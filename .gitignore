@@ -1,1 +1,6 @@
+# Build output
 /target
+
+# Testing files
+test.vert
+test.frag

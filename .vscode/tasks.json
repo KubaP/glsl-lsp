@@ -1,0 +1,146 @@
+{
+    "version": "2.0.0",
+    "tasks": [
+        {
+            "label": "Cargo run",
+            "type": "cargo",
+            "command": "run",
+            "env": {
+                "RUST_BACKTRACE": "1"
+            },
+            "group": {
+                "kind": "build",
+                "isDefault": true
+            },
+            "presentation": {
+                "echo": true,
+                "reveal": "silent",
+                "focus": false,
+                "panel": "dedicated",
+                "showReuseMessage": false,
+                "clear": false
+            },
+            "problemMatcher": [
+                "$rustc"
+            ],
+        },
+        {
+            "label": "Cargo run release",
+            "type": "cargo",
+            "command": "run",
+            "args": [
+                "--release"
+            ],
+            "env": {
+                "RUST_BACKTRACE": "1"
+            },
+            "group": "build",
+            "presentation": {
+                "echo": true,
+                "reveal": "silent",
+                "focus": false,
+                "panel": "dedicated",
+                "showReuseMessage": false,
+                "clear": false
+            },
+            "problemMatcher": [
+                "$rustc"
+            ]
+        },
+        {
+            "label": "Cargo check",
+            "type": "cargo",
+            "command": "check",
+            "group": {
+                "kind": "test",
+                "isDefault": true
+            },
+            "presentation": {
+                "echo": true,
+                "reveal": "silent",
+                "focus": false,
+                "panel": "shared",
+                "showReuseMessage": true,
+                "clear": true
+            },
+            "problemMatcher": [
+                "$rustc"
+            ]
+        },
+        {
+            "label": "Cargo build",
+            "type": "cargo",
+            "command": "build",
+            "group": "build",
+            "presentation": {
+                "echo": true,
+                "reveal": "silent",
+                "focus": false,
+                "panel": "shared",
+                "showReuseMessage": true,
+                "clear": true
+            },
+            "problemMatcher": [
+                "$rustc"
+            ]
+        },
+        {
+            "label": "Cargo build release",
+            "type": "cargo",
+            "command": "build",
+            "args": [
+                "--release"
+            ],
+            "group": "build",
+            "presentation": {
+                "echo": true,
+                "reveal": "silent",
+                "focus": false,
+                "panel": "shared",
+                "showReuseMessage": true,
+                "clear": true
+            },
+            "problemMatcher": [
+                "$rustc"
+            ],
+        },
+        {
+            "label": "Cargo docs",
+            "type": "cargo",
+            "command": "doc",
+            "args": [
+                // This flag is necessary in order to document any non pub modules.
+                // Technically this flag is passed by default but for some reason it needs manuall passing
+                // to take effect.
+                "--document-private-items"
+            ],
+            "presentation": {
+                "echo": true,
+                "reveal": "silent",
+                "focus": false,
+                "panel": "shared",
+                "showReuseMessage": true,
+                "clear": true
+            },
+            "problemMatcher": [
+                "$rustc"
+            ],
+        },
+        {
+            "label": "Open documentation",
+            "type": "process",
+            "command": "C:/Program Files/Mozilla Firefox/firefox.exe",
+            "args": [
+                "file://${workspaceFolder}/target/doc/glsl-parser/index.html"
+            ],
+            "presentation": {
+                "echo": false,
+                "reveal": "never",
+                "focus": false,
+                "panel": "shared",
+                "showReuseMessage": true,
+                "clear": true
+            }
+        }
+    ]
+}

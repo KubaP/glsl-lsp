@@ -7,3 +7,5 @@ edition = "2021"
 
 [dependencies]
 chumsky = "0.8.0"
+gl = "0.14.0"
+glutin = "0.28.0"

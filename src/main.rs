@@ -1,9 +1,22 @@
 use gl::types::{GLenum, GLsizei, GLuint};
 use glutin::{window::Window, ContextWrapper, PossiblyCurrent};
-use std::{fs, path::Path};
+use notify::Watcher;
+use std::{
+	collections::VecDeque,
+	fs,
+	path::Path,
+	sync::{Arc, Mutex},
+	thread,
+};
 
 pub mod parser;
 pub mod shader;
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Type {
+	Compile,
+	Parse,
+}
 
 fn main() {
 	// Variables to contain stuff modified at runtime.
@@ -11,20 +24,64 @@ fn main() {
 	let stdin = std::io::stdin();
 	let mut v_source = String::new();
 	let mut f_source = String::new();
+	let mut parse_source = String::new();
 
 	// Check that the files exists.
+	if !Path::exists(Path::new("./test.parse")) {
+		panic!("Could not find 'test.parse' in the project root!");
+	}
 	if !Path::exists(Path::new("./test.vert")) {
 		panic!("Could not find 'test.vert' in the project root!");
 	}
 	if !Path::exists(Path::new("./test.frag")) {
-		panic!("Could not find 'test.vert' in the project root!");
+		panic!("Could not find 'test.frag' in the project root!");
 	}
 
-	// Ask for user input.
-	const MSG: &str = "[p_] to parse, [c] to compile, [e] to exit:";
-	println!("{}", MSG);
+	// Setup file watching.
+	let event_queue = Arc::new(Mutex::new(VecDeque::new()));
+	let handle = Arc::clone(&event_queue);
+	thread::spawn(move || {
+		let (tx, rx) = std::sync::mpsc::channel();
+		let mut watcher =
+			notify::watcher(tx, std::time::Duration::from_secs(1)).unwrap();
+		watcher
+			.watch("./test.parse", notify::RecursiveMode::Recursive)
+			.unwrap();
 
-	// Enter the event loop.
+		loop {
+			match rx.recv() {
+				Ok(_event) => {
+					let mut queue = handle.lock().unwrap();
+					queue.push_back(Type::Parse);
+				}
+				Err(e) => panic!("{e:?}"),
+			}
+		}
+	});
+	let handle = Arc::clone(&event_queue);
+	thread::spawn(move || {
+		let (tx, rx) = std::sync::mpsc::channel();
+		let mut watcher =
+			notify::watcher(tx, std::time::Duration::from_millis(500)).unwrap();
+		watcher
+			.watch("./test.vert", notify::RecursiveMode::Recursive)
+			.unwrap();
+		watcher
+			.watch("./test.frag", notify::RecursiveMode::Recursive)
+			.unwrap();
+
+		loop {
+			match rx.recv() {
+				Ok(_event) => {
+					let mut queue = handle.lock().unwrap();
+					queue.push_back(Type::Compile);
+				}
+				Err(e) => panic!("{e:?}"),
+			}
+		}
+	});
+
+	// Create context and enter the event loop.
 	let event_loop = glutin::event_loop::EventLoop::new();
 	let window = initialise_gl(&event_loop);
 	event_loop.run(move |event, _, control_flow| {
@@ -42,30 +99,35 @@ fn main() {
 				gl::ClearColor(0.0, 0.0, 0.0, 1.0);
 				gl::Clear(gl::COLOR_BUFFER_BIT | gl::DEPTH_BUFFER_BIT);
 
-				if stdin.read_line(&mut buffer).is_ok() {
-					// Clear the screen. NOTE: This doesn't actually clear it, just puts a bunch of newlines.
-					print!("\x1b[2J");
+				let mut queue = event_queue.lock().unwrap();
+				if !queue.is_empty() {
+					let mut has_reparsed = false;
+					let mut has_recompiled = false;
 
-					// Update the contents of the file.
-					v_source = fs::read_to_string("./test.vert").unwrap();
-					f_source = fs::read_to_string("./test.frag").unwrap();
+					queue.iter().for_each(|t| {
+						if t == &Type::Parse && !has_reparsed {
+							parse_source =
+								fs::read_to_string("./test.parse").unwrap();
 
-					match buffer.trim().to_lowercase().as_ref() {
-						"pv" => parser::parse(&v_source),
-						"pf" => parser::parse(&f_source),
-						"c" => {
+							println!("\r\n");
+							parser::parse(&parse_source);
+
+							has_reparsed = true;
+						}
+						if t == &Type::Compile && !has_recompiled {
+							v_source =
+								fs::read_to_string("./test.vert").unwrap();
+							f_source =
+								fs::read_to_string("./test.frag").unwrap();
+
 							println!("\x1b[31;4mCOMPILING SHADER\x1b[0m");
 							shader::create_shader(&v_source, None, &f_source);
 							println!("Compiled");
+
+							has_recompiled = true;
 						}
-						"e" => *control_flow = ControlFlow::Exit,
-						_ => {}
-					}
-
-					buffer.clear();
-
-					// Ask for user input.
-					println!("\n{}", MSG);
+					});
+					queue.clear();
 				}
 
 				window.swap_buffers().unwrap();

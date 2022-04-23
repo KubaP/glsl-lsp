@@ -26,6 +26,14 @@ The following notations are valid:
 
 0x{0..F}+
 -0x{0..F}+
+
+1.0
+1.0e5
+1.e5
+
+1.0{lf|LF}
+1.0e5{lf|LF}
+1e5{lf|LF}
 ```
 
 ## Variable Identifiers

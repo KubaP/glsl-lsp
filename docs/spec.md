@@ -10,7 +10,7 @@ These are the allowed literals:
 - `bool` - `true` and `false`,
 - `int` - `1` (prefix `0` for base-8 or prefix `0x` for base-16),
 - `uint` - `1u` or `1U` (prefix `0` for base-8 or prefix `0x` for base-16),
-- `float` - `1.0` (`1e10` or `1E10` for exponential notation, which is always base-10),
+- `float` - `1.0` (`1e10` or `1.2e10` for exponential notation, which is always base-10),
 - `double` - `1.0lf` or `1.0LF` (mixing case such as `lF` is not allowed).
 
 ### Numbers
@@ -28,12 +28,57 @@ The following notations are valid:
 -0x{0..F}+
 
 1.0
-1.0e5
-1.e5
+1.0{e|E}5
+1{e|E}5
 
 1.0{lf|LF}
-1.0e5{lf|LF}
-1e5{lf|LF}
+1.0{e|E}5{lf|LF}
+1{e|E}5{lf|LF}
+```
+
+## Operators
+Mathematical operators:
+```glsl
+1 + 2
+1 - 2
+1 * 2
+1 / 2
+1 % 2
+1 & 2
+1 | 2
+1 ^ 2
+1 << 2
+1 >> 2
+
+i += 5
+i -= 5
+i *= 5
+i /= 5
+i %= 5
+i &= 5
+i |= 5
+i ^= 5
+i <<= 5
+i >>= 5
+
+i ++
+i --
+
+~ i
+```
+
+Comparison operators:
+```glsl
+a == b
+a != b
+a > b
+a < b
+a >= b
+a <= b
+
+a && b
+a || b
+a ! b
 ```
 
 ## Variable Identifiers

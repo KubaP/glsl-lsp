@@ -8,26 +8,99 @@ pub fn parse(source: &str) {
 
 /// CST tokens.
 #[derive(Debug, Clone, PartialEq, Eq)]
+#[allow(unused)]
 enum Token {
 	Invalid,
 	Num(String, NumType),
 	Bool(bool),
 	Ident(String),
+	Type(String),
 	// Keywords
+	If,
+	Else,
+	For,
+	Switch,
+	Case,
+	Default,
+	Break,
+	Return,
+	Struct,
+	// Qualifiers
+	In,
+	Out,
+	InOut,
+	Uniform,
+	Buffer,
 	Const,
+	Invariant,
+	Interpolation,
+	Precision,
+	Layout,
+	Location,
+	Component,
+	FragCoord,
+	FragDepth,
+	Index,
+	FragTest,
 	// Punctuation
+	Op(OpType),
 	Eq,
+	Comma,
+	Dot,
 	Semi,
+	Star,
+	Underscore,
 }
 
 /// The different number types in the CST.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[allow(unused)]
 enum NumType {
 	Normal,
 	Oct,
 	Hex,
 	Float,
 	Double,
+}
+
+/// Mathematical and comparison operation symbols.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[allow(unused)]
+enum OpType {
+	// Maths
+	Add,
+	Sub,
+	Mul,
+	Div,
+	Rem,
+	And,
+	Or,
+	Xor,
+	LShift,
+	RShift,
+	AddEq,
+	SubEq,
+	MulEq,
+	DivEq,
+	RemEq,
+	AndEq,
+	OrEq,
+	XorEq,
+	LShiftEq,
+	RShiftEq,
+	AddAdd,
+	SubSub,
+	Flip,
+	// Comparison
+	EqEq,
+	NotEq,
+	Gt,
+	Lt,
+	Ge,
+	Le,
+	AndAnd,
+	OrOr,
+	Not,
 }
 
 type Spanned<T> = (T, Span);

@@ -72,7 +72,7 @@ enum NumType {
 /// Mathematical and comparison operation symbols.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 #[allow(unused)]
-enum OpType {
+pub enum OpType {
 	// Maths
 	Add,
 	Sub,

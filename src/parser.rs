@@ -1,9 +1,63 @@
 use chumsky::prelude::*;
 
 pub fn parse(source: &str) {
-	let cst = lexer().parse(source);
-
+	let (cst, errors) = lexer().parse_recovery(source);
 	println!("{cst:?}");
+	println!("errors: {errors:?}");
+
+	if let Some(tokens) = cst {
+		let len = source.chars().count();
+		let (ast, errors) = parser().parse_recovery(Stream::from_iter(
+			len..len + 1,
+			tokens.into_iter(),
+		));
+		println!("{ast:?}");
+		if let Some(ast) = ast {
+			for expr in ast {
+				print_expr(&expr, 0);
+			}
+		}
+		println!("\r\nerrors: {errors:?}");
+	}
+}
+
+fn print_expr(expr: &Expr, indent: usize) {
+	match expr {
+		Expr::Literal(s) => {
+			print!(" Lit(\x1b[35m{s}\x1b[0m)")
+		}
+		Expr::Neg(e) => print_expr(e, indent + 1),
+		Expr::Binary { left, op, right } => {
+			print!(" (");
+			print_expr(left, indent + 1);
+			print!(" {op:?}");
+			print_expr(right, indent + 1);
+			print!(" )");
+		}
+		Expr::VarDecl {
+			type_,
+			ident,
+			value,
+		} => {
+			print!(
+				"\r\n{:indent$}\x1b[32mVar\x1b[0m(type=\x1b[91m{type_}\x1b[0m ident=\x1b[33m{ident}\x1b[0m) =",
+				"",
+				indent = indent * 4
+			);
+			print_expr(value, indent + 1);
+		}
+		Expr::FnDecl { type_, ident, body } => {
+			print!(
+				"\r\n{:indent$}\x1b[34mFn\x1b[0m(return=\x1b[91m{type_}\x1b[0m ident=\x1b[33m{ident}\x1b[0m) {{",
+				"",
+				indent = indent * 4
+			);
+			for inner in body {
+				print_expr(inner, indent + 1);
+			}
+			print!("\r\n}}")
+		}
+	}
 }
 
 /// CST tokens.

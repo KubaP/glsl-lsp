@@ -12,4 +12,16 @@ pub enum Expr {
 		op: OpType,
 		right: Box<Expr>,
 	},
+	/// Variable declaration.
+	VarDecl {
+		type_: String,
+		ident: String,
+		value: Box<Expr>,
+	},
+	// Function declaration.
+	FnDecl {
+		type_: String,
+		ident: String,
+		body: Vec<Expr>,
+	}
 }

@@ -1,4 +1,5 @@
-use chumsky::prelude::*;
+use crate::ast::Expr;
+use chumsky::{prelude::*, Stream};
 
 pub fn parse(source: &str) {
 	let (cst, errors) = lexer().parse_recovery(source);
@@ -247,15 +248,11 @@ fn literals() -> impl Parser<char, Token, Error = Simple<char>> {
 	// Unsigned integer suffix.
 	let suffix = filter(|c: &char| *c == 'u' || *c == 'U').or_not();
 
-	let zero_valid = just('-')
-		.or_not()
-		.chain(just('0'))
+	let zero_valid = just('0')
 		.chain::<char, _, _>(suffix)
 		.collect::<String>()
 		.map(|s| Token::Num(s, NumType::Normal));
-	let zero_invalid = just('-')
-		.or_not()
-		.chain(just('0'))
+	let zero_invalid = just('0')
 		.chain::<char, _, _>(suffix)
 		.chain::<char, _, _>(
 			filter(|c: &char| c.is_ascii_alphanumeric())
@@ -265,9 +262,7 @@ fn literals() -> impl Parser<char, Token, Error = Simple<char>> {
 		.collect::<String>()
 		.map(|_| Token::Invalid);
 
-	let num = just('-')
-		.or_not()
-		.chain(filter(|c: &char| c.is_ascii_digit() && *c != '0'))
+	let num = filter(|c: &char| c.is_ascii_digit() && *c != '0')
 		.chain::<char, _, _>(filter(|c: &char| c.is_ascii_digit()).repeated())
 		.chain::<char, _, _>(suffix);
 	let num_valid = num.collect().map(|s| Token::Num(s, NumType::Normal));
@@ -280,9 +275,7 @@ fn literals() -> impl Parser<char, Token, Error = Simple<char>> {
 		.collect::<String>()
 		.map(|_| Token::Invalid);
 
-	let num_hex = just('-')
-		.or_not()
-		.then(just('0'))
+	let num_hex = just('0')
 		.then(just('x'))
 		.chain::<char, _, _>(
 			filter::<_, _, Simple<char>>(|c: &char| c.is_ascii_hexdigit())
@@ -300,9 +293,7 @@ fn literals() -> impl Parser<char, Token, Error = Simple<char>> {
 		.collect::<String>()
 		.map(|_| Token::Invalid);
 
-	let num_oct = just('-')
-		.or_not()
-		.chain(just('0'))
+	let num_oct = just('0')
 		.chain::<char, _, _>(
 			filter(|c: &char| match c {
 				'0' | '1' | '2' | '3' | '4' | '5' | '6' | '7' => true,
@@ -322,9 +313,9 @@ fn literals() -> impl Parser<char, Token, Error = Simple<char>> {
 		.collect::<String>()
 		.map(|_| Token::Invalid);
 
-	let num_float = just('-')
-		.or_not()
-		.chain(filter(|c: &char| c.is_ascii_digit()).repeated().at_least(1))
+	let num_float = filter(|c: &char| c.is_ascii_digit())
+		.repeated()
+		.at_least(1)
 		.chain(just('.'))
 		.chain::<char, _, _>(
 			filter(|c: &char| c.is_ascii_digit()).repeated().at_least(1),
@@ -341,9 +332,9 @@ fn literals() -> impl Parser<char, Token, Error = Simple<char>> {
 		.collect::<String>()
 		.map(|_| Token::Invalid);
 
-	let num_float_exp = just('-')
-		.or_not()
-		.chain(filter(|c: &char| c.is_ascii_digit()).repeated().at_least(1))
+	let num_float_exp = filter(|c: &char| c.is_ascii_digit())
+		.repeated()
+		.at_least(1)
 		.chain(just('.'))
 		.chain::<char, _, _>(
 			filter(|c: &char| c.is_ascii_digit()).repeated().at_least(1),
@@ -364,9 +355,9 @@ fn literals() -> impl Parser<char, Token, Error = Simple<char>> {
 		.collect::<String>()
 		.map(|_| Token::Invalid);
 
-	let num_float_exp_no_decimal = just('-')
-		.or_not()
-		.chain(filter(|c: &char| c.is_ascii_digit()).repeated().at_least(1))
+	let num_float_exp_no_decimal = filter(|c: &char| c.is_ascii_digit())
+		.repeated()
+		.at_least(1)
 		.chain(just('E').or(just('e')))
 		.chain::<char, _, _>(
 			filter(|c: &char| c.is_ascii_digit()).repeated().at_least(1),
@@ -386,9 +377,9 @@ fn literals() -> impl Parser<char, Token, Error = Simple<char>> {
 	// Double specifier suffix.
 	let lf = just('l').then(just('f')).or(just('L').then(just('F')));
 
-	let num_double = just('-')
-		.or_not()
-		.chain(filter(|c: &char| c.is_ascii_digit()).repeated().at_least(1))
+	let num_double = filter(|c: &char| c.is_ascii_digit())
+		.repeated()
+		.at_least(1)
 		.chain(just('.'))
 		.chain::<char, _, _>(
 			filter(|c: &char| c.is_ascii_digit()).repeated().at_least(1),
@@ -406,9 +397,9 @@ fn literals() -> impl Parser<char, Token, Error = Simple<char>> {
 		.collect::<String>()
 		.map(|_| Token::Invalid);
 
-	let num_double_exp = just('-')
-		.or_not()
-		.chain(filter(|c: &char| c.is_ascii_digit()).repeated().at_least(1))
+	let num_double_exp = filter(|c: &char| c.is_ascii_digit())
+		.repeated()
+		.at_least(1)
 		.chain(just('.'))
 		.chain::<char, _, _>(
 			filter(|c: &char| c.is_ascii_digit()).repeated().at_least(1),
@@ -430,9 +421,9 @@ fn literals() -> impl Parser<char, Token, Error = Simple<char>> {
 		.collect::<String>()
 		.map(|_| Token::Invalid);
 
-	let num_double_exp_no_decimal = just('-')
-		.or_not()
-		.chain(filter(|c: &char| c.is_ascii_digit()).repeated().at_least(1))
+	let num_double_exp_no_decimal = filter(|c: &char| c.is_ascii_digit())
+		.repeated()
+		.at_least(1)
 		.chain(just('E').or(just('e')))
 		.chain::<char, _, _>(
 			filter(|c: &char| c.is_ascii_digit()).repeated().at_least(1),
@@ -475,4 +466,104 @@ fn literals() -> impl Parser<char, Token, Error = Simple<char>> {
 		.or(zero_valid)
 		.or(b_true)
 		.or(b_false)
+}
+
+fn parser() -> impl Parser<Token, Vec<Expr>, Error = Simple<Token>> {
+	let expr = recursive(|expr| {
+		let val = select! {
+			Token::Num(s, _) => Expr::Literal(s.clone()),
+			Token::Ident(s) => Expr::Literal(s.clone()),
+			Token::Bool(b) => Expr::Literal(b.to_string()),
+		};
+
+		let atom =
+			val.or(expr.delimited_by(just(Token::LParen), just(Token::RParen)));
+
+		let op = filter(|t: &Token| match t {
+			Token::Op(op) => match op {
+				OpType::Sub => true,
+				_ => false,
+			},
+			_ => false,
+		});
+
+		let neg = op
+			.repeated()
+			.then(atom)
+			.foldr(|_op, rhs| Expr::Neg(Box::new(rhs)));
+
+		let op = filter(|t: &Token| match t {
+			Token::Op(op) => match op {
+				OpType::Mul | OpType::Div => true,
+				_ => false,
+			},
+			_ => false,
+		});
+		let product = neg
+			.clone()
+			.then(
+				op.map(|t| match t {
+					Token::Op(op) => op,
+					_ => unreachable!(),
+				})
+				.then(neg)
+				.repeated(),
+			)
+			.foldl(|lhs, (op, rhs)| Expr::Binary {
+				left: Box::from(lhs),
+				op,
+				right: Box::from(rhs),
+			});
+
+		let op = filter(|t: &Token| match t {
+			Token::Op(op) => match op {
+				OpType::Add | OpType::Sub => true,
+				_ => false,
+			},
+			_ => false,
+		});
+		let sum = product
+			.clone()
+			.then(
+				op.map(|t| match t {
+					Token::Op(op) => op,
+					_ => unreachable!(),
+				})
+				.then(product)
+				.repeated(),
+			)
+			.foldl(|lhs, (op, rhs)| Expr::Binary {
+				left: Box::from(lhs),
+				op,
+				right: Box::from(rhs),
+			});
+
+		sum
+	});
+
+	let ident = select! {
+		Token::Ident(s) => s.clone(),
+	};
+
+	let var = ident
+		.then(ident)
+		.then_ignore(just(Token::Eq))
+		.then(expr.clone())
+		.then_ignore(just(Token::Semi))
+		.map(|((type_, ident), rhs)| Expr::VarDecl {
+			type_,
+			ident,
+			value: Box::from(rhs),
+		});
+
+	let func = ident
+		.then(ident)
+		.then_ignore(just(Token::LParen))
+		.then_ignore(just(Token::RParen))
+		.then_ignore(just(Token::LBrace))
+		.then(var.clone().repeated())
+		.then_ignore(just(Token::RBrace))
+		.map(|((type_, ident), body)| Expr::FnDecl { type_, ident, body });
+
+	func.or(var).repeated()
 }

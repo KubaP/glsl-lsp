@@ -1,0 +1,33 @@
+## Parsing
+- Version directive
+- Extension directive
+- Preprocessor directives
+- Expressions
+    - ~~Literals~~
+    - ~~Identifiers~~
+    - ~~Negations~~
+    - ~~Binary expressions (inc. parenthesis)~~
+    - Function calls
+    - Array constructors
+    - Initializer lists
+- Variable declaration
+    - Const qualifier
+    - ~~Type~~
+    - N-dimensional arrays
+    - ~~Identifier~~
+    - ~~Value assignment~~
+- Function declaration
+    - ~~Return type~~
+    - ~~Identifier~~
+    - Parameters
+    - ~~Body~~
+- Struct declaration
+    - Identifier
+    - Members
+    - Variable instance
+- Special global variables
+    - Vertex inputs
+    - Fragment inputs
+    - Fragment outputs
+    - Uniforms
+    - Interface blocks

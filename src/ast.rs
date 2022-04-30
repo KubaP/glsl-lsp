@@ -14,21 +14,25 @@ pub enum Expr {
 		op: OpType,
 		right: Box<Expr>,
 	},
+}
+
+#[derive(Debug, Clone)]
+pub enum Stmt {
+	/// An empty statement, i.e. just a `;`.
+	Empty,
 	/// Variable declaration.
 	VarDecl {
 		type_: Ident,
 		ident: Ident,
-		value: Box<Expr>,
+		value: Expr,
 	},
-	// Function declaration.
+	/// Function declaration.
 	FnDecl {
 		type_: Ident,
 		ident: Ident,
-		body: Vec<Expr>,
+		body: Vec<Stmt>,
 	},
 }
-
-// TODO: Separate into `Expr` and `Stmt` for clarity/accuracy.
 
 /// A literal value.
 #[derive(Debug, Clone, Copy)]

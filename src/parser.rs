@@ -1,4 +1,4 @@
-use crate::ast::{Expr, Ident, Lit};
+use crate::ast::{Expr, Ident, Lit, Stmt};
 use chumsky::{prelude::*, Stream};
 
 pub fn parse(source: &str) {
@@ -14,8 +14,8 @@ pub fn parse(source: &str) {
 		));
 		println!("{ast:?}");
 		if let Some(ast) = ast {
-			for expr in ast {
-				print_expr(&expr, 0);
+			for stmt in ast {
+				print_stmt(&stmt, 0);
 			}
 		}
 		println!("\r\nerrors: {errors:?}");
@@ -36,7 +36,17 @@ fn print_expr(expr: &Expr, indent: usize) {
 			print_expr(right, indent + 1);
 			print!(" )");
 		}
-		Expr::VarDecl {
+	}
+}
+
+fn print_stmt(stmt: &Stmt, indent: usize) {
+	match stmt {
+		Stmt::Empty => print!(
+			"\r\n{:indent$}(\x1b[97mEmpty\x1b[0m)",
+			"",
+			indent = indent * 4
+		),
+		Stmt::VarDecl {
 			type_,
 			ident,
 			value,
@@ -48,14 +58,14 @@ fn print_expr(expr: &Expr, indent: usize) {
 			);
 			print_expr(value, indent + 1);
 		}
-		Expr::FnDecl { type_, ident, body } => {
+		Stmt::FnDecl { type_, ident, body } => {
 			print!(
 				"\r\n{:indent$}\x1b[34mFn\x1b[0m(return=\x1b[91m{type_}\x1b[0m ident=\x1b[33m{ident}\x1b[0m) {{",
 				"",
 				indent = indent * 4
 			);
 			for inner in body {
-				print_expr(inner, indent + 1);
+				print_stmt(inner, indent + 1);
 			}
 			print!("\r\n}}")
 		}
@@ -469,7 +479,7 @@ fn literals() -> impl Parser<char, Token, Error = Simple<char>> {
 		.or(b_false)
 }
 
-fn parser() -> impl Parser<Token, Vec<Expr>, Error = Simple<Token>> {
+fn parser() -> impl Parser<Token, Vec<Stmt>, Error = Simple<Token>> {
 	let expr = recursive(|expr| {
 		let val = filter(|t: &Token| match t {
 			Token::Bool(_) => true,
@@ -561,20 +571,24 @@ fn parser() -> impl Parser<Token, Vec<Expr>, Error = Simple<Token>> {
 		.then_ignore(just(Token::Eq))
 		.then(expr.clone())
 		.then_ignore(just(Token::Semi))
-		.map(|((type_, ident), rhs)| Expr::VarDecl {
+		.map(|((type_, ident), rhs)| Stmt::VarDecl {
 			type_,
 			ident,
-			value: Box::from(rhs),
+			value: rhs,
 		});
+
+	let empty = just(Token::Semi).map(|_| Stmt::Empty);
+
+	let stmt = var.clone().or(empty.clone());
 
 	let func = ident
 		.then(ident)
 		.then_ignore(just(Token::LParen))
 		.then_ignore(just(Token::RParen))
 		.then_ignore(just(Token::LBrace))
-		.then(var.clone().repeated())
+		.then(stmt.clone().repeated())
 		.then_ignore(just(Token::RBrace))
-		.map(|((type_, ident), body)| Expr::FnDecl { type_, ident, body });
+		.map(|((type_, ident), body)| Stmt::FnDecl { type_, ident, body });
 
-	func.or(var).repeated()
+	func.or(var).or(empty).repeated()
 }

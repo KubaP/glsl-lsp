@@ -9,6 +9,7 @@ use std::{
 	thread,
 };
 
+pub mod ast;
 pub mod parser;
 pub mod shader;
 
@@ -18,10 +19,9 @@ enum Type {
 	Parse,
 }
 
+#[allow(unused_assignments)]
 fn main() {
 	// Variables to contain stuff modified at runtime.
-	let mut buffer = String::new();
-	let stdin = std::io::stdin();
 	let mut v_source = String::new();
 	let mut f_source = String::new();
 	let mut parse_source = String::new();
@@ -84,6 +84,18 @@ fn main() {
 	// Create context and enter the event loop.
 	let event_loop = glutin::event_loop::EventLoop::new();
 	let window = initialise_gl(&event_loop);
+
+	// Print at the start.
+	parse_source = fs::read_to_string("./test.parse").unwrap();
+	println!("\r\n");
+	parser::parse(&parse_source);
+
+	v_source = fs::read_to_string("./test.vert").unwrap();
+	f_source = fs::read_to_string("./test.frag").unwrap();
+	println!("\r\n\x1b[31;4mCOMPILING SHADER\x1b[0m");
+	shader::create_shader(&v_source, None, &f_source);
+	println!("Compiled");
+
 	event_loop.run(move |event, _, control_flow| {
 		use glutin::event::{Event, WindowEvent};
 		use glutin::event_loop::ControlFlow;
@@ -120,7 +132,7 @@ fn main() {
 							f_source =
 								fs::read_to_string("./test.frag").unwrap();
 
-							println!("\x1b[31;4mCOMPILING SHADER\x1b[0m");
+							println!("\r\n\x1b[31;4mCOMPILING SHADER\x1b[0m");
 							shader::create_shader(&v_source, None, &f_source);
 							println!("Compiled");
 

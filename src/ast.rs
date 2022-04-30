@@ -30,7 +30,7 @@ pub enum Stmt {
 	VarDecl {
 		type_: Type,
 		ident: Ident,
-		value: Expr,
+		value: Option<Expr>,
 	},
 	/// Function declaration.
 	FnDecl {

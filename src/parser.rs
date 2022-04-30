@@ -52,11 +52,14 @@ fn print_stmt(stmt: &Stmt, indent: usize) {
 			value,
 		} => {
 			print!(
-				"\r\n{:indent$}\x1b[32mVar\x1b[0m(type={type_} ident=\x1b[33m{ident}\x1b[0m) =",
+				"\r\n{:indent$}\x1b[32mVar\x1b[0m(type={type_} ident=\x1b[33m{ident}\x1b[0m)",
 				"",
 				indent = indent * 4
 			);
-			print_expr(value, indent + 1);
+			if let Some(value) = value {
+				print!(" =");
+				print_expr(value, indent + 1);
+			}
 		}
 		Stmt::FnDecl { type_, ident, body } => {
 			print!(
@@ -666,21 +669,30 @@ fn parser() -> impl Parser<Token, Vec<Stmt>, Error = Simple<Token>> {
 	// Variable declaration.
 	let var = var_type_ident
 		.then(ident)
-		.then(arr.repeated())
+		.then(arr.clone().repeated())
 		.then_ignore(just(Token::Eq))
 		.then(expr.clone())
 		.then_ignore(just(Token::Semi))
 		.map(|(((type_ident, ident), size), rhs)| Stmt::VarDecl {
 			type_: Type::new(type_ident, size),
 			ident,
-			value: rhs,
+			value: Some(rhs),
+		});
+	let var_uninit = var_type_ident
+		.then(ident)
+		.then(arr.repeated())
+		.then_ignore(just(Token::Semi))
+		.map(|((type_ident, ident), size)| Stmt::VarDecl {
+			type_: Type::new(type_ident, size),
+			ident,
+			value: None,
 		});
 
 	// Empty statement.
 	let empty = just(Token::Semi).map(|_| Stmt::Empty);
 
 	// All statements.
-	let stmt = var.clone().or(empty.clone());
+	let stmt = var.clone().or(var_uninit.clone()).or(empty.clone());
 
 	// Function declaration.
 	let func = type_ident
@@ -696,5 +708,5 @@ fn parser() -> impl Parser<Token, Vec<Stmt>, Error = Simple<Token>> {
 			body,
 		});
 
-	func.or(var).or(empty).repeated()
+	func.or(var).or(var_uninit).or(empty).repeated()
 }

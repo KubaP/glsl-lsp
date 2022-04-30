@@ -1,4 +1,4 @@
-use crate::ast::Expr;
+use crate::ast::{Expr, Ident, Lit};
 use chumsky::{prelude::*, Stream};
 
 pub fn parse(source: &str) {
@@ -24,9 +24,10 @@ pub fn parse(source: &str) {
 
 fn print_expr(expr: &Expr, indent: usize) {
 	match expr {
-		Expr::Literal(s) => {
+		Expr::Lit(s) => {
 			print!(" Lit(\x1b[35m{s}\x1b[0m)")
 		}
+		Expr::Ident(s) => print!(" Ident(\x1b[33m{s}\x1b[0m)"),
 		Expr::Neg(e) => print_expr(e, indent + 1),
 		Expr::Binary { left, op, right } => {
 			print!(" (");
@@ -116,7 +117,7 @@ enum Token {
 /// The different number types in the CST.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 #[allow(unused)]
-enum NumType {
+pub enum NumType {
 	Normal,
 	Oct,
 	Hex,
@@ -470,11 +471,21 @@ fn literals() -> impl Parser<char, Token, Error = Simple<char>> {
 
 fn parser() -> impl Parser<Token, Vec<Expr>, Error = Simple<Token>> {
 	let expr = recursive(|expr| {
-		let val = select! {
-			Token::Num(s, _) => Expr::Literal(s.clone()),
-			Token::Ident(s) => Expr::Literal(s.clone()),
-			Token::Bool(b) => Expr::Literal(b.to_string()),
-		};
+		let val = filter(|t: &Token| match t {
+			Token::Bool(_) => true,
+			Token::Num(_, _) => true,
+			Token::Ident(_) => true,
+			_ => false,
+		})
+		.try_map(|t, span| match t {
+			Token::Bool(b) => Ok(Expr::Lit(Lit::Bool(b))),
+			Token::Num(s, t) => match Lit::parse_num(&s, t) {
+				Ok(l) => Ok(Expr::Lit(l)),
+				Err(_) => Err(Simple::custom(span, "Could not parse number")),
+			},
+			Token::Ident(s) => Ok(Expr::Ident(Ident(s))),
+			_ => unreachable!(),
+		});
 
 		let atom =
 			val.or(expr.delimited_by(just(Token::LParen), just(Token::RParen)));
@@ -542,7 +553,7 @@ fn parser() -> impl Parser<Token, Vec<Expr>, Error = Simple<Token>> {
 	});
 
 	let ident = select! {
-		Token::Ident(s) => s.clone(),
+		Token::Ident(s) => Ident(s)
 	};
 
 	let var = ident

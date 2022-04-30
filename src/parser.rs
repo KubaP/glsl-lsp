@@ -1,4 +1,4 @@
-use crate::ast::{Expr, Ident, Lit, Stmt};
+use crate::ast::{Either, Expr, Ident, Lit, Primitive, Stmt, Type};
 use chumsky::{prelude::*, Stream};
 
 pub fn parse(source: &str) {
@@ -52,7 +52,7 @@ fn print_stmt(stmt: &Stmt, indent: usize) {
 			value,
 		} => {
 			print!(
-				"\r\n{:indent$}\x1b[32mVar\x1b[0m(type=\x1b[91m{type_}\x1b[0m ident=\x1b[33m{ident}\x1b[0m) =",
+				"\r\n{:indent$}\x1b[32mVar\x1b[0m(type={type_} ident=\x1b[33m{ident}\x1b[0m) =",
 				"",
 				indent = indent * 4
 			);
@@ -480,6 +480,7 @@ fn literals() -> impl Parser<char, Token, Error = Simple<char>> {
 }
 
 fn parser() -> impl Parser<Token, Vec<Stmt>, Error = Simple<Token>> {
+	// Expressions of all kinds.
 	let expr = recursive(|expr| {
 		let val = filter(|t: &Token| match t {
 			Token::Bool(_) => true,
@@ -562,33 +563,138 @@ fn parser() -> impl Parser<Token, Vec<Stmt>, Error = Simple<Token>> {
 		sum
 	});
 
-	let ident = select! {
-		Token::Ident(s) => Ident(s)
+	// Identifier for a name.
+	let ident = filter(|t: &Token| match t {
+		Token::Ident(_) => true,
+		_ => false,
+	})
+	.try_map(|t, span| {
+		let str = if let Token::Ident(s) = t {
+			s
+		} else {
+			unreachable!()
+		};
+
+		match Ident::parse_name(&str) {
+			Ok(i) => Ok(i),
+			Err(_) => Err(Simple::custom(
+				span,
+				"Identifier cannot be the same as a type",
+			)),
+		}
+	});
+
+	// Type identifiers of any type, (incl. void).
+	let type_ident = filter(|t: &Token| match t {
+		Token::Ident(_) => true,
+		_ => false,
+	})
+	.try_map(|t, span| {
+		// Deconstruct the string.
+		let str = if let Token::Ident(s) = t {
+			s
+		} else {
+			unreachable!()
+		};
+
+		// First, try to parse a primitive type identifier. If not, try to parse a valid custom type identifier.
+		match Primitive::parse(&str) {
+			Ok(p) => Ok(Either::Left(p)),
+			Err(_) => match Ident::parse_struct(&str) {
+				Ok(i) => Ok(Either::Right(i)),
+				Err(_) => Err(Simple::custom(span, "Invalid type")),
+			},
+		}
+	});
+
+	// Type identifiers that are allowed for variable declarations.
+	let var_type_ident = filter(|t: &Token| match t {
+		Token::Ident(_) => true,
+		_ => false,
+	})
+	.try_map(|t, span| {
+		// Deconstruct the string.
+		let str = if let Token::Ident(s) = t {
+			s
+		} else {
+			unreachable!()
+		};
+
+		// First, try to parse a primitive type identifier. If not, try to parse a valid custom type identifier.
+		match Primitive::parse_var(&str) {
+			Ok(p) => Ok(Either::Left(p)),
+			Err(_) => match Ident::parse_struct(&str) {
+				Ok(i) => Ok(Either::Right(i)),
+				Err(_) => Err(Simple::custom(span, "Invalid type")),
+			},
+		}
+	});
+
+	// Array size, i.e. `[...]`.
+	let arr = {
+		let size = filter(|t: &Token| match t {
+			Token::Num(_, _) => true,
+			Token::Ident(_) => true,
+			_ => false,
+		})
+		.try_map(|t, span| match t {
+			Token::Num(s, t) => match t {
+				NumType::Normal | NumType::Oct | NumType::Hex => {
+					match Lit::parse_num(&s, t) {
+						Ok(l) => match l {
+							Lit::UInt(u) => Ok(Either::Left(u as usize)),
+							Lit::Int(i) => Ok(Either::Left(i as usize)),
+							_ => unimplemented!(),
+						},
+						Err(_) => {
+							Err(Simple::custom(span, "Could not parse number!"))
+						}
+					}
+				}
+				_ => Err(Simple::custom(span, "Float values are not allowed")),
+			},
+			Token::Ident(s) => Ok(Either::Right(Ident(s))),
+			_ => unreachable!(),
+		});
+
+		just(Token::LBracket)
+			.then(size.or_not())
+			.then(just(Token::RBracket))
+			.map(|((_, s), _)| s)
 	};
 
-	let var = ident
+	// Variable declaration.
+	let var = var_type_ident
 		.then(ident)
+		.then(arr.repeated())
 		.then_ignore(just(Token::Eq))
 		.then(expr.clone())
 		.then_ignore(just(Token::Semi))
-		.map(|((type_, ident), rhs)| Stmt::VarDecl {
-			type_,
+		.map(|(((type_ident, ident), size), rhs)| Stmt::VarDecl {
+			type_: Type::new(type_ident, size),
 			ident,
 			value: rhs,
 		});
 
+	// Empty statement.
 	let empty = just(Token::Semi).map(|_| Stmt::Empty);
 
+	// All statements.
 	let stmt = var.clone().or(empty.clone());
 
-	let func = ident
+	// Function declaration.
+	let func = type_ident
 		.then(ident)
 		.then_ignore(just(Token::LParen))
 		.then_ignore(just(Token::RParen))
 		.then_ignore(just(Token::LBrace))
 		.then(stmt.clone().repeated())
 		.then_ignore(just(Token::RBrace))
-		.map(|((type_, ident), body)| Stmt::FnDecl { type_, ident, body });
+		.map(|((type_ident, ident), body)| Stmt::FnDecl {
+			type_: Type::Basic(type_ident),
+			ident,
+			body,
+		});
 
 	func.or(var).or(empty).repeated()
 }

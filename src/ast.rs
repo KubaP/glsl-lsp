@@ -37,11 +37,13 @@ pub enum Stmt {
 		type_: Type,
 		ident: Ident,
 		value: Option<Expr>,
+		is_const: bool,
 	},
 	/// Function declaration.
 	FnDecl {
 		type_: Type,
 		ident: Ident,
+		params: Vec<(Type, Ident)>,
 		body: Vec<Stmt>,
 	},
 	/// Function call (on its own, as opposed to being part of a larger expression).

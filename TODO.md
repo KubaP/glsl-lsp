@@ -11,7 +11,7 @@
     - ~~Array constructors~~
     - ~~Initializer lists~~
 - Variable declaration
-    - Const qualifier
+    - ~~Const qualifier~~
     - ~~Type~~
     - ~~N-dimensional arrays~~
     - ~~Identifier~~
@@ -20,7 +20,7 @@
 - Function declaration
     - ~~Return type~~
     - ~~Identifier~~
-    - Parameters
+    - ~~Parameters~~
     - ~~Body~~
 - ~~Function call~~
     - ~~Identifier~~

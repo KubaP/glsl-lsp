@@ -71,23 +71,37 @@ fn print_stmt(stmt: &Stmt, indent: usize) {
 			type_,
 			ident,
 			value,
+			is_const,
 		} => {
 			print!(
-				"\r\n{:indent$}\x1b[32mVar\x1b[0m(type={type_} ident=\x1b[33m{ident}\x1b[0m)",
+				"\r\n{:indent$}\x1b[32mVar\x1b[0m(type={type_} ident=\x1b[33m{ident}\x1b[0m",
 				"",
 				indent = indent * 4
 			);
+			if *is_const {
+				print!(" \x1b[4mconst\x1b[0m");
+			}
+			print!(")");
 			if let Some(value) = value {
 				print!(" =");
 				print_expr(value, indent + 1);
 			}
 		}
-		Stmt::FnDecl { type_, ident, body } => {
+		Stmt::FnDecl {
+			type_,
+			ident,
+			params,
+			body,
+		} => {
 			print!(
-				"\r\n{:indent$}\x1b[34mFn\x1b[0m(return=\x1b[91m{type_}\x1b[0m ident=\x1b[33m{ident}\x1b[0m) {{",
+				"\r\n{:indent$}\x1b[34mFn\x1b[0m(return=\x1b[91m{type_}\x1b[0m ident=\x1b[33m{ident}\x1b[0m, args=[",
 				"",
 				indent = indent * 4
 			);
+			for (type_, ident) in params {
+				print!(" \x1b[91m{type_}\x1b[0m \x1b[33m{ident}\x1b[0m,");
+			}
+			print!("]) {{");
 			for inner in body {
 				print_stmt(inner, indent + 1);
 			}
@@ -742,26 +756,36 @@ fn parser() -> impl Parser<Token, Vec<Stmt>, Error = Simple<Token>> {
 		sum
 	});
 
+	// Const qualifier.
+	let const_ = just(Token::Const).or_not().map(|t| t.is_some());
+
 	// Variable declaration.
-	let var = var_type_ident
+	let var = const_
+		.clone()
+		.then(var_type_ident)
 		.then(ident)
 		.then(arr.clone().repeated())
 		.then_ignore(just(Token::Eq))
 		.then(expr.clone())
 		.then_ignore(just(Token::Semi))
-		.map(|(((type_ident, ident), size), rhs)| Stmt::VarDecl {
-			type_: Type::new(type_ident, size),
-			ident,
-			value: Some(rhs),
-		});
-	let var_uninit = var_type_ident
+		.map(
+			|((((is_const, type_ident), ident), size), rhs)| Stmt::VarDecl {
+				type_: Type::new(type_ident, size),
+				ident,
+				value: Some(rhs),
+				is_const,
+			},
+		);
+	let var_uninit = const_
+		.then(var_type_ident)
 		.then(ident)
 		.then(arr.repeated())
 		.then_ignore(just(Token::Semi))
-		.map(|((type_ident, ident), size)| Stmt::VarDecl {
+		.map(|(((is_const, type_ident), ident), size)| Stmt::VarDecl {
 			type_: Type::new(type_ident, size),
 			ident,
 			value: None,
+			is_const,
 		});
 
 	// Function call on its own.
@@ -784,18 +808,28 @@ fn parser() -> impl Parser<Token, Vec<Stmt>, Error = Simple<Token>> {
 		.or(fn_call)
 		.or(empty.clone());
 
+	// Function parameter.
+	let param = type_ident
+		.clone()
+		.then(ident.clone())
+		.map(|(type_, ident)| (Type::Basic(type_), ident));
+
 	// Function declaration.
 	let func = type_ident
 		.then(ident)
-		.then_ignore(just(Token::LParen))
-		.then_ignore(just(Token::RParen))
+		.then(
+			param
+				.separated_by(just(Token::Comma))
+				.delimited_by(just(Token::LParen), just(Token::RParen)),
+		)
 		.then(
 			stmt.repeated()
 				.delimited_by(just(Token::LBrace), just(Token::RBrace)),
 		)
-		.map(|((type_ident, ident), body)| Stmt::FnDecl {
+		.map(|(((type_ident, ident), params), body)| Stmt::FnDecl {
 			type_: Type::Basic(type_ident),
 			ident,
+			params,
 			body,
 		});
 

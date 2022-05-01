@@ -20,6 +20,12 @@ pub enum Expr {
 		op: OpType,
 		right: Box<Expr>,
 	},
+	/// Function call.
+	Fn { ident: Ident, args: Vec<Expr> },
+	/// Array constructor.
+	Array { type_: Type, args: Vec<Expr> },
+	/// Initializer list.
+	InitList(Vec<Expr>),
 }
 
 #[derive(Debug, Clone)]

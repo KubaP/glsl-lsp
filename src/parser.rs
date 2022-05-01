@@ -36,6 +36,27 @@ fn print_expr(expr: &Expr, indent: usize) {
 			print_expr(right, indent + 1);
 			print!(" )");
 		}
+		Expr::Fn { ident, args } => {
+			print!(" \x1b[34m{ident}\x1b[0m(");
+			for arg in args {
+				print_expr(arg, indent + 1);
+			}
+			print!(" )");
+		}
+		Expr::Array { type_, args } => {
+			print!(" Arr(type={type_})(");
+			for arg in args {
+				print_expr(arg, indent + 1);
+			}
+			print!(" )");
+		}
+		Expr::InitList(v) => {
+			print!(" Init{{");
+			for arg in v {
+				print_expr(arg, indent + 1);
+			}
+			print!(" }}");
+		}
 	}
 }
 
@@ -483,9 +504,150 @@ fn literals() -> impl Parser<char, Token, Error = Simple<char>> {
 }
 
 fn parser() -> impl Parser<Token, Vec<Stmt>, Error = Simple<Token>> {
+	// Identifier for a name.
+	let ident = filter(|t: &Token| match t {
+		Token::Ident(_) => true,
+		_ => false,
+	})
+	.try_map(|t, span| {
+		let str = if let Token::Ident(s) = t {
+			s
+		} else {
+			unreachable!()
+		};
+
+		match Ident::parse_name(&str) {
+			Ok(i) => Ok(i),
+			Err(_) => Err(Simple::custom(
+				span,
+				"Identifier cannot be the same as a type",
+			)),
+		}
+	});
+
+	// Type identifiers of any type, (incl. void).
+	let type_ident = filter(|t: &Token| match t {
+		Token::Ident(_) => true,
+		_ => false,
+	})
+	.try_map(|t, span| {
+		// Deconstruct the string.
+		let str = if let Token::Ident(s) = t {
+			s
+		} else {
+			unreachable!()
+		};
+
+		// First, try to parse a primitive type identifier. If not, try to parse a valid custom type identifier.
+		match Primitive::parse(&str) {
+			Ok(p) => Ok(Either::Left(p)),
+			Err(_) => match Ident::parse_struct(&str) {
+				Ok(i) => Ok(Either::Right(i)),
+				Err(_) => Err(Simple::custom(span, "Invalid type")),
+			},
+		}
+	});
+
+	// Type identifiers that are allowed in variable declarations.
+	let var_type_ident = filter(|t: &Token| match t {
+		Token::Ident(_) => true,
+		_ => false,
+	})
+	.try_map(|t, span| {
+		// Deconstruct the string.
+		let str = if let Token::Ident(s) = t {
+			s
+		} else {
+			unreachable!()
+		};
+
+		// First, try to parse a primitive type identifier. If not, try to parse a valid custom type identifier.
+		match Primitive::parse_var(&str) {
+			Ok(p) => Ok(Either::Left(p)),
+			Err(_) => match Ident::parse_struct(&str) {
+				Ok(i) => Ok(Either::Right(i)),
+				Err(_) => Err(Simple::custom(span, "Invalid type")),
+			},
+		}
+	});
+
+	// Array size, i.e. `[...]`.
+	let arr = {
+		let size = filter(|t: &Token| match t {
+			Token::Num(_, _) => true,
+			Token::Ident(_) => true,
+			_ => false,
+		})
+		.try_map(|t, span| match t {
+			Token::Num(s, t) => match t {
+				NumType::Normal | NumType::Oct | NumType::Hex => {
+					match Lit::parse_num(&s, t) {
+						Ok(l) => match l {
+							Lit::UInt(u) => Ok(Either::Left(u as usize)),
+							Lit::Int(i) => Ok(Either::Left(i as usize)),
+							_ => unimplemented!(),
+						},
+						Err(_) => {
+							Err(Simple::custom(span, "Could not parse number!"))
+						}
+					}
+				}
+				_ => Err(Simple::custom(span, "Float values are not allowed")),
+			},
+			Token::Ident(s) => Ok(Either::Right(Ident(s))),
+			_ => unreachable!(),
+		});
+
+		just(Token::LBracket)
+			.then(size.or_not())
+			.then(just(Token::RBracket))
+			.map(|((_, s), _)| s)
+	};
+
 	// Expressions of all kinds.
 	let expr = recursive(|expr| {
-		let val = filter(|t: &Token| match t {
+		let arr_init = type_ident
+			.clone()
+			.then(arr.clone())
+			.then(
+				expr.clone()
+					.separated_by(just(Token::Comma))
+					.delimited_by(just(Token::LParen), just(Token::RParen)),
+			)
+			.map(|((type_, size), args)| Expr::Array {
+				type_: Type::Array(type_, size),
+				args,
+			});
+
+		let init_list = arr_init.or(expr
+			.clone()
+			.separated_by(just(Token::Comma))
+			.delimited_by(just(Token::LBrace), just(Token::RBrace))
+			.map(|v| Expr::InitList(v)));
+
+		let fn_call = init_list.or(filter(|t: &Token| match t {
+			Token::Ident(_) => true,
+			_ => false,
+		})
+		.then(
+			expr.clone()
+				.separated_by(just(Token::Comma))
+				.delimited_by(just(Token::LParen), just(Token::RParen)),
+		)
+		.try_map(|(t, args), span| {
+			let str = if let Token::Ident(s) = t {
+				s
+			} else {
+				unreachable!()
+			};
+
+			match Ident::parse_name(&str) {
+				Ok(i) => Ok(Expr::Fn { ident: i, args }),
+				Err(_) => Err(Simple::custom(span, "Invalid identifier")),
+			}
+		}));
+
+		let val = fn_call.or(filter(|t: &Token| match t {
 			Token::Bool(_) => true,
 			Token::Num(_, _) => true,
 			Token::Ident(_) => true,
@@ -497,9 +659,12 @@ fn parser() -> impl Parser<Token, Vec<Stmt>, Error = Simple<Token>> {
 				Ok(l) => Ok(Expr::Lit(l)),
 				Err(_) => Err(Simple::custom(span, "Could not parse number")),
 			},
-			Token::Ident(s) => Ok(Expr::Ident(Ident(s))),
+			Token::Ident(s) => match Ident::parse_name(&s) {
+				Ok(i) => Ok(Expr::Ident(i)),
+				Err(_) => Err(Simple::custom(span, "Invalid identifier")),
+			},
 			_ => unreachable!(),
-		});
+		}));
 
 		let atom =
 			val.or(expr.delimited_by(just(Token::LParen), just(Token::RParen)));
@@ -566,106 +731,6 @@ fn parser() -> impl Parser<Token, Vec<Stmt>, Error = Simple<Token>> {
 		sum
 	});
 
-	// Identifier for a name.
-	let ident = filter(|t: &Token| match t {
-		Token::Ident(_) => true,
-		_ => false,
-	})
-	.try_map(|t, span| {
-		let str = if let Token::Ident(s) = t {
-			s
-		} else {
-			unreachable!()
-		};
-
-		match Ident::parse_name(&str) {
-			Ok(i) => Ok(i),
-			Err(_) => Err(Simple::custom(
-				span,
-				"Identifier cannot be the same as a type",
-			)),
-		}
-	});
-
-	// Type identifiers of any type, (incl. void).
-	let type_ident = filter(|t: &Token| match t {
-		Token::Ident(_) => true,
-		_ => false,
-	})
-	.try_map(|t, span| {
-		// Deconstruct the string.
-		let str = if let Token::Ident(s) = t {
-			s
-		} else {
-			unreachable!()
-		};
-
-		// First, try to parse a primitive type identifier. If not, try to parse a valid custom type identifier.
-		match Primitive::parse(&str) {
-			Ok(p) => Ok(Either::Left(p)),
-			Err(_) => match Ident::parse_struct(&str) {
-				Ok(i) => Ok(Either::Right(i)),
-				Err(_) => Err(Simple::custom(span, "Invalid type")),
-			},
-		}
-	});
-
-	// Type identifiers that are allowed for variable declarations.
-	let var_type_ident = filter(|t: &Token| match t {
-		Token::Ident(_) => true,
-		_ => false,
-	})
-	.try_map(|t, span| {
-		// Deconstruct the string.
-		let str = if let Token::Ident(s) = t {
-			s
-		} else {
-			unreachable!()
-		};
-
-		// First, try to parse a primitive type identifier. If not, try to parse a valid custom type identifier.
-		match Primitive::parse_var(&str) {
-			Ok(p) => Ok(Either::Left(p)),
-			Err(_) => match Ident::parse_struct(&str) {
-				Ok(i) => Ok(Either::Right(i)),
-				Err(_) => Err(Simple::custom(span, "Invalid type")),
-			},
-		}
-	});
-
-	// Array size, i.e. `[...]`.
-	let arr = {
-		let size = filter(|t: &Token| match t {
-			Token::Num(_, _) => true,
-			Token::Ident(_) => true,
-			_ => false,
-		})
-		.try_map(|t, span| match t {
-			Token::Num(s, t) => match t {
-				NumType::Normal | NumType::Oct | NumType::Hex => {
-					match Lit::parse_num(&s, t) {
-						Ok(l) => match l {
-							Lit::UInt(u) => Ok(Either::Left(u as usize)),
-							Lit::Int(i) => Ok(Either::Left(i as usize)),
-							_ => unimplemented!(),
-						},
-						Err(_) => {
-							Err(Simple::custom(span, "Could not parse number!"))
-						}
-					}
-				}
-				_ => Err(Simple::custom(span, "Float values are not allowed")),
-			},
-			Token::Ident(s) => Ok(Either::Right(Ident(s))),
-			_ => unreachable!(),
-		});
-
-		just(Token::LBracket)
-			.then(size.or_not())
-			.then(just(Token::RBracket))
-			.map(|((_, s), _)| s)
-	};
-
 	// Variable declaration.
 	let var = var_type_ident
 		.then(ident)
@@ -699,9 +764,10 @@ fn parser() -> impl Parser<Token, Vec<Stmt>, Error = Simple<Token>> {
 		.then(ident)
 		.then_ignore(just(Token::LParen))
 		.then_ignore(just(Token::RParen))
-		.then_ignore(just(Token::LBrace))
-		.then(stmt.clone().repeated())
-		.then_ignore(just(Token::RBrace))
+		.then(
+			stmt.repeated()
+				.delimited_by(just(Token::LBrace), just(Token::RBrace)),
+		)
 		.map(|((type_ident, ident), body)| Stmt::FnDecl {
 			type_: Type::Basic(type_ident),
 			ident,

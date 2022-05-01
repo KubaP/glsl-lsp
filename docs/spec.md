@@ -1,11 +1,58 @@
-# Spec
-Notes:
-- Currently ignoring the existence of `double`, `dvecn`, and `dmatmxn` types.
-- Currently ignoring the existence of `component` qualifiers.
+# OpenGL Shading Language Specification
+Missing/incomplete:
+- Buffer objects
+- Images
+- Atomic counters
+- `f` number suffix
+- Arrays/opaque arrays limitations
 
-## Types
+# Types
+### Standard Types
+Scalars:
+- `bool`
+- `int`
+- `uint`
+- `float`
+- `double`
 
-## Literals
+Vectors (where `2 <= n <= 4`):
+- `bvecn` - vector of booleans
+- `ivecn` - vector of integers
+- `uvecn` - vector of unsignedintegers
+- `vecn` - vector of floats
+- `dvec` - vector of double precision floats
+
+Matrices (where n is the number of columns and m is the number of rows, and they satisfy `2 <= n/m <= 4`):
+- `matnxm` - matrix of floats
+- `dmatnxm` - matrix of double precision floats
+
+### Opaque Types
+These are types which act as a reference to some external object. A clear analogy would be, like pointers are fundamentally integers but they have special meaning, the same thing is with opaque types. Opaque types can only be part of a `uniform` global variable.
+
+- Samplers - A bound texture,
+- Images - TODO,
+- Atomic counters - TODO
+
+### Structs
+User-defined structs can be created like so:
+```glsl
+struct NAME {
+    float f;
+    vec3 v;
+} OPTIONAL_NAME;
+```
+Structs must have at least one member defined. `OPTIONAL_NAME` is an identifier of an instance of the struct.
+
+If a struct contains an [Opaque Type](#opaque-types), then it can only be used in places that accept such types (mainly `uniform` globals).
+
+## Implicit Conversions
+Signed integers can be implicitly converted to unsigned integers (but not the other way round).
+
+Any integer types can be implicitly converted to a float. Integer types and floats can be implicitly converted to doubles.
+
+Vectors and matrices can be converted if the type they're built-on can be implicitly converted.
+
+# Literals
 These are the allowed literals:
 - `bool` - `true` and `false`,
 - `int` - `1` (prefix `0` for base-8 or prefix `0x` for base-16),
@@ -17,15 +64,11 @@ These are the allowed literals:
 The following notations are valid:
 ```glsl
 0
--0
-{1..9}+
--{1..9}+
+{1..9}{0..9}+
 
 0{0..7}+
--0{0..7}+
 
 0x{0..F}+
--0x{0..F}+
 
 1.0
 1.0{e|E}5
@@ -36,20 +79,21 @@ The following notations are valid:
 1{e|E}5{lf|LF}
 ```
 
-## Operators
+### Operators
 Mathematical operators:
 ```glsl
-1 + 2
-1 - 2
-1 * 2
-1 / 2
-1 % 2
-1 & 2
-1 | 2
-1 ^ 2
-1 << 2
-1 >> 2
+1 + 2  // Addition
+1 - 2  // Subtraction
+1 * 2  // Multiplication
+1 / 2  // Division
+1 % 2  // Remainder
+1 & 2  // Bitwise AND
+1 | 2  // Bitwise OR
+1 ^ 2  // Bitwise XOR
+1 << 2 // Binary left shit
+1 >> 2 // Binary right shift
 
+// Same as above, but assigns the result back to the variable.
 i += 5
 i -= 5
 i *= 5
@@ -61,56 +105,98 @@ i ^= 5
 i <<= 5
 i >>= 5
 
-i ++
-i --
+i ++ // Increment
+i -- // Decrement
 
-~ i
+~ i  // Bitwise flip
 ```
 
 Comparison operators:
 ```glsl
-a == b
-a != b
-a > b
-a < b
-a >= b
-a <= b
+a == b // Equals
+a != b // Not equals
+a > b  // Greater than
+a < b  // Less than
+a >= b // Greater or equal to
+a <= b // Less than or equal to
 
-a && b
-a || b
-a ! b
+a && b // Logical AND
+a || b // Logical OR
+a ! b  // Logical NOT
 ```
 
-## Variable Identifiers
+# Variables
+Variables cannot be of the `void` type. This applies to any variable type, local, global, etc.
+
 Variable identifiers:
 - cannot be the same as a type identifier.
-- cannot start with the `gl_` prefix. Note that `gl` or just `g` is allowed.
+- cannot start with the `gl_` prefix; note that `gl` or even just `g` is allowed. (The exception is some built-in variables).
+
+## Initialization
+Variables can be initialized at the site of declaration:
+```glsl
+// Literal assignment
+int p = 5;
+
+// Identifier assignment, assuming 'other_float' is already declared _and_ initialized.
+float f = other_float;
+
+// Type constructor.
+vec3 v = vec3(1.0, 1.0, 1.0);
+
+// Standard function call.
+mat4 m = my_func();
+
+// Array constructor.
+int i[3] = int[3](1, 2, 3);
+
+// Initializer list.
+int i[3] = {1, 2, 3};
+int i[2][4] = {
+    {1, 2, 3, 4},
+    {5, 6, 7, 8}
+};
+
+// Struct constructor.
+struct Data {
+    float f;
+    vec2 v;
+};
+Data d = Data(1.0, vec2(1.0, 2.0));
+```
+For `const` qualified variables (or other constant variables such as `uniform` globals), any expression must also be a *Constant Expression*.
+
+There is technically no difference between standard function calls and type constructors.
+
+Array constructors cannot be nested; all other initializers can.
 
 ## Global Variables
-There are multiple forms of global variables. Some are immutable, some can be passed as structs; this section details the possible qualifiers for global variables. There is one main distinction between global variables; they are either "standard" variables which are set/modified within the execution of the program, or they are "external" variables which either pass data *into* or *out of* the program. These variables use either the `in`, `out` or `uniform` storage qualifier.
-
-Variables in general cannot be of the `void` type. This applies to any variable type, local, global, etc.
+Variables in the global scope have certain special properties/abilities. There is one main distinction between global variables; they are either "standard" variables which are set/modified within the execution of the program, or they are "external" variables which either pass data *into* or *out of* the program. These variables use either the `in`, `out` or `uniform` storage qualifier.
 
 ### Standard Variables
-Global variables declared without a storage qualifier (`in`, `out`, `uniform`) are just standard variables. Globals can be declared of any type or array of types:
+Global variables declared without a storage qualifier (`in`, `out`, `uniform`) are just standard variables. Globals can be declared of any type or array of types; they follow the same rules as local variables:
 ```glsl
 vec3 p;
 mat4 m[2];
-float f[5][2];
+const float f[5][2] = {/*...*/};
 ```
 Standard global variables can **only** have a [Const Qualifier](#qualifiers).
 
-Standard global variables can be [Default Initialized](#default-initialization).
+Standard global variables can be [Default Initialized](#initialization).
 
 ### Inputs
-Inputs into a vertex shader are also known as vertex attributes. Inputs can be declared of any type or array of types:
+Inputs can be declared of any type or array of types:
 ```glsl
 in vec3 p;
 in mat4 m[2];
+in VData {
+    vec3 pos;
+    vec3 colour;
+} inData;
 ```
-Inputs are immutable, though they are not *Constant Expressions*. Any attempt to assign to them (either directly or through `out`/`inout` qualifiers) is an error. They cannot be of a struct type, but they can be an [Interface Block](#interface-blocks) (aside from vertex inputs). They also cannot be of any non-*Opaque Type*.
+Inputs are immutable, though they are not *Constant Expressions*. Any attempt to assign to them (either directly or through `out`/`inout` qualifiers) is an error. They cannot be of a struct type, but they can be an [Interface Block](#interface-blocks) (aside from vertex inputs). They also cannot be of any [Opaque Type](#opaque-types).
 
-Vertex inputs can have a [Location Qualifier](#location-qualifiers).
+Inputs into a vertex shader are also known as vertex attributes. Vertex inputs can have a [Location Qualifier](#location-qualifiers).
 
 Fragment inputs can have a special [Fragment Test Qualifier](#fragment-test-qualifier). Fragment shaders can re-define a `gl_FragCoord` input with a [Origin Qualifier](#fragcoord-qualifier). Fragment shaders can re-define a `gl_FragDepth` input with a [Depth Qualifier](#fragdepth-qualifier).
 
@@ -140,11 +226,10 @@ in int gl_ViewportIndex;
 ```
 
 ### Uniforms
-Uniforms can be declared of any type (including *Opaque Types*, but not `void`), array of types, or struct:
+Uniforms can be declared of any type (including [Opaque Types](#opaque-types)), array of types, or struct:
 ```glsl
-uniform vec3 p;
 uniform mat4 m[2];
-
+uniform vec3 p = vec3(1.0, 0.5, 0.0);
 struct Foo {
     vec2 a;
     float[5] b;
@@ -153,11 +238,7 @@ uniform Foo f;
 ```
 Uniforms are immutable, though they are not *Constant Expressions*. Any attempt to assign to them (either directly or through `out`/`inout` qualifiers) is an error.
 
-Uniforms can be [Default Initialized](#default-initialization):
-```glsl
-uniform vec3 p = vec3(1.0, 0.5, 0.0);
-```
-Note that *Opaque Types* are not allowed to be default initialized.
+Uniforms can be [Default Initialized](#initialization) as long as they are not a [Opaque Type](#opaque-types).
 
 Uniforms defined traditionally (not an interface block) can have a [Location Qualifier](#location-qualifiers):
 ```glsl
@@ -179,10 +260,14 @@ Outputs can be declared of any\* type or array of types:
 ```glsl
 out vec p;
 out mat4 m[2];
+out VData {
+    vec3 pos;
+    vec3 colour;
+} outData;
 ```
-Outputs are mutable and **must** be assigned to (unless a fragment shader executes the `discard` statement). They cannot be of a struct type, but they can be an [Interface Block](#interface-blocks) (aside from fragment outputs). They also cannot be of any non-*Opaque Type*.
+Outputs are mutable and **must** be assigned to (unless a fragment shader executes the `discard` statement). They cannot be of a struct type, but they can be an [Interface Block](#interface-blocks) (aside from fragment outputs).
 
-\*Outputs from the fragment shader can only be of the types: `float`, `int` and `{_, i}vecn`. They **cannot** be an *Interface Block*.
+Outputs cannot be of any [Opaque Type](#opaque-types). \*Outputs from the fragment shader can only be of the types: `float`, `int` and `{_, i}vecn`.
 
 Vertex outputs can have an [Interpolation Qualifier](#interpolation-qualifiers).
 
@@ -208,11 +293,11 @@ out int gl_SampleMask[];
 ### Interface Blocks
 Interface blocks are defined like so:
 ```glsl
-TYPE Foo {
+QUALIFIER Foo {
     vec3 p;
     mat4 m;
 } OPTIONAL_NAME;
-// where TYPE =
+// where QUALIFIER =
 uniform
 in
 out
@@ -228,17 +313,9 @@ uniform Foo {
 } obj[2];
 ```
 
-Interface blocks **cannot contain** *Opaque Types*, and types inside cannot be default initialized.
+Interface blocks **cannot contain** [Opaque Types](#opaque-types), and types inside cannot be default initialized.
 
-## Default Initialization
-Default initialization for global variables looks like so:
-```glsl
-int p = 5;
-uniform vec3 = vec3(1.0, 1.0, 1.0);
-```
-The value must either be a matching literal, or a function call that returns a value. For `const` qualified variables, a function call must also be a constant expression.
-
-## Qualifiers
+# Qualifiers
 There are many qualifiers, and they must be declared in the following order:
 ```text
 [INVARIANT] [INTERPOLATION] [LAYOUT] [PRECISION] type ...
@@ -249,7 +326,7 @@ For standard global variables, i.e. without any `in`/`out`/`uniform` storage qua
 const type ...
 ```
 
-### Invariant Qualifier
+## Invariant Qualifier
 Invariant qualifiers are declared like so:
 ```glsl
 invariant out vec3 p;
@@ -264,7 +341,7 @@ invariant gl_Position;
 ```
 Invariant qualifiers are entirely useless on inputs; they do not have to conform to *Interface Matching*.
 
-### Interpolation Qualifiers
+## Interpolation Qualifiers
 Interpolation qualifiers are declared like so:
 ```glsl
 ... out vec3 p;
@@ -274,7 +351,7 @@ smooth
 noperspective
 ```
 
-### Precision Qualifiers
+## Precision Qualifiers
 Precision qualifiers have no use; they are only a feature in OpenGL ES and they only exist in normal OpenGL for syntax compatibility:
 ```glsl
 precision ...
@@ -285,7 +362,7 @@ lowp
 ```
 They can only be applied to `int`, `float`, `{_, i}vecn` and `matmxn` types.
 
-### Layout Qualifiers
+## Layout Qualifiers
 Layout qualifiers are annotations which precede the rest of a global variable's declaration:
 ```glsl
 layout(...) ...
@@ -293,7 +370,7 @@ layout(...) ...
 layout(location = 5, component = 2) ...
 ```
 
-#### Location
+### Location
 Location qualifiers are declared like so:
 ```glsl
 location = #
@@ -306,7 +383,7 @@ const n = #;
 ```
 If there is no location qualifier for a global variable, then it is randomly assigned an index. This index is **completely arbitrary**.
 
-#### Type Sizing
+### Type Sizing
 Along with an index, there is a size for the location which depends on the type:
 
 **1** index|
@@ -334,7 +411,7 @@ layout(location = 6) in vec3 p;     // error
 ```
 *Note:* Component qualifiers allow *some* overlap of indices; however currently unimplemented.
 
-#### FragCoord Qualifier
+## FragCoord Qualifier
 This is a special re-definition of the built-in `gl_FragCoord` input which defines the origin of the fragment:
 ```glsl
 layout(...) in vec4 gl_FragCoord;
@@ -344,7 +421,7 @@ pixel_center_integer
 // Both can be declared together.
 ```
 
-#### FragDepth Qualifier
+## FragDepth Qualifier
 This is a special re-definition of the built-in `gl_FragDepth` output which defines the depth condition:
 ```glsl
 layout(...) out float gl_FragDepth;
@@ -355,14 +432,14 @@ depth_less
 depth_unchanged
 ```
 
-#### Index Qualifier
+## Index Qualifier
 Index qualifiers are declared like so:
 ```glsl
 index = #
 ```
 If there is no index qualifier, then it is assigned the value 0.
 
-#### Fragment Test Qualifier
+## Fragment Test Qualifier
 This is a special input for fragment shaders (awkward because in this example the syntax is valid even though there is no type or identifier after the `in` token):
 ```glsl
 layout(early_fragment_tests) in;

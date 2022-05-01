@@ -7,20 +7,24 @@
     - ~~Identifiers~~
     - ~~Negations~~
     - ~~Binary expressions (inc. parenthesis)~~
-    - Function calls
-    - Array constructors
-    - Initializer lists
+    - ~~Function calls~~
+    - ~~Array constructors~~
+    - ~~Initializer lists~~
 - Variable declaration
     - Const qualifier
     - ~~Type~~
-    - N-dimensional arrays
+    - ~~N-dimensional arrays~~
     - ~~Identifier~~
     - ~~Value assignment~~
+    - ~~Lack of value assignment~~
 - Function declaration
     - ~~Return type~~
     - ~~Identifier~~
     - Parameters
     - ~~Body~~
+- ~~Function call~~
+    - ~~Identifier~~
+    - ~~Arguments~~
 - Struct declaration
     - Identifier
     - Members

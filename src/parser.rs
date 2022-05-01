@@ -93,6 +93,17 @@ fn print_stmt(stmt: &Stmt, indent: usize) {
 			}
 			print!("\r\n}}")
 		}
+		Stmt::FnCall { ident, args } => {
+			print!(
+				"\r\n{:indent$}\x1b[34m{ident}\x1b[0m(",
+				"",
+				indent = indent * 4
+			);
+			for arg in args {
+				print_expr(arg, indent + 1);
+			}
+			print!(" )");
+		}
 	}
 }
 
@@ -753,11 +764,25 @@ fn parser() -> impl Parser<Token, Vec<Stmt>, Error = Simple<Token>> {
 			value: None,
 		});
 
+	// Function call on its own.
+	let fn_call = ident
+		.then(
+			expr.clone()
+				.separated_by(just(Token::Comma))
+				.delimited_by(just(Token::LParen), just(Token::RParen)),
+		)
+		.then_ignore(just(Token::Semi))
+		.map(|(ident, args)| Stmt::FnCall { ident, args });
+
 	// Empty statement.
 	let empty = just(Token::Semi).map(|_| Stmt::Empty);
 
 	// All statements.
-	let stmt = var.clone().or(var_uninit.clone()).or(empty.clone());
+	let stmt = var
+		.clone()
+		.or(var_uninit.clone())
+		.or(fn_call)
+		.or(empty.clone());
 
 	// Function declaration.
 	let func = type_ident

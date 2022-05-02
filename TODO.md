@@ -1,7 +1,9 @@
 ## Parsing
-- Version directive
-- Extension directive
-- Preprocessor directives
+- ~~Version directive~~
+- ~~Extension directive~~
+- ~~Line directive~~
+- C directives (WIP)
+- Macros
 - Expressions
     - ~~Literals~~
     - ~~Identifiers~~
@@ -10,6 +12,7 @@
     - ~~Function calls~~
     - ~~Array constructors~~
     - ~~Initializer lists~~
+    - Struct member access
 - Variable declaration
     - ~~Const qualifier~~
     - ~~Type~~
@@ -22,7 +25,7 @@
     - ~~Identifier~~
     - ~~Parameters~~
     - ~~Body~~
-- ~~Function call~~
+- Function call
     - ~~Identifier~~
     - ~~Arguments~~
 - Struct declaration

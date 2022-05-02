@@ -5,6 +5,7 @@ Missing/incomplete:
 - Atomic counters
 - `f` number suffix
 - Arrays/opaque arrays limitations
+- Subroutines
 
 # Types
 ### Standard Types
@@ -444,3 +445,112 @@ This is a special input for fragment shaders (awkward because in this example th
 ```glsl
 layout(early_fragment_tests) in;
 ```
+
+# Preprocessor
+
+## Directives
+### Version
+The version directive is specified like so:
+```glsl
+#version NUM PROFILE
+// E.g.
+#version 450 core
+#version 460
+```
+`NUM` is the version string without the dot (`.`), so version 4.50 is `450`. Unless specified, `110` is the default.
+
+`PROFILE` is either `core` or `compatibility`. Unless specified, `core` is the default. You can omit the profile, but the version number must be present.
+
+This directive must be the first statement in the file (aside from whitespace/comments), and it cannot be repeated.
+
+### Extension
+The extension directive is specified like so:
+```glsl
+#extension NAME : BEHAVIOUR
+```
+`NAME` specifies the name of the extension; the value `all` is also allowed.
+
+`BEHAVIOUR` is one of the following:
+- `enable` - Enables the extension. If not supported, a warning is generated.
+- `require` - Enables the extension. If not supported, the compilation fails.
+- `warn` - Enables the extension. If used, it will produce warnings.
+- `disable` - Disabled the extension. 
+
+### Line
+The line directive is specified like so:
+```glsl
+#line LINE SRC-STR-NUM
+```
+`LINE` must be greater than `0`. The `SRC-STR-NUM` is optional.
+
+### C Directives
+These directives come from the C language.
+
+#### ~~include~~
+```glsl
+#include "FILE"
+```
+`FILE` is a path string.
+
+Not supported natively by GLSL.
+
+#### define
+#### undef
+```glsl
+#undef SYMBOL
+```
+`SYMBOL` is any identifier string.
+
+#### ifdef
+```glsl
+#ifdef SYMBOL
+```
+`SYMBOL` is any identifier string.
+
+#### ifndef
+```glsl
+#ifndef SYMBOL
+```
+`SYMBOL` is any identifier string.
+
+#### if
+#### elif
+#### else
+```glsl
+#else
+```
+
+#### endif
+```glsl
+#endif
+```
+
+#### error
+Causes the compiler to error and print the text in the compile debug log output:
+```glsl
+#error TEXT
+```
+`TEXT` is any string of characters until a new line.
+
+#### pragma
+Controls compiler options:
+```glsl
+#pragma OPTIONS
+```
+`OPTIONS` is any string of characters until a new line.
+
+## Macros
+### __FILE__
+It is **not** a file name. It is a decimal integer representing which string in the list of strings the shader came from.
+
+### __LINE__
+The line number
+
+### __VERSION__
+The version number as an integer, i.e. version 4.50 is `450`.
+
+### GL_core_profile
+Always defined to be `1`.
+
+### GL_compatibility_profile
+Defined to `1` if the profile is set to *compatibility*.

@@ -789,12 +789,19 @@ fn parser() -> impl Parser<Token, Vec<Stmt>, Error = Simple<Token>> {
 	})
 	.try_map(|t, span: std::ops::Range<usize>| match t {
 		Token::Directive(s) => {
-			let (stmt, _error) = preproc_parser().parse_recovery(s);
+			let (stmt, errors) = preproc_parser().parse_recovery(s);
+
+			if let Some(_) = errors.first() {
+				return Err(Simple::custom(
+					span,
+					"Error parsing preproc directive",
+				));
+			}
 
 			if let Some(stmt) = stmt {
 				Ok(stmt)
 			} else {
-				Err(Simple::custom(span, "error parsing directive"))
+				Ok(Stmt::Preproc(Preproc::Unsupported))
 			}
 		}
 		_ => unreachable!(),
@@ -1052,4 +1059,8 @@ fn preproc_parser() -> impl Parser<char, Stmt, Error = Simple<char>> {
 		.or(line)
 		.or(error)
 		.or(pragma)
+		.or(any()
+			.repeated()
+			.then_ignore(end())
+			.to(Stmt::Preproc(Preproc::Unsupported)))
 }

@@ -74,6 +74,7 @@ pub enum Preproc {
 	EndIf,
 	Error(String),
 	Pragma(String),
+	Unsupported,
 }
 
 impl std::fmt::Display for Preproc {
@@ -104,6 +105,7 @@ impl std::fmt::Display for Preproc {
 			Preproc::EndIf => write!(f, "END"),
 			Preproc::Error(s) => write!(f, "error=\"{s}\""),
 			Preproc::Pragma(s) => write!(f, "pragma=\"{s}\""),
+			Preproc::Unsupported => write!(f, "UNSUPPORTED"),
 		}
 	}
 }

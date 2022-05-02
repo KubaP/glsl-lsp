@@ -963,5 +963,93 @@ fn preproc_parser() -> impl Parser<char, Stmt, Error = Simple<char>> {
 			},
 		);
 
-	version.or(extension).or(line)
+	let include = text::keyword("include")
+		.ignored()
+		.padded()
+		.then(
+			filter(|c: &char| {
+				// TODO: Check which characters are actually valid within an include path.
+				c.is_ascii_alphanumeric()
+					|| c.is_ascii_whitespace()
+					|| *c == '.' || *c == '/'
+					|| *c == '\\'
+			})
+			.repeated()
+			.delimited_by(just('"'), just('"')),
+		)
+		.then_ignore(end())
+		.map(|(_, v)| Stmt::Preproc(Preproc::Include(v.iter().collect())));
+
+	let error = text::keyword("error")
+		.ignored()
+		.padded()
+		.then(
+			filter(|c: &char| {
+				// TODO: Check which characters are actually valid within a message.
+				c.is_ascii_alphanumeric()
+					|| c.is_ascii_punctuation()
+					|| c.is_ascii_whitespace()
+			})
+			.repeated(),
+		)
+		.map(|(_, v)| Stmt::Preproc(Preproc::Error(v.iter().collect())));
+
+	let pragma = text::keyword("pragma")
+		.ignored()
+		.padded()
+		.then(
+			// TODO: Check which characters are actually valid within pragma options.
+			filter(|c: &char| {
+				c.is_ascii_alphanumeric()
+					|| c.is_ascii_punctuation()
+					|| c.is_ascii_whitespace()
+			})
+			.repeated(),
+		)
+		.map(|(_, v)| Stmt::Preproc(Preproc::Pragma(v.iter().collect())));
+
+	let undef = text::keyword("undef")
+		.ignored()
+		.padded()
+		.then(text::ident().padded())
+		.then_ignore(end())
+		.map(|(_, symbol)| Stmt::Preproc(Preproc::UnDef(symbol)));
+
+	let ifdef = text::keyword("ifdef")
+		.ignored()
+		.padded()
+		.then(text::ident().padded())
+		.then_ignore(end())
+		.map(|(_, symbol)| Stmt::Preproc(Preproc::IfDef(symbol)));
+
+	let ifndef = text::keyword("ifdef")
+		.ignored()
+		.padded()
+		.then(text::ident().padded())
+		.then_ignore(end())
+		.map(|(_, symbol)| Stmt::Preproc(Preproc::IfnDef(symbol)));
+
+	let else_ = text::keyword("else")
+		.ignored()
+		.padded()
+		.then_ignore(end())
+		.to(Stmt::Preproc(Preproc::Else));
+
+	let endif = text::keyword("endif")
+		.ignored()
+		.padded()
+		.then_ignore(end())
+		.to(Stmt::Preproc(Preproc::EndIf));
+
+	version
+		.or(include)
+		.or(ifdef)
+		.or(ifndef)
+		.or(undef)
+		.or(else_)
+		.or(endif)
+		.or(extension)
+		.or(line)
+		.or(error)
+		.or(pragma)
 }

@@ -67,7 +67,13 @@ pub enum Preproc {
 		src_str: Option<usize>,
 	},
 	Include(String),
+	UnDef(String),
+	IfDef(String),
+	IfnDef(String),
+	Else,
+	EndIf,
 	Error(String),
+	Pragma(String),
 }
 
 impl std::fmt::Display for Preproc {
@@ -90,8 +96,14 @@ impl std::fmt::Display for Preproc {
 					format!(" ")
 				}
 			),
-			Preproc::Error(s) => write!(f, "error=\"{s}\""),
 			Preproc::Include(s) => write!(f, "include=\"{s}\""),
+			Preproc::UnDef(s) => write!(f, "UNDEF=\"{s}\""),
+			Preproc::IfDef(s) => write!(f, "IFDEF=\"{s}\""),
+			Preproc::IfnDef(s) => write!(f, "IFNDEF=\"{s}\""),
+			Preproc::Else => write!(f, "ELSE"),
+			Preproc::EndIf => write!(f, "END"),
+			Preproc::Error(s) => write!(f, "error=\"{s}\""),
+			Preproc::Pragma(s) => write!(f, "pragma=\"{s}\""),
 		}
 	}
 }

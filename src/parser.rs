@@ -1,4 +1,6 @@
-use crate::ast::{Either, Expr, Ident, Lit, Primitive, Stmt, Type};
+use crate::ast::{
+	Either, Expr, ExtBehaviour, Ident, Lit, Preproc, Primitive, Stmt, Type,
+};
 use chumsky::{prelude::*, Stream};
 
 pub fn parse(source: &str) {
@@ -118,6 +120,11 @@ fn print_stmt(stmt: &Stmt, indent: usize) {
 			}
 			print!(" )");
 		}
+		Stmt::Preproc(p) => print!(
+			"\r\n{:indent$}\x1b[4mPreproc({p})\x1b[0m",
+			"",
+			indent = indent * 4
+		),
 	}
 }
 
@@ -130,6 +137,7 @@ enum Token {
 	Bool(bool),
 	Ident(String),
 	Type(String),
+	Directive(String),
 	// Keywords
 	If,
 	Else,
@@ -228,15 +236,33 @@ type Spanned<T> = (T, Span);
 type Span = std::ops::Range<usize>;
 
 fn lexer() -> impl Parser<char, Vec<Spanned<Token>>, Error = Simple<char>> {
-	let ident = text::ident().map(|s| Token::Ident(s));
+	let directive = just('#')
+		.then(
+			filter(|c: &char| {
+				// TODO: Check which characters are actually valid within a preprocessor directive.
+				c.is_ascii_alphanumeric()
+					|| c.is_ascii_punctuation()
+					|| *c == ' '
+			})
+			.repeated()
+			.at_least(1),
+		)
+		.then_ignore(text::newline().or(end()))
+		.map(|(_, v)| Token::Directive(v.iter().collect()))
+		.padded();
 
+	let ident = text::ident().map(|s| Token::Ident(s));
 	let token = literals()
 		.or(punctuation())
 		.or(keywords())
 		.or(ident)
-		.recover_with(skip_then_retry_until([]));
+		.padded();
 
-	token.map_with_span(|t, s| (t, s)).padded().repeated()
+	directive
+		.or(token)
+		.map_with_span(|t, s| (t, s))
+		.repeated()
+		.recover_with(skip_then_retry_until([]))
 }
 
 /// Parse punctuation symbols that aren't mathematical/comparison operators.
@@ -756,6 +782,24 @@ fn parser() -> impl Parser<Token, Vec<Stmt>, Error = Simple<Token>> {
 		sum
 	});
 
+	// Preprocessor directives.
+	let preproc = filter(|t: &Token| match t {
+		Token::Directive(_) => true,
+		_ => false,
+	})
+	.try_map(|t, span: std::ops::Range<usize>| match t {
+		Token::Directive(s) => {
+			let (stmt, _error) = preproc_parser().parse_recovery(s);
+
+			if let Some(stmt) = stmt {
+				Ok(stmt)
+			} else {
+				Err(Simple::custom(span, "error parsing directive"))
+			}
+		}
+		_ => unreachable!(),
+	});
+
 	// Const qualifier.
 	let const_ = just(Token::Const).or_not().map(|t| t.is_some());
 
@@ -806,6 +850,7 @@ fn parser() -> impl Parser<Token, Vec<Stmt>, Error = Simple<Token>> {
 		.clone()
 		.or(var_uninit.clone())
 		.or(fn_call)
+		.or(preproc.clone())
 		.or(empty.clone());
 
 	// Function parameter.
@@ -833,5 +878,90 @@ fn parser() -> impl Parser<Token, Vec<Stmt>, Error = Simple<Token>> {
 			body,
 		});
 
-	func.or(var).or(var_uninit).or(empty).repeated()
+	func.or(var).or(var_uninit).or(empty).or(preproc).repeated()
+}
+
+fn preproc_parser() -> impl Parser<char, Stmt, Error = Simple<char>> {
+	let version = text::keyword("version")
+		.ignored()
+		.padded()
+		.then(text::digits(10).padded())
+		.then(text::ident().padded().or_not())
+		.try_map(|((_, v), p), span| {
+			let is_core = if let Some(p) = p {
+				if p == "core" {
+					true
+				} else if p == "compatibility" {
+					false
+				} else {
+					return Err(Simple::custom(span, "invalid profile"));
+				}
+			} else {
+				true
+			};
+
+			if v != "450" {
+				return Err(Simple::custom(span, "invalid version"));
+			}
+
+			Ok(Stmt::Preproc(Preproc::Version {
+				version: 450,
+				is_core,
+			}))
+		});
+
+	let extension = text::keyword("extension")
+		.ignored()
+		.padded()
+		.then(text::ident().padded())
+		.then_ignore(just(':').padded())
+		.then(text::ident().padded())
+		.try_map(|((_, name), ext), span| {
+			let ext = match ext.as_str() {
+				"enable" => ExtBehaviour::Enable,
+				"disable" => ExtBehaviour::Disable,
+				"warn" => ExtBehaviour::Warn,
+				"require" => ExtBehaviour::Require,
+				_ => return Err(Simple::custom(span, "Invalid behaviour")),
+			};
+
+			Ok(Stmt::Preproc(Preproc::Extension {
+				name,
+				behaviour: ext,
+			}))
+		});
+
+	let line = text::keyword("line")
+		.ignored()
+		.padded()
+		.then(text::digits(10).padded())
+		.then(text::digits(10).padded().or_not())
+		.try_map(
+			|((_, line), src_str): (((), String), Option<String>), span| {
+				let line = match usize::from_str_radix(line.as_str(), 10) {
+					Ok(i) => i,
+					Err(_) => {
+						return Err(Simple::custom(span, "Invalid line number"))
+					}
+				};
+
+				let src_str = if let Some(src_str) = src_str {
+					match usize::from_str_radix(src_str.as_str(), 10) {
+						Ok(i) => Some(i),
+						Err(_) => {
+							return Err(Simple::custom(
+								span,
+								"Invalid line number",
+							))
+						}
+					}
+				} else {
+					None
+				};
+
+				Ok(Stmt::Preproc(Preproc::Line { line, src_str }))
+			},
+		);
+
+	version.or(extension).or(line)
 }

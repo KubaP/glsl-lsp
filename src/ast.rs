@@ -48,6 +48,60 @@ pub enum Stmt {
 	},
 	/// Function call (on its own, as opposed to being part of a larger expression).
 	FnCall { ident: Ident, args: Vec<Expr> },
+	/// Preprocessor calls.
+	Preproc(Preproc),
+}
+
+#[derive(Debug, Clone)]
+pub enum Preproc {
+	Version {
+		version: usize,
+		is_core: bool,
+	},
+	Extension {
+		name: String,
+		behaviour: ExtBehaviour,
+	},
+	Line {
+		line: usize,
+		src_str: Option<usize>,
+	},
+	Include(String),
+	Error(String),
+}
+
+impl std::fmt::Display for Preproc {
+	fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+		match self {
+			Preproc::Version { version, is_core } => write!(
+				f,
+				"version: {version} profile: {}",
+				if *is_core { "core" } else { "compat" }
+			),
+			Preproc::Extension { name, behaviour } => {
+				write!(f, "ext: {name} behaviour: {behaviour:?}")
+			}
+			Preproc::Line { line, src_str } => write!(
+				f,
+				"line: {line} src: {}",
+				if let Some(s) = src_str {
+					format!("{s}")
+				} else {
+					format!(" ")
+				}
+			),
+			Preproc::Error(s) => write!(f, "error=\"{s}\""),
+			Preproc::Include(s) => write!(f, "include=\"{s}\""),
+		}
+	}
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ExtBehaviour {
+	Enable,
+	Require,
+	Warn,
+	Disable,
 }
 
 /// A literal value.

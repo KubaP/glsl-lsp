@@ -46,6 +46,11 @@ pub enum Stmt {
 		params: Vec<(Type, Ident)>,
 		body: Vec<Stmt>,
 	},
+	/// Struct declaration.
+	StructDecl {
+		ident: Ident,
+		members: Vec<(Type, Ident)>,
+	},
 	/// Function call (on its own, as opposed to being part of a larger expression).
 	FnCall { ident: Ident, args: Vec<Expr> },
 	/// Variable assignment.

@@ -109,6 +109,17 @@ fn print_stmt(stmt: &Stmt, indent: usize) {
 			}
 			print!("\r\n}}")
 		}
+		Stmt::StructDecl { ident, members } => {
+			print!(
+				"\r\n{:indent$}\x1b[32mStruct\x1b[0m(ident=\x1b[33m{ident}\x1b[0m",
+				"",
+				indent = indent * 4
+			);
+			for (t, i) in members {
+				print!(" \x1b[33m{i}\x1b[0m=\x1b[91m{t}\x1b[0m,");
+			}
+			print!(" )");
+		}
 		Stmt::FnCall { ident, args } => {
 			print!(
 				"\r\n{:indent$}\x1b[34m{ident}\x1b[0m(",
@@ -900,7 +911,33 @@ fn parser() -> impl Parser<Token, Vec<Stmt>, Error = Simple<Token>> {
 			body,
 		});
 
-	func.or(var).or(var_uninit).or(empty).or(preproc).repeated()
+	// Struct member.
+	let member = var_type_ident
+		.then(ident)
+		.then(arr.repeated())
+		.then_ignore(just(Token::Semi))
+		.map(|((type_ident, ident), size)| {
+			(Type::new(type_ident, size), ident)
+		});
+
+	// Struct declaration.
+	let struct_ = just(Token::Struct)
+		.ignored()
+		.then(ident)
+		.then(
+			member
+				.repeated()
+				.delimited_by(just(Token::LBrace), just(Token::RBrace)),
+		)
+		.then_ignore(just(Token::Semi))
+		.map(|((_, ident), members)| Stmt::StructDecl { ident, members });
+
+	func.or(var)
+		.or(var_uninit)
+		.or(struct_)
+		.or(empty)
+		.or(preproc)
+		.repeated()
 }
 
 fn preproc_parser() -> impl Parser<char, Stmt, Error = Simple<char>> {

@@ -26,6 +26,8 @@ pub enum Expr {
 	Array { type_: Type, args: Vec<Expr> },
 	/// Initializer list.
 	InitList(Vec<Expr>),
+	/// Member access.
+	Member(Vec<Ident>),
 }
 
 #[derive(Debug, Clone)]

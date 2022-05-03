@@ -59,6 +59,13 @@ fn print_expr(expr: &Expr, indent: usize) {
 			}
 			print!(" }}");
 		}
+		Expr::Member(v) => {
+			print!(" Member( ");
+			for m in v {
+				print!("{m}.");
+			}
+			print!(" )");
+		}
 	}
 }
 
@@ -718,7 +725,51 @@ fn parser() -> impl Parser<Token, Vec<Stmt>, Error = Simple<Token>> {
 			}
 		}));
 
-		let val = fn_call.or(filter(|t: &Token| match t {
+		let member = fn_call.or(filter(|t: &Token| match t {
+			Token::Ident(_) => true,
+			_ => false,
+		})
+		.then(
+			just(Token::Dot)
+				.ignored()
+				.then(filter(|t: &Token| match t {
+					Token::Ident(_) => true,
+					_ => false,
+				}))
+				.repeated()
+				.at_least(1),
+		)
+		.try_map(|(first, v), span| {
+			let mut vec = Vec::with_capacity(v.len() + 1);
+
+			match first {
+				Token::Ident(s) => match Ident::parse_name(&s) {
+					Ok(i) => vec.push(i),
+					Err(_) => {
+						return Err(Simple::custom(span, "Invalid identifier"));
+					}
+				},
+				_ => unreachable!(),
+			}
+			for (_, t) in v.into_iter() {
+				match t {
+					Token::Ident(s) => match Ident::parse_name(&s) {
+						Ok(i) => vec.push(i),
+						Err(_) => {
+							return Err(Simple::custom(
+								span,
+								"Invalid identifier",
+							));
+						}
+					},
+					_ => unreachable!(),
+				}
+			}
+
+			Ok(Expr::Member(vec))
+		}));
+
+		let val = member.or(filter(|t: &Token| match t {
 			Token::Bool(_) => true,
 			Token::Num(_, _) => true,
 			Token::Ident(_) => true,

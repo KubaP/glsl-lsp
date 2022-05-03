@@ -120,6 +120,15 @@ fn print_stmt(stmt: &Stmt, indent: usize) {
 			}
 			print!(" )");
 		}
+		Stmt::VarAssign { ident, value } => {
+			print!(
+				"\r\n{:indent$}Assign(ident=\x1b[33m{ident}\x1b[0m value=",
+				"",
+				indent = indent * 4
+			);
+			print_expr(value, indent + 1);
+			print!(" )");
+		}
 		Stmt::Preproc(p) => print!(
 			"\r\n{:indent$}\x1b[4mPreproc({p})\x1b[0m",
 			"",
@@ -830,7 +839,7 @@ fn parser() -> impl Parser<Token, Vec<Stmt>, Error = Simple<Token>> {
 	let var_uninit = const_
 		.then(var_type_ident)
 		.then(ident)
-		.then(arr.repeated())
+		.then(arr.clone().repeated())
 		.then_ignore(just(Token::Semi))
 		.map(|(((is_const, type_ident), ident), size)| Stmt::VarDecl {
 			type_: Type::new(type_ident, size),
@@ -838,6 +847,11 @@ fn parser() -> impl Parser<Token, Vec<Stmt>, Error = Simple<Token>> {
 			value: None,
 			is_const,
 		});
+	let var_assign = ident
+		.then_ignore(just(Token::Eq))
+		.then(expr.clone())
+		.then_ignore(just(Token::Semi))
+		.map(|(ident, rhs)| Stmt::VarAssign { ident, value: rhs });
 
 	// Function call on its own.
 	let fn_call = ident
@@ -852,10 +866,11 @@ fn parser() -> impl Parser<Token, Vec<Stmt>, Error = Simple<Token>> {
 	// Empty statement.
 	let empty = just(Token::Semi).map(|_| Stmt::Empty);
 
-	// All statements.
+	// All valid statements within a function.
 	let stmt = var
 		.clone()
 		.or(var_uninit.clone())
+		.or(var_assign)
 		.or(fn_call)
 		.or(preproc.clone())
 		.or(empty.clone());

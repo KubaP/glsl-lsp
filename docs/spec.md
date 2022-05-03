@@ -40,9 +40,9 @@ User-defined structs can be created like so:
 struct NAME {
     float f;
     vec3 v;
-} OPTIONAL_NAME;
+};
 ```
-Structs must have at least one member defined. `OPTIONAL_NAME` is an identifier of an instance of the struct.
+Structs must have at least one member defined. Members cannot be default initialized
 
 If a struct contains an [Opaque Type](#opaque-types), then it can only be used in places that accept such types (mainly `uniform` globals).
 

@@ -12,7 +12,7 @@
     - ~~Function calls~~
     - ~~Array constructors~~
     - ~~Initializer lists~~
-    - Struct member access
+    - ~~Struct member access~~
 - Variable declaration
     - ~~Const qualifier~~
     - ~~Type~~
@@ -25,16 +25,28 @@
     - ~~Identifier~~
     - ~~Parameters~~
     - ~~Body~~
-- Function call
-    - ~~Identifier~~
-    - ~~Arguments~~
 - Struct declaration
-    - Identifier
-    - Members
-    - Variable instance
+    - ~~Identifier~~
+    - ~~Members~~
 - Special global variables
     - Vertex inputs
     - Fragment inputs
     - Fragment outputs
     - Uniforms
     - Interface blocks
+- Function call
+    - ~~Identifier~~
+    - ~~Arguments~~
+- Variable assignment
+    - ~~Identifier~~
+    - ~~Value expression~~
+- If statement
+    - Condition
+    - Condition body
+    - Else if
+    - Else
+- Switch statement
+    - Variable identifier
+    - Case condition
+    - Case body
+    - Default case

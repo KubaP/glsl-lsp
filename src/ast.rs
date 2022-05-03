@@ -39,7 +39,7 @@ pub enum Stmt {
 		type_: Type,
 		ident: Ident,
 		value: Option<Expr>,
-		is_const: bool,
+		is_const: bool, // TODO: Refactor to be a Vec<Qualifier> or something similar.
 	},
 	/// Function declaration.
 	FnDecl {

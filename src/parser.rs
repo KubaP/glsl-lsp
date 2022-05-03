@@ -180,7 +180,7 @@ macro_rules! match_op {
 }
 
 /// Creates a pattern for a binary expression with the specified operands.
-/// 
+///
 /// # Example
 /// ```rust
 /// let product = {/*...*/};
@@ -316,6 +316,7 @@ pub enum OpType {
 	Le,
 	AndAnd,
 	OrOr,
+	XorXor,
 	Not,
 }
 
@@ -355,6 +356,27 @@ fn lexer() -> impl Parser<char, Vec<Spanned<Token>>, Error = Simple<char>> {
 /// Parse punctuation symbols that aren't mathematical/comparison operators.
 fn punctuation() -> impl Parser<char, Token, Error = Simple<char>> {
 	choice((
+		just("<<=").to(Token::Op(OpType::LShiftEq)),
+		just(">>=").to(Token::Op(OpType::RShiftEq)),
+		just("==").to(Token::Op(OpType::EqEq)),
+		just("!=").to(Token::Op(OpType::NotEq)),
+		just(">=").to(Token::Op(OpType::Ge)),
+		just("<=").to(Token::Op(OpType::Le)),
+		just("&&").to(Token::Op(OpType::AndAnd)),
+		just("||").to(Token::Op(OpType::OrOr)),
+		just("<<").to(Token::Op(OpType::LShift)),
+		just(">>").to(Token::Op(OpType::RShift)),
+		just("+=").to(Token::Op(OpType::AddEq)),
+		just("-=").to(Token::Op(OpType::SubEq)),
+		just("*=").to(Token::Op(OpType::MulEq)),
+		just("/=").to(Token::Op(OpType::DivEq)),
+		just("%=").to(Token::Op(OpType::RemEq)),
+		just("&=").to(Token::Op(OpType::AndEq)),
+		just("|=").to(Token::Op(OpType::OrEq)),
+		just("^^").to(Token::Op(OpType::XorXor)),
+		just("^=").to(Token::Op(OpType::XorEq)),
+	))
+	.or(choice((
 		just('=').to(Token::Eq),
 		just(',').to(Token::Comma),
 		just('.').to(Token::Dot),
@@ -365,12 +387,19 @@ fn punctuation() -> impl Parser<char, Token, Error = Simple<char>> {
 		just(']').to(Token::RBracket),
 		just('{').to(Token::LBrace),
 		just('}').to(Token::RBrace),
-		//
 		just('+').to(Token::Op(OpType::Add)),
 		just('-').to(Token::Op(OpType::Sub)),
 		just('*').to(Token::Op(OpType::Mul)),
 		just('/').to(Token::Op(OpType::Div)),
-	))
+		just('>').to(Token::Op(OpType::Gt)),
+		just('<').to(Token::Op(OpType::Lt)),
+		just('!').to(Token::Op(OpType::Not)),
+		just('~').to(Token::Op(OpType::Flip)),
+		just('%').to(Token::Op(OpType::Rem)),
+		just('&').to(Token::Op(OpType::And)),
+		just('|').to(Token::Op(OpType::Or)),
+		just('^').to(Token::Op(OpType::Xor)),
+	)))
 }
 
 /// Parse keywords.
@@ -848,19 +877,46 @@ fn parser() -> impl Parser<Token, Vec<Stmt>, Error = Simple<Token>> {
 			_ => unreachable!(),
 		}));
 
-		let atom =
-			val.or(expr.delimited_by(just(Token::LParen), just(Token::RParen)));
+		let atom = val
+			.or(expr.delimited_by(just(Token::LParen), just(Token::RParen)))
+			.boxed();
 
+		// Operators in order of precedence.
+		// Note: The reason for the sprinkling of '.boxed()' everywhere is because otherwise there would be so much
+		// nesting of generic types that 'rustc' will have a breakdown.
 		let neg = match_op!(OpType::Sub)
 			.repeated()
 			.then(atom)
 			.foldr(|_op, rhs| Expr::Neg(Box::new(rhs)));
-
-		let product = binary_expr!(neg, OpType::Mul, OpType::Div);
+		let product = binary_expr!(neg, OpType::Mul, OpType::Div, OpType::Rem);
 		let sum = binary_expr!(product, OpType::Add, OpType::Sub);
-
-		sum
-	});
+		let shift = binary_expr!(sum, OpType::LShift, OpType::RShift);
+		let cpm =
+			binary_expr!(shift, OpType::Lt, OpType::Gt, OpType::Le, OpType::Ge);
+		let eq = binary_expr!(cpm, OpType::EqEq, OpType::NotEq).boxed();
+		let b_and = binary_expr!(eq, OpType::And);
+		let b_xor = binary_expr!(b_and, OpType::Xor);
+		let b_or = binary_expr!(b_xor, OpType::Or);
+		let b_and_and = binary_expr!(b_or, OpType::AndAnd);
+		let b_xor_xor = binary_expr!(b_and_and, OpType::XorXor);
+		let b_or_or = binary_expr!(b_xor_xor, OpType::OrOr);
+		// TODO: Inline if operator.
+		let assign = binary_expr!(
+			b_or_or,
+			OpType::AddEq,
+			OpType::SubEq,
+			OpType::MulEq,
+			OpType::DivEq,
+			OpType::RemEq,
+			OpType::AndEq,
+			OpType::XorEq,
+			OpType::OrEq,
+			OpType::LShiftEq,
+			OpType::RShiftEq
+		);
+		assign
+	})
+	.boxed();
 
 	// Preprocessor directives.
 	let preproc = filter(|t: &Token| match t {

@@ -30,7 +30,11 @@ fn print_expr(expr: &Expr, indent: usize) {
 			print!(" Lit(\x1b[35m{s}\x1b[0m)")
 		}
 		Expr::Ident(s) => print!(" Ident(\x1b[33m{s}\x1b[0m)"),
-		Expr::Neg(e) => print_expr(e, indent + 1),
+		Expr::Neg(e) => {
+			print!(" Neg(");
+			print_expr(e, indent + 1);
+			print!(" )");
+		}
 		Expr::Binary { left, op, right } => {
 			print!(" (");
 			print_expr(left, indent + 1);
@@ -153,6 +157,62 @@ fn print_stmt(stmt: &Stmt, indent: usize) {
 			indent = indent * 4
 		),
 	}
+}
+
+/// Filters only the specified operands.
+///
+/// # Example
+/// ```rust
+/// match_op!(OpType::Mul, OpType::Div).then(/*...*/)
+/// ```
+macro_rules! match_op {
+	($($op:pat),*) => {
+		filter(|t: &Token| match t {
+			Token::Op(op) => match op {
+				$(
+					$op => true,
+				)*
+				_ => false,
+			},
+			_ => false,
+		})
+	};
+}
+
+/// Creates a pattern for a binary expression with the specified operands.
+/// 
+/// # Example
+/// ```rust
+/// let product = {/*...*/};
+/// let sum = binary_expr!(product, OpType::Add, OpType::Sub);
+/// ```
+macro_rules! binary_expr {
+	($prev:expr, $($op:pat),*) => {
+		$prev
+			.clone()
+			.then(
+				filter(|t: &Token| match t {
+					Token::Op(op) => match op {
+						$(
+							$op => true,
+						)*
+						_ => false,
+					},
+					_ => false,
+				})
+				.map(|t| match t {
+					Token::Op(op) => op,
+					_ => unreachable!(),
+				})
+				.then($prev)
+				.repeated(),
+			)
+			.foldl(|lhs, (op, rhs)| Expr::Binary {
+				left: Box::from(lhs),
+				op,
+				right: Box::from(rhs),
+			})
+	};
 }
 
 /// CST tokens.
@@ -791,64 +851,13 @@ fn parser() -> impl Parser<Token, Vec<Stmt>, Error = Simple<Token>> {
 		let atom =
 			val.or(expr.delimited_by(just(Token::LParen), just(Token::RParen)));
 
-		let op = filter(|t: &Token| match t {
-			Token::Op(op) => match op {
-				OpType::Sub => true,
-				_ => false,
-			},
-			_ => false,
-		});
-
-		let neg = op
+		let neg = match_op!(OpType::Sub)
 			.repeated()
 			.then(atom)
 			.foldr(|_op, rhs| Expr::Neg(Box::new(rhs)));
 
-		let op = filter(|t: &Token| match t {
-			Token::Op(op) => match op {
-				OpType::Mul | OpType::Div => true,
-				_ => false,
-			},
-			_ => false,
-		});
-		let product = neg
-			.clone()
-			.then(
-				op.map(|t| match t {
-					Token::Op(op) => op,
-					_ => unreachable!(),
-				})
-				.then(neg)
-				.repeated(),
-			)
-			.foldl(|lhs, (op, rhs)| Expr::Binary {
-				left: Box::from(lhs),
-				op,
-				right: Box::from(rhs),
-			});
-
-		let op = filter(|t: &Token| match t {
-			Token::Op(op) => match op {
-				OpType::Add | OpType::Sub => true,
-				_ => false,
-			},
-			_ => false,
-		});
-		let sum = product
-			.clone()
-			.then(
-				op.map(|t| match t {
-					Token::Op(op) => op,
-					_ => unreachable!(),
-				})
-				.then(product)
-				.repeated(),
-			)
-			.foldl(|lhs, (op, rhs)| Expr::Binary {
-				left: Box::from(lhs),
-				op,
-				right: Box::from(rhs),
-			});
+		let product = binary_expr!(neg, OpType::Mul, OpType::Div);
+		let sum = binary_expr!(product, OpType::Add, OpType::Sub);
 
 		sum
 	});

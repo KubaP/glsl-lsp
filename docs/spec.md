@@ -123,8 +123,29 @@ a <= b // Less than or equal to
 
 a && b // Logical AND
 a || b // Logical OR
+a ^^ b // Logical XOR
 a ! b  // Logical NOT
 ```
+
+|Precedence|Operator|
+|-|-|
+|1|`()`|
+|2|`[]`, `fn_call()`, `.`, `++`, `--` (postfix)|
+|3|`++`, `--` (prefix), `-` (neg), `~`, `!`|
+|4|`*`, `/`, `%`|
+|5|`+`, `-`|
+|6|`<<`, `>>`|
+|7|`<`, `>`, `<=`, `>=`|
+|8|`==`, `!=`|
+|9|`&`|
+|10|`^`|
+|11|`\|`|
+|12|`&&`|
+|13|`^^`|
+|14|`\|\|`|
+|15|`?:`|
+|16|`=`, `+=`, `-=`, `*=`, `/=`, `%=`, `&=`, `^=`, `\|=`, `<<=`, `>>=`|
+|17|`,` (list seperator)|
 
 # Variables
 Variables cannot be of the `void` type. This applies to any variable type, local, global, etc.

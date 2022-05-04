@@ -66,6 +66,12 @@ pub enum Stmt {
 		else_ifs: Vec<(Expr, Vec<Stmt>)>,
 		else_: Option<Vec<Stmt>>,
 	},
+	/// Switch statement.
+	Switch{
+		expr: Expr,
+		/// `0` - If `None`, then this is a *default* case.
+		cases: Vec<(Option<Expr>, Vec<Stmt>)>,
+	},
 	Return,
 	Break,
 	Discard,

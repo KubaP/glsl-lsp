@@ -188,6 +188,33 @@ fn print_stmt(stmt: &Stmt, indent: usize) {
 				print!("\r\n{:indent$}}}", "", indent = indent * 4);
 			}
 		}
+		Stmt::Switch { expr, cases } => {
+			print!("\r\n{:indent$}Switch(", "", indent = indent * 4);
+			print_expr(expr, indent + 1);
+			print!(" ) {{");
+			for (expr, stmts) in cases {
+				if let Some(expr) = expr {
+					print!(
+						"\r\n{:indent$}Case(",
+						"",
+						indent = (indent + 1) * 4
+					);
+					print_expr(expr, indent + 2);
+					print!(" ) {{");
+				} else {
+					print!(
+						"\r\n{:indent$}Default {{",
+						"",
+						indent = (indent + 1) * 4
+					);
+				}
+				for stmt in stmts {
+					print_stmt(stmt, indent + 2);
+				}
+				print!("\r\n{:indent$}}}", "", indent = (indent + 1) * 4);
+			}
+			print!("\r\n{:indent$}}}", "", indent = indent * 4);
+		}
 		Stmt::Return => print!("\r\n{:indent$}RETURN", "", indent = indent * 4),
 		Stmt::Break => {
 			print!("\r\n{:indent$}BREAK", "", indent = indent * 4)
@@ -298,6 +325,7 @@ enum Token {
 	Comma,
 	Dot,
 	Semi,
+	Colon,
 	Star,
 	Underscore,
 	LParen,
@@ -427,6 +455,7 @@ fn punctuation() -> impl Parser<char, Token, Error = Simple<char>> {
 		just(']').to(Token::RBracket),
 		just('{').to(Token::LBrace),
 		just('}').to(Token::RBrace),
+		just(':').to(Token::Colon),
 		just('+').to(Token::Op(OpType::Add)),
 		just('-').to(Token::Op(OpType::Sub)),
 		just('*').to(Token::Op(OpType::Mul)),
@@ -1105,7 +1134,32 @@ fn parser() -> impl Parser<Token, Vec<Stmt>, Error = Simple<Token>> {
 				})
 				.boxed();
 
-		fn_call.or(if_).or(empty.clone())
+		// Switch statement.
+		let switch = just(Token::Switch)
+			.ignored()
+			.then(
+				expr.clone()
+					.delimited_by(just(Token::LParen), just(Token::RParen)),
+			)
+			.then(
+				just(Token::Case)
+					.ignored()
+					.then(expr.clone())
+					.then_ignore(just(Token::Colon))
+					.then(stmt.clone().repeated())
+					.map(|((_, expr), stmt)| (Some(expr), stmt))
+					.or(just(Token::Default)
+						.ignored()
+						.then_ignore(just(Token::Colon))
+						.then(stmt.clone().repeated())
+						.map(|(_, stmt)| (None, stmt)))
+					.repeated()
+					.delimited_by(just(Token::LBrace), just(Token::RBrace)),
+			)
+			.map(|((_, expr), cases)| Stmt::Switch { expr, cases })
+			.boxed();
+
+		fn_call.or(if_).or(switch).or(empty.clone())
 	})
 	.boxed();
 

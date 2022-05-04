@@ -59,6 +59,13 @@ pub enum Stmt {
 	VarAssign { ident: Ident, value: Expr },
 	/// Preprocessor calls.
 	Preproc(Preproc),
+	/// If statement.
+	If {
+		cond: Expr,
+		body: Vec<Stmt>,
+		else_ifs: Vec<(Expr, Vec<Stmt>)>,
+		else_: Option<Vec<Stmt>>,
+	},
 }
 
 #[derive(Debug, Clone)]

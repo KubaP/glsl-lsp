@@ -336,7 +336,7 @@ enum Token {
 	RBrace,
 }
 
-/// The different number types in the CST.
+/// The different number types.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 #[allow(unused)]
 pub enum NumType {
@@ -347,7 +347,7 @@ pub enum NumType {
 	Double,
 }
 
-/// Mathematical and comparison operation symbols.
+/// Mathematical and comparison operators.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 #[allow(unused)]
 pub enum OpType {

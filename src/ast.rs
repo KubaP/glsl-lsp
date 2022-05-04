@@ -1,11 +1,13 @@
 use crate::parser::{NumType, OpType};
 
+/// Holds either one or the other value.
 #[derive(Debug, Clone)]
 pub enum Either<L, R> {
 	Left(L),
 	Right(R),
 }
 
+/// An expression which will be part of a statement. Expressions cannot exist on their own.
 #[derive(Debug, Clone)]
 pub enum Expr {
 	/// A literal value; either a number, a boolean.
@@ -27,9 +29,13 @@ pub enum Expr {
 	/// Initializer list.
 	InitList(Vec<Expr>),
 	/// Member access.
+	/// 
+	/// `0` - List of identifiers seperated by dots (`.`), in left-to-right order.
 	Member(Vec<Ident>),
 }
 
+/// A top-level statement. Some of these statements are only valid at the file top-level. Others are only valid
+/// inside of functions.
 #[derive(Debug, Clone)]
 pub enum Stmt {
 	/// An empty statement, i.e. just a `;`.
@@ -67,16 +73,20 @@ pub enum Stmt {
 		else_: Option<Vec<Stmt>>,
 	},
 	/// Switch statement.
-	Switch{
+	Switch {
 		expr: Expr,
 		/// `0` - If `None`, then this is a *default* case.
 		cases: Vec<(Option<Expr>, Vec<Stmt>)>,
 	},
+	/// Return keyword.
 	Return,
+	/// Break keyword.
 	Break,
+	/// Discard keyword.
 	Discard,
 }
 
+/// A preprocessor directive.
 #[derive(Debug, Clone)]
 pub enum Preproc {
 	Version {
@@ -135,6 +145,7 @@ impl std::fmt::Display for Preproc {
 	}
 }
 
+/// The valid options for the behaviour setting in a `#extension` directive.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ExtBehaviour {
 	Enable,

@@ -950,141 +950,6 @@ fn parser() -> impl Parser<Token, Vec<Stmt>, Error = Simple<Token>> {
 	})
 	.boxed();
 
-	// All statements within a function body.
-	let stmt = recursive(|stmt| {
-		// Preprocessor directives.
-		let preproc = filter(|t: &Token| match t {
-			Token::Directive(_) => true,
-			_ => false,
-		})
-		.try_map(|t, span: std::ops::Range<usize>| match t {
-			Token::Directive(s) => {
-				let (stmt, errors) = preproc_parser().parse_recovery(s);
-
-				if let Some(_) = errors.first() {
-					return Err(Simple::custom(
-						span,
-						"Error parsing preproc directive",
-					));
-				}
-
-				if let Some(stmt) = stmt {
-					Ok(stmt)
-				} else {
-					Ok(Stmt::Preproc(Preproc::Unsupported))
-				}
-			}
-			_ => unreachable!(),
-		});
-
-		// Const qualifier.
-		let const_ = just(Token::Const).or_not().map(|t| t.is_some());
-
-		// Variable declaration.
-		let var = preproc.or(const_
-			.clone()
-			.then(var_type_ident)
-			.then(ident)
-			.then(arr.clone().repeated())
-			.then_ignore(just(Token::Eq))
-			.then(expr.clone())
-			.then_ignore(just(Token::Semi))
-			.map(|((((is_const, type_ident), ident), size), rhs)| {
-				Stmt::VarDecl {
-					type_: Type::new(type_ident, size),
-					ident,
-					value: Some(rhs),
-					is_const,
-				}
-			}));
-		let var_uninit = var.or(const_
-			.then(var_type_ident)
-			.then(ident)
-			.then(arr.clone().repeated())
-			.then_ignore(just(Token::Semi))
-			.map(|(((is_const, type_ident), ident), size)| Stmt::VarDecl {
-				type_: Type::new(type_ident, size),
-				ident,
-				value: None,
-				is_const,
-			}));
-		let var_assign = var_uninit.or(ident
-			.then_ignore(just(Token::Eq))
-			.then(expr.clone())
-			.then_ignore(just(Token::Semi))
-			.map(|(ident, rhs)| Stmt::VarAssign { ident, value: rhs }));
-
-		// Function call on its own.
-		let fn_call = var_assign.or(ident
-			.then(
-				expr.clone()
-					.separated_by(just(Token::Comma))
-					.delimited_by(just(Token::LParen), just(Token::RParen)),
-			)
-			.then_ignore(just(Token::Semi))
-			.map(|(ident, args)| Stmt::FnCall { ident, args }));
-
-		// Empty statement.
-		let empty = fn_call.or(just(Token::Semi).map(|_| Stmt::Empty));
-
-		// If statement.
-		let if_ =
-			just(Token::If)
-				.ignored()
-				.then(
-					expr.clone()
-						.delimited_by(just(Token::LParen), just(Token::RParen)),
-				)
-				.then(
-					stmt.clone()
-						.repeated()
-						.delimited_by(just(Token::LBrace), just(Token::RBrace)),
-				)
-				.then(
-					// else ifs
-					just(Token::Else)
-						.ignored()
-						.then_ignore(just(Token::If))
-						.then(expr.clone().delimited_by(
-							just(Token::LParen),
-							just(Token::RParen),
-						))
-						.then(stmt.clone().repeated().delimited_by(
-							just(Token::LBrace),
-							just(Token::RBrace),
-						))
-						.repeated(),
-				)
-				.then(
-					just(Token::Else)
-						.ignored()
-						.then(stmt.clone().repeated().delimited_by(
-							just(Token::LBrace),
-							just(Token::RBrace),
-						))
-						.or_not(),
-				)
-				.map(|((((_, cond), body), nth), opt): ((_, Vec<_>), _)| {
-					Stmt::If {
-						cond,
-						body,
-						else_ifs: nth
-							.into_iter()
-							.map(|((_, cond), stmts)| (cond, stmts))
-							.collect(),
-						else_: if let Some(opt) = opt {
-							Some(opt.1)
-						} else {
-							None
-						},
-					}
-				})
-				.boxed();
-
-		empty.or(if_)
-	})
-	.boxed();
-
 	// Preprocessor directives.
 	let preproc = filter(|t: &Token| match t {
 		Token::Directive(_) => true,
@@ -1144,6 +1009,86 @@ fn parser() -> impl Parser<Token, Vec<Stmt>, Error = Simple<Token>> {
 
 	// Empty statement.
 	let empty = just(Token::Semi).map(|_| Stmt::Empty);
+
+	// All statements within a function body.
+	let stmt = recursive(|stmt| {
+		let var_assign = preproc
+			.clone()
+			.or(var.clone())
+			.or(var_uninit.clone())
+			.or(ident
+				.then_ignore(just(Token::Eq))
+				.then(expr.clone())
+				.then_ignore(just(Token::Semi))
+				.map(|(ident, rhs)| Stmt::VarAssign { ident, value: rhs }));
+
+		// Function call on its own.
+		let fn_call = var_assign.or(ident
+			.then(
+				expr.clone()
+					.separated_by(just(Token::Comma))
+					.delimited_by(just(Token::LParen), just(Token::RParen)),
+			)
+			.then_ignore(just(Token::Semi))
+			.map(|(ident, args)| Stmt::FnCall { ident, args }));
+
+		// If statement.
+		let if_ =
+			just(Token::If)
+				.ignored()
+				.then(
+					expr.clone()
+						.delimited_by(just(Token::LParen), just(Token::RParen)),
+				)
+				.then(
+					stmt.clone()
+						.repeated()
+						.delimited_by(just(Token::LBrace), just(Token::RBrace)),
+				)
+				.then(
+					// else ifs
+					just(Token::Else)
+						.ignored()
+						.then_ignore(just(Token::If))
+						.then(expr.clone().delimited_by(
+							just(Token::LParen),
+							just(Token::RParen),
+						))
+						.then(stmt.clone().repeated().delimited_by(
+							just(Token::LBrace),
+							just(Token::RBrace),
+						))
+						.repeated(),
+				)
+				.then(
+					just(Token::Else)
+						.ignored()
+						.then(stmt.clone().repeated().delimited_by(
+							just(Token::LBrace),
+							just(Token::RBrace),
+						))
+						.or_not(),
+				)
+				.map(|((((_, cond), body), nth), opt): ((_, Vec<_>), _)| {
+					Stmt::If {
+						cond,
+						body,
+						else_ifs: nth
+							.into_iter()
+							.map(|((_, cond), stmts)| (cond, stmts))
+							.collect(),
+						else_: if let Some(opt) = opt {
+							Some(opt.1)
+						} else {
+							None
+						},
+					}
+				})
+				.boxed();
+
+		fn_call.or(if_).or(empty.clone())
+	})
+	.boxed();
 
 	// Function parameter.
 	let param = type_ident

@@ -41,12 +41,14 @@
     - ~~Identifier~~
     - ~~Value expression~~
 - If statement
-    - Condition
-    - Condition body
-    - Else if
-    - Else
+    - ~~Condition~~
+    - ~~Condition body~~
+    - ~~Else if~~
+    - ~~Else~~
 - Switch statement
     - Variable identifier
     - Case condition
     - Case body
     - Default case
+- For loop
+- ~~Return/Break/Discard~~

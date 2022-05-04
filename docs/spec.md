@@ -1,9 +1,12 @@
 # OpenGL Shading Language Specification
 Missing/incomplete:
 - Buffer objects
+- Samplers
 - Images
 - Atomic counters
 - `f` number suffix
+- `.n` float notation (skipping before dot)
+- `n.` float notation (skipping after dot)
 - Arrays/opaque arrays limitations
 - Subroutines
 
@@ -19,20 +22,20 @@ Scalars:
 Vectors (where `2 <= n <= 4`):
 - `bvecn` - vector of booleans
 - `ivecn` - vector of integers
-- `uvecn` - vector of unsignedintegers
+- `uvecn` - vector of unsigned integers
 - `vecn` - vector of floats
 - `dvec` - vector of double precision floats
 
-Matrices (where n is the number of columns and m is the number of rows, and they satisfy `2 <= n/m <= 4`):
+Matrices (where `n` is the number of columns and `m` is the number of rows, and they satisfy `2 <= n/m <= 4`):
 - `matnxm` - matrix of floats
 - `dmatnxm` - matrix of double precision floats
 
 ### Opaque Types
 These are types which act as a reference to some external object. A clear analogy would be, like pointers are fundamentally integers but they have special meaning, the same thing is with opaque types. Opaque types can only be part of a `uniform` global variable.
 
-- Samplers - A bound texture,
+- Samplers - TODO,
 - Images - TODO,
-- Atomic counters - TODO
+- Atomic counters - TODO.
 
 ### Structs
 User-defined structs can be created like so:
@@ -467,6 +470,48 @@ This is a special input for fragment shaders (awkward because in this example th
 layout(early_fragment_tests) in;
 ```
 
+# Control Flow
+### Keywords
+```glsl
+return;  // Valid in a function body
+discard; // Valid in a function body
+break;   // Only valid inside of a for loop or a switch case.
+```
+
+## If statement
+```glsl
+if ({EXPR}) {
+    /*...*/
+}
+
+// Optionally followed by (n number of times):
+else if ({EXPR}) {
+    /*...*/
+}
+
+// Optionally followed by:
+else {
+    /*...*/
+}
+
+```
+`{EXPR}` is any expression which evaluates to a `bool`.
+
+## Switch
+```glsl
+switch ({EXPR}) {
+    case {CONST-EXPR} : 
+        /*...*/
+
+    // Optionally followed by:
+    default :
+        /*...*/
+}
+```
+`{EXPR}` is any expression.
+
+`{CONST-EXPR}` is any constant expression.
+
 # Preprocessor
 
 ## Directives
@@ -513,7 +558,7 @@ These directives come from the C language.
 ```
 `FILE` is a path string.
 
-Not supported natively by GLSL.
+⚠ Not supported natively by GLSL.
 
 #### define
 #### undef

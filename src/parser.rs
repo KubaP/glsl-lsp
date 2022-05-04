@@ -188,6 +188,13 @@ fn print_stmt(stmt: &Stmt, indent: usize) {
 				print!("\r\n{:indent$}}}", "", indent = indent * 4);
 			}
 		}
+		Stmt::Return => print!("\r\n{:indent$}RETURN", "", indent = indent * 4),
+		Stmt::Break => {
+			print!("\r\n{:indent$}BREAK", "", indent = indent * 4)
+		}
+		Stmt::Discard => {
+			print!("\r\n{:indent$}DISCARD", "", indent = indent * 4)
+		}
 	}
 }
 
@@ -266,6 +273,7 @@ enum Token {
 	Default,
 	Break,
 	Return,
+	Discard,
 	Struct,
 	// Qualifiers
 	In,
@@ -447,6 +455,7 @@ fn keywords() -> impl Parser<char, Token, Error = Simple<char>> {
 		text::keyword("default").to(Token::Default),
 		text::keyword("break").to(Token::Break),
 		text::keyword("return").to(Token::Return),
+		text::keyword("discard").to(Token::Discard),
 		text::keyword("struct").to(Token::Struct),
 	))
 	.or(choice((
@@ -1012,7 +1021,17 @@ fn parser() -> impl Parser<Token, Vec<Stmt>, Error = Simple<Token>> {
 
 	// All statements within a function body.
 	let stmt = recursive(|stmt| {
-		let var_assign = preproc
+		let break_ = preproc.or(just(Token::Break)
+			.then_ignore(just(Token::Semi))
+			.to(Stmt::Break));
+		let return_ = break_.or(just(Token::Return)
+			.then_ignore(just(Token::Semi))
+			.to(Stmt::Return));
+		let discard = return_.or(just(Token::Discard)
+			.then_ignore(just(Token::Semi))
+			.to(Stmt::Discard));
+
+		let var_assign = discard
 			.clone()
 			.or(var.clone())
 			.or(var_uninit.clone())

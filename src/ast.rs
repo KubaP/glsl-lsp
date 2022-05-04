@@ -66,6 +66,9 @@ pub enum Stmt {
 		else_ifs: Vec<(Expr, Vec<Stmt>)>,
 		else_: Option<Vec<Stmt>>,
 	},
+	Return,
+	Break,
+	Discard,
 }
 
 #[derive(Debug, Clone)]

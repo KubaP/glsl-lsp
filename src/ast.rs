@@ -30,6 +30,12 @@ pub enum Expr {
 		op: OpType,
 		right: Box<Expr>,
 	},
+	/// Ternary if.
+	Ternary {
+		cond: Box<Expr>,
+		true_: Box<Expr>,
+		false_: Box<Expr>,
+	},
 	/// Function call.
 	Fn { ident: Ident, args: Vec<Expr> },
 	/// Array constructor.
@@ -37,7 +43,7 @@ pub enum Expr {
 	/// Initializer list.
 	InitList(Vec<Expr>),
 	/// Member access.
-	/// 
+	///
 	/// `0` - List of identifiers seperated by dots (`.`), in left-to-right order.
 	Member(Vec<Ident>),
 }

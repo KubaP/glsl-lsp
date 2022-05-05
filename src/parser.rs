@@ -64,6 +64,19 @@ fn print_expr(expr: &Expr, indent: usize) {
 			print_expr(right, indent + 1);
 			print!(" )");
 		}
+		Expr::Ternary {
+			cond,
+			true_,
+			false_,
+		} => {
+			print!(" IF(");
+			print_expr(cond, indent + 1);
+			print!(" ) {{");
+			print_expr(true_, indent + 1);
+			print!(" }} ELSE {{");
+			print_expr(false_, indent + 1);
+			print!(" }}");
+		}
 		Expr::Fn { ident, args } => {
 			print!(" \x1b[34m{ident}\x1b[0m(");
 			for arg in args {
@@ -380,7 +393,7 @@ enum Token {
 	Semi,
 	Colon,
 	Star,
-	Underscore,
+	Question,
 	LParen,
 	RParen,
 	LBracket,
@@ -519,6 +532,7 @@ fn punctuation() -> impl Parser<char, Token, Error = Simple<char>> {
 		just('<').to(Token::Op(OpType::Lt)),
 		just('!').to(Token::Op(OpType::Not)),
 		just('~').to(Token::Op(OpType::Flip)),
+		just('?').to(Token::Question),
 		just('%').to(Token::Op(OpType::Rem)),
 		just('&').to(Token::Op(OpType::And)),
 		just('|').to(Token::Op(OpType::Or)),
@@ -1003,7 +1017,9 @@ fn parser() -> impl Parser<Token, Vec<Stmt>, Error = Simple<Token>> {
 		}));
 
 		let atom = val
-			.or(expr.delimited_by(just(Token::LParen), just(Token::RParen)))
+			.or(expr
+				.clone()
+				.delimited_by(just(Token::LParen), just(Token::RParen)))
 			.boxed();
 
 		// Operators in order of precedence.
@@ -1067,9 +1083,28 @@ fn parser() -> impl Parser<Token, Vec<Stmt>, Error = Simple<Token>> {
 		let b_and_and = binary_expr!(b_or, OpType::AndAnd);
 		let b_xor_xor = binary_expr!(b_and_and, OpType::XorXor);
 		let b_or_or = binary_expr!(b_xor_xor, OpType::OrOr);
-		// TODO: Inline if operator.
+		let ternary = b_or_or
+			.then(
+				just(Token::Question)
+					.ignored()
+					.then(expr.clone())
+					.then_ignore(just(Token::Colon))
+					.then(expr)
+					.or_not(),
+			)
+			.map(|(expr, if_else)| {
+				if let Some(((_, true_), false_)) = if_else {
+					Expr::Ternary {
+						cond: Box::from(expr),
+						true_: Box::from(true_),
+						false_: Box::from(false_),
+					}
+				} else {
+					expr
+				}
+			});
 		let assign = binary_expr!(
-			b_or_or,
+			ternary,
 			OpType::AddEq,
 			OpType::SubEq,
 			OpType::MulEq,

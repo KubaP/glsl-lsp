@@ -35,6 +35,28 @@ fn print_expr(expr: &Expr, indent: usize) {
 			print_expr(e, indent + 1);
 			print!(" )");
 		}
+		Expr::Prefix(expr, op) => {
+			print!(" Prefix(");
+			print!(" {op:?}");
+			print_expr(expr, indent + 1);
+			print!(" )");
+		}
+		Expr::Postfix(expr, op) => {
+			print!(" Postfix(");
+			print_expr(expr, indent + 1);
+			print!(" {op:?}");
+			print!(" )");
+		}
+		Expr::Flip(e) => {
+			print!(" Flip(");
+			print_expr(e, indent + 1);
+			print!(" )");
+		}
+		Expr::Not(e) => {
+			print!(" Not(");
+			print_expr(e, indent + 1);
+			print!(" )");
+		}
 		Expr::Binary { left, op, right } => {
 			print!(" (");
 			print_expr(left, indent + 1);
@@ -463,6 +485,8 @@ fn punctuation() -> impl Parser<char, Token, Error = Simple<char>> {
 		just("<=").to(Token::Op(OpType::Le)),
 		just("&&").to(Token::Op(OpType::AndAnd)),
 		just("||").to(Token::Op(OpType::OrOr)),
+		just("++").to(Token::Op(OpType::AddAdd)),
+		just("--").to(Token::Op(OpType::SubSub)),
 		just("<<").to(Token::Op(OpType::LShift)),
 		just(">>").to(Token::Op(OpType::RShift)),
 		just("+=").to(Token::Op(OpType::AddEq)),
@@ -984,10 +1008,52 @@ fn parser() -> impl Parser<Token, Vec<Stmt>, Error = Simple<Token>> {
 
 		// Operators in order of precedence.
 		// Note: The reason for the sprinkling of '.boxed()' everywhere is because otherwise there would be so much
-		// nesting of generic types that 'rustc' will have a breakdown.
+		// nesting of generic types that rustc will have a breakdown.
+		let postfix = atom
+			.then(match_op!(OpType::AddAdd, OpType::SubSub).or_not())
+			.map(|(expr, op)| {
+				if let Some(op) = op {
+					let op = match op {
+						Token::Op(o) => o,
+						_ => unreachable!(),
+					};
+					Expr::Postfix(Box::from(expr), op)
+				} else {
+					expr
+				}
+			});
+		let prefix = match_op!(OpType::AddAdd, OpType::SubSub)
+			.or_not()
+			.then(postfix)
+			.map(|(op, expr)| {
+				if let Some(op) = op {
+					let op = match op {
+						Token::Op(o) => o,
+						_ => unreachable!(),
+					};
+					Expr::Prefix(Box::from(expr), op)
+				} else {
+					expr
+				}
+			});
+		let flip =
+			match_op!(OpType::Flip)
+				.or_not()
+				.then(prefix)
+				.map(|(op, expr)| {
+					if let Some(_) = op {
+						Expr::Flip(Box::from(expr))
+					} else {
+						expr
+					}
+				});
+		let not = match_op!(OpType::Not)
+			.repeated()
+			.then(flip)
+			.foldr(|_op, rhs| Expr::Not(Box::new(rhs)));
 		let neg = match_op!(OpType::Sub)
 			.repeated()
-			.then(atom)
+			.then(not)
 			.foldr(|_op, rhs| Expr::Neg(Box::new(rhs)));
 		let product = binary_expr!(neg, OpType::Mul, OpType::Div, OpType::Rem);
 		let sum = binary_expr!(product, OpType::Add, OpType::Sub);
@@ -1216,7 +1282,7 @@ fn parser() -> impl Parser<Token, Vec<Stmt>, Error = Simple<Token>> {
 			.map(|((_, expr), cases)| Stmt::Switch { expr, cases })
 			.boxed();
 
-		fn_call.or(for_).or(if_).or(switch).or(empty.clone())
+		fn_call.or(if_).or(switch).or(for_).or(empty.clone())
 	})
 	.boxed();
 

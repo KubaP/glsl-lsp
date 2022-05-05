@@ -16,6 +16,14 @@ pub enum Expr {
 	Ident(Ident),
 	/// A negation of an expression.
 	Neg(Box<Expr>),
+	/// An expression prefix.
+	Prefix(Box<Expr>, OpType),
+	/// An expression postfix.
+	Postfix(Box<Expr>, OpType),
+	/// A bitflip.
+	Flip(Box<Expr>),
+	/// A not.
+	Not(Box<Expr>),
 	/// Binary expression with a left and right hand-side.
 	Binary {
 		left: Box<Expr>,

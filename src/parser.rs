@@ -215,6 +215,31 @@ fn print_stmt(stmt: &Stmt, indent: usize) {
 			}
 			print!("\r\n{:indent$}}}", "", indent = indent * 4);
 		}
+		Stmt::For {
+			var,
+			cond,
+			inc,
+			body,
+		} => {
+			print!("\r\n{:indent$}For(", "", indent = indent * 4);
+			if let Some(var) = var {
+				print!(" var=");
+				print_stmt(var, indent + 1);
+			}
+			if let Some(cond) = cond {
+				print!(" cond=");
+				print_expr(cond, indent + 1);
+			}
+			if let Some(inc) = inc {
+				print!(" inc=");
+				print_expr(inc, indent + 1);
+			}
+			print!(" ) {{");
+			for stmt in body {
+				print_stmt(stmt, indent + 1);
+			}
+			print!("\r\n{:indent$}}}", "", indent = indent * 4);
+		}
 		Stmt::Return => print!("\r\n{:indent$}RETURN", "", indent = indent * 4),
 		Stmt::Break => {
 			print!("\r\n{:indent$}BREAK", "", indent = indent * 4)
@@ -1080,6 +1105,30 @@ fn parser() -> impl Parser<Token, Vec<Stmt>, Error = Simple<Token>> {
 			.then_ignore(just(Token::Semi))
 			.map(|(ident, args)| Stmt::FnCall { ident, args }));
 
+		// For statement.
+		let for_ = just(Token::For)
+			.ignored()
+			.then(
+				var.clone()
+					.or(var_uninit.clone())
+					.or(empty.clone())
+					.or_not()
+					.then(expr.clone().or_not().then_ignore(just(Token::Semi)))
+					.then(expr.clone().or_not())
+					.delimited_by(just(Token::LParen), just(Token::RParen)),
+			)
+			.then(
+				stmt.clone()
+					.repeated()
+					.delimited_by(just(Token::LBrace), just(Token::RBrace)),
+			)
+			.map(|((_, ((var, cond), inc)), stmts)| Stmt::For {
+				var: var.map(|s| Box::from(s)),
+				cond,
+				inc,
+				body: stmts,
+			});
+
 		// If statement.
 		let if_ =
 			just(Token::If)
@@ -1159,7 +1208,7 @@ fn parser() -> impl Parser<Token, Vec<Stmt>, Error = Simple<Token>> {
 			.map(|((_, expr), cases)| Stmt::Switch { expr, cases })
 			.boxed();
 
-		fn_call.or(if_).or(switch).or(empty.clone())
+		fn_call.or(for_).or(if_).or(switch).or(empty.clone())
 	})
 	.boxed();
 

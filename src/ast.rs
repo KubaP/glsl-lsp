@@ -78,6 +78,13 @@ pub enum Stmt {
 		/// `0` - If `None`, then this is a *default* case.
 		cases: Vec<(Option<Expr>, Vec<Stmt>)>,
 	},
+	/// For statement.
+	For {
+		var: Option<Box<Stmt>>,
+		cond: Option<Expr>,
+		inc: Option<Expr>,
+		body: Vec<Stmt>,
+	},
 	/// Return keyword.
 	Return,
 	/// Break keyword.

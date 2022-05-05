@@ -77,6 +77,12 @@ pub enum Stmt {
 	FnCall { ident: Ident, args: Vec<Expr> },
 	/// Variable assignment.
 	VarAssign { ident: Ident, value: Expr },
+	/// Variable assignment through `+=`/`-=`/etc. operators.
+	VarEq {
+		ident: Ident,
+		value: Box<Expr>,
+		op: OpType,
+	},
 	/// Preprocessor calls.
 	Preproc(Preproc),
 	/// If statement.

@@ -168,7 +168,7 @@ fn print_stmt(stmt: &Stmt, indent: usize) {
 		}
 		Stmt::FnCall { ident, args } => {
 			print!(
-				"\r\n{:indent$}\x1b[34m{ident}\x1b[0m(",
+				"\r\n{:indent$}\x1b[34mFn-{ident}\x1b[0m(",
 				"",
 				indent = indent * 4
 			);
@@ -183,6 +183,16 @@ fn print_stmt(stmt: &Stmt, indent: usize) {
 				"",
 				indent = indent * 4
 			);
+			print_expr(value, indent + 1);
+			print!(" )");
+		}
+		Stmt::VarEq { ident, value, op } => {
+			print!(
+				"\r\n{:indent$}Assign(ident=\x1b[33m{ident}\x1b[0m op={op:?}",
+				"",
+				indent = indent * 4
+			);
+			print!(" value=");
 			print_expr(value, indent + 1);
 			print!(" )");
 		}
@@ -1194,11 +1204,50 @@ fn parser() -> impl Parser<Token, Vec<Stmt>, Error = Simple<Token>> {
 			.then_ignore(just(Token::Semi))
 			.to(Stmt::Discard));
 
-		let var_assign = discard
+		let var_eq = discard.or(expr
 			.clone()
-			.or(var.clone())
-			.or(var_uninit.clone())
-			.or(ident
+			.then_ignore(just(Token::Semi))
+			.try_map(|expr, span| match expr {
+				Expr::Binary { left, op, right } => {
+					let ident = match *left {
+						Expr::Ident(i) => i,
+						_ => {
+							return Err(Simple::custom(
+								span,
+								"Expected an identifier",
+							))
+						}
+					};
+					match op {
+						OpType::AddEq
+						| OpType::SubEq
+						| OpType::MulEq
+						| OpType::DivEq
+						| OpType::RemEq
+						| OpType::AndEq
+						| OpType::XorEq
+						| OpType::OrEq
+						| OpType::LShiftEq
+						| OpType::RShiftEq => {}
+						_ => {
+							return Err(Simple::custom(
+								span,
+								"Invalid operator",
+							))
+						}
+					}
+
+					Ok(Stmt::VarEq {
+						ident,
+						value: right,
+						op,
+					})
+				}
+				_ => return Err(Simple::custom(span, "invalid expression")),
+			}));
+
+		let var_assign =
+			var_eq.or(var.clone()).or(var_uninit.clone()).or(ident
 				.then_ignore(just(Token::Eq))
 				.then(expr.clone())
 				.then_ignore(just(Token::Semi))

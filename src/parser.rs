@@ -240,7 +240,13 @@ fn print_stmt(stmt: &Stmt, indent: usize) {
 			}
 			print!("\r\n{:indent$}}}", "", indent = indent * 4);
 		}
-		Stmt::Return => print!("\r\n{:indent$}RETURN", "", indent = indent * 4),
+		Stmt::Return(expr) => {
+			print!("\r\n{:indent$}RETURN", "", indent = indent * 4);
+			if let Some(expr) = expr {
+				print!(" val=");
+				print_expr(expr, indent + 1);
+			}
+		}
 		Stmt::Break => {
 			print!("\r\n{:indent$}BREAK", "", indent = indent * 4)
 		}
@@ -1079,8 +1085,10 @@ fn parser() -> impl Parser<Token, Vec<Stmt>, Error = Simple<Token>> {
 			.then_ignore(just(Token::Semi))
 			.to(Stmt::Break));
 		let return_ = break_.or(just(Token::Return)
+			.ignored()
+			.then(expr.clone().or_not())
 			.then_ignore(just(Token::Semi))
-			.to(Stmt::Return));
+			.map(|(_, expr)| Stmt::Return(expr)));
 		let discard = return_.or(just(Token::Discard)
 			.then_ignore(just(Token::Semi))
 			.to(Stmt::Discard));

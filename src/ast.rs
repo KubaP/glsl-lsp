@@ -85,8 +85,8 @@ pub enum Stmt {
 		inc: Option<Expr>,
 		body: Vec<Stmt>,
 	},
-	/// Return keyword.
-	Return,
+	/// Return statement.
+	Return(Option<Expr>),
 	/// Break keyword.
 	Break,
 	/// Discard keyword.

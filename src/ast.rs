@@ -48,6 +48,60 @@ pub enum Expr {
 	Member(Vec<Ident>),
 }
 
+impl std::fmt::Display for Expr {
+	fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+		match self {
+			Expr::Lit(l) => write!(f, "Lit<{l}>"),
+			Expr::Ident(i) => write!(f, "Ident<{i}>"),
+			Expr::Neg(expr) => write!(f, "\x1b[36mNeg\x1b[0m({expr})"),
+			Expr::Prefix(expr, op) => {
+				write!(f, "\x1b[36mPre\x1b[0m({expr} \x1b[36m{op:?}\x1b[0m)")
+			}
+			Expr::Postfix(expr, op) => {
+				write!(f, "\x1b[36mPost\x1b[0m({expr} \x1b[36m{op:?}\x1b[0m)")
+			}
+			Expr::Flip(expr) => write!(f, "\x1b[36mFlip\x1b[0m({expr})"),
+			Expr::Not(expr) => write!(f, "\x1b[36mNot\x1b[0m({expr})"),
+			Expr::Binary { left, op, right } => {
+				write!(f, "({left} \x1b[36m{op:?}\x1b[0m {right})")
+			}
+			Expr::Ternary {
+				cond,
+				true_,
+				false_,
+			} => write!(f, "IF({cond}) {{ {true_} }} ELSE {{ {false_} }}"),
+			Expr::Fn { ident, args } => {
+				write!(f, "\x1b[34mCall\x1b[0m(ident: {ident}, args: [")?;
+				for arg in args {
+					write!(f, "{arg}, ")?;
+				}
+				write!(f, "])")
+			}
+			Expr::Array { type_, args } => {
+				write!(f, "\x1b[34mArr\x1b[0m(type: {type_} args: [)")?;
+				for arg in args {
+					write!(f, "{arg}, ")?;
+				}
+				write!(f, "])")
+			}
+			Expr::InitList(args) => {
+				write!(f, "\x1b[34mInit\x1b[0m{{")?;
+				for arg in args {
+					write!(f, "{arg}, ")?;
+				}
+				write!(f, "}}")
+			}
+			Expr::Member(idents) => {
+				write!(f, "Member(")?;
+				for ident in idents {
+					write!(f, "{ident}. ")?;
+				}
+				write!(f, ")")
+			}
+		}
+	}
+}
+
 /// A top-level statement. Some of these statements are only valid at the file top-level. Others are only valid
 /// inside of functions.
 #[derive(Debug, Clone)]
@@ -144,29 +198,27 @@ impl std::fmt::Display for Preproc {
 		match self {
 			Preproc::Version { version, is_core } => write!(
 				f,
-				"version: {version} profile: {}",
+				"version: {version}, profile: {}",
 				if *is_core { "core" } else { "compat" }
 			),
 			Preproc::Extension { name, behaviour } => {
-				write!(f, "ext: {name} behaviour: {behaviour:?}")
+				write!(f, "extension: {name}, behaviour: {behaviour:?}")
 			}
-			Preproc::Line { line, src_str } => write!(
-				f,
-				"line: {line} src: {}",
-				if let Some(s) = src_str {
-					format!("{s}")
+			Preproc::Line { line, src_str } => {
+				if let Some(src_str) = src_str {
+					write!(f, "line: {line}, src-str: {src_str}")
 				} else {
-					format!(" ")
+					write!(f, "line: {line}")
 				}
-			),
-			Preproc::Include(s) => write!(f, "include=\"{s}\""),
-			Preproc::UnDef(s) => write!(f, "UNDEF=\"{s}\""),
-			Preproc::IfDef(s) => write!(f, "IFDEF=\"{s}\""),
-			Preproc::IfnDef(s) => write!(f, "IFNDEF=\"{s}\""),
-			Preproc::Else => write!(f, "ELSE"),
-			Preproc::EndIf => write!(f, "END"),
-			Preproc::Error(s) => write!(f, "error=\"{s}\""),
-			Preproc::Pragma(s) => write!(f, "pragma=\"{s}\""),
+			}
+			Preproc::Include(s) => write!(f, "include: {s}"),
+			Preproc::UnDef(s) => write!(f, "undef: {s}"),
+			Preproc::IfDef(s) => write!(f, "ifdef: {s}"),
+			Preproc::IfnDef(s) => write!(f, "ifndef: {s}"),
+			Preproc::Else => write!(f, "else"),
+			Preproc::EndIf => write!(f, "end"),
+			Preproc::Error(s) => write!(f, "error: {s}"),
+			Preproc::Pragma(s) => write!(f, "pragma: {s}"),
 			Preproc::Unsupported => write!(f, "UNSUPPORTED"),
 		}
 	}
@@ -194,11 +246,11 @@ pub enum Lit {
 impl std::fmt::Display for Lit {
 	fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
 		match self {
-			Self::Bool(b) => write!(f, "{}", b.to_string()),
-			Self::Int(i) => write!(f, "{i}"),
-			Self::UInt(u) => write!(f, "{u}"),
-			Self::Float(fp) => write!(f, "{fp}"),
-			Self::Double(d) => write!(f, "{d}"),
+			Self::Bool(b) => write!(f, "\x1b[35m{}\x1b[0m", b.to_string()),
+			Self::Int(i) => write!(f, "\x1b[35m{i}\x1b[0m"),
+			Self::UInt(u) => write!(f, "\x1b[35m{u}\x1b[0m"),
+			Self::Float(fp) => write!(f, "\x1b[35m{fp}\x1b[0m"),
+			Self::Double(d) => write!(f, "\x1b[35m{d}\x1b[0m"),
 		}
 	}
 }
@@ -303,7 +355,7 @@ pub struct Ident(pub String);
 
 impl std::fmt::Display for Ident {
 	fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-		write!(f, "{}", self.0)
+		write!(f, "\x1b[33m{}\x1b[0m", self.0)
 	}
 }
 
@@ -379,7 +431,7 @@ impl std::fmt::Display for Primitive {
 		match self {
 			Primitive::Scalar(ff) => write!(f, "{ff}"),
 			Primitive::Vector(ff, size) => write!(f, "{ff}-vec-{size}"),
-			Primitive::Matrix(i, j) => write!(f, "float-mat-{i}x{j}"),
+			Primitive::Matrix(i, j) => write!(f, "mat-{i}x{j}"),
 			Primitive::DMatrix(i, j) => write!(f, "double-mat-{i}x{j}"),
 		}
 	}
@@ -473,7 +525,7 @@ impl std::fmt::Display for Type {
 		fn format_ident(ident: &Either<Primitive, Ident>) -> String {
 			match ident {
 				Either::Left(p) => format!("\x1b[91m{p}\x1b[0m"),
-				Either::Right(i) => format!("\x1b[36m{i}\x1b[0m"),
+				Either::Right(i) => format!("{i}"),
 			}
 		}
 		fn format_size(size: &Option<Either<usize, Ident>>) -> String {

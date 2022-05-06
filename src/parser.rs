@@ -24,94 +24,10 @@ pub fn parse(source: &str) {
 	}
 }
 
-fn print_expr(expr: &Expr, indent: usize) {
-	match expr {
-		Expr::Lit(s) => {
-			print!(" Lit(\x1b[35m{s}\x1b[0m)")
-		}
-		Expr::Ident(s) => print!(" Ident(\x1b[33m{s}\x1b[0m)"),
-		Expr::Neg(e) => {
-			print!(" Neg(");
-			print_expr(e, indent + 1);
-			print!(" )");
-		}
-		Expr::Prefix(expr, op) => {
-			print!(" Prefix(");
-			print!(" {op:?}");
-			print_expr(expr, indent + 1);
-			print!(" )");
-		}
-		Expr::Postfix(expr, op) => {
-			print!(" Postfix(");
-			print_expr(expr, indent + 1);
-			print!(" {op:?}");
-			print!(" )");
-		}
-		Expr::Flip(e) => {
-			print!(" Flip(");
-			print_expr(e, indent + 1);
-			print!(" )");
-		}
-		Expr::Not(e) => {
-			print!(" Not(");
-			print_expr(e, indent + 1);
-			print!(" )");
-		}
-		Expr::Binary { left, op, right } => {
-			print!(" (");
-			print_expr(left, indent + 1);
-			print!(" {op:?}");
-			print_expr(right, indent + 1);
-			print!(" )");
-		}
-		Expr::Ternary {
-			cond,
-			true_,
-			false_,
-		} => {
-			print!(" IF(");
-			print_expr(cond, indent + 1);
-			print!(" ) {{");
-			print_expr(true_, indent + 1);
-			print!(" }} ELSE {{");
-			print_expr(false_, indent + 1);
-			print!(" }}");
-		}
-		Expr::Fn { ident, args } => {
-			print!(" \x1b[34m{ident}\x1b[0m(");
-			for arg in args {
-				print_expr(arg, indent + 1);
-			}
-			print!(" )");
-		}
-		Expr::Array { type_, args } => {
-			print!(" Arr(type={type_})(");
-			for arg in args {
-				print_expr(arg, indent + 1);
-			}
-			print!(" )");
-		}
-		Expr::InitList(v) => {
-			print!(" Init{{");
-			for arg in v {
-				print_expr(arg, indent + 1);
-			}
-			print!(" }}");
-		}
-		Expr::Member(v) => {
-			print!(" Member( ");
-			for m in v {
-				print!("{m}.");
-			}
-			print!(" )");
-		}
-	}
-}
-
 fn print_stmt(stmt: &Stmt, indent: usize) {
 	match stmt {
 		Stmt::Empty => print!(
-			"\r\n{:indent$}(\x1b[97mEmpty\x1b[0m)",
+			"\r\n{:indent$}\x1b[9m(Empty)\x1b[0m",
 			"",
 			indent = indent * 4
 		),
@@ -122,17 +38,16 @@ fn print_stmt(stmt: &Stmt, indent: usize) {
 			is_const,
 		} => {
 			print!(
-				"\r\n{:indent$}\x1b[32mVar\x1b[0m(type={type_} ident=\x1b[33m{ident}\x1b[0m",
+				"\r\n{:indent$}\x1b[32mVar\x1b[0m(type: {type_}, ident: {ident}",
 				"",
 				indent = indent * 4
 			);
 			if *is_const {
-				print!(" \x1b[4mconst\x1b[0m");
+				print!(", \x1b[4mconst\x1b[0m");
 			}
 			print!(")");
 			if let Some(value) = value {
-				print!(" =");
-				print_expr(value, indent + 1);
+				print!(" = {value}");
 			}
 		}
 		Stmt::FnDecl {
@@ -142,59 +57,54 @@ fn print_stmt(stmt: &Stmt, indent: usize) {
 			body,
 		} => {
 			print!(
-				"\r\n{:indent$}\x1b[34mFn\x1b[0m(return=\x1b[91m{type_}\x1b[0m ident=\x1b[33m{ident}\x1b[0m, args=[",
+				"\r\n{:indent$}\x1b[34mFn\x1b[0m(return: {type_} ident: {ident}, params: [",
 				"",
 				indent = indent * 4
 			);
 			for (type_, ident) in params {
-				print!(" \x1b[91m{type_}\x1b[0m \x1b[33m{ident}\x1b[0m,");
+				print!("{type_}: {ident}, ");
 			}
 			print!("]) {{");
 			for inner in body {
 				print_stmt(inner, indent + 1);
 			}
-			print!("\r\n}}")
+			print!("\r\n{:indent$}}}", "", indent = indent * 4);
 		}
 		Stmt::StructDecl { ident, members } => {
 			print!(
-				"\r\n{:indent$}\x1b[32mStruct\x1b[0m(ident=\x1b[33m{ident}\x1b[0m",
+				"\r\n{:indent$}\x1b[32mStruct\x1b[0m(ident: {ident}, members: [",
 				"",
 				indent = indent * 4
 			);
 			for (t, i) in members {
-				print!(" \x1b[33m{i}\x1b[0m=\x1b[91m{t}\x1b[0m,");
+				print!("{i}: {t}, ");
 			}
-			print!(" )");
+			print!("])");
 		}
 		Stmt::FnCall { ident, args } => {
 			print!(
-				"\r\n{:indent$}\x1b[34mFn-{ident}\x1b[0m(",
+				"\r\n{:indent$}\x1b[34mCall\x1b[0m(ident: {ident}, args: [",
 				"",
 				indent = indent * 4
 			);
 			for arg in args {
-				print_expr(arg, indent + 1);
+				print!("{arg}, ");
 			}
-			print!(" )");
+			print!("])");
 		}
 		Stmt::VarAssign { ident, value } => {
 			print!(
-				"\r\n{:indent$}Assign(ident=\x1b[33m{ident}\x1b[0m value=",
+				"\r\n{:indent$}\x1b[32mAssign\x1b[0m(ident: {ident}) = {value}",
 				"",
 				indent = indent * 4
 			);
-			print_expr(value, indent + 1);
-			print!(" )");
 		}
 		Stmt::VarEq { ident, value, op } => {
 			print!(
-				"\r\n{:indent$}Assign(ident=\x1b[33m{ident}\x1b[0m op={op:?}",
+				"\r\n{:indent$}\x1b[32mAssign\x1b[0m(ident: {ident}, op: \x1b[36m{op:?}\x1b[0m) = {value}",
 				"",
 				indent = indent * 4
 			);
-			print!(" value=");
-			print_expr(value, indent + 1);
-			print!(" )");
 		}
 		Stmt::Preproc(p) => print!(
 			"\r\n{:indent$}\x1b[4mPreproc({p})\x1b[0m",
@@ -207,18 +117,14 @@ fn print_stmt(stmt: &Stmt, indent: usize) {
 			else_ifs,
 			else_,
 		} => {
-			print!("\r\n{:indent$}If(", "", indent = indent * 4);
-			print_expr(cond, indent);
-			print!(" ) {{");
+			print!("\r\n{:indent$}If({cond}) {{", "", indent = indent * 4);
 			for stmt in body {
 				print_stmt(stmt, indent + 1);
 			}
 			print!("\r\n{:indent$}}}", "", indent = indent * 4);
 
 			for (cond, body) in else_ifs {
-				print!("\r\n{:indent$}ElseIf(", "", indent = indent * 4);
-				print_expr(cond, indent);
-				print!(" ) {{");
+				print!("\r\n{:indent$}ElseIf({cond})", "", indent = indent * 4);
 				for stmt in body {
 					print_stmt(stmt, indent + 1);
 				}
@@ -234,18 +140,14 @@ fn print_stmt(stmt: &Stmt, indent: usize) {
 			}
 		}
 		Stmt::Switch { expr, cases } => {
-			print!("\r\n{:indent$}Switch(", "", indent = indent * 4);
-			print_expr(expr, indent + 1);
-			print!(" ) {{");
+			print!("\r\n{:indent$}Switch({expr}) {{", "", indent = indent * 4);
 			for (expr, stmts) in cases {
 				if let Some(expr) = expr {
 					print!(
-						"\r\n{:indent$}Case(",
+						"\r\n{:indent$}Case({expr}) {{",
 						"",
 						indent = (indent + 1) * 4
 					);
-					print_expr(expr, indent + 2);
-					print!(" ) {{");
 				} else {
 					print!(
 						"\r\n{:indent$}Default {{",
@@ -268,18 +170,29 @@ fn print_stmt(stmt: &Stmt, indent: usize) {
 		} => {
 			print!("\r\n{:indent$}For(", "", indent = indent * 4);
 			if let Some(var) = var {
-				print!(" var=");
-				print_stmt(var, indent + 1);
+				print!("var:");
+				print_stmt(var, indent + 2);
+				print!(", ");
 			}
 			if let Some(cond) = cond {
-				print!(" cond=");
-				print_expr(cond, indent + 1);
+				print!(
+					"\r\n{:indent$}cond:\r\n{:indent_2$}{cond}, ",
+					"",
+					"",
+					indent = (indent + 1) * 4,
+					indent_2 = (indent + 2) * 4
+				);
 			}
 			if let Some(inc) = inc {
-				print!(" inc=");
-				print_expr(inc, indent + 1);
+				print!(
+					"\r\n{:indent$}inc:\r\n{:indent_2$}{inc}, ",
+					"",
+					"",
+					indent = (indent + 1) * 4,
+					indent_2 = (indent + 2) * 4
+				);
 			}
-			print!(" ) {{");
+			print!(") {{");
 			for stmt in body {
 				print_stmt(stmt, indent + 1);
 			}
@@ -288,8 +201,7 @@ fn print_stmt(stmt: &Stmt, indent: usize) {
 		Stmt::Return(expr) => {
 			print!("\r\n{:indent$}RETURN", "", indent = indent * 4);
 			if let Some(expr) = expr {
-				print!(" val=");
-				print_expr(expr, indent + 1);
+				print!("(value: {expr})");
 			}
 		}
 		Stmt::Break => {

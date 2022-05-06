@@ -359,14 +359,12 @@ macro_rules! binary_expr {
 
 /// CST tokens.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
-#[allow(unused)]
 enum Token {
-	Invalid,
 	Num(String, NumType),
 	Bool(bool),
 	Ident(String),
-	Type(String),
 	Directive(String),
+	Invalid(String),
 	// Keywords
 	If,
 	Else,
@@ -402,7 +400,6 @@ enum Token {
 	Dot,
 	Semi,
 	Colon,
-	Star,
 	Question,
 	LParen,
 	RParen,
@@ -414,7 +411,6 @@ enum Token {
 
 /// The different number types.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-#[allow(unused)]
 pub enum NumType {
 	Normal,
 	Oct,
@@ -425,7 +421,6 @@ pub enum NumType {
 
 /// Mathematical and comparison operators.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-#[allow(unused)]
 pub enum OpType {
 	// Maths
 	Add,
@@ -467,7 +462,13 @@ pub enum OpType {
 type Spanned<T> = (T, Span);
 type Span = std::ops::Range<usize>;
 
+/// Performs lexical parsing of the steam of `char`s into a list of [`Token`]s with their span in the string.
 fn lexer() -> impl Parser<char, Vec<Spanned<Token>>, Error = Simple<char>> {
+	// Preprocessor directive lines must be parsed first and as a whole string. This must be done because unlike
+	// with statements, where the 'parser()' is looking for a series of tokens followed a semi-colon, directives have
+	// no semi-colon and instead their end is categorised by the EOL. By parsing the entire directive line into a
+	// single string, we simplify this parser and reduce the number of edge cases we need to track. Meanwhile, the
+	// directive can be parsed on its own in the 'preproc_parser()' function.
 	let directive = just('#')
 		.then(
 			filter(|c: &char| {
@@ -483,11 +484,14 @@ fn lexer() -> impl Parser<char, Vec<Spanned<Token>>, Error = Simple<char>> {
 		.map(|(_, v)| Token::Directive(v.iter().collect()))
 		.padded();
 
-	let ident = text::ident().map(|s| Token::Ident(s));
+	// Parse the source code in order of least ambiguity, to ensure the correct Tokens are given out every time.
 	let token = literals()
 		.or(punctuation())
 		.or(keywords())
-		.or(ident)
+		.or(text::ident().map(|s| Token::Ident(s)))
+		// If none of the patterns have succeeded, then we must have a character that is straight up illegal in
+		// glsl source code, so create an 'Invalid' token.
+		.or(filter(|_| true).map(|c| Token::Invalid(String::from(c))))
 		.padded();
 
 	directive
@@ -497,8 +501,13 @@ fn lexer() -> impl Parser<char, Vec<Spanned<Token>>, Error = Simple<char>> {
 		.recover_with(skip_then_retry_until([]))
 }
 
-/// Parse punctuation symbols that aren't mathematical/comparison operators.
+/// Parse any valid punctuation or operator symbols.
 fn punctuation() -> impl Parser<char, Token, Error = Simple<char>> {
+	// Parse in order of least ambiguity, so starting with 3 characters and going to 1, and most common occurrence,
+	// to reduce the average amount of checks necessary.
+	//
+	// Split because of limit; 'choice()' is a generic function for performance reasons and it only has 26 generic
+	// overrides.
 	choice((
 		just("<<=").to(Token::Op(OpType::LShiftEq)),
 		just(">>=").to(Token::Op(OpType::RShiftEq)),
@@ -552,7 +561,7 @@ fn punctuation() -> impl Parser<char, Token, Error = Simple<char>> {
 
 /// Parse keywords.
 fn keywords() -> impl Parser<char, Token, Error = Simple<char>> {
-	// Split because of limit. 'choice()' is a generic function for performance reasons and it only has 26 generic
+	// Split because of limit; 'choice()' is a generic function for performance reasons and it only has 26 generic
 	// overrides.
 	choice((
 		text::keyword("if").to(Token::If),
@@ -595,9 +604,35 @@ fn keywords() -> impl Parser<char, Token, Error = Simple<char>> {
 }
 
 /// Parse literal values, i.e. numbers and booleans.
+///
+/// If this parser encounters a partially valid number, where the first *n* characters are valid but the last *m*
+/// are not, it will return a [`Token::Invalid`]. This is done because of the following reason:
+///
+/// For every token other than number literals, spaces don't matter, i.e. `i+=5` will be parsed as a
+/// `[Token::Ident("i"), Token::AddEq, Token::Num(5)]`. However, because numbers *can* contain ascii letters at the
+/// end (such as the `u` postfix), this creates an element of ambiguity. Take for example the string `5.0ufoo`.
+/// According to the glsl spec, this string is seen as a float of value `5.0` with a postfix of `ufoo` (which is an
+/// invalid postfix). If this literal parser only cared about valid patterns, the `lexer()` would produce
+/// `[Token::Num(5, NumType::Float), Token::Ident("ufoo")]`, which is clearly incorrect, because after a number we
+/// need padding **if** the next token is an identifier (we don't need padding for punctuation). So instead, by
+/// also matching for invalid characters after a number, we can produce a `Token::Invalid("5.0ufoo")` which is the
+/// corrent result.
+///
+/// You may think that an alternative like this would work:
+/// ```
+/// num_float
+///     .or(num_double)
+///     /*...*/
+///     .then_ignore(filter(|c: &char| *c == ' '))
+/// ```
+/// But it doesn't. This wouldn't parse `5+` because of the missing space between the number and operator. The key
+/// isn't that we was a space after a number. It's that we want a space if the characters (after any valid postfix)
+/// are letters.
 fn literals() -> impl Parser<char, Token, Error = Simple<char>> {
 	// Unsigned integer suffix.
 	let suffix = filter(|c: &char| *c == 'u' || *c == 'U').or_not();
+	// Double specifier suffix.
+	let lf = just('l').then(just('f')).or(just('L').then(just('F')));
 
 	let zero_valid = just('0')
 		.chain::<char, _, _>(suffix)
@@ -611,7 +646,7 @@ fn literals() -> impl Parser<char, Token, Error = Simple<char>> {
 				.at_least(1),
 		)
 		.collect::<String>()
-		.map(|_| Token::Invalid);
+		.map(|s| Token::Invalid(s));
 
 	let num = filter(|c: &char| c.is_ascii_digit() && *c != '0')
 		.chain::<char, _, _>(filter(|c: &char| c.is_ascii_digit()).repeated())
@@ -624,7 +659,7 @@ fn literals() -> impl Parser<char, Token, Error = Simple<char>> {
 				.at_least(1),
 		)
 		.collect::<String>()
-		.map(|_| Token::Invalid);
+		.map(|s| Token::Invalid(s));
 
 	let num_hex = just('0')
 		.then(just('x'))
@@ -642,7 +677,7 @@ fn literals() -> impl Parser<char, Token, Error = Simple<char>> {
 				.at_least(1),
 		)
 		.collect::<String>()
-		.map(|_| Token::Invalid);
+		.map(|s| Token::Invalid(s));
 
 	let num_oct = just('0')
 		.chain::<char, _, _>(
@@ -662,7 +697,7 @@ fn literals() -> impl Parser<char, Token, Error = Simple<char>> {
 				.at_least(1),
 		)
 		.collect::<String>()
-		.map(|_| Token::Invalid);
+		.map(|s| Token::Invalid(s));
 
 	let num_float = filter(|c: &char| c.is_ascii_digit())
 		.repeated()
@@ -681,7 +716,7 @@ fn literals() -> impl Parser<char, Token, Error = Simple<char>> {
 				.at_least(1),
 		)
 		.collect::<String>()
-		.map(|_| Token::Invalid);
+		.map(|s| Token::Invalid(s));
 
 	let num_float_exp = filter(|c: &char| c.is_ascii_digit())
 		.repeated()
@@ -704,7 +739,7 @@ fn literals() -> impl Parser<char, Token, Error = Simple<char>> {
 				.at_least(1),
 		)
 		.collect::<String>()
-		.map(|_| Token::Invalid);
+		.map(|s| Token::Invalid(s));
 
 	let num_float_exp_no_decimal = filter(|c: &char| c.is_ascii_digit())
 		.repeated()
@@ -723,10 +758,7 @@ fn literals() -> impl Parser<char, Token, Error = Simple<char>> {
 				.at_least(1),
 		)
 		.collect::<String>()
-		.map(|_| Token::Invalid);
-
-	// Double specifier suffix.
-	let lf = just('l').then(just('f')).or(just('L').then(just('F')));
+		.map(|s| Token::Invalid(s));
 
 	let num_double = filter(|c: &char| c.is_ascii_digit())
 		.repeated()
@@ -746,7 +778,7 @@ fn literals() -> impl Parser<char, Token, Error = Simple<char>> {
 				.at_least(1),
 		)
 		.collect::<String>()
-		.map(|_| Token::Invalid);
+		.map(|s| Token::Invalid(s));
 
 	let num_double_exp = filter(|c: &char| c.is_ascii_digit())
 		.repeated()
@@ -770,7 +802,7 @@ fn literals() -> impl Parser<char, Token, Error = Simple<char>> {
 				.at_least(1),
 		)
 		.collect::<String>()
-		.map(|_| Token::Invalid);
+		.map(|s| Token::Invalid(s));
 
 	let num_double_exp_no_decimal = filter(|c: &char| c.is_ascii_digit())
 		.repeated()
@@ -790,8 +822,11 @@ fn literals() -> impl Parser<char, Token, Error = Simple<char>> {
 				.at_least(1),
 		)
 		.collect::<String>()
-		.map(|_| Token::Invalid);
+		.map(|s| Token::Invalid(s));
 
+	// Unlike with the number parsers, we don't need to check for characters after the boolean, i.e. 'truep'
+	// because the 'text::keyword()' function already makes sure that the string is not followed by any other
+	// letters (still allows punctuation, etc.).
 	let b_true = text::keyword("true").map(|_| Token::Bool(true));
 	let b_false = text::keyword("false").map(|_| Token::Bool(false));
 

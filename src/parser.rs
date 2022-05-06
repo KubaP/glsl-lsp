@@ -269,7 +269,7 @@ macro_rules! binary_expr {
 	};
 }
 
-/// CST tokens.
+/// Concrete syntax tree tokens.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 enum Token {
 	Num(String, NumType),
@@ -321,7 +321,7 @@ enum Token {
 	RBrace,
 }
 
-/// The different number types.
+/// The different number types/notations.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum NumType {
 	Normal,
@@ -377,10 +377,10 @@ type Span = std::ops::Range<usize>;
 /// Performs lexical parsing of the steam of `char`s into a list of [`Token`]s with their span in the string.
 fn lexer() -> impl Parser<char, Vec<Spanned<Token>>, Error = Simple<char>> {
 	// Preprocessor directive lines must be parsed first and as a whole string. This must be done because unlike
-	// with statements, where the 'parser()' is looking for a series of tokens followed a semi-colon, directives have
-	// no semi-colon and instead their end is categorised by the EOL. By parsing the entire directive line into a
-	// single string, we simplify this parser and reduce the number of edge cases we need to track. Meanwhile, the
-	// directive can be parsed on its own in the 'preproc_parser()' function.
+	// with statements, where the 'parser()' is looking for a series of tokens followed a semi-colon, directives
+	// have no semi-colon and instead their end is categorised by the EOL. By parsing the entire directive line
+	// into a single string, we simplify this parser and reduce the number of edge cases we need to track.
+	// Meanwhile, the directive can be parsed on its own in the 'preproc_parser()' function.
 	let directive = just('#')
 		.then(
 			filter(|c: &char| {
@@ -396,13 +396,14 @@ fn lexer() -> impl Parser<char, Vec<Spanned<Token>>, Error = Simple<char>> {
 		.map(|(_, v)| Token::Directive(v.iter().collect()))
 		.padded();
 
-	// Parse the source code in order of least ambiguity, to ensure the correct Tokens are given out every time.
+	// Parse the source code in order of least ambiguity, to ensure the correct tokens are given out every time.
 	let token = literals()
 		.or(punctuation())
 		.or(keywords())
 		.or(text::ident().map(|s| Token::Ident(s)))
 		// If none of the patterns have succeeded, then we must have a character that is straight up illegal in
-		// glsl source code, so create an 'Invalid' token.
+		// glsl source code (or a situation where a character is legal but can't start the token with it, e.g.
+		// '_'), so create an 'Invalid' token.
 		.or(filter(|_| true).map(|c| Token::Invalid(String::from(c))))
 		.padded();
 
@@ -486,6 +487,7 @@ fn keywords() -> impl Parser<char, Token, Error = Simple<char>> {
 		text::keyword("return").to(Token::Return),
 		text::keyword("discard").to(Token::Discard),
 		text::keyword("struct").to(Token::Struct),
+		// TODO: Parse reserved keywords which have no use currently.
 	))
 	.or(choice((
 		text::keyword("in").to(Token::In),
@@ -538,8 +540,8 @@ fn keywords() -> impl Parser<char, Token, Error = Simple<char>> {
 ///     .then_ignore(filter(|c: &char| *c == ' '))
 /// ```
 /// But it doesn't. This wouldn't parse `5+` because of the missing space between the number and operator. The key
-/// isn't that we was a space after a number. It's that we want a space if the characters (after any valid postfix)
-/// are letters.
+/// isn't that we want a space after a number. It's that we want a space if the characters (after any valid
+/// postfix) are letters.
 fn literals() -> impl Parser<char, Token, Error = Simple<char>> {
 	// Unsigned integer suffix.
 	let suffix = filter(|c: &char| *c == 'u' || *c == 'U').or_not();

@@ -131,7 +131,7 @@
             "type": "process",
             "command": "C:/Program Files/Mozilla Firefox/firefox.exe",
             "args": [
-                "file://${workspaceFolder}/target/doc/glsl-parser/index.html"
+                "file://${workspaceFolder}/target/doc/glsl_parser/index.html"
             ],
             "presentation": {
                 "echo": false,

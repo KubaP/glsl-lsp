@@ -13,6 +13,7 @@
     - ~~Array constructors~~
     - ~~Initializer lists~~
     - ~~Struct member access~~
+    - ~~Ternary~~
 - Variable declaration
     - ~~Const qualifier~~
     - ~~Type~~
@@ -40,15 +41,21 @@
 - Variable assignment
     - ~~Identifier~~
     - ~~Value expression~~
+    - ~~+=/-=/etc. expressions~~
 - If statement
     - ~~Condition~~
     - ~~Condition body~~
     - ~~Else if~~
     - ~~Else~~
 - Switch statement
-    - Variable identifier
-    - Case condition
-    - Case body
-    - Default case
+    - ~~Tested expression~~
+    - ~~Case condition~~
+    - ~~Case body~~
+    - ~~Default case~~
 - For loop
+    - ~~Variable declaration~~
+    - ~~End condition~~
+    - ~~Increment expression~~
+    - ~~Body~~
 - ~~Return/Break/Discard~~
+- Comments

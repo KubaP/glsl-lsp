@@ -98,6 +98,13 @@ Mathematical operators:
 1 >> 2 // Binary right shift
 
 // Same as above, but assigns the result back to the variable.
+// These can be either as part of an expression, or as a standalone statement.
+// E.g.
+//     // This will increment p by 4, and also create a copy, assigning it to i.
+//     int i = p+=4; 
+//
+//     // This will just increment p by 4.
+//     p+=4; 
 i += 5
 i -= 5
 i *= 5
@@ -109,10 +116,10 @@ i ^= 5
 i <<= 5
 i >>= 5
 
-i ++ // Increment
-i -- // Decrement
-
-~ i  // Bitwise flip
+// Same as above; can be used in expression or statement.
+i++ // Increment
+i-- // Decrement
+~i  // Bitwise flip
 ```
 
 Comparison operators:
@@ -127,14 +134,14 @@ a <= b // Less than or equal to
 a && b // Logical AND
 a || b // Logical OR
 a ^^ b // Logical XOR
-a ! b  // Logical NOT
+!a     // Logical NOT
 ```
 
 |Precedence|Operator|
 |-|-|
 |1|`()`|
 |2|`[]`, `fn_call()`, `.`, `++`, `--` (postfix)|
-|3|`++`, `--` (prefix), `-` (neg), `~`, `!`|
+|3|`++`, `--` (prefix), `-` (negation; repeatable), `~`, `!` (repeatable)|
 |4|`*`, `/`, `%`|
 |5|`+`, `-`|
 |6|`<<`, `>>`|
@@ -412,7 +419,7 @@ If there is no location qualifier for a global variable, then it is randomly ass
 Along with an index, there is a size for the location which depends on the type:
 
 **1** index|
----
+---|
 bool
 int
 uint
@@ -471,9 +478,12 @@ layout(early_fragment_tests) in;
 ```
 
 # Control Flow
+Control flow statements are only valid within function bodies.
+
 ### Keywords
 ```glsl
-return;  // Valid in a function body
+Valid in a function body; {EXPR} is an optional return value expression.
+return {EXPR};
 discard; // Valid in a function body
 break;   // Only valid inside of a for loop or a switch case.
 ```
@@ -512,9 +522,29 @@ switch ({EXPR}) {
 
 `{CONST-EXPR}` is any constant expression.
 
+## For Loop
+```glsl
+for ({VAR_DECL}; {COND_EXPR}; {INC_EXPR}) {
+    /*...*/
+}
+```
+`{VAR_DECL}` is a variable declaration (value assignment is optional).
+
+`{COND_EXPR}` is an expression which evaluated to a `bool`.
+
+`{INC_EXPR}` is an expression.
+
+All 3 statements are optional, i.e. `(;;)` is a valid (infinite) loop.
+
 # Preprocessor
 
 ## Directives
+All preprocessor directives follow the syntax:
+```glsl
+#/*...*/
+```
+The `#` symbol must be the first (aside from whitespace) and the statement ends at EOL.
+
 ### Version
 The version directive is specified like so:
 ```glsl

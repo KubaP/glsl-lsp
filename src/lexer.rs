@@ -386,3 +386,114 @@ fn lexer(source: &str) -> Vec<Token> {
 
 	tokens
 }
+
+#[allow(unused_macros)]
+macro_rules! assert_tokens {
+    ($src:expr, $($token:expr),*) => {
+        assert_eq!(lexer($src), vec![
+            $(
+                $token,
+            )*
+        ])
+    };
+}
+
+#[test]
+fn identifiers() {
+	assert_tokens!("ident", Token::Ident("ident".into()));
+	assert_tokens!("gl_something", Token::Ident("gl_something".into()));
+	assert_tokens!("id_145", Token::Ident("id_145".into()));
+}
+
+#[test]
+fn keywords() {
+	assert_tokens!("if", Token::If);
+	assert_tokens!("else", Token::Else);
+	assert_tokens!("for", Token::For);
+	assert_tokens!("switch", Token::Switch);
+	assert_tokens!("case", Token::Case);
+	assert_tokens!("default", Token::Default);
+	assert_tokens!("break", Token::Break);
+	assert_tokens!("return", Token::Return);
+	assert_tokens!("discard", Token::Discard);
+	assert_tokens!("struct", Token::Struct);
+	assert_tokens!("in", Token::In);
+	assert_tokens!("out", Token::Out);
+	assert_tokens!("inout", Token::InOut);
+	assert_tokens!("uniform", Token::Uniform);
+	assert_tokens!("buffer", Token::Buffer);
+	assert_tokens!("const", Token::Const);
+	assert_tokens!("invariant", Token::Invariant);
+	assert_tokens!("highp", Token::Precision);
+	assert_tokens!("mediump", Token::Precision);
+	assert_tokens!("lowp", Token::Precision);
+	assert_tokens!("flat", Token::Interpolation);
+	assert_tokens!("smooth", Token::Interpolation);
+	assert_tokens!("noperspective", Token::Interpolation);
+	assert_tokens!("layout", Token::Layout);
+	assert_tokens!("location", Token::Location);
+	assert_tokens!("component", Token::Component);
+	assert_tokens!("origin_upper_left", Token::FragCoord);
+	assert_tokens!("pixel_center_integer", Token::FragCoord);
+	assert_tokens!("depth_any", Token::FragDepth);
+	assert_tokens!("depth_greater", Token::FragDepth);
+	assert_tokens!("depth_less", Token::FragDepth);
+	assert_tokens!("depth_unchanged", Token::FragDepth);
+	assert_tokens!("index", Token::Index);
+	assert_tokens!("early_fragment_test", Token::FragTest);
+}
+
+#[test]
+fn punctuation() {
+	assert_tokens!(";", Token::Semi);
+	assert_tokens!(".", Token::Dot);
+	assert_tokens!(",", Token::Comma);
+	assert_tokens!("=", Token::Eq);
+	assert_tokens!("(", Token::LParen);
+	assert_tokens!(")", Token::RParen);
+	assert_tokens!("[", Token::LBracket);
+	assert_tokens!("]", Token::RBracket);
+	assert_tokens!("{", Token::LBrace);
+	assert_tokens!("}", Token::RBrace);
+	assert_tokens!(":", Token::Colon);
+	assert_tokens!("+", Token::Op(OpType::Add));
+	assert_tokens!("-", Token::Op(OpType::Sub));
+	assert_tokens!("*", Token::Op(OpType::Mul));
+	assert_tokens!("/", Token::Op(OpType::Div));
+	assert_tokens!(">", Token::Op(OpType::Gt));
+	assert_tokens!("<", Token::Op(OpType::Lt));
+	assert_tokens!("!", Token::Op(OpType::Not));
+	assert_tokens!("~", Token::Op(OpType::Flip));
+	assert_tokens!("?", Token::Question);
+	assert_tokens!("%", Token::Op(OpType::Rem));
+	assert_tokens!("&", Token::Op(OpType::And));
+	assert_tokens!("|", Token::Op(OpType::Or));
+	assert_tokens!("^", Token::Op(OpType::Xor));
+	assert_tokens!("<<=", Token::Op(OpType::LShiftEq));
+	assert_tokens!(">>=", Token::Op(OpType::RShiftEq));
+	assert_tokens!("==", Token::Op(OpType::EqEq));
+	assert_tokens!("!=", Token::Op(OpType::NotEq));
+	assert_tokens!(">=", Token::Op(OpType::Le));
+	assert_tokens!("<=", Token::Op(OpType::Ge));
+	assert_tokens!("&&", Token::Op(OpType::AndAnd));
+	assert_tokens!("||", Token::Op(OpType::OrOr));
+	assert_tokens!("++", Token::Op(OpType::AddAdd));
+	assert_tokens!("--", Token::Op(OpType::SubSub));
+	assert_tokens!("<<", Token::Op(OpType::LShift));
+	assert_tokens!(">>", Token::Op(OpType::RShift));
+	assert_tokens!("+=", Token::Op(OpType::AddEq));
+	assert_tokens!("-=", Token::Op(OpType::SubEq));
+	assert_tokens!("*=", Token::Op(OpType::MulEq));
+	assert_tokens!("/=", Token::Op(OpType::DivEq));
+	assert_tokens!("%=", Token::Op(OpType::RemEq));
+	assert_tokens!("&=", Token::Op(OpType::AndEq));
+	assert_tokens!("|=", Token::Op(OpType::OrEq));
+	assert_tokens!("^^", Token::Op(OpType::XorXor));
+	assert_tokens!("^=", Token::Op(OpType::XorEq));
+}
+
+#[test]
+fn literals() {
+	assert_tokens!("true", Token::Bool(true));
+	assert_tokens!("false", Token::Bool(false));
+}

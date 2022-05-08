@@ -187,3 +187,143 @@ impl Lexer {
 		self.cursor == self.chars.len()
 	}
 }
+
+/// Whether the character is allowed to start a word.
+fn is_word_start(c: &char) -> bool {
+	c.is_ascii_alphabetic() || *c == '_'
+}
+
+/// Whether the character is allowed to be part of a word.
+fn is_word(c: &char) -> bool {
+	c.is_ascii_alphanumeric() || *c == '_'
+}
+
+/// Whether the character is allowed to start a number.
+fn is_number_start(c: &char) -> bool {
+	c.is_ascii_digit() || *c == '.'
+}
+
+/// Whether the character is allowed to be part of an octal number.
+fn is_octal(c: &char) -> bool {
+	match c {
+		'0' | '1' | '2' | '3' | '4' | '5' | '6' | '7' => true,
+		_ => false,
+	}
+}
+
+/// Whether the character is allowed to start a punctuation.
+/// 
+/// Note: The `.` is also caught by the `is_number_start()` function which may execute first.
+fn is_punctuation_start(c: &char) -> bool {
+	match c {
+		'=' | ',' | '.' | ';' | '(' | ')' | '[' | ']' | '{' | '}' | ':'
+		| '+' | '-' | '*' | '/' | '%' | '>' | '<' | '!' | '~' | '?' | '&'
+		| '|' | '^' => true,
+		_ => false,
+	}
+}
+
+macro_rules! match_op {
+	($lexer:ident, $str:expr, $token:expr) => {
+		if $lexer.take_pat($str) {
+			return $token;
+		}
+	};
+}
+
+/// Matches punctuation.
+fn match_punctuation(lexer: &mut Lexer) -> Token {
+	match_op!(lexer, "<<=", Token::Op(OpType::LShiftEq));
+	match_op!(lexer, ">>=", Token::Op(OpType::RShiftEq));
+	match_op!(lexer, "==", Token::Op(OpType::EqEq));
+	match_op!(lexer, "!=", Token::Op(OpType::NotEq));
+	match_op!(lexer, ">=", Token::Op(OpType::Le));
+	match_op!(lexer, "<=", Token::Op(OpType::Ge));
+	match_op!(lexer, "&&", Token::Op(OpType::AndAnd));
+	match_op!(lexer, "||", Token::Op(OpType::OrOr));
+	match_op!(lexer, "++", Token::Op(OpType::AddAdd));
+	match_op!(lexer, "--", Token::Op(OpType::SubSub));
+	match_op!(lexer, "<<", Token::Op(OpType::LShift));
+	match_op!(lexer, ">>", Token::Op(OpType::RShift));
+	match_op!(lexer, "+=", Token::Op(OpType::AddEq));
+	match_op!(lexer, "-=", Token::Op(OpType::SubEq));
+	match_op!(lexer, "*=", Token::Op(OpType::MulEq));
+	match_op!(lexer, "/=", Token::Op(OpType::DivEq));
+	match_op!(lexer, "%=", Token::Op(OpType::RemEq));
+	match_op!(lexer, "&=", Token::Op(OpType::AndEq));
+	match_op!(lexer, "|=", Token::Op(OpType::OrEq));
+	match_op!(lexer, "^^", Token::Op(OpType::XorXor));
+	match_op!(lexer, "^=", Token::Op(OpType::XorEq));
+	match_op!(lexer, ";", Token::Semi);
+	match_op!(lexer, ".", Token::Dot);
+	match_op!(lexer, ",", Token::Comma);
+	match_op!(lexer, "=", Token::Eq);
+	match_op!(lexer, "(", Token::LParen);
+	match_op!(lexer, ")", Token::RParen);
+	match_op!(lexer, "[", Token::LBracket);
+	match_op!(lexer, "]", Token::RBracket);
+	match_op!(lexer, "{", Token::LBrace);
+	match_op!(lexer, "}", Token::RBrace);
+	match_op!(lexer, ":", Token::Colon);
+	match_op!(lexer, "+", Token::Op(OpType::Add));
+	match_op!(lexer, "-", Token::Op(OpType::Sub));
+	match_op!(lexer, "*", Token::Op(OpType::Mul));
+	match_op!(lexer, "/", Token::Op(OpType::Div));
+	match_op!(lexer, ">", Token::Op(OpType::Gt));
+	match_op!(lexer, "<", Token::Op(OpType::Lt));
+	match_op!(lexer, "!", Token::Op(OpType::Not));
+	match_op!(lexer, "~", Token::Op(OpType::Flip));
+	match_op!(lexer, "?", Token::Question);
+	match_op!(lexer, "%", Token::Op(OpType::Rem));
+	match_op!(lexer, "&", Token::Op(OpType::And));
+	match_op!(lexer, "|", Token::Op(OpType::Or));
+	match_op!(lexer, "^", Token::Op(OpType::Xor));
+	unreachable!()
+}
+
+/// Matches a word to either the `true`/`false` literal, a keyword or an identifier; in that order of precedence.
+fn match_word(str: String) -> Token {
+	match str.as_ref() {
+		// Booleans
+		"true" => Token::Bool(true),
+		"false" => Token::Bool(false),
+		// Keywords
+		"if" => Token::If,
+		"else" => Token::Else,
+		"for" => Token::For,
+		"switch" => Token::Switch,
+		"case" => Token::Case,
+		"default" => Token::Default,
+		"break" => Token::Break,
+		"return" => Token::Return,
+		"discard" => Token::Discard,
+		"struct" => Token::Struct,
+		// Qualifiers
+		"in" => Token::In,
+		"out" => Token::Out,
+		"inout" => Token::InOut,
+		"uniform" => Token::Uniform,
+		"buffer" => Token::Buffer,
+		"const" => Token::Const,
+		"invariant" => Token::Invariant,
+		"highp" => Token::Precision,
+		"mediump" => Token::Precision,
+		"lowp" => Token::Precision,
+		"flat" => Token::Interpolation,
+		"smooth" => Token::Interpolation,
+		"noperspective" => Token::Interpolation,
+		"layout" => Token::Layout,
+		"location" => Token::Location,
+		"component" => Token::Component,
+		"origin_upper_left" => Token::FragCoord,
+		"pixel_center_integer" => Token::FragCoord,
+		"depth_any" => Token::FragDepth,
+		"depth_greater" => Token::FragDepth,
+		"depth_less" => Token::FragDepth,
+		"depth_unchanged" => Token::FragDepth,
+		"index" => Token::Index,
+		"early_fragment_test" => Token::FragTest,
+		// Identifier
+		_ => Token::Ident(str),
+	}
+}

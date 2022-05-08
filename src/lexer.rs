@@ -212,7 +212,7 @@ fn is_octal(c: &char) -> bool {
 }
 
 /// Whether the character is allowed to start a punctuation.
-/// 
+///
 /// Note: The `.` is also caught by the `is_number_start()` function which may execute first.
 fn is_punctuation_start(c: &char) -> bool {
 	match c {
@@ -326,4 +326,57 @@ fn match_word(str: String) -> Token {
 		// Identifier
 		_ => Token::Ident(str),
 	}
+}
+
+/// Performs lexical analysis of the source string and returns a vector of [`Token`]s.
+fn lexer(source: &str) -> Vec<Token> {
+	let mut tokens = Vec::new();
+	let mut lexer = Lexer::new(source);
+	let mut buffer = String::new();
+	let mut current = ' ';
+
+	// Any time we want to test the next character, we first `peek()` to see what it is. If it is valid in whatever
+	// branch we are in, we can `advance()` the lexer to the next character and repeat the process. If it is
+	// invalid (and hence we want to finish this branch and try another one), we don't `advance()` the lexer
+	// because we don't want to consume this character; we want to test it against other branches.
+	while !lexer.is_done() {
+		// Peek the current character.
+		current = match lexer.peek() {
+			Some(c) => c,
+			None => {
+				break;
+			}
+		};
+
+		if is_word_start(&current) {
+			buffer.push(current);
+			lexer.advance();
+
+			'word: loop {
+				// Peek the current character.
+				current = match lexer.peek() {
+					Some(c) => c,
+					None => {
+						// We have reached the end of the source string, and therefore the end of the word.
+						tokens.push(match_word(std::mem::take(&mut buffer)));
+						break 'word;
+					}
+				};
+
+				// Check if it can be part of a word.
+				if is_word(&current) {
+					// The character can be part of an word, so consume it and continue looping.
+					buffer.push(current);
+					lexer.advance();
+				} else {
+					// The character can't be part of an word, so we can produce a token and exit this loop without
+					// consuming it.
+					tokens.push(match_word(std::mem::take(&mut buffer)));
+					break 'word;
+				}
+			}
+		}
+	}
+
+	tokens
 }

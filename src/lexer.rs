@@ -375,6 +375,12 @@ fn lexer(source: &str) -> Vec<Token> {
 					break 'word;
 				}
 			}
+		} else if is_punctuation_start(&current) {
+			tokens.push(match_punctuation(&mut lexer));
+		} else {
+			// We don't care about this character.
+			// TODO: Create invalid tokens.
+			lexer.advance()
 		}
 	}
 

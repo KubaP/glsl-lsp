@@ -1094,3 +1094,21 @@ fn floats() {
 	assert_tokens!(".1e+7lf", Token::Num{num: ".1e+7".into(), suffix: Some("lf".into()), type_: NumType::Float});
 	assert_tokens!(".1e-7lf", Token::Num{num: ".1e-7".into(), suffix: Some("lf".into()), type_: NumType::Float});
 }
+
+#[test]
+#[rustfmt::skip]
+fn directives(){
+	assert_tokens!("#directive", Token::Directive("directive".into()));
+	assert_tokens!("#   directive", Token::Directive("   directive".into()));
+	assert_tokens!("#directive args", Token::Directive("directive args".into()));
+	assert_tokens!("  #directive", Token::Directive("directive".into()));
+	assert_tokens!("\t#directive", Token::Directive("directive".into()));
+	assert_tokens!("#directive\\", Token::Directive("directive".into()));
+	assert_tokens!("#directive \\\\", Token::Directive("directive \\\\".into()));
+	assert_tokens!("#directive \\n", Token::Directive("directive \\n".into()));
+	assert_tokens!("#directive \\\r\n args", Token::Directive("directive \r\n args".into()));
+	assert_tokens!("#  directive \\\r args", Token::Directive("  directive \r args".into()));
+	assert_tokens!("#directive\\\nargs", Token::Directive("directive\nargs".into()));
+	assert_tokens!("#", Token::Directive("".into()));
+	assert_tokens!("   #", Token::Directive("".into()));
+}

@@ -924,6 +924,25 @@ fn punctuation() {
 
 #[test]
 #[rustfmt::skip]
+fn comments() {
+	// Line comments
+	assert_tokens!("// a comment", Token::Comment{str: " a comment".into(), contains_eof: false});
+	assert_tokens!("//a comment", Token::Comment{str: "a comment".into(), contains_eof: false});
+	assert_tokens!("//a comment \\", Token::Comment{str: "a comment ".into(), contains_eof: false});
+	assert_tokens!("//a comment \\\\", Token::Comment{str: "a comment \\\\".into(), contains_eof: false});
+	assert_tokens!("//a comment \\n", Token::Comment{str: "a comment \\n".into(), contains_eof: false});
+	assert_tokens!("//a comment \\\r\n continuation", Token::Comment{str: "a comment \r\n continuation".into(), contains_eof: false});
+	assert_tokens!("// a comment \\\r continuation", Token::Comment{str: " a comment \r continuation".into(), contains_eof: false});
+	assert_tokens!("//a comment\\\ncontinuation", Token::Comment{str: "a comment\ncontinuation".into(), contains_eof: false});
+	// Multi-line comments
+	assert_tokens!("/* a comment */", Token::Comment{ str: " a comment ".into(), contains_eof: false});
+	assert_tokens!("/*a comment*/", Token::Comment{ str: "a comment".into(), contains_eof: false});
+	assert_tokens!("/* <Ll#,;#l,_!\"^$!6 */", Token::Comment{ str: " <Ll#,;#l,_!\"^$!6 ".into(), contains_eof: false});
+	assert_tokens!("/* open-ended comment", Token::Comment{ str: " open-ended comment".into(), contains_eof: true});
+}
+
+#[test]
+#[rustfmt::skip]
 fn integers(){
 	// Zero
 	assert_tokens!("0", Token::Num{num: "0".into(), suffix: None, type_: NumType::Dec});

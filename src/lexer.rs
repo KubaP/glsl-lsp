@@ -332,6 +332,66 @@ fn match_word(str: String) -> Token {
 	}
 }
 
+/// Matches a line-continuator at the end of a line.
+fn match_line_continuator(buffer: &mut String, lexer: &mut Lexer) -> bool {
+	let current = lexer.peek().unwrap();
+
+	// Line-continuators begin with `\`.
+	if current != '\\' {
+		return false;
+	}
+
+	if let Some(lookahead) = lexer.lookahead_1() {
+		if lookahead == '\n' {
+			// We have a `\<\n>`.
+			buffer.push('\n');
+			lexer.advance();
+			lexer.advance();
+			return true;
+		} else if lookahead == '\r' {
+			if let Some(lookahead_2) = lexer.lookahead_2() {
+				if lookahead_2 == '\n' {
+					// We have a `\<\r><\n>`.
+					buffer.push('\r');
+					buffer.push('\n');
+					lexer.advance();
+					lexer.advance();
+					lexer.advance();
+					return true;
+				} else {
+					// We have a `\<\r><something else>`
+					buffer.push('\r');
+					lexer.advance();
+					lexer.advance();
+					return true;
+				}
+			} else {
+				// We have a `\<\r><eof>`, so this is a defacto line-continuator.
+				buffer.push('\r');
+				lexer.advance();
+				lexer.advance();
+				return true;
+			}
+		} else if lookahead == '\\' {
+			// We have `\\` which escapes the `\`. Technically this isn't a line-continuator, but
+			// the escaping of a `\` happens in pairs so it makes sense to treat this condition as
+			// true and push to the buffer here.
+			buffer.push('\\');
+			buffer.push('\\');
+			lexer.advance();
+			lexer.advance();
+			return true;
+		} else {
+			// We have a `\` followed by another character, so this isn't a line-continuator.
+			return false;
+		}
+	} else {
+		// We have a `\<eof>`, so this is a defacto line-continuator.
+		lexer.advance();
+		return true;
+	}
+}
+
 /// The current state when parsing a number.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum NumState {
@@ -716,65 +776,8 @@ fn lexer(source: &str) -> Vec<Token> {
 						}
 					};
 
-					if current == '\\' {
-						// We may have a line-continuation character if the following is an EOL. If we have a
-						// second `\` that escapes the first `\` and we can continue parsing.
-						if let Some(lookahead) = lexer.lookahead_1() {
-							if lookahead == '\n' {
-								// We have a `\<\n>`.
-								buffer.push('\n');
-								lexer.advance();
-								lexer.advance();
-							} else if lookahead == '\r' {
-								if let Some(lookahead_2) = lexer.lookahead_2() {
-									if lookahead_2 == '\n' {
-										// We have a `\<\r><\n>`.
-										buffer.push('\r');
-										buffer.push('\n');
-										lexer.advance();
-										lexer.advance();
-										lexer.advance();
-										continue 'line_comment;
-									} else {
-										// We have a `\<\r><something else>`
-										buffer.push('\r');
-										lexer.advance();
-										lexer.advance();
-										continue 'line_comment;
-									}
-								} else {
-									// We have a `\<\r><eof>`, so therefore we have reached the end of the comment.
-									buffer.push('\r');
-									lexer.advance();
-									lexer.advance();
-									tokens.push(Token::Comment {
-										str: std::mem::take(&mut buffer),
-										contains_eof: false,
-									});
-									break 'line_comment;
-								}
-							} else if lookahead == '\\' {
-								// We have `\\` which escapes the `\` and we can carry on parsing.
-								buffer.push(current);
-								buffer.push(current);
-								lexer.advance();
-								lexer.advance();
-								continue 'line_comment;
-							} else {
-								// Any other character following a `\` is just added to the comment buffer.
-								buffer.push(current);
-								lexer.advance();
-								continue 'line_comment;
-							}
-						} else {
-							// We have a `\<eof>` so therefore we have reached the end of the comment.
-							tokens.push(Token::Comment {
-								str: std::mem::take(&mut buffer),
-								contains_eof: false,
-							});
-							lexer.advance();
-							break 'line_comment;
-						}
+					if match_line_continuator(&mut buffer, &mut lexer) {
+						continue 'line_comment;
 					} else {
 						// Any other character is just added to the comment buffer.
 						buffer.push(current);
@@ -833,63 +836,8 @@ fn lexer(source: &str) -> Vec<Token> {
 					}
 				};
 
-				if current == '\\' {
-					// We may have a line-continuation character if the following is an EOL. If we have a
-					// second `\` that escapes the first `\` and we can continue parsing.
-					if let Some(lookahead) = lexer.lookahead_1() {
-						if lookahead == '\n' {
-							// We have a `\<\n>`.
-							buffer.push('\n');
-							lexer.advance();
-							lexer.advance();
-						} else if lookahead == '\r' {
-							if let Some(lookahead_2) = lexer.lookahead_2() {
-								if lookahead_2 == '\n' {
-									// We have a `\<\r><\n>`.
-									buffer.push('\r');
-									buffer.push('\n');
-									lexer.advance();
-									lexer.advance();
-									lexer.advance();
-									continue 'directive;
-								} else {
-									// We have a `\<\r><something else>`
-									buffer.push('\r');
-									lexer.advance();
-									lexer.advance();
-									continue 'directive;
-								}
-							} else {
-								// We have a `\<\r><eof>`, so therefore we have reached the end of the comment.
-								buffer.push('\r');
-								lexer.advance();
-								lexer.advance();
-								tokens.push(Token::Directive(std::mem::take(
-									&mut buffer,
-								)));
-								break 'directive;
-							}
-						} else if lookahead == '\\' {
-							// We have `\\` which escapes the `\` and we can carry on parsing.
-							buffer.push(current);
-							buffer.push(current);
-							lexer.advance();
-							lexer.advance();
-							continue 'directive;
-						} else {
-							// Any other character following a `\` is just added to the comment buffer.
-							buffer.push(current);
-							lexer.advance();
-							continue 'directive;
-						}
-					} else {
-						// We have a `\<eof>` so therefore we have reached the end of the comment.
-						tokens.push(Token::Directive(std::mem::take(
-							&mut buffer,
-						)));
-						lexer.advance();
-						break 'directive;
-					}
+				if match_line_continuator(&mut buffer, &mut lexer) {
+					continue 'directive;
 				} else {
 					// Any other character is just added to the comment buffer.
 					buffer.push(current);

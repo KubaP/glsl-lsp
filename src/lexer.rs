@@ -6,7 +6,6 @@ enum Token {
 	Num {
 		num: String,
 		suffix: Option<String>,
-		base: NumBase,
 		type_: NumType,
 	},
 	Bool(bool),
@@ -57,18 +56,12 @@ enum Token {
 	RBrace,
 }
 
-/// Numerical bases.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum NumBase {
-	Oct,
-	Dec,
-	Hex,
-}
-
-/// Specifies distinction between integers and floating points.
+/// The different number types/notations.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum NumType {
-	Int,
+	Dec,
+	Oct,
+	Hex,
 	Float,
 }
 
@@ -328,6 +321,19 @@ fn match_word(str: String) -> Token {
 	}
 }
 
+/// The current state when parsing a number.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum NumState {
+	/// Parsing either an octal or decimal or a floating point number (depending on what follows).
+	Zero,
+	/// Parsing a hexadecimal number.
+	Hex,
+	/// Parsing a decimal number.
+	Dec,
+	/// Parsing a decimal floating point number.
+	Float,
+}
+
 /// Performs lexical analysis of the source string and returns a vector of [`Token`]s.
 fn lexer(source: &str) -> Vec<Token> {
 	let mut tokens = Vec::new();
@@ -373,6 +379,225 @@ fn lexer(source: &str) -> Vec<Token> {
 					// consuming it.
 					tokens.push(match_word(std::mem::take(&mut buffer)));
 					break 'word;
+				}
+			}
+		} else if is_number_start(&current) {
+			// We don't need to worry about having a word character before this first digit character because if
+			// there was a word character before, this digit character would be getting parsed as part of the
+			// word in the first place, so this branch would not be executing.
+
+			let mut num_buffer = String::new();
+			let mut suffix_buffer = None;
+
+			// If we begin with [1-9], we know it's 100% a decimal number. If we begin with `0x`, we know it's 100%
+			// a hexadecimal number and we can ignore this prefix as it's not part of the number itself.
+			//
+			// If we begin with a `0`, however, this can either be:
+			// - an octal number (and we need to ignore this prefix later down the line) or,
+			// - a decimal number `0` assuming the number ends at the next character or,
+			// - it's a floating point which can have a variable amount of `0`s before the decimal point.
+			//
+			// If we begin with a `.`, we 100% know it's a floating point if there's at least one [0-9] digit
+			// afterwards, otherwise this is just a dot token.
+			let mut state = if lexer.take_pat("0x") {
+				NumState::Hex
+			} else if lexer.take_pat("0X") {
+				NumState::Hex
+			} else if current == '0' {
+				// We have a `0`, so either an octal number or a decimal `0` or a floating point.
+				num_buffer.push(current);
+				lexer.advance();
+				NumState::Zero
+			} else if current == '.' {
+				if let Some(lookahead) = lexer.lookahead_1() {
+					if lookahead.is_ascii_digit() {
+						// We have a `.` followed by a character that is a floating point digit.
+						num_buffer.push(current);
+						lexer.advance();
+						NumState::Float
+					} else {
+						// We have a `.` followed by a character that is not a digit, so this must be a punctuation
+						// token. We consume the character because otherwise we'd end up back in this branch again.
+						tokens.push(Token::Dot);
+						lexer.advance();
+						continue;
+					}
+				} else {
+					// We have a `.` followed by the end of the source string, so this must be a punctuation token.
+					// We consume the character because otherwise we'd end up back in this branch again.
+					tokens.push(Token::Dot);
+					lexer.advance();
+					continue;
+				}
+			} else {
+				// We have a [1-9] digit, so a decimal number.
+				num_buffer.push(current);
+				lexer.advance();
+				NumState::Dec
+			};
+
+			'number: loop {
+				// Peek the current character.
+				current = match lexer.peek() {
+					Some(c) => c,
+					None => {
+						// We have reached the end of the source string, and therefore the end of the number.
+						let type_ = match state {
+							NumState::Hex => NumType::Hex,
+							NumState::Zero => {
+								if num_buffer.as_str() == "0" {
+									NumType::Dec
+								} else {
+									num_buffer.remove(0);
+									NumType::Oct
+								}
+							}
+							NumState::Dec => NumType::Dec,
+							NumState::Float => NumType::Float,
+						};
+						tokens.push(Token::Num {
+							num: num_buffer,
+							suffix: suffix_buffer,
+							type_,
+						});
+						break 'number;
+					}
+				};
+
+				if current == '.' && state == NumState::Hex {
+					// If we encounter a `.` and we are parsing a hexadecimal number, that means we've reached the
+					// end of this number, and the `.` is a punctuation symbol. We consume the character because
+					// otherwise we'd end up back in this branch again.
+					tokens.push(Token::Num {
+						num: num_buffer,
+						suffix: suffix_buffer,
+						type_: NumType::Hex,
+					});
+					tokens.push(Token::Dot);
+					lexer.advance();
+					break 'number;
+				}
+				if current == '.' && suffix_buffer.is_some() {
+					// If we have finished parsing the digits and are now parsing the suffix, that means we've
+					// reached the end of the number and this `.` is a punctuation symbol. We consume the character
+					// because otherwise we'd end up back in this branch again.
+					let type_ = match state {
+						NumState::Hex => NumType::Hex,
+						NumState::Zero => {
+							if num_buffer.as_str() == "0" {
+								NumType::Dec
+							} else {
+								num_buffer.remove(0);
+								NumType::Oct
+							}
+						}
+						NumState::Dec => NumType::Dec,
+						NumState::Float => NumType::Float,
+					};
+					tokens.push(Token::Num {
+						num: num_buffer,
+						suffix: suffix_buffer,
+						type_,
+					});
+					tokens.push(Token::Dot);
+					lexer.advance();
+					break 'number;
+				}
+				if current == '.'
+					&& (state == NumState::Dec || state == NumState::Zero)
+				{
+					// If we are still parsing the digits of a number beginning with [0-9] and haven't reached a
+					// suffix yet, and haven't encountered a `.` yet either, that means this number is a floating
+					// point.
+					state = NumState::Float;
+					num_buffer.push(current);
+					lexer.advance();
+					continue 'number;
+				}
+				if current == '.' && state == NumState::Float {
+					// If we are still parsing the digits and haven't reached a suffix yet, and have already
+					// encountered a `.` before, that means we've reached the end of the number and this `.` is a
+					// punctuation symbol. We consume the character because otherwise we'd end up back in this
+					// branch again.
+					let type_ = match state {
+						NumState::Hex => NumType::Hex,
+						NumState::Zero => {
+							if num_buffer.as_str() == "0" {
+								NumType::Dec
+							} else {
+								num_buffer.remove(0);
+								NumType::Oct
+							}
+						}
+						NumState::Dec => NumType::Dec,
+						NumState::Float => NumType::Float,
+					};
+					tokens.push(Token::Num {
+						num: num_buffer,
+						suffix: suffix_buffer,
+						type_,
+					});
+					tokens.push(Token::Dot);
+					lexer.advance();
+					break 'number;
+				}
+
+				// We want to check for any word characters (and digits of course). This is to follow the spec.
+				//
+				// Something like `51ufoo` should be parsed as a decimal integer `51` with an invalid postfix
+				// `ufoo`, hence why we must be greedy and pick up _any_ word characters.
+				if current.is_ascii_hexdigit() || is_word(&current) {
+					match state {
+						NumState::Zero | NumState::Dec | NumState::Float => {
+							if !current.is_ascii_digit()
+								&& suffix_buffer.is_none()
+							{
+								// We have reached the beginning of a word, so flag that we are now parsing the
+								// suffix.
+								suffix_buffer = Some(String::new());
+							}
+						}
+						NumState::Hex => {
+							if !current.is_ascii_hexdigit()
+								&& suffix_buffer.is_none()
+							{
+								// We have reached the beginning of a word, so flag that we are now parsing the
+								// suffix.
+								suffix_buffer = Some(String::new());
+							}
+						}
+					}
+
+					// Append the character to the appropriate buffer.
+					if let Some(suffix) = &mut suffix_buffer {
+						suffix.push(current);
+					} else {
+						num_buffer.push(current);
+					}
+
+					lexer.advance();
+				} else {
+					// The character can't be part of a number, so we can produce a token and exit this loop
+					// without consuming it.
+					let type_ = match state {
+						NumState::Hex => NumType::Hex,
+						NumState::Zero => {
+							if num_buffer.as_str() == "0" {
+								NumType::Dec
+							} else {
+								num_buffer.remove(0);
+								NumType::Oct
+							}
+						}
+						NumState::Dec => NumType::Dec,
+						NumState::Float => NumType::Float,
+					};
+					tokens.push(Token::Num {
+						num: num_buffer,
+						suffix: suffix_buffer,
+						type_,
+					});
+					break 'number;
 				}
 			}
 		} else if is_punctuation_start(&current) {

@@ -11,6 +11,11 @@ enum Token {
 	Bool(bool),
 	Ident(String),
 	Directive(String),
+	Comment {
+		str: String,
+		/// Only `true` is this is a `/*...` comment at the end of the file without an ending delimiter.
+		contains_eof: bool,
+	},
 	Invalid(String),
 	// Keywords
 	If,
@@ -686,7 +691,119 @@ fn lexer(source: &str) -> Vec<Token> {
 				}
 			}
 		} else if is_punctuation_start(&current) {
-			tokens.push(match_punctuation(&mut lexer));
+			if lexer.take_pat("//") {
+				// If we have a `//`, that means this is a comment until the EOL.
+				'line_comment: loop {
+					// Peek the current character.
+					current = match lexer.peek() {
+						Some(c) => c,
+						None => {
+							// We have reached the end of the source string, and therefore the end of the comment.
+							tokens.push(Token::Comment {
+								str: std::mem::take(&mut buffer),
+								contains_eof: false,
+							});
+							break 'line_comment;
+						}
+					};
+
+					if current == '\\' {
+						// We may have a line-continuation character if the following is an EOL. If we have a
+						// second `\` that escapes the first `\` and we can continue parsing.
+						if let Some(lookahead) = lexer.lookahead_1() {
+							if lookahead == '\n' {
+								// We have a `\<\n>`.
+								buffer.push('\n');
+								lexer.advance();
+								lexer.advance();
+							} else if lookahead == '\r' {
+								if let Some(lookahead_2) = lexer.lookahead_2() {
+									if lookahead_2 == '\n' {
+										// We have a `\<\r><\n>`.
+										buffer.push('\r');
+										buffer.push('\n');
+										lexer.advance();
+										lexer.advance();
+										lexer.advance();
+										continue 'line_comment;
+									} else {
+										// We have a `\<\r><something else>`
+										buffer.push('\r');
+										lexer.advance();
+										lexer.advance();
+										continue 'line_comment;
+									}
+								} else {
+									// We have a `\<\r><eof>`, so therefore we have reached the end of the comment.
+									buffer.push('\r');
+									lexer.advance();
+									lexer.advance();
+									tokens.push(Token::Comment {
+										str: std::mem::take(&mut buffer),
+										contains_eof: false,
+									});
+									break 'line_comment;
+								}
+							} else if lookahead == '\\' {
+								// We have `\\` which escapes the `\` and we can carry on parsing.
+								buffer.push(current);
+								buffer.push(current);
+								lexer.advance();
+								lexer.advance();
+								continue 'line_comment;
+							} else {
+								// Any other character following a `\` is just added to the comment buffer.
+								buffer.push(current);
+								lexer.advance();
+								continue 'line_comment;
+							}
+						} else {
+							// We have a `\<eof>` so therefore we have reached the end of the comment.
+							tokens.push(Token::Comment {
+								str: std::mem::take(&mut buffer),
+								contains_eof: false,
+							});
+							lexer.advance();
+							break 'line_comment;
+						}
+					} else {
+						// Any other character is just added to the comment buffer.
+						buffer.push(current);
+						lexer.advance();
+					}
+				}
+			} else if lexer.take_pat("/*") {
+				// If we have a `/*`, that means this is a comment until the first `*/`
+				'comment: loop {
+					// Test if the end delimiter is here.
+					if lexer.take_pat("*/") {
+						tokens.push(Token::Comment {
+							str: std::mem::take(&mut buffer),
+							contains_eof: false,
+						});
+						break 'comment;
+					}
+
+					// Continue pushing any characters into the buffer.
+					if let Some(char) = lexer.next() {
+						buffer.push(char);
+					} else {
+						// We have reached the end of the source string, and therefore the end of the comment. This
+						// comment however therefore contains the EOF and hence is not valid.
+						tokens.push(Token::Comment {
+							str: std::mem::take(&mut buffer),
+							contains_eof: true,
+						});
+						break 'comment;
+					}
+				}
+			} else {
+				tokens.push(match_punctuation(&mut lexer));
+			}
+		} else if current.is_whitespace() {
+			// We ignore whitespace characters.
+			lexer.advance();
+		} else if current == '#' {
 		} else {
 			// We don't care about this character.
 			// TODO: Create invalid tokens.

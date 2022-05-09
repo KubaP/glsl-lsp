@@ -132,6 +132,12 @@ impl Lexer {
 		self.chars.get(self.cursor + 1).map(|c| *c)
 	}
 
+	/// Peeks the character after the next one without advancing the cursor; (returns the character under `cursor +
+	/// 2`).
+	fn lookahead_2(&self) -> Option<char> {
+		self.chars.get(self.cursor + 2).map(|c| *c)
+	}
+
 	/// Advances the cursor by one.
 	fn advance(&mut self) {
 		self.cursor += 1;
@@ -540,6 +546,85 @@ fn lexer(source: &str) -> Vec<Token> {
 					tokens.push(Token::Dot);
 					lexer.advance();
 					break 'number;
+				}
+
+				if current == 'e' {
+					// Note: In the case we encounter an `e` followed by nothing after, that can only be a suffix,
+					// so the logic below will deal with that.
+					if let Some(lookahead) = lexer.lookahead_1() {
+						if lookahead.is_ascii_digit() {
+							// We have an `e` followed by a digit, so this is an exponent notation rather than a
+							// suffix.
+							num_buffer.push(current);
+							lexer.advance();
+							// If the number isn't already a float, then an exponent makes it one.
+							state = NumState::Float;
+							continue 'number;
+						} else if lookahead == '+' || lookahead == '-' {
+							//  We have an `e` followed by a `+`/`-`, so this _may_ be an exponent notation depending
+							//  on whether a digit follows.
+							if let Some(lookahead_2) = lexer.lookahead_2() {
+								if lookahead_2.is_ascii_digit() {
+									// We have an `e+`/`e-` followed by a digit, so this is an exponent notation rather
+									// than a suffix.
+									num_buffer.push(current);
+									num_buffer.push(lookahead);
+									lexer.advance();
+									lexer.advance();
+									// If the number isn't already a float, then an exponent makes it one.
+									state = NumState::Float;
+									continue 'number;
+								} else {
+									// We have an `e` followed by a `+`/`-` and something that's not a digit after, so
+									// this becomes a suffix.
+									suffix_buffer = Some(String::from(current));
+									lexer.advance();
+									let type_ = match state {
+										NumState::Hex => NumType::Hex,
+										NumState::Zero => {
+											if num_buffer.as_str() == "0" {
+												NumType::Dec
+											} else {
+												num_buffer.remove(0);
+												NumType::Oct
+											}
+										}
+										NumState::Dec => NumType::Dec,
+										NumState::Float => NumType::Float,
+									};
+									tokens.push(Token::Num {
+										num: num_buffer,
+										suffix: suffix_buffer,
+										type_,
+									});
+									break 'number;
+								}
+							} else {
+								// We have an `e` followed by a `+`/`-` and nothing after, so this becomes a suffix.
+								suffix_buffer = Some(String::from(current));
+								lexer.advance();
+								let type_ = match state {
+									NumState::Hex => NumType::Hex,
+									NumState::Zero => {
+										if num_buffer.as_str() == "0" {
+											NumType::Dec
+										} else {
+											num_buffer.remove(0);
+											NumType::Oct
+										}
+									}
+									NumState::Dec => NumType::Dec,
+									NumState::Float => NumType::Float,
+								};
+								tokens.push(Token::Num {
+									num: num_buffer,
+									suffix: suffix_buffer,
+									type_,
+								});
+								break 'number;
+							}
+						}
+					}
 				}
 
 				// We want to check for any word characters (and digits of course). This is to follow the spec.

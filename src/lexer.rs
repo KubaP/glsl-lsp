@@ -351,11 +351,17 @@ fn lexer(source: &str) -> Vec<Token> {
 	let mut lexer = Lexer::new(source);
 	let mut buffer = String::new();
 	let mut current = ' ';
+	let mut can_start_directive = true;
 
 	// Any time we want to test the next character, we first `peek()` to see what it is. If it is valid in whatever
 	// branch we are in, we can `advance()` the lexer to the next character and repeat the process. If it is
 	// invalid (and hence we want to finish this branch and try another one), we don't `advance()` the lexer
 	// because we don't want to consume this character; we want to test it against other branches.
+	//
+	// `can_start_directive` is a flag as to whether we can start parsing a directive if we encounter a `#` symbol.
+	// After an EOL this is set to `true`. Any branch other than the whitespace branch sets this to `false`. This
+	// makes it easy to keep track of when we are allowed to parse a directive, since they must exist at the start
+	// of a line.
 	while !lexer.is_done() {
 		// Peek the current character.
 		current = match lexer.peek() {
@@ -366,6 +372,7 @@ fn lexer(source: &str) -> Vec<Token> {
 		};
 
 		if is_word_start(&current) {
+			can_start_directive = false;
 			buffer.push(current);
 			lexer.advance();
 
@@ -393,6 +400,7 @@ fn lexer(source: &str) -> Vec<Token> {
 				}
 			}
 		} else if is_number_start(&current) {
+			can_start_directive = false;
 			// We don't need to worry about having a word character before this first digit character because if
 			// there was a word character before, this digit character would be getting parsed as part of the
 			// word in the first place, so this branch would not be executing.
@@ -691,6 +699,7 @@ fn lexer(source: &str) -> Vec<Token> {
 				}
 			}
 		} else if is_punctuation_start(&current) {
+			can_start_directive = false;
 			if lexer.take_pat("//") {
 				// If we have a `//`, that means this is a comment until the EOL.
 				'line_comment: loop {
@@ -801,9 +810,92 @@ fn lexer(source: &str) -> Vec<Token> {
 				tokens.push(match_punctuation(&mut lexer));
 			}
 		} else if current.is_whitespace() {
+			// Check for an EOL, to reset the directive parsing flag.
+			if current == '\n' || current == '\r' {
+				can_start_directive = true;
+			}
+
 			// We ignore whitespace characters.
 			lexer.advance();
-		} else if current == '#' {
+		} else if can_start_directive && current == '#' {
+			lexer.advance();
+
+			'directive: loop {
+				// Peek the current character.
+				current = match lexer.peek() {
+					Some(c) => c,
+					None => {
+						// We have reached the end of the source string, and therefore the end of the comment.
+						tokens.push(Token::Directive(std::mem::take(
+							&mut buffer,
+						)));
+						break 'directive;
+					}
+				};
+
+				if current == '\\' {
+					// We may have a line-continuation character if the following is an EOL. If we have a
+					// second `\` that escapes the first `\` and we can continue parsing.
+					if let Some(lookahead) = lexer.lookahead_1() {
+						if lookahead == '\n' {
+							// We have a `\<\n>`.
+							buffer.push('\n');
+							lexer.advance();
+							lexer.advance();
+						} else if lookahead == '\r' {
+							if let Some(lookahead_2) = lexer.lookahead_2() {
+								if lookahead_2 == '\n' {
+									// We have a `\<\r><\n>`.
+									buffer.push('\r');
+									buffer.push('\n');
+									lexer.advance();
+									lexer.advance();
+									lexer.advance();
+									continue 'directive;
+								} else {
+									// We have a `\<\r><something else>`
+									buffer.push('\r');
+									lexer.advance();
+									lexer.advance();
+									continue 'directive;
+								}
+							} else {
+								// We have a `\<\r><eof>`, so therefore we have reached the end of the comment.
+								buffer.push('\r');
+								lexer.advance();
+								lexer.advance();
+								tokens.push(Token::Directive(std::mem::take(
+									&mut buffer,
+								)));
+								break 'directive;
+							}
+						} else if lookahead == '\\' {
+							// We have `\\` which escapes the `\` and we can carry on parsing.
+							buffer.push(current);
+							buffer.push(current);
+							lexer.advance();
+							lexer.advance();
+							continue 'directive;
+						} else {
+							// Any other character following a `\` is just added to the comment buffer.
+							buffer.push(current);
+							lexer.advance();
+							continue 'directive;
+						}
+					} else {
+						// We have a `\<eof>` so therefore we have reached the end of the comment.
+						tokens.push(Token::Directive(std::mem::take(
+							&mut buffer,
+						)));
+						lexer.advance();
+						break 'directive;
+					}
+				} else {
+					// Any other character is just added to the comment buffer.
+					buffer.push(current);
+					lexer.advance();
+				}
+			}
 		} else {
 			// We don't care about this character.
 			// TODO: Create invalid tokens.

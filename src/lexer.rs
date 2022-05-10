@@ -1118,3 +1118,19 @@ fn directives(){
 	assert_tokens!("#", Token::Directive("".into()));
 	assert_tokens!("   #", Token::Directive("".into()));
 }
+
+#[test]
+#[rustfmt::skip]
+fn illegal(){
+	// Note: All of these characters will be parsed as part of a preprocessor directive string; only later once the
+	// string is tokenised will any errors come up.
+	assert_tokens!("@", Token::Invalid('@'));
+	assert_tokens!("¬", Token::Invalid('¬'));
+	assert_tokens!("`", Token::Invalid('`'));
+	assert_tokens!("¦", Token::Invalid('¦'));
+	assert_tokens!("'", Token::Invalid('\''));
+	assert_tokens!("\"", Token::Invalid('"'));
+	assert_tokens!("£", Token::Invalid('£'));
+	assert_tokens!("$", Token::Invalid('$'));
+	assert_tokens!("€", Token::Invalid('€'));
+}

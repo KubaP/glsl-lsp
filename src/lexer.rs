@@ -16,7 +16,7 @@ enum Token {
 		/// Only `true` is this is a `/*...` comment at the end of the file without an ending delimiter.
 		contains_eof: bool,
 	},
-	Invalid(String),
+	Invalid(char),
 	// Keywords
 	If,
 	Else,
@@ -149,6 +149,8 @@ impl Lexer {
 	}
 
 	/// Returns the current character under the cursor and advances the cursor by one.
+	///
+	/// Equivalent to [`peek()`](Self::peek) followed by [`advance()`](Self::advance).
 	fn next(&mut self) -> Option<char> {
 		// If we are successful in getting the character, advance the cursor.
 		match self.chars.get(self.cursor) {
@@ -421,7 +423,7 @@ fn lexer(source: &str) -> Vec<Token> {
 	// `can_start_directive` is a flag as to whether we can start parsing a directive if we encounter a `#` symbol.
 	// After an EOL this is set to `true`. Any branch other than the whitespace branch sets this to `false`. This
 	// makes it easy to keep track of when we are allowed to parse a directive, since they must exist at the start
-	// of a line.
+	// of a line barring any whitespace.
 	while !lexer.is_done() {
 		// Peek the current character.
 		current = match lexer.peek() {
@@ -838,6 +840,10 @@ fn lexer(source: &str) -> Vec<Token> {
 
 				if match_line_continuator(&mut buffer, &mut lexer) {
 					continue 'directive;
+				} else if current == '\r' || current == '\n' {
+					// We have an EOL without a line-continuator, so therefore this is the end of the directive.
+					tokens.push(Token::Directive(std::mem::take(&mut buffer)));
+					break 'directive;
 				} else {
 					// Any other character is just added to the comment buffer.
 					buffer.push(current);
@@ -845,8 +851,8 @@ fn lexer(source: &str) -> Vec<Token> {
 				}
 			}
 		} else {
-			// We don't care about this character.
-			// TODO: Create invalid tokens.
+			// This character isn't valid to start any token.
+			tokens.push(Token::Invalid(current));
 			lexer.advance()
 		}
 	}

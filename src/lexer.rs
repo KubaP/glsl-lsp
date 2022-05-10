@@ -21,6 +21,9 @@ enum Token {
 	If,
 	Else,
 	For,
+	Do,
+	While,
+	Continue,
 	Switch,
 	Case,
 	Default,
@@ -28,6 +31,8 @@ enum Token {
 	Return,
 	Discard,
 	Struct,
+	Subroutine,
+	Reserved(String),
 	// Qualifiers
 	In,
 	Out,
@@ -297,6 +302,9 @@ fn match_word(str: String) -> Token {
 		"if" => Token::If,
 		"else" => Token::Else,
 		"for" => Token::For,
+		"do" => Token::Do,
+		"while" => Token::While,
+		"continue" => Token::Continue,
 		"switch" => Token::Switch,
 		"case" => Token::Case,
 		"default" => Token::Default,
@@ -304,6 +312,7 @@ fn match_word(str: String) -> Token {
 		"return" => Token::Return,
 		"discard" => Token::Discard,
 		"struct" => Token::Struct,
+		"subroutine" => Token::Subroutine,
 		// Qualifiers
 		"in" => Token::In,
 		"out" => Token::Out,
@@ -329,6 +338,16 @@ fn match_word(str: String) -> Token {
 		"depth_unchanged" => Token::FragDepth,
 		"index" => Token::Index,
 		"early_fragment_test" => Token::FragTest,
+		// Reserved
+		"common" | "partition" | "active" | "asm" | "class" | "union"
+		| "enum" | "typedef" | "template" | "this" | "resource" | "goto"
+		| "inline" | "noinline" | "public" | "static" | "extern"
+		| "external" | "interface" | "long" | "short" | "half" | "fixed"
+		| "unsigned" | "superp" | "input" | "output" | "hvec2" | "hvec3"
+		| "hvec4" | "fvec2" | "fvec3" | "fvec4" | "sampler3DRect"
+		| "filter" | "sizeof" | "cast" | "namespace" | "using" => {
+			Token::Reserved(str)
+		}
 		// Identifier
 		_ => Token::Ident(str),
 	}
@@ -886,6 +905,9 @@ fn keywords() {
 	assert_tokens!("if", Token::If);
 	assert_tokens!("else", Token::Else);
 	assert_tokens!("for", Token::For);
+	assert_tokens!("do", Token::Do);
+	assert_tokens!("while", Token::While);
+	assert_tokens!("continue", Token::Continue);
 	assert_tokens!("switch", Token::Switch);
 	assert_tokens!("case", Token::Case);
 	assert_tokens!("default", Token::Default);
@@ -893,6 +915,7 @@ fn keywords() {
 	assert_tokens!("return", Token::Return);
 	assert_tokens!("discard", Token::Discard);
 	assert_tokens!("struct", Token::Struct);
+	assert_tokens!("subroutine", Token::Subroutine);
 	assert_tokens!("in", Token::In);
 	assert_tokens!("out", Token::Out);
 	assert_tokens!("inout", Token::InOut);
@@ -917,6 +940,46 @@ fn keywords() {
 	assert_tokens!("depth_unchanged", Token::FragDepth);
 	assert_tokens!("index", Token::Index);
 	assert_tokens!("early_fragment_test", Token::FragTest);
+	// Reserved
+	assert_tokens!("common", Token::Reserved("common".into()));
+	assert_tokens!("partition", Token::Reserved("partition".into()));
+	assert_tokens!("active", Token::Reserved("active".into()));
+	assert_tokens!("asm", Token::Reserved("asm".into()));
+	assert_tokens!("class", Token::Reserved("class".into()));
+	assert_tokens!("union", Token::Reserved("union".into()));
+	assert_tokens!("enum", Token::Reserved("enum".into()));
+	assert_tokens!("typedef", Token::Reserved("typedef".into()));
+	assert_tokens!("template", Token::Reserved("template".into()));
+	assert_tokens!("this", Token::Reserved("this".into()));
+	assert_tokens!("resource", Token::Reserved("resource".into()));
+	assert_tokens!("goto", Token::Reserved("goto".into()));
+	assert_tokens!("inline", Token::Reserved("inline".into()));
+	assert_tokens!("noinline", Token::Reserved("noinline".into()));
+	assert_tokens!("public", Token::Reserved("public".into()));
+	assert_tokens!("static", Token::Reserved("static".into()));
+	assert_tokens!("extern", Token::Reserved("extern".into()));
+	assert_tokens!("external", Token::Reserved("external".into()));
+	assert_tokens!("interface", Token::Reserved("interface".into()));
+	assert_tokens!("long", Token::Reserved("long".into()));
+	assert_tokens!("short", Token::Reserved("short".into()));
+	assert_tokens!("half", Token::Reserved("half".into()));
+	assert_tokens!("fixed", Token::Reserved("fixed".into()));
+	assert_tokens!("unsigned", Token::Reserved("unsigned".into()));
+	assert_tokens!("superp", Token::Reserved("superp".into()));
+	assert_tokens!("input", Token::Reserved("input".into()));
+	assert_tokens!("output", Token::Reserved("output".into()));
+	assert_tokens!("hvec2", Token::Reserved("hvec2".into()));
+	assert_tokens!("hvec3", Token::Reserved("hvec3".into()));
+	assert_tokens!("hvec4", Token::Reserved("hvec4".into()));
+	assert_tokens!("fvec2", Token::Reserved("fvec2".into()));
+	assert_tokens!("fvec3", Token::Reserved("fvec3".into()));
+	assert_tokens!("fvec4", Token::Reserved("fvec4".into()));
+	assert_tokens!("sampler3DRect", Token::Reserved("sampler3DRect".into()));
+	assert_tokens!("filter", Token::Reserved("filter".into()));
+	assert_tokens!("sizeof", Token::Reserved("sizeof".into()));
+	assert_tokens!("cast", Token::Reserved("cast".into()));
+	assert_tokens!("namespace", Token::Reserved("namespace".into()));
+	assert_tokens!("using", Token::Reserved("using".into()));
 }
 
 #[test]

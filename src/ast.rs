@@ -333,6 +333,10 @@ impl Lit {
 				if let Ok(f) = s.parse::<f64>() {
 					return Ok(Self::Double(f));
 				}
+			} else if suffix == "f" || suffix == "F" {
+				if let Ok(f) = s.parse::<f32>() {
+					return Ok(Self::Float(f));
+				}
 			} else {
 				return Err(());
 			}

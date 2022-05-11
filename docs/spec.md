@@ -4,9 +4,6 @@ Missing/incomplete:
 - Samplers
 - Images
 - Atomic counters
-- `f` number suffix
-- `.n` float notation (skipping before dot)
-- `n.` float notation (skipping after dot)
 - Arrays/opaque arrays limitations
 - Subroutines
 

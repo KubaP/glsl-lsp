@@ -12,7 +12,7 @@
 
 # Floating points
 <f64> ::= <float> "lf" | <float> "LF"
-<f32> ::= <float> "f" | <float> "F"
+<f32> ::= <float> "f" | <float> "F" | <float>
 
 <float> ::= <float_e> | <float_dot>
 

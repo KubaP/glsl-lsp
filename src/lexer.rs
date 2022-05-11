@@ -1,8 +1,9 @@
 #![allow(unused)]
+// Note: The `Hash` derives are only needed because of the chumsky parser.
 
 /// Concrete syntax tree tokens.
-#[derive(Debug, Clone, PartialEq, Eq)]
-enum Token {
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub enum Token {
 	Num {
 		num: String,
 		suffix: Option<String>,
@@ -67,7 +68,7 @@ enum Token {
 }
 
 /// The different number types/notations.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum NumType {
 	Dec,
 	Oct,
@@ -76,7 +77,7 @@ pub enum NumType {
 }
 
 /// Mathematical and comparison operators.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum OpType {
 	// Maths
 	Add,
@@ -115,7 +116,7 @@ pub enum OpType {
 	Not,
 }
 
-type Spanned<T> = (T, std::ops::Range<usize>);
+pub type Spanned<T> = (T, std::ops::Range<usize>);
 
 /// A lexer which allows stepping through a string character by character.
 struct Lexer {
@@ -434,7 +435,7 @@ enum NumState {
 }
 
 /// Performs lexical analysis of the source string and returns a vector of [`Token`]s.
-fn lexer(source: &str) -> Vec<Spanned<Token>> {
+pub fn lexer(source: &str) -> Vec<Spanned<Token>> {
 	let mut tokens = Vec::new();
 	let mut lexer = Lexer::new(source);
 	let mut buffer_start: usize = 0;

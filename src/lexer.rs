@@ -953,6 +953,41 @@ fn lexer(source: &str) -> Vec<Spanned<Token>> {
 	tokens
 }
 
+#[test]
+#[rustfmt::skip]
+fn spans() {
+	// Identifiers/keywords
+	assert_eq!(lexer("return"), vec![(Token::Return, 0..6)]);
+	assert_eq!(lexer("break "), vec![(Token::Break, 0..5)]);
+	assert_eq!(lexer("return break"), vec![(Token::Return, 0..6), (Token::Break, 7..12)]);
+	// Punctuation
+	assert_eq!(lexer(";"), vec![(Token::Semi, 0..1)]);
+	assert_eq!(lexer(": "), vec![(Token::Colon, 0..1)]);
+	assert_eq!(lexer("; :"), vec![(Token::Semi, 0..1), (Token::Colon, 2..3)]);
+	// Comments
+	assert_eq!(lexer("// comment"), vec![(Token::Comment { str: " comment".into(), contains_eof: false }, 0..10)]);
+	assert_eq!(lexer("/* a */"), vec![(Token::Comment { str: " a ".into(), contains_eof: false }, 0..7)]);
+	assert_eq!(lexer("/* a"), vec![(Token::Comment { str: " a".into(), contains_eof: true }, 0..4)]);
+	// Directive
+	assert_eq!(lexer("#dir"), vec![(Token::Directive("dir".into()), 0..4)]);
+	assert_eq!(lexer("#dir a "), vec![(Token::Directive("dir a ".into()), 0..7)]);
+	// Invalid
+	assert_eq!(lexer("@"), vec![(Token::Invalid('@'), 0..1)]);
+	assert_eq!(lexer("¬"), vec![(Token::Invalid('¬'), 0..1)]);
+	assert_eq!(lexer("@  ¬"), vec![(Token::Invalid('@'), 0..1), (Token::Invalid('¬'), 3..4)]);
+	// Numbers
+	assert_eq!(lexer("."), vec![(Token::Dot, 0..1)]);
+	assert_eq!(lexer(". "), vec![(Token::Dot, 0..1)]);
+	assert_eq!(lexer("0xF."), vec![(Token::Num { num: "F".into(), suffix: None, type_: NumType::Hex }, 0..3), (Token::Dot, 3..4)]);
+	assert_eq!(lexer("123u."), vec![(Token::Num { num: "123".into(), suffix: Some("u".into()), type_: NumType::Dec }, 0..4), (Token::Dot, 4..5)]);
+	assert_eq!(lexer("1.2."), vec![(Token::Num { num: "1.2".into(), suffix: None, type_: NumType::Float }, 0..3), (Token::Dot, 3..4)]);
+	assert_eq!(lexer("1.2."), vec![(Token::Num { num: "1.2".into(), suffix: None, type_: NumType::Float }, 0..3), (Token::Dot, 3..4)]);
+	assert_eq!(lexer("1e"), vec![(Token::Num { num: "1".into(), suffix: Some("e".into()), type_: NumType::Dec }, 0..2)]);
+	assert_eq!(lexer("123 "), vec![(Token::Num { num: "123".into(), suffix: None, type_: NumType::Dec }, 0..3)]);
+	assert_eq!(lexer("1e+="), vec![(Token::Num { num: "1".into(), suffix: Some("e".into()), type_: NumType::Dec }, 0..2), (Token::Op(OpType::AddEq), 2..4)]);
+	assert_eq!(lexer("1e+"), vec![(Token::Num { num: "1".into(), suffix: Some("e".into()), type_: NumType::Dec }, 0..2), (Token::Op(OpType::Add), 2..3)]);
+}
+
 /// Asserts the token output of the `lexer()` matches the right hand side; ignores the spans.
 #[allow(unused_macros)]
 macro_rules! assert_tokens {

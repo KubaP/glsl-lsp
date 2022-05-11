@@ -115,6 +115,8 @@ pub enum OpType {
 	Not,
 }
 
+type Spanned<T> = (T, std::ops::Range<usize>);
+
 /// A lexer which allows stepping through a string character by character.
 struct Lexer {
 	/// The string stored as a vector of characters.
@@ -189,6 +191,11 @@ impl Lexer {
 		}
 
 		false
+	}
+
+	/// Returns the position of the cursor.
+	fn position(&self) -> usize {
+		self.cursor
 	}
 
 	/// Returns whether the `Lexer` has reached the end of the source string.
@@ -427,9 +434,10 @@ enum NumState {
 }
 
 /// Performs lexical analysis of the source string and returns a vector of [`Token`]s.
-fn lexer(source: &str) -> Vec<Token> {
+fn lexer(source: &str) -> Vec<Spanned<Token>> {
 	let mut tokens = Vec::new();
 	let mut lexer = Lexer::new(source);
+	let mut buffer_start: usize = 0;
 	let mut buffer = String::new();
 	let mut current = ' ';
 	let mut can_start_directive = true;
@@ -444,6 +452,7 @@ fn lexer(source: &str) -> Vec<Token> {
 	// makes it easy to keep track of when we are allowed to parse a directive, since they must exist at the start
 	// of a line barring any whitespace.
 	while !lexer.is_done() {
+		buffer_start = lexer.position();
 		// Peek the current character.
 		current = match lexer.peek() {
 			Some(c) => c,
@@ -463,7 +472,10 @@ fn lexer(source: &str) -> Vec<Token> {
 					Some(c) => c,
 					None => {
 						// We have reached the end of the source string, and therefore the end of the word.
-						tokens.push(match_word(std::mem::take(&mut buffer)));
+						tokens.push((
+							match_word(std::mem::take(&mut buffer)),
+							buffer_start..lexer.position(),
+						));
 						break 'word;
 					}
 				};
@@ -476,7 +488,10 @@ fn lexer(source: &str) -> Vec<Token> {
 				} else {
 					// The character can't be part of an word, so we can produce a token and exit this loop without
 					// consuming it.
-					tokens.push(match_word(std::mem::take(&mut buffer)));
+					tokens.push((
+						match_word(std::mem::take(&mut buffer)),
+						buffer_start..lexer.position(),
+					));
 					break 'word;
 				}
 			}
@@ -518,15 +533,16 @@ fn lexer(source: &str) -> Vec<Token> {
 					} else {
 						// We have a `.` followed by a character that is not a digit, so this must be a punctuation
 						// token. We consume the character because otherwise we'd end up back in this branch again.
-						tokens.push(Token::Dot);
 						lexer.advance();
+						tokens
+							.push((Token::Dot, buffer_start..lexer.position()));
 						continue;
 					}
 				} else {
 					// We have a `.` followed by the end of the source string, so this must be a punctuation token.
 					// We consume the character because otherwise we'd end up back in this branch again.
-					tokens.push(Token::Dot);
 					lexer.advance();
+					tokens.push((Token::Dot, buffer_start..lexer.position()));
 					continue;
 				}
 			} else {
@@ -555,11 +571,14 @@ fn lexer(source: &str) -> Vec<Token> {
 							NumState::Dec => NumType::Dec,
 							NumState::Float => NumType::Float,
 						};
-						tokens.push(Token::Num {
-							num: num_buffer,
-							suffix: suffix_buffer,
-							type_,
-						});
+						tokens.push((
+							Token::Num {
+								num: num_buffer,
+								suffix: suffix_buffer,
+								type_,
+							},
+							buffer_start..lexer.position(),
+						));
 						break 'number;
 					}
 				};
@@ -568,12 +587,18 @@ fn lexer(source: &str) -> Vec<Token> {
 					// If we encounter a `.` and we are parsing a hexadecimal number, that means we've reached the
 					// end of this number, and the `.` is a punctuation symbol. We consume the character because
 					// otherwise we'd end up back in this branch again.
-					tokens.push(Token::Num {
-						num: num_buffer,
-						suffix: suffix_buffer,
-						type_: NumType::Hex,
-					});
-					tokens.push(Token::Dot);
+					tokens.push((
+						Token::Num {
+							num: num_buffer,
+							suffix: suffix_buffer,
+							type_: NumType::Hex,
+						},
+						buffer_start..lexer.position(),
+					));
+					tokens.push((
+						Token::Dot,
+						lexer.position()..lexer.position() + 1,
+					));
 					lexer.advance();
 					break 'number;
 				}
@@ -594,12 +619,18 @@ fn lexer(source: &str) -> Vec<Token> {
 						NumState::Dec => NumType::Dec,
 						NumState::Float => NumType::Float,
 					};
-					tokens.push(Token::Num {
-						num: num_buffer,
-						suffix: suffix_buffer,
-						type_,
-					});
-					tokens.push(Token::Dot);
+					tokens.push((
+						Token::Num {
+							num: num_buffer,
+							suffix: suffix_buffer,
+							type_,
+						},
+						buffer_start..lexer.position(),
+					));
+					tokens.push((
+						Token::Dot,
+						lexer.position()..lexer.position() + 1,
+					));
 					lexer.advance();
 					break 'number;
 				}
@@ -632,12 +663,18 @@ fn lexer(source: &str) -> Vec<Token> {
 						NumState::Dec => NumType::Dec,
 						NumState::Float => NumType::Float,
 					};
-					tokens.push(Token::Num {
-						num: num_buffer,
-						suffix: suffix_buffer,
-						type_,
-					});
-					tokens.push(Token::Dot);
+					tokens.push((
+						Token::Num {
+							num: num_buffer,
+							suffix: suffix_buffer,
+							type_,
+						},
+						buffer_start..lexer.position(),
+					));
+					tokens.push((
+						Token::Dot,
+						lexer.position()..lexer.position() + 1,
+					));
 					lexer.advance();
 					break 'number;
 				}
@@ -671,8 +708,8 @@ fn lexer(source: &str) -> Vec<Token> {
 								} else {
 									// We have an `e` followed by a `+`/`-` and something that's not a digit after, so
 									// this becomes a suffix.
-									suffix_buffer = Some(String::from(current));
 									lexer.advance();
+									suffix_buffer = Some(String::from(current));
 									let type_ = match state {
 										NumState::Hex => NumType::Hex,
 										NumState::Zero => {
@@ -686,11 +723,14 @@ fn lexer(source: &str) -> Vec<Token> {
 										NumState::Dec => NumType::Dec,
 										NumState::Float => NumType::Float,
 									};
-									tokens.push(Token::Num {
-										num: num_buffer,
-										suffix: suffix_buffer,
-										type_,
-									});
+									tokens.push((
+										Token::Num {
+											num: num_buffer,
+											suffix: suffix_buffer,
+											type_,
+										},
+										buffer_start..lexer.position(),
+									));
 									break 'number;
 								}
 							} else {
@@ -710,11 +750,14 @@ fn lexer(source: &str) -> Vec<Token> {
 									NumState::Dec => NumType::Dec,
 									NumState::Float => NumType::Float,
 								};
-								tokens.push(Token::Num {
-									num: num_buffer,
-									suffix: suffix_buffer,
-									type_,
-								});
+								tokens.push((
+									Token::Num {
+										num: num_buffer,
+										suffix: suffix_buffer,
+										type_,
+									},
+									buffer_start..lexer.position(),
+								));
 								break 'number;
 							}
 						}
@@ -771,11 +814,14 @@ fn lexer(source: &str) -> Vec<Token> {
 						NumState::Dec => NumType::Dec,
 						NumState::Float => NumType::Float,
 					};
-					tokens.push(Token::Num {
-						num: num_buffer,
-						suffix: suffix_buffer,
-						type_,
-					});
+					tokens.push((
+						Token::Num {
+							num: num_buffer,
+							suffix: suffix_buffer,
+							type_,
+						},
+						buffer_start..lexer.position(),
+					));
 					break 'number;
 				}
 			}
@@ -789,16 +835,29 @@ fn lexer(source: &str) -> Vec<Token> {
 						Some(c) => c,
 						None => {
 							// We have reached the end of the source string, and therefore the end of the comment.
-							tokens.push(Token::Comment {
-								str: std::mem::take(&mut buffer),
-								contains_eof: false,
-							});
+							tokens.push((
+								Token::Comment {
+									str: std::mem::take(&mut buffer),
+									contains_eof: false,
+								},
+								buffer_start..lexer.position(),
+							));
 							break 'line_comment;
 						}
 					};
 
 					if match_line_continuator(&mut buffer, &mut lexer) {
 						continue 'line_comment;
+					} else if current == '\r' || current == '\n' {
+						// We have an EOL without a line-continuator, so therefore this is the end of the directive.
+						tokens.push((
+							Token::Comment {
+								str: std::mem::take(&mut buffer),
+								contains_eof: false,
+							},
+							buffer_start..lexer.position(),
+						));
+						break 'line_comment;
 					} else {
 						// Any other character is just added to the comment buffer.
 						buffer.push(current);
@@ -810,10 +869,13 @@ fn lexer(source: &str) -> Vec<Token> {
 				'comment: loop {
 					// Test if the end delimiter is here.
 					if lexer.take_pat("*/") {
-						tokens.push(Token::Comment {
-							str: std::mem::take(&mut buffer),
-							contains_eof: false,
-						});
+						tokens.push((
+							Token::Comment {
+								str: std::mem::take(&mut buffer),
+								contains_eof: false,
+							},
+							buffer_start..lexer.position(),
+						));
 						break 'comment;
 					}
 
@@ -823,22 +885,27 @@ fn lexer(source: &str) -> Vec<Token> {
 					} else {
 						// We have reached the end of the source string, and therefore the end of the comment. This
 						// comment however therefore contains the EOF and hence is not valid.
-						tokens.push(Token::Comment {
-							str: std::mem::take(&mut buffer),
-							contains_eof: true,
-						});
+						tokens.push((
+							Token::Comment {
+								str: std::mem::take(&mut buffer),
+								contains_eof: true,
+							},
+							buffer_start..lexer.position(),
+						));
 						break 'comment;
 					}
 				}
 			} else {
-				tokens.push(match_punctuation(&mut lexer));
+				tokens.push((
+					match_punctuation(&mut lexer),
+					buffer_start..lexer.position(),
+				));
 			}
 		} else if current.is_whitespace() {
 			// Check for an EOL, to reset the directive parsing flag.
 			if current == '\n' || current == '\r' {
 				can_start_directive = true;
 			}
-
 			// We ignore whitespace characters.
 			lexer.advance();
 		} else if can_start_directive && current == '#' {
@@ -850,9 +917,10 @@ fn lexer(source: &str) -> Vec<Token> {
 					Some(c) => c,
 					None => {
 						// We have reached the end of the source string, and therefore the end of the comment.
-						tokens.push(Token::Directive(std::mem::take(
-							&mut buffer,
-						)));
+						tokens.push((
+							Token::Directive(std::mem::take(&mut buffer)),
+							buffer_start..lexer.position(),
+						));
 						break 'directive;
 					}
 				};
@@ -861,7 +929,10 @@ fn lexer(source: &str) -> Vec<Token> {
 					continue 'directive;
 				} else if current == '\r' || current == '\n' {
 					// We have an EOL without a line-continuator, so therefore this is the end of the directive.
-					tokens.push(Token::Directive(std::mem::take(&mut buffer)));
+					tokens.push((
+						Token::Directive(std::mem::take(&mut buffer)),
+						buffer_start..lexer.position(),
+					));
 					break 'directive;
 				} else {
 					// Any other character is just added to the comment buffer.
@@ -871,18 +942,23 @@ fn lexer(source: &str) -> Vec<Token> {
 			}
 		} else {
 			// This character isn't valid to start any token.
-			tokens.push(Token::Invalid(current));
-			lexer.advance()
+			lexer.advance();
+			tokens.push((
+				Token::Invalid(current),
+				buffer_start..lexer.position(),
+			));
 		}
 	}
 
 	tokens
 }
 
+/// Asserts the token output of the `lexer()` matches the right hand side; ignores the spans.
 #[allow(unused_macros)]
 macro_rules! assert_tokens {
     ($src:expr, $($token:expr),*) => {
-        assert_eq!(lexer($src), vec![
+		let output = lexer($src).into_iter().map(|(t, s)| t).collect::<Vec<_>>();
+        assert_eq!(output, vec![
             $(
                 $token,
             )*

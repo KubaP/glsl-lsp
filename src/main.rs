@@ -12,6 +12,7 @@ use std::{
 pub mod ast;
 pub mod parser;
 pub mod shader;
+pub mod lexer;
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum Type {

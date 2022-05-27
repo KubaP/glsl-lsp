@@ -1,4 +1,4 @@
-use crate::parser::{NumType, OpType};
+use crate::lexer::{NumType, OpType};
 
 /// Holds either one or the other value.
 #[derive(Debug, Clone)]
@@ -256,27 +256,31 @@ impl std::fmt::Display for Lit {
 }
 
 impl Lit {
-	pub fn parse_num(s: &str, type_: NumType) -> Result<Self, ()> {
-		// Sanity check, but this should never fail.
+	pub fn parse_num(
+		s: &str,
+		suffix: Option<&str>,
+		type_: NumType,
+	) -> Result<Self, ()> {
+		// This can be empty, e.g. `0xu` is a `NumType::Hex` with contents `` with suffix `u`.
 		if s == "" {
 			return Err(());
 		}
 		match type_ {
-			NumType::Normal => Self::parse_num_dec(s),
-			NumType::Hex => Self::parse_num_hex(s),
-			NumType::Oct => Self::parse_num_oct(s),
-			NumType::Float => Self::parse_num_float(s),
-			NumType::Double => Self::parse_num_double(s),
+			NumType::Dec => Self::parse_num_dec(s, suffix),
+			NumType::Hex => Self::parse_num_hex(s, suffix),
+			NumType::Oct => Self::parse_num_oct(s, suffix),
+			NumType::Float => Self::parse_num_float(s, suffix),
 		}
 	}
 
-	fn parse_num_dec(s: &str) -> Result<Self, ()> {
-		let last = s.chars().last().unwrap();
-		if last == 'u' || last == 'U' {
-			// Remove the 'u' suffix.
-			let s = &s[..s.len() - 1];
-			if let Ok(u) = u64::from_str_radix(s, 10) {
-				return Ok(Self::UInt(u));
+	fn parse_num_dec(s: &str, suffix: Option<&str>) -> Result<Self, ()> {
+		if let Some(suffix) = suffix {
+			if suffix == "u" || suffix == "U" {
+				if let Ok(u) = u64::from_str_radix(s, 10) {
+					return Ok(Self::UInt(u));
+				}
+			} else {
+				return Err(());
 			}
 		} else {
 			if let Ok(i) = i64::from_str_radix(s, 10) {
@@ -287,16 +291,14 @@ impl Lit {
 		Err(())
 	}
 
-	fn parse_num_hex(s: &str) -> Result<Self, ()> {
-		// Trim the '0x' part, otherwise the conversion will fail.
-		let s = s.trim_start_matches("0x");
-
-		let last = s.chars().last().unwrap();
-		if last == 'u' || last == 'U' {
-			// Remove the 'u' suffix.
-			let s = &s[..s.len() - 1];
-			if let Ok(u) = u64::from_str_radix(s, 16) {
-				return Ok(Self::UInt(u));
+	fn parse_num_hex(s: &str, suffix: Option<&str>) -> Result<Self, ()> {
+		if let Some(suffix) = suffix {
+			if suffix == "u" || suffix == "U" {
+				if let Ok(u) = u64::from_str_radix(s, 16) {
+					return Ok(Self::UInt(u));
+				}
+			} else {
+				return Err(());
 			}
 		} else {
 			if let Ok(i) = i64::from_str_radix(s, 16) {
@@ -307,16 +309,14 @@ impl Lit {
 		Err(())
 	}
 
-	fn parse_num_oct(s: &str) -> Result<Self, ()> {
-		// Trim the '0' part, because the first '0' is not part of the number itself but rather the radix.
-		let s = s.trim_start_matches("0");
-
-		let last = s.chars().last().unwrap();
-		if last == 'u' || last == 'U' {
-			// Remove the 'u' suffix.
-			let s = &s[..s.len() - 1];
-			if let Ok(u) = u64::from_str_radix(s, 8) {
-				return Ok(Self::UInt(u));
+	fn parse_num_oct(s: &str, suffix: Option<&str>) -> Result<Self, ()> {
+		if let Some(suffix) = suffix {
+			if suffix == "u" || suffix == "U" {
+				if let Ok(u) = u64::from_str_radix(s, 8) {
+					return Ok(Self::UInt(u));
+				}
+			} else {
+				return Err(());
 			}
 		} else {
 			if let Ok(i) = i64::from_str_radix(s, 8) {
@@ -327,20 +327,23 @@ impl Lit {
 		Err(())
 	}
 
-	fn parse_num_float(s: &str) -> Result<Self, ()> {
-		if let Ok(f) = s.parse::<f32>() {
-			return Ok(Self::Float(f));
-		}
-
-		Err(())
-	}
-
-	fn parse_num_double(s: &str) -> Result<Self, ()> {
-		// Remove the 'lf' suffix.
-		let s = &s[..s.len() - 2];
-
-		if let Ok(f) = s.parse::<f64>() {
-			return Ok(Self::Double(f));
+	fn parse_num_float(s: &str, suffix: Option<&str>) -> Result<Self, ()> {
+		if let Some(suffix) = suffix {
+			if suffix == "lf" || suffix == "LF" {
+				if let Ok(f) = s.parse::<f64>() {
+					return Ok(Self::Double(f));
+				}
+			} else if suffix == "f" || suffix == "F" {
+				if let Ok(f) = s.parse::<f32>() {
+					return Ok(Self::Float(f));
+				}
+			} else {
+				return Err(());
+			}
+		} else {
+			if let Ok(f) = s.parse::<f32>() {
+				return Ok(Self::Float(f));
+			}
 		}
 
 		Err(())

@@ -1,0 +1,40 @@
+## Identifiers/Keywords/Built-in types/Structs
+word ::= ident_start ident_char*
+
+ident_start ::= [a-z] | [A-Z] | "_"
+ident_char ::= [a-z] | [A-Z] | "_" | digit
+
+
+## Literals
+lit ::= "true" | "false" | number
+number ::= uint | int | f64 | f32
+
+# Floating points
+f64 ::= float "lf" | float "LF"
+f32 ::= float "f" | float "F" | float
+
+float ::= float_e | float_dot
+
+float_e ::= float_dot exp sign? digit+
+sign ::= "+" | "-"
+exp ::= "e" | "E"
+
+float_dot ::= float_3 | float_2 | float_1
+float_3 ::= digit+ "." digit+
+float_2 ::= digit+ "."
+float_1 ::= "." digit+
+
+# Integers
+uint ::= hex u_suffix | oct u_suffix | dec u_suffix
+u_suffix ::= "u" | "U"
+int ::= hex | oct | dec
+
+dec ::= "0" | dec_digit digit*
+hex ::= "0x" hex_digit+
+oct ::= "0" oct_digit+
+
+hex_digit ::= digit | "a" | "b" | "c" | "d" | "e" | "f" | "A" | "B" | "C" | "D" | "E" | "F"
+oct_digit ::= [0-7]
+dec_digit ::= [1-9]
+
+digit ::= [0-9]

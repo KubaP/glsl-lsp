@@ -4,9 +4,6 @@ Missing/incomplete:
 - Samplers
 - Images
 - Atomic counters
-- `f` number suffix
-- `.n` float notation (skipping before dot)
-- `n.` float notation (skipping after dot)
 - Arrays/opaque arrays limitations
 - Subroutines
 
@@ -56,6 +53,16 @@ Any integer types can be implicitly converted to a float. Integer types and floa
 
 Vectors and matrices can be converted if the type they're built-on can be implicitly converted.
 
+# Identifiers
+Identifiers can contain any of the following characters:
+```glsl
+a-z // lowercase latin
+A-Z // uppercase latin
+0-9 // digits
+_   // underscore
+```
+An identifier cannot start with a digit. Identifiers starting with the `gl_` prefix are reserved for OpenGL. Identifiers also cannot be any of the keywords, reserved keywords, or built-in type identifiers.
+
 # Literals
 These are the allowed literals:
 - `bool` - `true` and `false`,
@@ -64,24 +71,10 @@ These are the allowed literals:
 - `float` - `1.0` (`1e10` or `1.2e10` for exponential notation, which is always base-10),
 - `double` - `1.0lf` or `1.0LF` (mixing case such as `lF` is not allowed).
 
+Integers use *32-bit* precision. Floats are *single-precision* and doubles are *double-precision* IEEE floating point numbers.
+
 ### Numbers
-The following notations are valid:
-```glsl
-0
-{1..9}{0..9}+
-
-0{0..7}+
-
-0x{0..F}+
-
-1.0
-1.0{e|E}5
-1{e|E}5
-
-1.0{lf|LF}
-1.0{e|E}5{lf|LF}
-1{e|E}5{lf|LF}
-```
+For a specification of valid number notations, see the [grammar](./grammar.bnf) file.
 
 ### Operators
 Mathematical operators:
@@ -159,10 +152,6 @@ a ^^ b // Logical XOR
 
 # Variables
 Variables cannot be of the `void` type. This applies to any variable type, local, global, etc.
-
-Variable identifiers:
-- cannot be the same as a type identifier.
-- cannot start with the `gl_` prefix; note that `gl` or even just `g` is allowed. (The exception is some built-in variables).
 
 ## Initialization
 Variables can be initialized at the site of declaration:
@@ -536,14 +525,70 @@ for ({VAR_DECL}; {COND_EXPR}; {INC_EXPR}) {
 
 All 3 statements are optional, i.e. `(;;)` is a valid (infinite) loop.
 
+# Comments
+Comment syntax:
+```glsl
+// Comment which goes to the end-of-line
+
+/* Comment between these delimiters */
+```
+
+Delimited comments cannot be nested, i.e. the following produces an error:
+```glsl
+/* First comment
+    /* inner comment */ (<- First comment ends here)
+*/ (<- Unmatched delimiter/punctuation)
+```
+
+Single line comments can continue with the *line-continuation character* `\`, in which case the comment extends to the EOL of the next line. So the following is one single comment:
+```glsl
+// First comment... \
+int i = 5; // This is still part of the first comment
+```
+
+Open-ended multiline comments containing the EOF produce an error:
+```glsl
+// Something else
+
+/*
+<EOF>
+```
+Note that single-line comments, even with the `\` continuation character, can never produce this error even if they also are at the end of the file.
+
+### Line-continuation character
+```glsl
+<anything but \>\<EOL>
+
+// Valid:
+keyword\
+190\
+ident_\
++\
+
+// Invalid:
+anything\\ // The first \ escapes the second \
+```
+
 # Preprocessor
 
 ## Directives
 All preprocessor directives follow the syntax:
 ```glsl
-#/*...*/
+#Directive ...
+
+   #Directive ...
+
+#    Directive ...
+
+#Directive ... \
+    Directive continues here
+
+// This is ignored:
+#
 ```
-The `#` symbol must be the first (aside from whitespace) and the statement ends at EOL.
+The `#` symbol must be the first (aside from whitespace) and the statement ends at EOL, unless a [Line-Continuation Character](#line-continuation-character) is present. The `#` can be followed by whitespace before the first directive letter.
+
+A `#` on its own without anything after is ignored.
 
 ### Version
 The version directive is specified like so:

@@ -1,4 +1,17 @@
+## Lexing
+- ~~Literals~~
+- ~~Identifiers~~
+- ~~Keywords~~
+- ~~Punctuation~~
+- ~~Comments~~
+- ~~Preprocessor directives~~
+- ~~Illegals~~
+
 ## Parsing
+### custom parser
+TODO: Implement
+
+### chumsky parser
 - ~~Version directive~~
 - ~~Extension directive~~
 - ~~Line directive~~

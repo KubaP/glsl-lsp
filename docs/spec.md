@@ -133,8 +133,8 @@ a ^^ b // Logical XOR
 |Precedence|Operator|
 |-|-|
 |1|`()`|
-|2|`[]`, `fn_call()`, `.`, `++`, `--` (postfix)|
-|3|`++`, `--` (prefix), `-` (negation; repeatable), `~`, `!` (repeatable)|
+|2|`[]`, `fn_call()`, `.` (member access), `++`, `--` (postfix)|
+|3|`++`, `--` (prefix), `-` (negation), `~`, `!` (repeatable)|
 |4|`*`, `/`, `%`|
 |5|`+`, `-`|
 |6|`<<`, `>>`|

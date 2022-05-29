@@ -435,6 +435,14 @@ enum NumState {
 }
 
 /// Performs lexical analysis of the source string and returns a vector of [`Token`]s.
+/// 
+/// This lexer uses the "Maximal munch" principle to greedily create Tokens. This means the longest possible valid
+/// token is always produced. Some examples:
+/// 
+/// ```text
+/// i-- -7 lexes as (--) (-)
+/// i-- - --7 lexes as (--) (--) (-)
+/// ```
 pub fn lexer(source: &str) -> Vec<Spanned<Token>> {
 	let mut tokens = Vec::new();
 	let mut lexer = Lexer::new(source);

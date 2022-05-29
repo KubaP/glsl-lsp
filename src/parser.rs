@@ -1,15 +1,16 @@
 use crate::ast::{
 	Either, Expr, ExtBehaviour, Ident, Lit, Preproc, Primitive, Stmt, Type,
 };
-use crate::lexer::{lexer, NumType, OpType, Token};
+use crate::lexer::{lexer, NumType, OpType, Spanned, Token};
+use crate::expression::expr_parser;
 use chumsky::{prelude::*, Stream};
 
 pub fn parse(source: &str) {
 	let cst = lexer(source);
 	println!("{cst:?}");
 
-	let len = source.chars().count();
-	let (ast, errors) = parser()
+	/* let len = source.chars().count();
+	let (ast, errors) = old_parser()
 		.parse_recovery(Stream::from_iter(len..len + 1, cst.into_iter()));
 	println!("{ast:?}");
 	if let Some(ast) = ast {
@@ -17,7 +18,10 @@ pub fn parse(source: &str) {
 			print_stmt(&stmt, 0);
 		}
 	}
-	println!("\r\nerrors: {errors:?}");
+	println!("\r\nerrors: {errors:?}"); */
+
+	expr_parser(&cst);
+	//println!("{ast:?}");
 }
 
 fn print_stmt(stmt: &Stmt, indent: usize) {
@@ -208,7 +212,7 @@ fn print_stmt(stmt: &Stmt, indent: usize) {
 		}
 	}
 }
-
+/* 
 /// Filters only the specified operands.
 ///
 /// # Example
@@ -265,7 +269,7 @@ macro_rules! binary_expr {
 	};
 }
 
-fn parser() -> impl Parser<Token, Vec<Stmt>, Error = Simple<Token>> {
+fn old_parser() -> impl Parser<Token, Vec<Stmt>, Error = Simple<Token>> {
 	// Identifier for a name.
 	let ident = filter(|t: &Token| match t {
 		Token::Ident(_) => true,
@@ -1054,3 +1058,4 @@ fn preproc_parser() -> impl Parser<char, Stmt, Error = Simple<char>> {
 			.then_ignore(end())
 			.to(Stmt::Preproc(Preproc::Unsupported)))
 }
+ */

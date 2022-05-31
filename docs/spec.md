@@ -184,12 +184,15 @@ struct Data {
     vec2 v;
 };
 Data d = Data(1.0, vec2(1.0, 2.0));
+Data d2 = {1.0, {1.0, 2.0}};
 ```
 For `const` qualified variables (or other constant variables such as `uniform` globals), any expression must also be a *Constant Expression*.
 
-There is technically no difference between standard function calls and type constructors.
+There is technically no difference between standard function calls and type constructors. Type constructors are effectively static functions which just return a value.
 
-Array constructors cannot be nested; all other initializers can.
+Array constructors cannot be nested; all other initializers can. They also cannot be empty, because an array cannot have a size of zero.
+
+Initializer lists cannot be empty because structs must contain at least one member, and arrays must have a size greater than zero.
 
 ## Global Variables
 Variables in the global scope have certain special properties/abilities. There is one main distinction between global variables; they are either "standard" variables which are set/modified within the execution of the program, or they are "external" variables which either pass data *into* or *out of* the program. These variables use either the `in`, `out` or `uniform` storage qualifier.

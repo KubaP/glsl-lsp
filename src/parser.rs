@@ -20,7 +20,7 @@ pub fn parse(source: &str) {
 	}
 	println!("\r\nerrors: {errors:?}"); */
 
-	expr_parser(&cst);
+	expr_parser(cst);
 	//println!("{ast:?}");
 }
 

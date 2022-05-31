@@ -100,12 +100,14 @@ pub enum OpType {
 	XorEq,
 	LShiftEq,
 	RShiftEq,
+	Flip,
 	AddAdd,
 	SubSub,
-	Flip,
+	//
 	// Comparison
 	EqEq,
 	NotEq,
+	Not,
 	Gt,
 	Lt,
 	Ge,
@@ -113,7 +115,19 @@ pub enum OpType {
 	AndAnd,
 	OrOr,
 	XorXor,
-	Not,
+	//
+	// Shunting Yard
+	//
+	// These variants are never constructed by the Lexer. These are constructed when the shunting yard is looking
+	// for prefix/postfix operators and comes across one of the above that is valid. It gets converted into these
+	// variants depending on the state of the yard to make the distinction clear when building the ast once the
+	// yard has finished.
+	Neg,
+	AddAddPre,
+	AddAddPost,
+	SubSubPre,
+	SubSubPost,
+	GroupStart, //???
 }
 
 pub type Spanned<T> = (T, std::ops::Range<usize>);

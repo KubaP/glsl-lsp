@@ -127,7 +127,7 @@ pub enum OpType {
 	AddAddPost,
 	SubSubPre,
 	SubSubPost,
-	GroupStart, //???
+	GroupStart, // Start of a bracket group
 }
 
 pub type Spanned<T> = (T, std::ops::Range<usize>);

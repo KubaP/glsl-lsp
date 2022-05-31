@@ -31,16 +31,47 @@ struct ShuntingYard {
 }
 
 impl ShuntingYard {
+	/// Pushes an operator onto the stack, potentially popping any operators which have a greater precedence than
+	/// the operator being pushed.
 	fn push_operator(&mut self, op: OpType) {
-		while if let Some(back) = self.operators.back() {
-			op.precedence() < back.precedence()
-		} else {
-			false
-		} {
-			let moved_op = self.operators.pop_back().unwrap();
-			self.stack.push(Either::Right(moved_op))
+		while self.operators.back().is_some() {
+			let back = self.operators.back().unwrap();
+
+			if *back == OpType::GroupStart {
+				// Group start operators always have the highest precedence, so we don't need to check further.
+				break;
+			}
+
+			if op.precedence() < back.precedence() {
+				let moved_op = self.operators.pop_back().unwrap();
+				self.stack.push(Either::Right(moved_op));
+			}
 		}
 		self.operators.push_back(op);
+	}
+
+	/// Registers the start of a bracket group.
+	fn start_group(&mut self) {
+		self.operators.push_back(OpType::GroupStart);
+	}
+
+	/// Registers the end of a bracket group, popping any operators until the start of the last bracket group is
+	/// reached.
+	fn end_group(&mut self) {
+		while self.operators.back().is_some() {
+			let back = self.operators.back().unwrap();
+
+			if *back == OpType::GroupStart {
+				// We have reached the end of the current group. We remove the operator without pushing it to the
+				// stack since it only functions as a flag, rather than as an actual operator.
+				self.operators.pop_back();
+				break;
+			} else {
+				// Any other operators get
+				let moved_op = self.operators.pop_back().unwrap();
+				self.stack.push(Either::Right(moved_op));
+			}
+		}
 	}
 
 	fn parse(&mut self, cst: Vec<Spanned<Token>>) {
@@ -111,14 +142,31 @@ impl ShuntingYard {
 						operand_state = true;
 					}
 				},
-				// TODO: Implement this:
 				Token::LParen if operand_state => {
 					// We are expecting an operand, and we found a bracket group start. We move it to the operator
 					// stack and continue looking for an operand, so we don't switch state.
-					self.push_operator(OpType::GroupStart);
+					self.start_group();
+				}
+				Token::LParen if !operand_state => {
+					// We are expecting an operator, but we've found an operand. This is an error.
+					// E.g. `..1 (` instead of `..1 + (`
+					println!("Expected an operator or the end of expression, found `(` instead!");
+					return;
+				}
+				Token::RParen if !operand_state => {
+					// We are expecting an operator, but we found a bracket group end. We move it to the operator
+					// stack and continue looking for an operator, so we don't switch state.
+					self.end_group();
+				}
+				Token::RParen if operand_state => {
+					// We are expecting an operand, but we've found an bracket group end. This is an error.
+					// E.g. `..+ )` instead of `..+ 1)`
+					println!("Expected an operand or the end of expression, found `)` instead!");
+					return;
 				}
 				_ => {
 					// We have a token that's not allowed to be part of an expression.
+					// TODO: Deal with this properly.
 					println!("Unexpected token found: {token:?}");
 					return;
 				}
@@ -178,6 +226,8 @@ impl OpType {
 			// TODO: Comma for functions/lists
 			// These two should always be converted to the *Pre or *Post versions in the shunting yard.
 			Self::AddAdd | Self::SubSub => panic!("OpType::AddAdd | OpType::SubSub do not have a precedence value because they should never be passed into this function. Something has gone wrong!"),
+			// These are never directly checked for precedence, but rather have special branches.
+			Self::GroupStart => panic!("OpType::GroupStart | OpType::GroupEnd do not have a precedence value because they should never be passed into this function. Something has gone wrong!"),
 			_ => 1,
 		}
 	}

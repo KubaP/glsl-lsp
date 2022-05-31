@@ -33,6 +33,49 @@ https://matklad.github.io/2020/04/15/from-pratt-to-dijkstra.html
 	  different approach
 */
 
+struct Walker {
+	cst: Vec<Spanned<Token>>,
+	cursor: usize,
+}
+
+impl Walker {
+	/// Returns the current token under the cursor, without advancing the cursor.
+	fn peek(&self) -> Option<&Token> {
+		self.cst.get(self.cursor).map(|(t, _)| t)
+	}
+
+	/// Peeks the next token without advancing the cursor; (returns the token under `cursor + 1`).
+	fn lookahead_1(&self) -> Option<&Token> {
+		self.cst.get(self.cursor + 1).map(|(t, _)| t)
+	}
+
+	/// Advances the cursor by one.
+	fn advance(&mut self) {
+		self.cursor += 1;
+	}
+
+	/// Returns the current token under the cursor and advances the cursor by one.
+	///
+	/// Equivalent to [`peek()`](Self::peek) followed by [`advance()`](Self::advance).
+	fn next(&mut self) -> Option<&Token> {
+		// If we are successful in getting the token, advance the cursor.
+		match self.cst.get(self.cursor) {
+			Some((t, _)) => {
+				self.cursor += 1;
+				Some(t)
+			}
+			None => None,
+		}
+	}
+
+	/// Returns whether the `Lexer` has reached the end of the token list.
+	fn is_done(&self) -> bool {
+		// We check that the cursor is equal to the length, because that means we have gone past the last token
+		// of the string, and hence, we are done.
+		self.cursor == self.cst.len()
+	}
+}
+
 struct ShuntingYard {
 	/// The final output stack in RPN.
 	stack: Vec<Either<Expr, OpType>>,
@@ -92,8 +135,15 @@ impl ShuntingYard {
 		// `true` if we are looking for an operand (which includes parsing prefix operators). `false` if we are
 		// looking for an operator for a binary expression (or alternatively the end of the expression).
 		let mut operand_state = true;
+		let mut walker = Walker { cst, cursor: 0 };
 
-		for (token, _range) in cst.iter() {
+		'main: while !walker.is_done() {
+			let token = match walker.peek() {
+				Some(t) => t,
+				// Return if we reach the end of the token list.
+				None => break,
+			};
+
 			match token {
 				Token::Num { .. } | Token::Bool(_) if operand_state => {
 					// We are expecting an operand, so we can move the literal to the stack immediately.
@@ -105,11 +155,93 @@ impl ShuntingYard {
 					operand_state = false;
 				}
 				Token::Ident(s) if operand_state => {
-					// TODO: Member access
-					self.stack.push(match Ident::parse_name(s) {
-						Ok(i) => Either::Left(Expr::Ident(i)),
-						Err(_) => Either::Left(Expr::Invalid),
-					});
+					// We want to handle member access depending on what is after the identifier.
+					if let Some(lookahead) = walker.lookahead_1() {
+						if *lookahead == Token::Dot {
+							let mut members = Vec::new();
+
+							// Push the current initial identifier.
+							members.push(match Ident::parse_name(s) {
+								Ok(i) => i,
+								Err(_) => {
+									println!(
+										"Expected an identifier, found a type!"
+									);
+									return;
+								}
+							});
+							walker.advance();
+
+							// Loop, looking for a `.ident`, until either:
+							// a) there is no input left,
+							// b) there is no following dot
+							// In both these cases, we produce a complete member access expression.
+							//
+							// In the case that there is a dot but it's not followed by an identifier (or anything
+							// period), then we error.
+							'member: loop {
+								// First, check if there is a dot next.
+								let dot = match walker.peek() {
+									Some(t) => t,
+									None => break 'member,
+								};
+								if *dot != Token::Dot {
+									// We've reached the end of the member access, so we can create an expression
+									// for it. We rerun the main loop on the current token since it will match
+									// against a different main branch, such as the operator branch. We don't
+									// advance the cursor.
+									self.stack.push(Either::Left(
+										Expr::Member(members),
+									));
+									operand_state = false;
+									continue 'main;
+								}
+
+								// There is a dot, so we are now expecting an identifier.
+								walker.advance();
+								let ident = match walker.peek() {
+									Some(t) => t,
+									None => {
+										println!("Expected an identifier after the `.`, found the end of input instead!");
+										break 'member;
+									}
+								};
+								if let Token::Ident(s) = ident {
+									// There is an identifier after the dot, so we can add it to the list of
+									// members. We continue looping in case there is another `.ident` afterwards.
+									members.push(match Ident::parse_name(s) {
+										Ok(i) => i,
+										Err(_) => {
+											println!("Expected an identifier, found a type!");
+											return;
+										}
+									});
+									walker.advance();
+									continue 'member;
+								} else {
+									// There is a dot, but afterwards there is no identifier. This is an error.
+									println!("Expected an identifier after the `.`, found something else instead!");
+									return;
+								}
+							}
+
+							// We've reached the end of the token list, so we can create an expression.
+							self.stack
+								.push(Either::Left(Expr::Member(members)));
+						} else {
+							// There is no following dot, so this is just a simple identifier.
+							self.stack.push(match Ident::parse_name(s) {
+								Ok(i) => Either::Left(Expr::Ident(i)),
+								Err(_) => Either::Left(Expr::Invalid),
+							});
+						}
+					} else {
+						// There is no following dot, so this is just a simple identifier.
+						self.stack.push(match Ident::parse_name(s) {
+							Ok(i) => Either::Left(Expr::Ident(i)),
+							Err(_) => Either::Left(Expr::Invalid),
+						});
+					}
 					operand_state = false;
 				}
 				Token::Num { .. } | Token::Bool(_) | Token::Ident(_)
@@ -186,6 +318,8 @@ impl ShuntingYard {
 					return;
 				}
 			}
+
+			walker.advance();
 		}
 
 		// Move any remaining operators onto the stack.

@@ -1,4 +1,4 @@
-use crate::lexer::{NumType, OpType};
+use crate::lexer::{NumType, OpType, Token};
 
 /// Holds either one or the other value.
 #[derive(Debug, Clone)]
@@ -7,9 +7,53 @@ pub enum Either<L, R> {
 	Right(R),
 }
 
-/// An expression which will be part of a statement. Expressions cannot exist on their own.
+/// An expression which will be part of an encompassing statement. Expressions cannot exist on their own.
 #[derive(Debug, Clone)]
 pub enum Expr {
+	/// An expression which is incomplete, e.g. `3+5-`.
+	///
+	/// This token exists to allow the parser/analyser to gracefully deal with expression errors without affecting
+	/// the ability to deal with higher expression scopes or statements. E.g.
+	/// ```c
+	/// int i = 3+5-;
+	///
+	/// // becomes
+	///
+	/// Expr::Binary {
+	///     left: Expr::Lit(3),
+	///     op: Add
+	///     right: Expr::Incomplete
+	/// }
+	/// ```
+	/// We can produce an error about the incomplete expression but still reason about the existence of `i`, such
+	/// as later references. Obviously however, we cannot analyse whether the expression evaluates to a valid
+	/// integer value.
+	///
+	/// Note: This token is not used for unclosed parenthesis. E.g.
+	/// ```c
+	/// (5+1
+	///
+	/// // becomes
+	///
+	/// Expr:: Binary {
+	/// 	left: Expr::Lit(5),
+	/// 	op: Add,
+	/// 	right: Expr::Lit(1)
+	/// }
+	/// ```
+	/// We can produce an error about the missing parenthesis, but we can assume that the bracket group extends
+	/// till the end. This is because bracket groups aren't an `Expr` type. Bracket groups will always come to
+	/// either a binary expression, or one of the pre/postfix expressions, hence there is no need to actually have
+	/// a bracket group expression. In theory we could replace a valid expression token within the parenthesis with
+	/// an invalid token if the bracket group is unclosed, but I don't see good reason to do that. An error is
+	/// produce anyway and the code won't compile so no harm in treating the expression as valid; at least we can
+	/// evaluate it for correctness.
+	Incomplete,
+	/// An expression which is invalid when converted from a token, e.g.
+	/// 
+	/// - A token number `1.0B` cannot be converted to a valid `Lit`,
+	/// - An identifier `vec3` cannot be converted to an `Ident`.
+	Invalid,
 	/// A literal value; either a number, a boolean.
 	Lit(Lit),
 	/// An identifier; could be a variable name, function name, etc.
@@ -51,6 +95,8 @@ pub enum Expr {
 impl std::fmt::Display for Expr {
 	fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
 		match self {
+			Expr::Incomplete => write!(f, "\x1b[31;4mINCOMPLETE\x1b[0m"),
+			Expr::Invalid => write!(f, "\x1b[31;4mINVALID\x1b[0m"),
 			Expr::Lit(l) => write!(f, "Lit<{l}>"),
 			Expr::Ident(i) => write!(f, "Ident<{i}>"),
 			Expr::Neg(expr) => write!(f, "\x1b[36mNeg\x1b[0m({expr})"),
@@ -256,6 +302,18 @@ impl std::fmt::Display for Lit {
 }
 
 impl Lit {
+	pub fn parse(token: &Token) -> Result<Self, ()> {
+		match token {
+			Token::Bool(b) => Ok(Self::Bool(*b)),
+			Token::Num {
+				num: s,
+				suffix,
+				type_,
+			} => Self::parse_num(&s, suffix.as_deref(), *type_),
+			_ => Err(()),
+		}
+	}
+
 	pub fn parse_num(
 		s: &str,
 		suffix: Option<&str>,

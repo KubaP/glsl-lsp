@@ -55,6 +55,10 @@ impl ShuntingYard {
 			if op.precedence() < back.precedence() {
 				let moved_op = self.operators.pop_back().unwrap();
 				self.stack.push(Either::Right(moved_op));
+			} else {
+				// If the precedence is greater, we aren't going to be moving any operators to the stack anymore,
+				// so we can exit the loop.
+				break;
 			}
 		}
 		self.operators.push_back(op);

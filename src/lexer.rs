@@ -18,7 +18,7 @@ pub enum Token {
 		contains_eof: bool,
 	},
 	Invalid(char),
-	// Keywords
+	// General keywords
 	If,
 	Else,
 	For,
@@ -34,7 +34,7 @@ pub enum Token {
 	Struct,
 	Subroutine,
 	Reserved(String),
-	// Qualifiers
+	// Qualifier keywords
 	In,
 	Out,
 	InOut,
@@ -122,6 +122,10 @@ pub enum OpType {
 	// for prefix/postfix operators and comes across one of the above that is valid. It gets converted into these
 	// variants depending on the state of the yard to make the distinction clear when building the ast once the
 	// yard has finished.
+	//
+	// The reason these are in this type is because the yard stores this type. It makes more sense to add these
+	// special variants rather than create a new type just for the shunting yard, which then will most of the time
+	// be converted back to this type since this is the type stored inside of `ast::Expr`.
 	Neg,
 	AddAddPre,
 	AddAddPost,
@@ -449,13 +453,14 @@ enum NumState {
 }
 
 /// Performs lexical analysis of the source string and returns a vector of [`Token`]s.
-/// 
+///
 /// This lexer uses the "Maximal munch" principle to greedily create Tokens. This means the longest possible valid
 /// token is always produced. Some examples:
-/// 
+///
 /// ```text
-/// i-- -7 lexes as (--) (-)
-/// i-- - --7 lexes as (--) (--) (-)
+/// i---7 lexes as (--) (-)
+/// i-----7 lexes as (--) (--) (-)
+/// i-- - --7 lexes as (--) (-) (--)
 /// ```
 pub fn lexer(source: &str) -> Vec<Spanned<Token>> {
 	let mut tokens = Vec::new();

@@ -5,16 +5,6 @@ use crate::{
 };
 use std::{collections::VecDeque, iter::Peekable, slice::Iter};
 
-/* enum SyntaxError {
-	Invalid(Spanned<char>),
-	UnclosedParen {
-		/// The `Token::LParen` which is unclosed.
-		opened: Spanned<Token>,
-		/// The `Token` which is at the position that a `Token::RParen` should be.
-		expected: Spanned<Token>,
-	},
-} */
-
 pub fn expr_parser(cst: Vec<Spanned<Token>>) {
 	let mut parser = ShuntingYard {
 		stack: Vec::new(),
@@ -25,8 +15,28 @@ pub fn expr_parser(cst: Vec<Spanned<Token>>) {
 	println!("{parser}");
 }
 
+/*
+Useful links related to expression parsing:
+
+https://petermalmgren.com/three-rust-parsers/
+	- recursive descent parser
+
+https://wcipeg.com/wiki/Shunting_yard_algorithm
+	- shunting yard overview & algorithm extensions
+
+https://erikeidt.github.io/The-Double-E-Method
+	- stateful shunting yard for unary support
+
+https://matklad.github.io/2020/04/13/simple-but-powerful-pratt-parsing.html
+https://matklad.github.io/2020/04/15/from-pratt-to-dijkstra.html
+	- two parter, first writing a pratt parser, and then refactoring into a shunting yard parser with a slightly
+	  different approach
+*/
+
 struct ShuntingYard {
+	/// The final output stack in RPN.
 	stack: Vec<Either<Expr, OpType>>,
+	/// Temporary stack to hold operators.
 	operators: VecDeque<OpType>,
 }
 
@@ -91,6 +101,7 @@ impl ShuntingYard {
 					operand_state = false;
 				}
 				Token::Ident(s) if operand_state => {
+					// TODO: Member access
 					self.stack.push(match Ident::parse_name(s) {
 						Ok(i) => Either::Left(Expr::Ident(i)),
 						Err(_) => Either::Left(Expr::Invalid),
@@ -180,19 +191,8 @@ impl ShuntingYard {
 	}
 }
 
-impl std::fmt::Display for ShuntingYard {
-	fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-		for node in self.stack.iter() {
-			match node {
-				Either::Left(e) => write!(f, "{e} ")?,
-				Either::Right(op) => write!(f, "{op} ")?,
-			}
-		}
-		Ok(())
-	}
-}
-
 impl OpType {
+	/// Returns the precedence of the operator.
 	fn precedence(&self) -> u8 {
 		match self {
 			Self::AddAddPost | Self::SubSubPost => 31,
@@ -223,13 +223,25 @@ impl OpType {
 			| Self::OrEq
 			| Self::LShiftEq
 			| Self::RShiftEq => 3,
-			// TODO: Comma for functions/lists
 			// These two should always be converted to the *Pre or *Post versions in the shunting yard.
 			Self::AddAdd | Self::SubSub => panic!("OpType::AddAdd | OpType::SubSub do not have a precedence value because they should never be passed into this function. Something has gone wrong!"),
-			// These are never directly checked for precedence, but rather have special branches.
-			Self::GroupStart => panic!("OpType::GroupStart | OpType::GroupEnd do not have a precedence value because they should never be passed into this function. Something has gone wrong!"),
+			// This is never directly checked for precedence, but rather has a special branch.
+			Self::GroupStart => panic!("OpType::GroupStart does not have a precedence value because they should never be passed into this function. Something has gone wrong!"),
 			_ => 1,
 		}
+	}
+}
+
+// Purely used for debugging the parsed expressions.
+impl std::fmt::Display for ShuntingYard {
+	fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+		for node in self.stack.iter() {
+			match node {
+				Either::Left(e) => write!(f, "{e} ")?,
+				Either::Right(op) => write!(f, "{op} ")?,
+			}
+		}
+		Ok(())
 	}
 }
 

@@ -50,7 +50,7 @@ pub enum Expr {
 	/// evaluate it for correctness.
 	Incomplete,
 	/// An expression which is invalid when converted from a token, e.g.
-	/// 
+	///
 	/// - A token number `1.0B` cannot be converted to a valid `Lit`,
 	/// - An identifier `vec3` cannot be converted to an `Ident`.
 	Invalid,

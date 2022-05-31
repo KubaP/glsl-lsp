@@ -9,7 +9,18 @@
 
 ## Parsing
 ### custom parser
-TODO: Implement
+- Expressions
+    - ~~Literals~~
+    - ~~Identifiers~~
+    - ~~Binary expressions (inc. parenthesis)~~
+    - ~~Prefix/postfix~~
+    - Function calls
+    - Initializer lists
+    - Array constructors
+    - Struct member access
+    - Ternary
+    
+TODO: Implement rest
 
 ### chumsky parser
 - ~~Version directive~~

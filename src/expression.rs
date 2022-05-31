@@ -9,6 +9,7 @@ pub fn expr_parser(cst: Vec<Spanned<Token>>) {
 	let mut parser = ShuntingYard {
 		stack: Vec::new(),
 		operators: VecDeque::new(),
+		arity: VecDeque::new(),
 	};
 	parser.parse(cst);
 
@@ -81,6 +82,8 @@ struct ShuntingYard {
 	stack: Vec<Either<Expr, OpType>>,
 	/// Temporary stack to hold operators.
 	operators: VecDeque<OpType>,
+	/// Temporary stack to hold the number of arguments any function calls are holding.
+	arity: VecDeque<usize>,
 }
 
 impl ShuntingYard {
@@ -90,7 +93,7 @@ impl ShuntingYard {
 		while self.operators.back().is_some() {
 			let back = self.operators.back().unwrap();
 
-			if *back == OpType::GroupStart {
+			if *back == OpType::GroupStart || *back == OpType::FnStart {
 				// Group start operators always have the highest precedence, so we don't need to check further.
 				break;
 			}
@@ -112,6 +115,12 @@ impl ShuntingYard {
 		self.operators.push_back(OpType::GroupStart);
 	}
 
+	/// Registers the start of a function call group.
+	fn start_fn(&mut self) {
+		self.operators.push_back(OpType::FnStart);
+		self.arity.push_back(1);
+	}
+
 	/// Registers the end of a bracket group, popping any operators until the start of the last bracket group is
 	/// reached.
 	fn end_group(&mut self) {
@@ -123,11 +132,47 @@ impl ShuntingYard {
 				// stack since it only functions as a flag, rather than as an actual operator.
 				self.operators.pop_back();
 				break;
+			} else if *back == OpType::FnStart {
+				// We have reached the end of the current function call group. We remove the operator and instead
+				// push a new operator which contains information about how many of the previous expressions are
+				// part of the current function call group.
+				//
+				// Note: The first expression will always be the expression containing the function identifier
+				// (hence the `+ 1`).
+				self.operators.pop_back();
+				let count = self.arity.pop_back().unwrap();
+				self.stack.push(Either::Right(OpType::FnCall(count + 1)));
+				break;
 			} else {
-				// Any other operators get
+				// Any other operators get moved.
 				let moved_op = self.operators.pop_back().unwrap();
 				self.stack.push(Either::Right(moved_op));
 			}
+		}
+	}
+
+	/// Increases the arity of the top-most current function call.
+	fn increase_arity(&mut self) {
+		if let Some(count) = self.arity.back_mut() {
+			*count += 1;
+
+			// Now that the arity has increased, and we are parsing the next expression, we want to move all
+			// existing operators up to the function call start delimiter to the stack, to clear it for the next
+			// expression.
+			while self.operators.back().is_some() {
+				let back = self.operators.back().unwrap();
+				if *back == OpType::FnStart {
+					break;
+				}
+
+				let moved_op = self.operators.pop_back().unwrap();
+				self.stack.push(Either::Right(moved_op));
+			}
+		} else {
+			println!(
+				"Found a `,` outside of a function call. This is invalid!"
+			);
+			return;
 		}
 	}
 
@@ -146,16 +191,46 @@ impl ShuntingYard {
 
 			match token {
 				Token::Num { .. } | Token::Bool(_) if operand_state => {
+					if let Some(lookahead) = walker.lookahead_1() {
+						if *lookahead == Token::Comma {
+							self.stack.push(match Lit::parse(token) {
+								Ok(l) => Either::Left(Expr::Lit(l)),
+								Err(_) => Either::Left(Expr::Invalid),
+							});
+
+							// We have an operand, followed by a comma. If we are parsing a function call at all
+							// currently, then we can increase the arity of the top-most one. If not, then this is
+							// an error.
+							self.increase_arity();
+
+							// Consume the identifier and `,`.
+							walker.advance();
+							walker.advance();
+
+							// Don't switch state, since after a comma, we will be expecting another operand.
+							continue 'main;
+						} else {
+							// There is no following comma, so this is just a simple literal.
+							self.stack.push(match Lit::parse(token) {
+								Ok(l) => Either::Left(Expr::Lit(l)),
+								Err(_) => Either::Left(Expr::Invalid),
+							});
+						}
+					} else {
+						// There is no following comma, so this is just a simple literal.
+						self.stack.push(match Lit::parse(token) {
+							Ok(l) => Either::Left(Expr::Lit(l)),
+							Err(_) => Either::Left(Expr::Invalid),
+						});
+					}
 					// We are expecting an operand, so we can move the literal to the stack immediately.
 					// We toggle the state so that we're now looking for an operator.
-					self.stack.push(match Lit::parse(token) {
-						Ok(l) => Either::Left(Expr::Lit(l)),
-						Err(_) => Either::Left(Expr::Invalid),
-					});
+
 					operand_state = false;
 				}
 				Token::Ident(s) if operand_state => {
-					// We want to handle member access depending on what is after the identifier.
+					// Depending on what is after the identifier we may want to handle member access or function
+					// calls.
 					if let Some(lookahead) = walker.lookahead_1() {
 						if *lookahead == Token::Dot {
 							let mut members = Vec::new();
@@ -228,6 +303,56 @@ impl ShuntingYard {
 							// We've reached the end of the token list, so we can create an expression.
 							self.stack
 								.push(Either::Left(Expr::Member(members)));
+						} else if *lookahead == Token::LParen {
+							// We push the function identifier to the stack.
+							self.stack.push(match Ident::parse_name(s) {
+								Ok(i) => Either::Left(Expr::Ident(i)),
+								Err(_) => Either::Left(Expr::Invalid),
+							});
+							// Consume the identifier and `(`.
+							walker.advance();
+							walker.advance();
+
+							if let Some(lookahead_2) = walker.peek() {
+								if *lookahead_2 == Token::RParen {
+									// We have a function call with zero arguments.
+
+									// We can push the appropriate function call operator straight away since we
+									// know there's nothing else to parse. We switch state since we now expect
+									// either an operator or an end of expression.
+									self.operators.push_back(OpType::FnCall(1));
+									walker.advance();
+									operand_state = false;
+									continue 'main;
+								} else {
+									// We have a function call with at least one argument.
+
+									// We push a function call group start to the operator stack, and continue
+									// looking for an operand, so we don't switch state.
+									self.start_fn();
+									continue 'main;
+								}
+							} else {
+								println!("Expected function call arguments or `)`, found end of input instead!");
+								return;
+							}
+						} else if *lookahead == Token::Comma {
+							// We push the identifier to the stack.
+							self.stack.push(match Ident::parse_name(s) {
+								Ok(i) => Either::Left(Expr::Ident(i)),
+								Err(_) => Either::Left(Expr::Invalid),
+							});
+							// We have an operand, followed by a comma. If we are parsing a function call at all
+							// currently, then we can increase the arity of the top-most one. If not, then this is
+							// an error.
+							self.increase_arity();
+
+							// Consume the identifier and `,`.
+							walker.advance();
+							walker.advance();
+
+							// Don't switch state, since after a comma, we will be expecting another operand.
+							continue 'main;
 						} else {
 							// There is no following dot, so this is just a simple identifier.
 							self.stack.push(match Ident::parse_name(s) {
@@ -362,9 +487,11 @@ impl OpType {
 			| Self::LShiftEq
 			| Self::RShiftEq => 3,
 			// These two should always be converted to the *Pre or *Post versions in the shunting yard.
-			Self::AddAdd | Self::SubSub => panic!("OpType::AddAdd | OpType::SubSub do not have a precedence value because they should never be passed into this function. Something has gone wrong!"),
-			// This is never directly checked for precedence, but rather has a special branch.
-			Self::GroupStart => panic!("OpType::GroupStart does not have a precedence value because they should never be passed into this function. Something has gone wrong!"),
+			Self::AddAdd | Self::SubSub => panic!("OpType::AddAdd | OpType::SubSub do not have precedence values because they should never be passed into this function. Something has gone wrong!"),
+			// These are never directly checked for precedence, but rather have special branches.
+			Self::GroupStart | Self::FnStart | Self::FnCall(_) => {
+				panic!("OpType::GroupStart | OpType::FnStart | OpType::FnCall do not have precedence values because they should never be passed into this function. Something has gone wrong!")
+			},
 			_ => 1,
 		}
 	}
@@ -430,6 +557,8 @@ impl std::fmt::Display for OpType {
 			Self::SubSubPre => write!(f, "--pre"),
 			Self::SubSubPost => write!(f, "--post"),
 			Self::GroupStart => write!(f, ""),
+			Self::FnStart => write!(f, ""),
+			Self::FnCall(count) => write!(f, "FN:{count}"),
 		}
 	}
 }

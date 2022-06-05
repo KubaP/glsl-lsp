@@ -1,7 +1,7 @@
 #![allow(unused)]
 use crate::{
 	ast::{Either, Expr, Ident, Lit},
-	lexer::{OpType, Spanned, Token},
+	lexer::{lexer, OpType, Spanned, Token},
 };
 use std::{collections::VecDeque, iter::Peekable, slice::Iter};
 
@@ -686,4 +686,189 @@ impl std::fmt::Display for OpType {
 			Self::FnCall(count) => write!(f, "FN:{count}"),
 		}
 	}
+}
+
+/// Asserts the expression output of the `expr_parser()` matches the right hand side.
+macro_rules! assert_expr {
+	($source:expr, $rest: expr) => {
+		assert_eq!(expr_parser(lexer($source)), $rest);
+	};
+}
+
+#[test]
+#[rustfmt::skip]
+fn calcs() {
+	// Single operator
+	assert_expr!("5 + 1",
+		Expr::Binary {
+			left: Box::from(Expr::Lit(Lit::Int(5))),
+			op: OpType::Add,
+			right: Box::from(Expr::Lit(Lit::Int(1)))
+		}
+	);
+	assert_expr!("ident * 100.4",
+		Expr::Binary {
+			left: Box::from(Expr::Ident(Ident("ident".into()))),
+			op: OpType::Mul,
+			right: Box::from(Expr::Lit(Lit::Float(100.4)))
+		}
+	);
+	assert_expr!("30 << 8u",
+		Expr::Binary {
+			left: Box::from(Expr::Lit(Lit::Int(30))),
+			op: OpType::LShift,
+			right: Box::from(Expr::Lit(Lit::UInt(8)))
+		}
+	);
+
+	// Multiple operators
+	assert_expr!("5 + 1 / 3",
+		Expr::Binary {
+			left: Box::from(Expr::Lit(Lit::Int(5))),
+			op: OpType::Add,
+			right: Box::from(Expr::Binary {
+				left: Box::from(Expr::Lit(Lit::Int(1))),
+				op: OpType::Div,
+				right: Box::from(Expr::Lit(Lit::Int(3)))
+			})
+		}
+	);
+	assert_expr!("5 + 1 / 3 * i",
+		Expr::Binary {
+			left: Box::from(Expr::Lit(Lit::Int(5))),
+			op: OpType::Add,
+			right: Box::from(Expr::Binary {
+				left: Box::from(Expr::Lit(Lit::Int(1))),
+				op: OpType::Div,
+				right: Box::from(Expr::Binary {
+					left: Box::from(Expr::Lit(Lit::Int(3))),
+					op: OpType::Mul,
+					right: Box::from(Expr::Ident(Ident("i".into())))
+				})
+			})
+		}
+	);
+	assert_expr!("5 + 1 == true * i",
+		Expr::Binary {
+			left: Box::from(Expr::Binary {
+				left: Box::from(Expr::Lit(Lit::Int(5))),
+				op: OpType::Add,
+				right: Box::from(Expr::Lit(Lit::Int(1)))
+			}),
+			op: OpType::EqEq,
+			right: Box::from(Expr::Binary {
+				left: Box::from(Expr::Lit(Lit::Bool(true))),
+				op: OpType::Mul,
+				right: Box::from(Expr::Ident(Ident("i".into())))
+			})
+		}
+	);
+}
+
+#[test]
+#[rustfmt::skip]
+fn brackets() {
+	assert_expr!("(5 + 1) * 8",
+		Expr::Binary {
+			left: Box::from(Expr::Binary {
+				left: Box::from(Expr::Lit(Lit::Int(5))),
+				op: OpType::Add,
+				right: Box::from(Expr::Lit(Lit::Int(1))),
+			}),
+			op: OpType::Mul,
+			right: Box::from(Expr::Lit(Lit::Int(8)))
+		}
+	);
+	assert_expr!("((5 + 1) < 100) * 8",
+		Expr::Binary {
+			left: Box::from(Expr::Binary {
+				left: Box::from(Expr::Binary {
+					left: Box::from(Expr::Lit(Lit::Int(5))),
+					op: OpType::Add,
+					right: Box::from(Expr::Lit(Lit::Int(1))),
+				}),
+				op: OpType::Lt,
+				right: Box::from(Expr::Lit(Lit::Int(100))),
+			}),
+			op: OpType::Mul,
+			right: Box::from(Expr::Lit(Lit::Int(8)))
+		}
+	);
+}
+
+#[test]
+#[rustfmt::skip]
+fn unaries() {
+	// Single operator
+	assert_expr!("-5", Expr::Neg(Box::from(Expr::Lit(Lit::Int(5)))));
+	assert_expr!("~5", Expr::Flip(Box::from(Expr::Lit(Lit::Int(5)))));
+	assert_expr!("!5", Expr::Not(Box::from(Expr::Lit(Lit::Int(5)))));
+	assert_expr!("++5", Expr::Prefix(Box::from(Expr::Lit(Lit::Int(5))), OpType::Add));
+	assert_expr!("--5", Expr::Prefix(Box::from(Expr::Lit(Lit::Int(5))), OpType::Sub));
+	assert_expr!("5++", Expr::Postfix(Box::from(Expr::Lit(Lit::Int(5))), OpType::Add));
+	assert_expr!("5--", Expr::Postfix(Box::from(Expr::Lit(Lit::Int(5))), OpType::Sub));
+	
+	// Multiple operators
+	assert_expr!("- -5",
+		Expr::Neg(Box::from(
+			Expr::Neg(Box::from(Expr::Lit(Lit::Int(5))))
+		))
+	);
+	assert_expr!("- - -5",
+		Expr::Neg(Box::from(
+			Expr::Neg(Box::from(
+				Expr::Neg(Box::from(Expr::Lit(Lit::Int(5))))
+			))
+		))
+	);
+	assert_expr!("!!5",
+		Expr::Not(Box::from(
+			Expr::Not(Box::from(Expr::Lit(Lit::Int(5))))
+		))
+	);
+	assert_expr!("++++5",
+		Expr::Prefix(
+			Box::from(
+				Expr::Prefix(
+					Box::from(Expr::Lit(Lit::Int(5))),
+					OpType::Add
+				)
+			),
+			OpType::Add
+		)
+	);
+	assert_expr!("--5++",
+		Expr::Prefix(
+			Box::from(Expr::Postfix(
+				Box::from(Expr::Lit(Lit::Int(5))),
+				OpType::Add
+			)),
+			OpType::Sub
+		)
+	);
+}
+
+#[test]
+#[rustfmt::skip]
+fn fn_calls() {
+	assert_expr!("fn()",
+		Expr::Fn { ident: Ident("fn".into()), args: vec![] }
+	);
+	assert_expr!("fu_nc(1)",
+		Expr::Fn { ident: Ident("fu_nc".into()), args: vec![Expr::Lit(Lit::Int(1))] }
+	);
+	assert_expr!("fn(5 + 1, i << 6)",
+		Expr::Fn { ident: Ident("fn".into()), args: vec![
+			Expr::Binary {
+				left: Box::from(Expr::Lit(Lit::Int(5))),
+				op: OpType::Add,
+				right: Box::from(Expr::Lit(Lit::Int(1))),
+			},
+			Expr::Binary {
+				left: Box::from(Expr::Ident(Ident("i".into()))),
+				op: OpType::LShift,
+				right: Box::from(Expr::Lit(Lit::Int(6))),
+			},
+		]}
+	);
 }

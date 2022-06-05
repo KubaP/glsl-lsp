@@ -1,14 +1,14 @@
 use crate::lexer::{NumType, OpType, Token};
 
 /// Holds either one or the other value.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub enum Either<L, R> {
 	Left(L),
 	Right(R),
 }
 
 /// An expression which will be part of an encompassing statement. Expressions cannot exist on their own.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub enum Expr {
 	/// An expression which is incomplete, e.g. `3+5-`.
 	///
@@ -280,7 +280,7 @@ pub enum ExtBehaviour {
 }
 
 /// A literal value.
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, PartialEq)]
 pub enum Lit {
 	Bool(bool),
 	Int(i64),
@@ -411,7 +411,7 @@ impl Lit {
 /// An identifier.
 ///
 /// This can be a variable name, function name, etc.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct Ident(pub String);
 
 impl std::fmt::Display for Ident {
@@ -441,7 +441,7 @@ impl Ident {
 /// A fundamental type.
 ///
 /// These are the most fundamental types in the language, on which all other types are composed.
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, PartialEq)]
 pub enum Fundamental {
 	Void,
 	Bool,
@@ -469,7 +469,7 @@ impl std::fmt::Display for Fundamental {
 /// ℹ The reason for the separation of this enum and the [`Fundamental`] enum is that all fundamental types (aside
 /// from `void`) can be either a scalar or an n-dimensional vector. Furthermore, any of the types in this enum can
 /// be on their own or as part of a n-dimensional array.
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, PartialEq)]
 pub enum Primitive {
 	/// A scalar primitive type.
 	Scalar(Fundamental),
@@ -560,7 +560,7 @@ impl Primitive {
 }
 
 /// A built-in language type.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub enum Type {
 	/// A type which has only a single value.
 	Basic(Either<Primitive, Ident>),

@@ -20,7 +20,8 @@ pub fn parse(source: &str) {
 	}
 	println!("\r\nerrors: {errors:?}"); */
 
-	expr_parser(cst);
+	let expr = expr_parser(cst);
+	println!("{expr}");
 	//println!("{ast:?}");
 }
 

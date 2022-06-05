@@ -5,15 +5,14 @@ use crate::{
 };
 use std::{collections::VecDeque, iter::Peekable, slice::Iter};
 
-pub fn expr_parser(cst: Vec<Spanned<Token>>) {
+pub fn expr_parser(cst: Vec<Spanned<Token>>) -> Expr {
 	let mut parser = ShuntingYard {
-		stack: Vec::new(),
+		stack: VecDeque::new(),
 		operators: VecDeque::new(),
 		arity: VecDeque::new(),
 	};
 	parser.parse(cst);
-
-	println!("{parser}");
+	parser.create_ast()
 }
 
 /*
@@ -79,7 +78,7 @@ impl Walker {
 
 struct ShuntingYard {
 	/// The final output stack in RPN.
-	stack: Vec<Either<Expr, OpType>>,
+	stack: VecDeque<Either<Expr, OpType>>,
 	/// Temporary stack to hold operators.
 	operators: VecDeque<OpType>,
 	/// Temporary stack to hold the number of arguments any function calls are holding.
@@ -100,7 +99,7 @@ impl ShuntingYard {
 
 			if op.precedence() < back.precedence() {
 				let moved_op = self.operators.pop_back().unwrap();
-				self.stack.push(Either::Right(moved_op));
+				self.stack.push_back(Either::Right(moved_op));
 			} else {
 				// If the precedence is greater, we aren't going to be moving any operators to the stack anymore,
 				// so we can exit the loop.
@@ -141,12 +140,13 @@ impl ShuntingYard {
 				// (hence the `+ 1`).
 				self.operators.pop_back();
 				let count = self.arity.pop_back().unwrap();
-				self.stack.push(Either::Right(OpType::FnCall(count + 1)));
+				self.stack
+					.push_back(Either::Right(OpType::FnCall(count + 1)));
 				break;
 			} else {
 				// Any other operators get moved.
 				let moved_op = self.operators.pop_back().unwrap();
-				self.stack.push(Either::Right(moved_op));
+				self.stack.push_back(Either::Right(moved_op));
 			}
 		}
 	}
@@ -166,7 +166,7 @@ impl ShuntingYard {
 				}
 
 				let moved_op = self.operators.pop_back().unwrap();
-				self.stack.push(Either::Right(moved_op));
+				self.stack.push_back(Either::Right(moved_op));
 			}
 		} else {
 			println!(
@@ -176,6 +176,7 @@ impl ShuntingYard {
 		}
 	}
 
+	/// Parses a list of tokens. Populates the internal `stack` with a RPN output.
 	fn parse(&mut self, cst: Vec<Spanned<Token>>) {
 		// `true` if we are looking for an operand (which includes parsing prefix operators). `false` if we are
 		// looking for an operator for a binary expression (or alternatively the end of the expression).
@@ -193,7 +194,7 @@ impl ShuntingYard {
 				Token::Num { .. } | Token::Bool(_) if operand_state => {
 					if let Some(lookahead) = walker.lookahead_1() {
 						if *lookahead == Token::Comma {
-							self.stack.push(match Lit::parse(token) {
+							self.stack.push_back(match Lit::parse(token) {
 								Ok(l) => Either::Left(Expr::Lit(l)),
 								Err(_) => Either::Left(Expr::Invalid),
 							});
@@ -211,14 +212,14 @@ impl ShuntingYard {
 							continue 'main;
 						} else {
 							// There is no following comma, so this is just a simple literal.
-							self.stack.push(match Lit::parse(token) {
+							self.stack.push_back(match Lit::parse(token) {
 								Ok(l) => Either::Left(Expr::Lit(l)),
 								Err(_) => Either::Left(Expr::Invalid),
 							});
 						}
 					} else {
 						// There is no following comma, so this is just a simple literal.
-						self.stack.push(match Lit::parse(token) {
+						self.stack.push_back(match Lit::parse(token) {
 							Ok(l) => Either::Left(Expr::Lit(l)),
 							Err(_) => Either::Left(Expr::Invalid),
 						});
@@ -265,7 +266,7 @@ impl ShuntingYard {
 									// for it. We rerun the main loop on the current token since it will match
 									// against a different main branch, such as the operator branch. We don't
 									// advance the cursor.
-									self.stack.push(Either::Left(
+									self.stack.push_back(Either::Left(
 										Expr::Member(members),
 									));
 									operand_state = false;
@@ -302,10 +303,10 @@ impl ShuntingYard {
 
 							// We've reached the end of the token list, so we can create an expression.
 							self.stack
-								.push(Either::Left(Expr::Member(members)));
+								.push_back(Either::Left(Expr::Member(members)));
 						} else if *lookahead == Token::LParen {
 							// We push the function identifier to the stack.
-							self.stack.push(match Ident::parse_name(s) {
+							self.stack.push_back(match Ident::parse_name(s) {
 								Ok(i) => Either::Left(Expr::Ident(i)),
 								Err(_) => Either::Left(Expr::Invalid),
 							});
@@ -338,7 +339,7 @@ impl ShuntingYard {
 							}
 						} else if *lookahead == Token::Comma {
 							// We push the identifier to the stack.
-							self.stack.push(match Ident::parse_name(s) {
+							self.stack.push_back(match Ident::parse_name(s) {
 								Ok(i) => Either::Left(Expr::Ident(i)),
 								Err(_) => Either::Left(Expr::Invalid),
 							});
@@ -355,14 +356,14 @@ impl ShuntingYard {
 							continue 'main;
 						} else {
 							// There is no following dot, so this is just a simple identifier.
-							self.stack.push(match Ident::parse_name(s) {
+							self.stack.push_back(match Ident::parse_name(s) {
 								Ok(i) => Either::Left(Expr::Ident(i)),
 								Err(_) => Either::Left(Expr::Invalid),
 							});
 						}
 					} else {
 						// There is no following dot, so this is just a simple identifier.
-						self.stack.push(match Ident::parse_name(s) {
+						self.stack.push_back(match Ident::parse_name(s) {
 							Ok(i) => Either::Left(Expr::Ident(i)),
 							Err(_) => Either::Left(Expr::Invalid),
 						});
@@ -449,8 +450,132 @@ impl ShuntingYard {
 
 		// Move any remaining operators onto the stack.
 		while let Some(op) = self.operators.pop_back() {
-			self.stack.push(Either::Right(op))
+			self.stack.push_back(Either::Right(op))
 		}
+	}
+
+	/// Converts the internal RPN stack into a singular `Expr` node, which contains the entire expression.
+	fn create_ast(&mut self) -> Expr {
+		let mut stack = VecDeque::new();
+
+		// Consume the stack from the front. If we have an expression, we move it to the back of a temporary stack.
+		// If we have an operator, we take the x-most expressions from the back of the temporary stack, process
+		// them in accordance to the operator type, and then push the result onto the back of the temporary stack.
+		while let Some(e) = self.stack.pop_front() {
+			match e {
+				Either::Left(e) => stack.push_back(e),
+				Either::Right(op) => match op {
+					OpType::Neg => {
+						let expr = stack.pop_back().unwrap();
+						stack.push_back(Expr::Neg(Box::from(expr)));
+					}
+					OpType::Flip => {
+						let expr = stack.pop_back().unwrap();
+						stack.push_back(Expr::Flip(Box::from(expr)));
+					}
+					OpType::Not => {
+						let expr = stack.pop_back().unwrap();
+						stack.push_back(Expr::Not(Box::from(expr)));
+					}
+					OpType::AddAddPre => {
+						let expr = stack.pop_back().unwrap();
+						stack.push_back(Expr::Prefix(
+							Box::from(expr),
+							OpType::Add,
+						));
+					}
+					OpType::SubSubPre => {
+						let expr = stack.pop_back().unwrap();
+						stack.push_back(Expr::Prefix(
+							Box::from(expr),
+							OpType::Sub,
+						));
+					}
+					OpType::AddAddPost => {
+						let expr = stack.pop_back().unwrap();
+						stack.push_back(Expr::Postfix(
+							Box::from(expr),
+							OpType::Add,
+						));
+					}
+					OpType::SubSubPost => {
+						let expr = stack.pop_back().unwrap();
+						stack.push_back(Expr::Postfix(
+							Box::from(expr),
+							OpType::Sub,
+						));
+					}
+					OpType::FnCall(count) => {
+						let mut args = VecDeque::new();
+						for _ in 0..count {
+							args.push_front(stack.pop_back().unwrap());
+						}
+
+						// Get the identifier (which is the first expression).
+						let ident = if let Expr::Ident(i) =
+							args.pop_front().unwrap()
+						{
+							i
+						} else {
+							panic!("The first expression of a function call operator is not an identifier!");
+						};
+
+						stack.push_back(Expr::Fn {
+							ident,
+							args: args.into(),
+						});
+					}
+					OpType::Add
+					| OpType::Sub
+					| OpType::Mul
+					| OpType::Div
+					| OpType::Rem
+					| OpType::And
+					| OpType::Or
+					| OpType::Xor
+					| OpType::LShift
+					| OpType::RShift
+					| OpType::EqEq
+					| OpType::NotEq
+					| OpType::Gt
+					| OpType::Lt
+					| OpType::Ge
+					| OpType::Le
+					| OpType::AndAnd
+					| OpType::OrOr
+					| OpType::XorXor
+					| OpType::AddEq
+					| OpType::SubEq
+					| OpType::MulEq
+					| OpType::DivEq
+					| OpType::RemEq
+					| OpType::AndEq
+					| OpType::OrEq
+					| OpType::XorEq
+					| OpType::LShiftEq
+					| OpType::RShiftEq => {
+						let right = stack.pop_back().unwrap();
+						let left = stack.pop_back().unwrap();
+						stack.push_back(Expr::Binary {
+							left: Box::from(left),
+							op,
+							right: Box::from(right),
+						});
+					}
+					_ => {
+						panic!("Invalid operator {op} in shunting yard stack. This operator should never be present in the final RPN output stack.");
+					}
+				},
+			}
+		}
+
+		#[cfg(debug_assertions)]
+		if stack.len() != 1 {
+			panic!("After processing the shunting yard output stack, we are left with more than one expression. This should not happen.");
+		}
+
+		// Return the one root expression.
+		stack.pop_back().unwrap()
 	}
 }
 

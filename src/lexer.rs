@@ -131,11 +131,15 @@ pub enum OpType {
 	AddAddPost,
 	SubSubPre,
 	SubSubPost,
-	GroupStart, // Start of a bracket group
-	FnStart,    // Start of a function call group
+	/// Index postfix operator.
+	Index,
 	/// Function call operator. Consumes the `usize` amount of nodes as arguments for the function call. The first
 	/// node is always an `Expr::Ident` which is the function identifier.
 	FnCall(usize),
+	// The following are never present in the final output of the shunting yard.
+	GroupStart,
+	FnStart,
+	IndexStart,
 }
 
 pub type Spanned<T> = (T, std::ops::Range<usize>);

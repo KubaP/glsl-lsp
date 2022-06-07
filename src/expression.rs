@@ -92,7 +92,10 @@ impl ShuntingYard {
 		while self.operators.back().is_some() {
 			let back = self.operators.back().unwrap();
 
-			if *back == OpType::GroupStart || *back == OpType::FnStart {
+			if *back == OpType::GroupStart
+				|| *back == OpType::FnStart
+				|| *back == OpType::IndexStart
+			{
 				// Group start operators always have the highest precedence, so we don't need to check further.
 				break;
 			}
@@ -120,6 +123,11 @@ impl ShuntingYard {
 		self.arity.push_back(1);
 	}
 
+	/// Registers the start of an index operator group.
+	fn start_index(&mut self) {
+		self.operators.push_back(OpType::IndexStart);
+	}
+
 	/// Registers the end of a bracket group, popping any operators until the start of the last bracket group is
 	/// reached.
 	fn end_group(&mut self) {
@@ -127,6 +135,43 @@ impl ShuntingYard {
 			let back = self.operators.back().unwrap();
 
 			if *back == OpType::GroupStart {
+				// We have reached the end of the current group. We remove the operator without pushing it to the
+				// stack since it only functions as a flag, rather than as an actual operator.
+				self.operators.pop_back();
+				break;
+			} else if *back == OpType::FnStart {
+				// We have reached the end of the current function call group. We remove the operator and instead
+				// push a new operator which contains information about how many of the previous expressions are
+				// part of the current function call group.
+				//
+				// Note: The first expression will always be the expression containing the function identifier
+				// (hence the `+ 1`).
+				self.operators.pop_back();
+				let count = self.arity.pop_back().unwrap();
+				self.stack
+					.push_back(Either::Right(OpType::FnCall(count + 1)));
+				break;
+			} else {
+				// Any other operators get moved.
+				let moved_op = self.operators.pop_back().unwrap();
+				self.stack.push_back(Either::Right(moved_op));
+			}
+		}
+	}
+
+	/// Registers the end of an index operator group, popping any operators until the start of the index group is
+	/// reached.
+	fn end_index(&mut self) {
+		while self.operators.back().is_some() {
+			let back = self.operators.back().unwrap();
+
+			if *back == OpType::IndexStart {
+				// We have reached the end of the current index expression. We remove the operator and push it to
+				// the stack.
+				self.operators.pop_back();
+				self.stack.push_back(Either::Right(OpType::Index));
+				break;
+			} else if *back == OpType::GroupStart {
 				// We have reached the end of the current group. We remove the operator without pushing it to the
 				// stack since it only functions as a flag, rather than as an actual operator.
 				self.operators.pop_back();
@@ -437,6 +482,29 @@ impl ShuntingYard {
 					println!("Expected an operand or the end of expression, found `)` instead!");
 					return;
 				}
+				Token::LBracket if !operand_state => {
+					// We are expecting an operator, and we found a `[...]`, which is effectively an indexing
+					// postfix of sorts. We move it to the operator stack and want to look for an operand, so we
+					// switch state.
+					self.start_index();
+					operand_state = true;
+				}
+				Token::LBracket if operand_state => {
+					// We are expecting an operand, but we've found a `[...]` instead. Indexing is effectively a
+					// postfix operator of sorts so it cannot be before an operand.
+					println!("Expected an operand or the end of expression, found `[` instead!");
+					return;
+				}
+				Token::RBracket if !operand_state => {
+					// We are expecting an operator, and we found the end of an index. We move it to the operator
+					// stack and continue looking for an operator, so we don't switch state.
+					self.end_index();
+				}
+				Token::RBracket if operand_state => {
+					// We are expecting an operand, but we've found the end of an index instead.
+					println!("Expected an operand or the end of expression, found `]` instead!");
+					return;
+				}
 				_ => {
 					// We have a token that's not allowed to be part of an expression.
 					// TODO: Deal with this properly.
@@ -523,6 +591,14 @@ impl ShuntingYard {
 						stack.push_back(Expr::Fn {
 							ident,
 							args: args.into(),
+						});
+					}
+					OpType::Index => {
+						let i = stack.pop_back().unwrap();
+						let expr = stack.pop_back().unwrap();
+						stack.push_back(Expr::Index {
+							item: Box::from(expr),
+							i: Box::from(i),
 						});
 					}
 					OpType::Add
@@ -614,10 +690,9 @@ impl OpType {
 			// These two should always be converted to the *Pre or *Post versions in the shunting yard.
 			Self::AddAdd | Self::SubSub => panic!("OpType::AddAdd | OpType::SubSub do not have precedence values because they should never be passed into this function. Something has gone wrong!"),
 			// These are never directly checked for precedence, but rather have special branches.
-			Self::GroupStart | Self::FnStart | Self::FnCall(_) => {
-				panic!("OpType::GroupStart | OpType::FnStart | OpType::FnCall do not have precedence values because they should never be passed into this function. Something has gone wrong!")
+			Self::GroupStart | Self::FnStart | Self::FnCall(_) | Self::IndexStart | Self::Index => {
+				panic!("The operator {self:?} does not have a precedence value because it should never be passed into this function. Something has gone wrong!")
 			},
-			_ => 1,
 		}
 	}
 }
@@ -681,8 +756,10 @@ impl std::fmt::Display for OpType {
 			Self::AddAddPost => write!(f, "++post"),
 			Self::SubSubPre => write!(f, "--pre"),
 			Self::SubSubPost => write!(f, "--post"),
-			Self::GroupStart => write!(f, ""),
-			Self::FnStart => write!(f, ""),
+			Self::GroupStart | Self::FnStart | Self::IndexStart => {
+				write!(f, "")
+			}
+			Self::Index => write!(f, "index"),
 			Self::FnCall(count) => write!(f, "FN:{count}"),
 		}
 	}

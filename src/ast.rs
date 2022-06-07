@@ -68,6 +68,8 @@ pub enum Expr {
 	Flip(Box<Expr>),
 	/// A not.
 	Not(Box<Expr>),
+	/// An index into, e.g. `arr[i]`.
+	Index { item: Box<Expr>, i: Box<Expr> },
 	/// Binary expression with a left and right hand-side.
 	Binary {
 		left: Box<Expr>,
@@ -108,6 +110,9 @@ impl std::fmt::Display for Expr {
 			}
 			Expr::Flip(expr) => write!(f, "\x1b[36mFlip\x1b[0m({expr})"),
 			Expr::Not(expr) => write!(f, "\x1b[36mNot\x1b[0m({expr})"),
+			Expr::Index { item, i } => {
+				write!(f, "\x1b[36mIndex\x1b[0m({item}, i: {i})")
+			}
 			Expr::Binary { left, op, right } => {
 				write!(f, "({left} \x1b[36m{op:?}\x1b[0m {right})")
 			}

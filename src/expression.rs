@@ -949,3 +949,27 @@ fn fn_calls() {
 		]}
 	);
 }
+
+#[test]
+#[rustfmt::skip]
+fn indexes() {
+	assert_expr!("i[0]", Expr::Index {
+		item: Box::from(Expr::Ident(Ident("i".into()))),
+		i: Box::from(Expr::Lit(Lit::Int(0)))
+	});
+	assert_expr!("s[z+1]", Expr::Index {
+		item: Box::from(Expr::Ident(Ident("s".into()))),
+		i: Box::from(Expr::Binary {
+			left: Box::from(Expr::Ident(Ident("z".into()))),
+			op: OpType::Add,
+			right: Box::from(Expr::Lit(Lit::Int(1)))
+		})
+	});
+	assert_expr!("i[y[5]]", Expr::Index {
+		item: Box::from(Expr::Ident(Ident("i".into()))),
+		i: Box::from(Expr::Index {
+			item: Box::from(Expr::Ident(Ident("y".into()))),
+			i: Box::from(Expr::Lit(Lit::Int(5)))
+		})
+	});
+}

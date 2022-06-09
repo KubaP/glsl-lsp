@@ -337,10 +337,10 @@ The following implicit conversions are available:
 |`ivecx`|`uvecx`|
 |`ivecx`, `uvecx`|`vecx`|
 |`ivecx`, `uvecx`, `vecx`|`dvecx`|
-|`mati`|`dmati`|
 |`matnxm`|`dmatnxm`|
+|`mati`|`dmati`|
 
-Arrays do not have any implicit conversions, even if the the underlying type does have conversions.
+Arrays do not have any implicit conversions, even if the the element type does have conversions.
 
 Structs do not have any implicit conversions, even if both structs have the exact same member layout.
 
@@ -352,7 +352,7 @@ A-Z // uppercase latin
 0-9 // digits
 _   // underscore
 ```
-An identifier cannot start with a digit. Identifiers starting with the `gl_` prefix are reserved for OpenGL. Identifiers also cannot be any of the keywords, reserved keywords, or built-in type identifiers.
+An identifier cannot start with a digit. Identifiers starting with the `gl_` prefix are reserved for OpenGL. Identifiers also cannot be any of the keywords, reserved keywords.
 
 # Literals
 These are the allowed literals:
@@ -362,10 +362,8 @@ These are the allowed literals:
 - `float` - `1.0` (`1e10` or `1.2e10` for exponential notation, which is always base-10),
 - `double` - `1.0lf` or `1.0LF` (mixing case such as `lF` is not allowed).
 
-Integers use *32-bit* precision. Floats are *single-precision* and doubles are *double-precision* IEEE floating point numbers.
-
 ### Numbers
-For a specification of valid number notations, see the [grammar](./grammar.bnf) file.
+For a specification of valid number notations, see the [grammar.bnf](./grammar.bnf) file.
 
 ### Operators
 Mathematical operators:
@@ -750,25 +748,39 @@ This is a special input for fragment shaders (awkward because in this example th
 layout(early_fragment_tests) in;
 ```
 
-# Control Flow
+# Statements
+
+## Function Calls
+Function call statements are only valid within function bodies.
+
+## Control Flow
 Control flow statements are only valid within function bodies.
 
-### Keywords
+### Jumps
 ```glsl
-Valid in a function body; {EXPR} is an optional return value expression.
-return {EXPR};
-discard; // Valid in a function body
-break;   // Only valid inside of a for loop or a switch case.
-```
+// Only valid inside for, while and do-while loops.
+continue;
 
-## If statement
+// Only valid inside for, while and do-while loops, as well as switch statements.
+break;
+
+// Valid inside any function.
+return;
+return EXPR;
+
+// Only valid in fragment shaders, inside any function.
+discard;
+```
+Unlike in C, there is no `goto` statement.
+
+### If statement
 ```glsl
-if ({EXPR}) {
+if (EXPR) {
     /*...*/
 }
 
 // Optionally followed by (n number of times):
-else if ({EXPR}) {
+else if (EXPR) {
     /*...*/
 }
 
@@ -778,12 +790,13 @@ else {
 }
 
 ```
-`{EXPR}` is any expression which evaluates to a `bool`.
+`EXPR` is an expression which evaluates to a `bool`.
 
-## Switch
+### Switch
 ```glsl
-switch ({EXPR}) {
-    case {CONST-EXPR} : 
+switch (EXPR) {
+    // Optionally repeated (n number of times):
+    case CONST_EXPR : 
         /*...*/
 
     // Optionally followed by:
@@ -791,23 +804,41 @@ switch ({EXPR}) {
         /*...*/
 }
 ```
-`{EXPR}` is any expression.
+`EXPR` is an expression which evaluates to either `int` or `uint`.
 
-`{CONST-EXPR}` is any constant expression.
+`CONST_EXPR` is a constant expression which evaluates to either `int` or `uint`.
 
-## For Loop
+If there is a difference in type between `EXPR` and `CONST_EXPR`, then an implicit conversion will take place from `int` to `uint`.
+
+### For Loop
 ```glsl
-for ({VAR_DECL}; {COND_EXPR}; {INC_EXPR}) {
+for (INIT_STMT; COND_EXPR; LOOP_EXPR) {
     /*...*/
 }
 ```
-`{VAR_DECL}` is a variable declaration (value assignment is optional).
+`INIT_STMT` is a either a statement or an expression. It is evaluated once at the start of the loop. It can be a variable declaration (with an assignment value).
 
-`{COND_EXPR}` is an expression which evaluated to a `bool`.
+`COND_EXPR` is an expression which evaluated to a `bool`.
 
-`{INC_EXPR}` is an expression.
+`LOOP_EXPR` is an expression.
 
-All 3 statements are optional, i.e. `(;;)` is a valid (infinite) loop.
+All 3 parts are optional, i.e. `for (;;)` is a valid (infinite) loop.
+
+### While Loop
+```glsl
+while (COND_EXPR) {
+    /*...*/
+}
+```
+`COND_EXPR` is an expression which evaluates to `bool`.
+
+### Do-While Loop
+```glsl
+do {
+    /*...*/
+} while (COND_EXPR)
+```
+`COND_EXPR` is an expression which evaluates to `bool`.
 
 # Comments
 Comment syntax:

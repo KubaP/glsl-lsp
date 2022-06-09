@@ -597,13 +597,14 @@ A `#` on its own without anything after is ignored.
 The version directive is specified like so:
 ```glsl
 #version NUM PROFILE
+
 // E.g.
 #version 450 core
 #version 460
 ```
-`NUM` is the version string without the dot (`.`), so version 4.50 is `450`. Unless specified, `110` is the default.
+`NUM` is the version number as an integer without the dot (`.`), so version 4.50 is `450`. Unless specified, `110` is the default.
 
-`PROFILE` is either `core` or `compatibility`. Unless specified, `core` is the default. You can omit the profile, but the version number must be present.
+`PROFILE` is either `core`, `compatibility` or `es`. Unless specified, `core` is the default. The profile can only be used if the version number is `150` or greater. You can omit the profile, but the version number must be present (unless the version number is `300` or `310`, in which case the profile **must** be `es`).
 
 This directive must be the first statement in the file (aside from whitespace/comments), and it cannot be repeated.
 
@@ -615,10 +616,25 @@ The extension directive is specified like so:
 `NAME` specifies the name of the extension; the value `all` is also allowed.
 
 `BEHAVIOUR` is one of the following:
+- `require` - Enables the extension. If not supported, it results in a compile-time error.
 - `enable` - Enables the extension. If not supported, a warning is generated.
-- `require` - Enables the extension. If not supported, the compilation fails.
-- `warn` - Enables the extension. If used, it will produce warnings.
-- `disable` - Disabled the extension. 
+- `warn` - Enables the extension. If used, it will produce warnings. If not supported, a warning is generated.
+- `disable` - Disabled the extension. If used, it results in a compile-time error.
+
+If `all` is used:
+```glsl
+// Produce warnings any time an extension is used.
+#extension all : warn
+
+// Produce errors any time an extension is used.
+// (This is effectively the default state of the compiler).
+#extension all : disable
+
+// The following are invalid and result in compile-time errors.
+#extension all : require
+#extension all : enable
+```
+The order of extension directives matters; configuring an extension overwrites any previous configurations of that extension.
 
 ### Line
 The line directive is specified like so:
@@ -626,6 +642,8 @@ The line directive is specified like so:
 #line LINE SRC-STR-NUM
 ```
 `LINE` must be greater than `0`. The `SRC-STR-NUM` is optional.
+
+After processing this directive, the compiler will behave as if it compiling at line number `LINE` and source string number `SRC-STR-NUM`. Subsequent lines will be numbered sequentially, until another `#line` directive overrides this.
 
 ### C Directives
 These directives come from the C language.
@@ -639,6 +657,17 @@ These directives come from the C language.
 ⚠ Not supported natively by GLSL.
 
 #### define
+##### Built-in
+```glsl
+// Always defined
+#define GL_core_profile 1
+
+// Defined if the profile is set to `compatibility`.
+#define GL_compatibility_profile 1
+
+// Defined if the profile is set to `es`
+#define GL_es_profile 1
+```
 #### undef
 ```glsl
 #undef SYMBOL
@@ -684,17 +713,13 @@ Controls compiler options:
 `OPTIONS` is any string of characters until a new line.
 
 ## Macros
-### __FILE__
+Macro names starting with the `GL_` prefix are reserved for OpenGL; they cannot de (un)defined. Macro names starting with a `__` prefix are by convention reserved; they can be (un)defined but it may cause unintended behaviour if a previous implementation definition exists.
+
+### \_\_FILE\_\_
 It is **not** a file name. It is a decimal integer representing which string in the list of strings the shader came from.
 
-### __LINE__
-The line number
+### \_\_LINE\_\_
+The line number.
 
-### __VERSION__
+### \_\_VERSION\_\_
 The version number as an integer, i.e. version 4.50 is `450`.
-
-### GL_core_profile
-Always defined to be `1`.
-
-### GL_compatibility_profile
-Defined to `1` if the profile is set to *compatibility*.

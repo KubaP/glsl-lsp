@@ -8,24 +8,33 @@ Missing/incomplete:
 - Subroutines
 
 # Types
+Note that the term *composites* refers to any of the vector, matrix, array or struct types.
+
+Unlike in C, there are no pointer types.
+
 ### Standard Types
 Scalars:
-- `bool`
-- `int`
-- `uint`
-- `float`
-- `double`
+- `bool` - genuine boolean which can hold one of two values, not an integer like in C,
+- `int` - signed 32-bit integer,
+- `uint` - unsigned 32-bit integer,
+- `float` - single precision floating point number,
+- `double` - double precision floating point number,
+- `void` - nothing.
+
+`void` is a special type which can only be used in function signatures to denote a function not returning anything. It cannot be used to declare a variable which stores some data.
 
 Vectors (where `2 <= n <= 4`):
-- `bvecn` - vector of booleans
-- `ivecn` - vector of integers
-- `uvecn` - vector of unsigned integers
-- `vecn` - vector of floats
-- `dvec` - vector of double precision floats
+- `bvecn` - vector of booleans,
+- `ivecn` - vector of integers,
+- `uvecn` - vector of unsigned integers,
+- `vecn` - vector of floats,
+- `dvec` - vector of double precision floats.
 
 Matrices (where `n` is the number of columns and `m` is the number of rows, and they satisfy `2 <= n/m <= 4`):
-- `matnxm` - matrix of floats
-- `dmatnxm` - matrix of double precision floats
+- `matnxm` - matrix of floats,
+- `dmatnxm` - matrix of double precision floats.
+
+An alternative `mati` and `dmati` notation, (where `i` is a number that satisfies `2 <= i <= 4`), defines a square matrix, i.e. it is equivalent to `(d)matixi`.
 
 ### Opaque Types
 These are types which act as a reference to some external object. A clear analogy would be, like pointers are fundamentally integers but they have special meaning, the same thing is with opaque types. Opaque types can only be part of a `uniform` global variable.
@@ -42,16 +51,298 @@ struct NAME {
     vec3 v;
 };
 ```
-Structs must have at least one member defined. Members cannot be default initialized
+Structs must have at least one member defined. Members cannot be default initialized.
 
 If a struct contains an [Opaque Type](#opaque-types), then it can only be used in places that accept such types (mainly `uniform` globals).
 
+## Arrays
+Any type (other than `void`) can be aggregated into an array of homogenous values:
+```glsl
+// Sized
+float f[3]
+
+// Unsized
+mat4 m[]
+
+// Size specified by a more complex constant expression
+const int size = 2;
+vec3 v[size + 5]
+```
+If an array size is specified, it must be a *Constant Expression* which evaluates to a greater-than-zero integer.
+
+Multi-dimensional arrays can also be typed:
+```glsl
+// 3 sets of arrays, each 5 in length
+float f[3][5]
+
+// Equivalent to above
+vec3[3] v[5]
+
+// A 3d array
+mat4 m[2][3][9]
+```
+
+## Initialization
+All types can be initialized with an initialization expression. This expression must evaluate either to that type, or to a type which can be implicitly converted to that type.
+
+### Scalar
+Scalars can be initialized through the following:
+```glsl
+// An expression consiting of a literal
+int i = 5;
+
+// A simple binary expression
+int i = 5 + 10;
+
+// A more complex nested binary expresion
+int i = (5 + 7) << 9;
+
+// An expression consiting of a function call which returns a value
+int i = func();
+```
+You can combine the different expression types above in any arbitrary way.
+
+Scalars can also be explicitly created using constructors, if the type provided can be converted:
+```glsl
+TODO:
+```
+
+### Vectors and Matrices
+Vectors and matrices can be initialized through constructors:
+```glsl
+// Initialises a vec3 with the given values
+vec3 v = vec3(1.0, 2.0, 3.0);
+
+// Initialises a vec3 with all zeroes
+vec3 v = vec3(0.0);
+
+// Initialises a mat2x2 with the given values
+mat2 m = mat2(1.0, 2.0, 10.0, 20.0);
+mat2 m = mat2(vec2(1.0, 2.0), vec2(10.0, 20.0));
+```
+The number of arguments in a constructor must match one of the constructor overloads. Depending on which overload is chosen, each expression must evaluate to the parameter type, or a type which can be implicitly converted to the parameter type.
+
+Alternatively, initializer lists can be used:
+```glsl
+vec3 v = {1.0, 2.0, 3.0};
+
+mat2 m = {{1.0, 2.0}, {10.0, 20.0}};
+```
+Each expression in an initializer list must either evaluate to the constituent type of the vector/matrix, or a type which can be implicitly converted to the constituent type.
+
+Initializer lists must contain the same amount of expressions as the number of components in the vector. The following is not allowed:
+```glsl
+// Allowed
+vec3 v = vec3(0.0);
+
+// Not allowed
+vec3 v = {0.0};
+
+// Allowed
+vec3 v = {0.0, 0.0, 0.0}; // x, y, z
+```
+Initializer lists must contain the same amount of expressions as the number of columns in the matrix. Matrices are "under the hood" treated as a bunch of vectors, one vector per column, hence the following happens:
+```glsl
+// Allowed
+mat2 m = mat2(1.0, 2.0, 3.0, 4.0);
+
+// Not allowed
+mat2 m = {1.0, 2.0, 3.0, 4.0};
+
+// This _is_ allowed however
+// See how you're effectively first initializing two `vec2`s, and then using those to initialize the `mat2`
+mat2 m = {{1.0, 2.0}, {3.0, 4.0}};
+// It is the equivalent of:
+mat2 m = mat2(vec2(1.0, 2.0), vec2(3.0, 4.0));
+```
+
+### Arrays
+Arrays can be initialized through constructors:
+```glsl
+// Initialize 3 elements
+int i[3] = int[3](1, 2, 3);
+
+// You don't have to repeat the size
+int i[3] = int[](1, 2, 3);
+
+// You can skip out the size entirely if you are initializing in one go
+int i[] = int[](1, 2, 3);
+
+// Invalid
+int i[3] = int[](1, 2);
+
+// Alternatively, put the size first
+int[3] i = int[](1, 2);
+int[] i = int[](1, 2);
+```
+The number of arguments in a constructor must match the size of the array (if explicitly specified). Each expression must evaluate to the element type, or a type which can be implicitly converted to the element type. If no explicit size is specified, the number of arguments can be arbitrary.
+
+Multi-dimensional arrays cannot be initialized with nested array constructors:
+```glsl
+// Invalid
+int i[2][3] = int[2](
+    int[3](1, 2, 3),
+    int[3](4, 5, 6)
+);
+
+// Use initializer lists instead,
+int i[2][3] = {{1, 2, 3}, {4, 5, 6}};
+int i[2][3][1] = {{{1}, {2}, {3}}, {{4}, {5}, {6}}};
+
+// Or alternatively construct it in multiple steps:
+int a[] = int[](1, 2, 3);
+int b[] = int[](4, 5, 6);
+int i[2][3] = int[](a, b);
+
+// Or alternatively use only inner constructors:
+int i[2][3] = {int[](1, 2, 3), int[](4, 5, 6)};
+
+// Alternatively, put the inner dimension size first
+int[3] i[2] = {int[](1, 2, 3), int[](4, 5, 6)};
+int[1] i[2][3] = {{{1}, {2}, {3}}, {{4}, {5}, {6}}};
+
+// Invalid, only the inner-most size can be moved forward
+int[1][3] i[2] = {{{1}, {2}, {3}}, {{4}, {5}, {6}}};
+```
+With multi-dimensional arrays, only the outer-most size can be implicit:
+```glsl
+// Valid, automatically infers: int[2][3]
+int i[][3] = {{1, 2, 3}, {4, 5, 6}};
+int[3] i[] = {{1, 2, 3}, {4, 5, 6}};
+
+// Invalid
+int i[][] = {int[3](1, 2, 3), int[3](4, 5, 6)};
+
+// Also invalid, inner size not specified
+int[] i[2] = {{1, 2, 3}, {4, 5, 6}};
+int[] i[2][3] = {{{1}, {2}, {3}}, {{4}, {5}, {6}}};
+```
+
+Alternatively, initializer lists can be used:
+```glsl
+// Explicit size
+int i[3] = {1, 2, 3};
+
+// Implicit size
+int i[] = {1, 2, 3};
+
+int i[3][2] = {{1, 2}, {3, 4}, {5, 6}};
+
+int i[2][3][1] = {{{1}, {2}, {3}}, {{4}, {5}, {6}}};
+```
+Each expression in an initializer list must be either evaluate to the element type, or a type which can be implicitly converted to the element type.
+
+Initializer lists must contain the same amount of expressions as the number of elements in the array. The following is not allowed:
+```glsl
+// Not allowed
+// Provided only 2 expressions, but there are 3 elements in the array
+int i[3] = {0, 1};
+
+// Provided 4 expressions, but there are only 3 elements
+int i[3] = {0, 1, 2, 3};
+```
+
+### Structs
+Structs can be initialized through a constructor:
+```glsl
+struct Data {
+    int i;
+    float f;
+    mat2 m;
+};
+
+// Initializes the struct
+Data d = Data(5, 1.0, mat2(0.0));
+
+// Invalid
+Data d = Data(5, 1.0);
+```
+The order of the arguments corresponds to the order the struct members are declared in. The number of arguments must match the number of members of the struct.
+
+Alternatively, initializer lists can be used:
+```glsl
+Data d = {5, 1.0, mat2({0.0, 0.0}, {0.0, 0.0})};
+```
+Each expression in an initializer list must be either evaluate to the type of the relevant member, or a type which can be implicitly converted to the relevant member. The following would not be allowed for example:
+```glsl
+// The second argument should be of `float`, but it is of `mat2`
+// The second and third arguments should be swapped around
+Data d = {5, mat2(0.0), 1.0};
+```
+
+Initializer lists must contain the same amount of expressions as the number of members in the struct. The following is not allowed:
+```glsl
+// Provided only 2 expressions, but there are 3 members in the struct
+Data d = {5, 1.0};
+// Provided 4 expressions, but there are only 3 members
+Data d = {5, 1.0, mat2(0.0), 7};
+```
+
+### Note about Initializer Lists
+Child initializer lists can only be used if the parent composite-type also uses an initializer list:
+```glsl
+struct Data {
+    int i;
+    mat2 m;
+};
+
+// Valid
+// Only uses initializer lists
+Data d = {
+    1,
+    {{1.0, 2.0}, {3.0, 4.0}}
+};
+
+// Valid
+// Uses the initializer list for the top-most composite,
+// but constructors for the nested `mat2` and `vec2` composites.
+Data d = {
+    1,
+    mat2(vec2(1.0, 2.0), vec2(3.0, 4.0))
+};
+
+// Invalid
+// Uses an initializer lists for the top-most composite,
+// a constructor for the nested `mat2` composite,
+// and then an initializer list for the nested `vec2` composites.
+Data d = {
+    1,
+    mat2({1.0, 2.0}, {3.0, 4.0});
+};
+// See how the `vec2` initializer lists are within a normal constructor. This is not allowed.
+
+// More invalid examples:
+Data d[2] = {
+    Data(1, {{1.0, 2.0}, {3.0, 4.0}}),
+    Data(1, {{1.0, 2.0}, {3.0, 4.0}}),
+};
+Data d[2] = {
+    {1, mat2({1.0, 2.0}, {3.0, 4.0})},
+    {1, mat2({1.0, 2.0}, {3.0, 4.0})},
+};
+
+mat2 m = mat2({1.0, 2.0}, {3.0, 4.0});
+
+int i[2][3] = int[2]({1, 2, 3}, {4, 5, 6});
+```
+
 ## Implicit Conversions
-Signed integers can be implicitly converted to unsigned integers (but not the other way round).
+The following implicit conversions are available:
 
-Any integer types can be implicitly converted to a float. Integer types and floats can be implicitly converted to doubles.
+| From | To |
+|---|---|
+|`int` |`uint`|
+|`int`, `uint` |`float`|
+|`int`, `uint`, `float` |`double`|
+|`ivecx`|`uvecx`|
+|`ivecx`, `uvecx`|`vecx`|
+|`ivecx`, `uvecx`, `vecx`|`dvecx`|
+|`mati`|`dmati`|
+|`matnxm`|`dmatnxm`|
 
-Vectors and matrices can be converted if the type they're built-on can be implicitly converted.
+Arrays do not have any implicit conversions, even if the the underlying type does have conversions.
+
+Structs do not have any implicit conversions, even if both structs have the exact same member layout.
 
 # Identifiers
 Identifiers can contain any of the following characters:
@@ -151,48 +442,38 @@ a ^^ b // Logical XOR
 |17|`,` (list seperator)|
 
 # Variables
-Variables cannot be of the `void` type. This applies to any variable type, local, global, etc.
+Variables can be of any type (other than `void`).
 
 ## Initialization
-Variables can be initialized at the site of declaration:
+
+For `const` qualified variables (or other constant variables such as `uniform` globals), any assignment expression must also be a *Constant Expression*.
+
+If a variable is not initialized at the site of declaration, it must be later initialized (through assignment, or through re-declaration) before it can be used:
 ```glsl
-// Literal assignment
-int p = 5;
+// Declared but not initialized
+float b[3];
 
-// Identifier assignment, assuming 'other_float' is already declared _and_ initialized.
-float f = other_float;
+// Initialized
+b = float[](1, 2, 3);
 
-// Type constructor.
-vec3 v = vec3(1.0, 1.0, 1.0);
+// Alternatively, it can be completely re-declared;
+float b[3] = {1, 2, 3};
 
-// Standard function call.
-mat4 m = my_func();
+// Can be used...
+```
 
-// Array constructor.
-int i[3] = int[3](1, 2, 3);
+## Assignment
+Variable can be assigned in a similar fashion to how they are declared:
+```glsl
+// Assuming int p;
+p = 5;
 
-// Initializer list.
-int i[3] = {1, 2, 3};
-int i[2][4] = {
+// Assuming float b[2][4];
+b = {
     {1, 2, 3, 4},
     {5, 6, 7, 8}
 };
-
-// Struct constructor.
-struct Data {
-    float f;
-    vec2 v;
-};
-Data d = Data(1.0, vec2(1.0, 2.0));
-Data d2 = {1.0, {1.0, 2.0}};
 ```
-For `const` qualified variables (or other constant variables such as `uniform` globals), any expression must also be a *Constant Expression*.
-
-There is technically no difference between standard function calls and type constructors. Type constructors are effectively static functions which just return a value.
-
-Array constructors cannot be nested; all other initializers can. They also cannot be empty, because an array cannot have a size of zero.
-
-Initializer lists cannot be empty because structs must contain at least one member, and arrays must have a size greater than zero.
 
 ## Global Variables
 Variables in the global scope have certain special properties/abilities. There is one main distinction between global variables; they are either "standard" variables which are set/modified within the execution of the program, or they are "external" variables which either pass data *into* or *out of* the program. These variables use either the `in`, `out` or `uniform` storage qualifier.

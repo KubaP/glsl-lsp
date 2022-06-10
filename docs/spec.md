@@ -443,6 +443,251 @@ Only the `.` object access, `==`, `!=` and `=` operators are allowed to operate 
 
 Only the `==`, `!=`, `=` and `[]` index operators are allowed to operate on [Arrays](#arrays). The `.` object access is allowed to access the `length()` method only.
 
+# Statements & Expressions
+
+## Variable Definitions & Declarations
+Variable declaration & definition statements are valid at the top-level of a shader file, and within functions or any other control flow statements or scopes. Variables can be of any type (other than `void`).
+
+### Initialization
+See [Initialization](#initialization) for an overview of how different types can be initialized.
+
+For `const` qualified variables (or other constant variables such as `uniform` globals), any assignment expression must also be a *Constant Expression*.
+
+If a variable is not initialized at the site of definition, it must be later initialized (through assignment, or through declaration) before it can be used:
+```glsl
+// Defined but not initialized
+float b[3];
+
+// Initialized
+b = float[](1, 2, 3);
+
+// Alternatively, it can be declared;
+float b[3] = {1, 2, 3};
+
+// Can be used...
+```
+
+### Assignment
+Variable can be assigned in a similar fashion to how they are declared:
+```glsl
+// Assuming int p;
+p = 5;
+
+// Assuming float b[2][4];
+b = {
+    {1, 2, 3, 4},
+    {5, 6, 7, 8}
+};
+```
+
+## Function Definitions & Declarations
+Function declaration & definition statements are only valid at the top-level of a shader file, i.e. they cannot be nested in any way. There is a distinction between a declaration and a definition:
+> A declaration declares the signature of a function (akin to a prototype), whilst a definition does that plus it also defines the behaviour of said function.
+
+A definition can exist in its own, however a declaration must also have a definition at some point for the function to be valid:
+```glsl
+// A declaration:
+int func(int i);
+
+// A definition:
+int func(int i) {
+    // Do something
+    return 5;
+}
+```
+In a function definition, the return type must match, or be able to be implicitly converted to, the return type specified in the function signature. If the return type is of `void`, the `return;` control flow statement must be used without any returning expression.
+
+Functions are allowed to return any type, and take in any type other than `void` for the parameter types. Arrays are allowed, but they must be explicitly sized.
+```glsl
+// A function with no parameters
+void func();
+
+// A function with multiple parameters
+mat4 func(int i, float f, mat4 m);
+
+// Invalid, `void` cannot be a parameter
+void func(void v);
+
+// A function with arrays
+vec3[3] func(int i[2]);
+
+// Invalid, arrays must be sized
+vec3[] func(int[2] i);
+```
+
+The parameter names are optional in both the declaration and definition, so the following is allowed:
+```glsl
+void func(int i, float, mat4 m);
+```
+
+### Qualifiers
+#### Passing
+There are multiple ways that arguments are passed into a function:
+- `in` - The argument value is copied into the function,
+- `out` - The parameter value within the function is copied out into this argument,
+- `inout` - The argument value is copied into the function, and then the parameter value within the function is copied back out into the same argument.
+
+The default behaviour is of `in`.
+```glsl
+void func(in int i);
+
+void func(out int i);
+
+void func(inout int i);
+```
+#### Const
+Parameters can be constant qualified:
+```glsl
+// Valid, implicit `in`
+void func(const int i);
+
+// Valid, explicit `in`
+void func(const in int i);
+
+// Invalid
+void func(const out int i);
+void func(const inout int i);
+```
+The `const` qualifier can only be used with the `in` passing qualifier.
+
+#### Precision
+The precision of the return type can be specified with a [qualifier](#precision-qualifiers):
+```glsl
+PRECISION float func();
+```
+
+## Function Calls
+Function call statements are only valid within function bodies. Function call expressions are valid in any expression, but **only** if they return a value.
+```glsl
+// A statement
+func();
+
+// Part of an expression
+... = vec3(0.0); // <- Returns a value
+
+// Functions can have an arbitrary number of arguments
+func(1, 5.0, Data(1));
+```
+There are multiple ways that arguments are passed into a function call:
+- `in` - The argument value is copied into the function,
+- `out` - The parameter value within the function is copied out into this argument,
+- `inout` - The argument value is copied into the function, and then the parameter value within the function is copied back out into the same argument.
+
+```glsl
+// Standard passing of arguments in
+fn(in int i) {
+    // Reads from `i` and does something...
+}
+int i = 5;
+fn(i);
+
+// Passing parameters out
+fn2(out int i) {
+    i = 5;
+}
+int i;
+fn2(i);
+// `i` is now 5
+
+// Both
+fn3(inout int i) {
+    i += i;
+}
+int i = 5;
+fn3(i);
+// `i` is now 10
+```
+
+## Control Flow
+Control flow statements are only valid within function bodies.
+
+### Jumps
+```glsl
+// Only valid inside for, while and do-while loops.
+continue;
+
+// Only valid inside for, while and do-while loops, as well as switch statements.
+break;
+
+// Valid inside any function.
+return;
+return EXPR;
+
+// Only valid in fragment shaders, inside any function.
+discard;
+```
+`EXPR` is an expression.
+
+Unlike in C, there is no `goto` statement.
+
+### If Statement
+```glsl
+if (EXPR) {
+    /*...*/
+}
+
+// Optionally followed by (n number of times):
+else if (EXPR) {
+    /*...*/
+}
+
+// Optionally followed by:
+else {
+    /*...*/
+}
+
+```
+`EXPR` is an expression which evaluates to a `bool`.
+
+### Switch
+```glsl
+switch (EXPR) {
+    // Optionally repeated (n number of times):
+    case CONST_EXPR : 
+        /*...*/
+
+    // Optionally followed by:
+    default :
+        /*...*/
+}
+```
+`EXPR` is an expression which evaluates to either `int` or `uint`.
+
+`CONST_EXPR` is a constant expression which evaluates to either `int` or `uint`.
+
+If there is a difference in type between `EXPR` and `CONST_EXPR`, then an implicit conversion will take place from `int` to `uint`.
+
+### For Loop
+```glsl
+for (INIT_STMT; COND_EXPR; LOOP_EXPR) {
+    /*...*/
+}
+```
+`INIT_STMT` is a either a statement or an expression. It is evaluated once at the start of the loop. It can be a variable declaration (with an assignment value).
+
+`COND_EXPR` is an expression which evaluated to a `bool`.
+
+`LOOP_EXPR` is an expression.
+
+All 3 parts are optional, i.e. `for (;;)` is a valid (infinite) loop.
+
+### While Loop
+```glsl
+while (COND_EXPR) {
+    /*...*/
+}
+```
+`COND_EXPR` is an expression which evaluates to `bool`.
+
+### Do-While Loop
+```glsl
+do {
+    /*...*/
+} while (COND_EXPR)
+```
+`COND_EXPR` is an expression which evaluates to `bool`.
+
+
 # Variables
 Variables can be of any type (other than `void`).
 
@@ -718,250 +963,6 @@ This is a special input for fragment shaders (awkward because in this example th
 ```glsl
 layout(early_fragment_tests) in;
 ```
-
-# Statements & Expressions
-
-## Variable Definitions & Declarations
-Variables can be defined & declared of any type (other than `void`).
-
-### Initialization
-See [Initialization](#initialization) for an overview of how different types can be initialized.
-
-For `const` qualified variables (or other constant variables such as `uniform` globals), any assignment expression must also be a *Constant Expression*.
-
-If a variable is not initialized at the site of definition, it must be later initialized (through assignment, or through declaration) before it can be used:
-```glsl
-// Defined but not initialized
-float b[3];
-
-// Initialized
-b = float[](1, 2, 3);
-
-// Alternatively, it can be declared;
-float b[3] = {1, 2, 3};
-
-// Can be used...
-```
-
-### Assignment
-Variable can be assigned in a similar fashion to how they are declared:
-```glsl
-// Assuming int p;
-p = 5;
-
-// Assuming float b[2][4];
-b = {
-    {1, 2, 3, 4},
-    {5, 6, 7, 8}
-};
-```
-
-## Function Definitions & Declarations
-Function declarations & definitions are only valid at the top-level of a shader file, i.e. they cannot be nested in any way. There is a distinction between a declaration and a definition:
-> A declaration declares the signature of a function (akin to a prototype), whilst a definition does that plus it also defines the behaviour of said function.
-
-A definition can exist in its own, however a declaration must also have a definition at some point for the function to be valid:
-```glsl
-// A declaration:
-int func(int i);
-
-// A definition:
-int func(int i) {
-    // Do something
-    return 5;
-}
-```
-In a function definition, the return type must match, or be able to be implicitly converted to, the return type specified in the function signature. If the return type is of `void`, the `return;` control flow statement must be used without any returning expression.
-
-Functions are allowed to return any type, and take in any type other than `void` for the parameter types. Arrays are allowed, but they must be explicitly sized.
-```glsl
-// A function with no parameters
-void func();
-
-// A function with multiple parameters
-mat4 func(int i, float f, mat4 m);
-
-// Invalid, `void` cannot be a parameter
-void func(void v);
-
-// A function with arrays
-vec3[3] func(int i[2]);
-
-// Invalid, arrays must be sized
-vec3[] func(int[2] i);
-```
-
-The parameter names are optional in both the declaration and definition, so the following is allowed:
-```glsl
-void func(int i, float, mat4 m);
-```
-
-### Qualifiers
-#### Passing
-There are multiple ways that arguments are passed into a function:
-- `in` - The argument value is copied into the function,
-- `out` - The parameter value within the function is copied out into this argument,
-- `inout` - The argument value is copied into the function, and then the parameter value within the function is copied back out into the same argument.
-
-The default behaviour is of `in`.
-```glsl
-void func(in int i);
-
-void func(out int i);
-
-void func(inout int i);
-```
-#### Const
-Parameters can be constant qualified:
-```glsl
-// Valid, implicit `in`
-void func(const int i);
-
-// Valid, explicit `in`
-void func(const in int i);
-
-// Invalid
-void func(const out int i);
-void func(const inout int i);
-```
-The `const` qualifier can only be used with the `in` passing qualifier.
-
-#### Precision
-The precision of the return type can be specified with a [qualifier](#precision-qualifiers):
-```glsl
-PRECISION float func();
-```
-
-## Function Calls
-Function call statements are only valid within function bodies. Function call expressions are valid in any expression, but **only** if they return a value.
-```glsl
-// A statement
-func();
-
-// Part of an expression
-... = vec3(0.0); // <- Returns a value
-
-// Functions can have an arbitrary number of arguments
-func(1, 5.0, Data(1));
-```
-There are multiple ways that arguments are passed into a function call:
-- `in` - The argument value is copied into the function,
-- `out` - The parameter value within the function is copied out into this argument,
-- `inout` - The argument value is copied into the function, and then the parameter value within the function is copied back out into the same argument.
-
-```glsl
-// Standard passing of arguments in
-fn(in int i) {
-    // Reads from `i` and does something...
-}
-int i = 5;
-fn(i);
-
-// Passing parameters out
-fn2(out int i) {
-    i = 5;
-}
-int i;
-fn2(i);
-// `i` is now 5
-
-// Both
-fn3(inout int i) {
-    i += i;
-}
-int i = 5;
-fn3(i);
-// `i` is now 10
-```
-
-## Control Flow
-Control flow statements are only valid within function bodies.
-
-### Jumps
-```glsl
-// Only valid inside for, while and do-while loops.
-continue;
-
-// Only valid inside for, while and do-while loops, as well as switch statements.
-break;
-
-// Valid inside any function.
-return;
-return EXPR;
-
-// Only valid in fragment shaders, inside any function.
-discard;
-```
-`EXPR` is an expression.
-
-Unlike in C, there is no `goto` statement.
-
-### If Statement
-```glsl
-if (EXPR) {
-    /*...*/
-}
-
-// Optionally followed by (n number of times):
-else if (EXPR) {
-    /*...*/
-}
-
-// Optionally followed by:
-else {
-    /*...*/
-}
-
-```
-`EXPR` is an expression which evaluates to a `bool`.
-
-### Switch
-```glsl
-switch (EXPR) {
-    // Optionally repeated (n number of times):
-    case CONST_EXPR : 
-        /*...*/
-
-    // Optionally followed by:
-    default :
-        /*...*/
-}
-```
-`EXPR` is an expression which evaluates to either `int` or `uint`.
-
-`CONST_EXPR` is a constant expression which evaluates to either `int` or `uint`.
-
-If there is a difference in type between `EXPR` and `CONST_EXPR`, then an implicit conversion will take place from `int` to `uint`.
-
-### For Loop
-```glsl
-for (INIT_STMT; COND_EXPR; LOOP_EXPR) {
-    /*...*/
-}
-```
-`INIT_STMT` is a either a statement or an expression. It is evaluated once at the start of the loop. It can be a variable declaration (with an assignment value).
-
-`COND_EXPR` is an expression which evaluated to a `bool`.
-
-`LOOP_EXPR` is an expression.
-
-All 3 parts are optional, i.e. `for (;;)` is a valid (infinite) loop.
-
-### While Loop
-```glsl
-while (COND_EXPR) {
-    /*...*/
-}
-```
-`COND_EXPR` is an expression which evaluates to `bool`.
-
-### Do-While Loop
-```glsl
-do {
-    /*...*/
-} while (COND_EXPR)
-```
-`COND_EXPR` is an expression which evaluates to `bool`.
 
 # Comments
 Comment syntax:

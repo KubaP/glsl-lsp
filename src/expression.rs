@@ -850,7 +850,7 @@ macro_rules! assert_expr {
 
 #[test]
 #[rustfmt::skip]
-fn calcs() {
+fn binaries() {
 	// Single operator
 	assert_expr!("5 + 1",
 		Expr::Binary {
@@ -1046,6 +1046,48 @@ fn indexes() {
 		i: Box::from(Expr::Index {
 			item: Box::from(Expr::Ident(Ident("y".into()))),
 			i: Box::from(Expr::Lit(Lit::Int(5)))
+		})
+	});
+}
+
+#[test]
+#[rustfmt::skip]
+fn complex() {
+	assert_expr!("func(i[9], foo-- -6)", Expr::Fn {
+		ident: Ident("func".into()),
+		args: vec![
+			Expr::Index {
+				item: Box::from(Expr::Ident(Ident("i".into()))),
+				i: Box::from(Expr::Lit(Lit::Int(9))),
+			},
+			Expr::Binary {
+				left: Box::from(
+					Expr::Postfix(Box::from(Expr::Ident(Ident("foo".into()))), OpType::Sub)
+				),
+				op: OpType::Sub,
+				right: Box::from(Expr::Lit(Lit::Int(6)))
+			}
+		]
+	});
+	assert_expr!("true << i[func((1 + 1) * 5.0)]", Expr::Binary {
+		left: Box::from(Expr::Lit(Lit::Bool(true))),
+		op: OpType::LShift,
+		right: Box::from(Expr::Index {
+			item: Box::from(Expr::Ident(Ident("i".into()))),
+			i: Box::from(Expr::Fn {
+				ident: Ident("func".into()),
+				args: vec![
+					Expr::Binary {
+						left: Box::from(Expr::Binary {
+							left: Box::from(Expr::Lit(Lit::Int(1))),
+							op: OpType::Add,
+							right: Box::from(Expr::Lit(Lit::Int(1))),
+						}),
+						op: OpType::Mul,
+						right: Box::from(Expr::Lit(Lit::Float(5.0)))
+					}
+				]
+			})
 		})
 	});
 }

@@ -9,7 +9,7 @@ pub fn expr_parser(cst: Vec<Spanned<Token>>) -> Expr {
 	let mut parser = ShuntingYard {
 		stack: VecDeque::new(),
 		operators: VecDeque::new(),
-		arity: VecDeque::new(),
+		groups: VecDeque::new(),
 	};
 	parser.parse(cst);
 	parser.create_ast()
@@ -76,13 +76,23 @@ impl Walker {
 	}
 }
 
+#[derive(Debug, PartialEq)]
+enum Group {
+	/// A bracket group, `(...)`.
+	Bracket,
+	/// An index operator `[...]`.
+	Index,
+	/// A function call `fn(...)`.
+	Fn(usize),
+}
+
 struct ShuntingYard {
 	/// The final output stack in RPN.
 	stack: VecDeque<Either<Expr, OpType>>,
 	/// Temporary stack to hold operators.
 	operators: VecDeque<OpType>,
-	/// Temporary stack to hold the number of arguments any function calls are holding.
-	arity: VecDeque<usize>,
+	/// Temporary stack to hold expression groups. The top-most entry is the group being currently parsed.
+	groups: VecDeque<Group>,
 }
 
 impl ShuntingYard {
@@ -92,11 +102,12 @@ impl ShuntingYard {
 		while self.operators.back().is_some() {
 			let back = self.operators.back().unwrap();
 
-			if *back == OpType::GroupStart
-				|| *back == OpType::FnStart
+			if *back == OpType::BracketStart
 				|| *back == OpType::IndexStart
+				|| *back == OpType::FnStart
 			{
-				// Group start operators always have the highest precedence, so we don't need to check further.
+				// Group delimiter start operators always have the highest precedence, so we don't need to check
+				// further.
 				break;
 			}
 
@@ -113,46 +124,97 @@ impl ShuntingYard {
 	}
 
 	/// Registers the start of a bracket group.
-	fn start_group(&mut self) {
-		self.operators.push_back(OpType::GroupStart);
+	fn start_bracket(&mut self) {
+		self.operators.push_back(OpType::BracketStart);
+		self.groups.push_back(Group::Bracket);
 	}
 
 	/// Registers the start of a function call group.
 	fn start_fn(&mut self) {
 		self.operators.push_back(OpType::FnStart);
-		self.arity.push_back(1);
+		self.groups.push_back(Group::Fn(1));
 	}
 
 	/// Registers the start of an index operator group.
 	fn start_index(&mut self) {
 		self.operators.push_back(OpType::IndexStart);
+		self.groups.push_back(Group::Index);
 	}
 
-	/// Registers the end of a bracket group, popping any operators until the start of the last bracket group is
-	/// reached.
-	fn end_group(&mut self) {
-		while self.operators.back().is_some() {
-			let back = self.operators.back().unwrap();
+	/// Registers the end of a bracket or function call group, popping any operators until the start of the group
+	/// is reached.
+	fn end_bracket_fn(&mut self) {
+		// We've encountered a `)` delimiter, but we first want to check that we are actually within a group, i.e.
+		// there was a start delimiter of some kind, and that the delimiter is a `(` as opposed to the other `[` or
+		// `{` delimiters.
+		//
+		// Ok:  { ( )
+		// Err: ( { )
+		let current_group =
+			match self.groups.back() {
+				Some(g) => g,
+				None => {
+					println!("Found a `)` delimiter without a starting `(` delimiter!");
+					return;
+				}
+			};
+		if *current_group == Group::Index {
+			println!("Found a `)` delimiter, but we still have an open `[` index operator!");
+			return;
+		}
 
-			if *back == OpType::GroupStart {
-				// We have reached the end of the current group. We remove the operator without pushing it to the
-				// stack since it only functions as a flag, rather than as an actual operator.
+		while self.operators.back().is_some() {
+			let top_op = self.operators.back().unwrap();
+
+			if *top_op == OpType::BracketStart {
+				// We have reached the start of the current bracket group.
+
+				// Sanity check; this should never happen.
+				if let Group::Fn(_) = current_group {
+					println!(
+						"Mismatch between operator stack (OpType::BracketStart) and group stack (Group::Fn)!"
+					);
+					return;
+				}
+
+				// We remove the operator without pushing it to the stack. Bracket groups don't actually create an
+				// AST node, they are just used to prioritise the order of binary expressions, hence no need for an
+				// operator.
 				self.operators.pop_back();
+				self.groups.pop_back();
 				break;
-			} else if *back == OpType::FnStart {
-				// We have reached the end of the current function call group. We remove the operator and instead
-				// push a new operator which contains information about how many of the previous expressions are
-				// part of the current function call group.
-				//
-				// Note: The first expression will always be the expression containing the function identifier
-				// (hence the `+ 1`).
-				self.operators.pop_back();
-				let count = self.arity.pop_back().unwrap();
-				self.stack
-					.push_back(Either::Right(OpType::FnCall(count + 1)));
-				break;
+			} else if *top_op == OpType::FnStart {
+				// We have reached the start of the current function call group.
+
+				match current_group {
+					Group::Fn(count) => {
+						// We remove the operator and instead push a new operator which contains information about
+						// how many of the previous expressions are part of the current function call group.
+						//
+						// Note: The first expression will always be the expression containing the function
+						// identifier (hence the `+ 1`).
+						self.operators.pop_back();
+						self.stack.push_back(Either::Right(OpType::FnCall(
+							count + 1,
+						)));
+						self.groups.pop_back();
+						break;
+					}
+					// Sanity check; this should never happen.
+					Group::Bracket => {
+						println!(
+							"Mismatch between operator stack (OpType::FnStart) and group stack (Group::Bracket)!"
+						);
+						return;
+					}
+					_ => unreachable!(),
+				}
+			} else if *top_op == OpType::IndexStart {
+				// Sanity check; this should never happen.
+				println!("Mismatch between operator stack (OpType::IndexStart) and group stack (Group::Bracket|Group::Fn)!");
+				return;
 			} else {
-				// Any other operators get moved.
+				// Any other operators get moved, since we are moving everything until we hit the start delimiter.
 				let moved_op = self.operators.pop_back().unwrap();
 				self.stack.push_back(Either::Right(moved_op));
 			}
@@ -162,34 +224,49 @@ impl ShuntingYard {
 	/// Registers the end of an index operator group, popping any operators until the start of the index group is
 	/// reached.
 	fn end_index(&mut self) {
-		while self.operators.back().is_some() {
-			let back = self.operators.back().unwrap();
+		// We've encountered a `]` delimiter, but we first want to check that we are actually within a group, i.e.
+		// there was a start delimiter of some kind, and that the delimiter is a `[` as opposed to the other `(` or
+		// `{` delimiters.
+		//
+		// Ok:  ( [ ]
+		// Err: [ ( ]
+		let current_group =
+			match self.groups.back() {
+				Some(g) => g,
+				None => {
+					println!("Found a `]` delimiter without a starting `[` delimiter!");
+					return;
+				}
+			};
+		if *current_group == Group::Bracket {
+			println!("Found a `]` delimiter, but we still have an open `(` bracket group!");
+			return;
+		} else if let Group::Fn(_) = current_group {
+			println!("Found a `]` delimiter, but we still have an open `(` function call!");
+			return;
+		}
 
-			if *back == OpType::IndexStart {
-				// We have reached the end of the current index expression. We remove the operator and push it to
-				// the stack.
+		while self.operators.back().is_some() {
+			let top_op = self.operators.back().unwrap();
+
+			if *top_op == OpType::IndexStart {
+				// We have reached the start of the current index group.
+
+				// We remove the operator and push it to the stack.
 				self.operators.pop_back();
+				self.groups.pop_back();
 				self.stack.push_back(Either::Right(OpType::Index));
 				break;
-			} else if *back == OpType::GroupStart {
-				// We have reached the end of the current group. We remove the operator without pushing it to the
-				// stack since it only functions as a flag, rather than as an actual operator.
-				self.operators.pop_back();
-				break;
-			} else if *back == OpType::FnStart {
-				// We have reached the end of the current function call group. We remove the operator and instead
-				// push a new operator which contains information about how many of the previous expressions are
-				// part of the current function call group.
-				//
-				// Note: The first expression will always be the expression containing the function identifier
-				// (hence the `+ 1`).
-				self.operators.pop_back();
-				let count = self.arity.pop_back().unwrap();
-				self.stack
-					.push_back(Either::Right(OpType::FnCall(count + 1)));
-				break;
+			} else if *top_op == OpType::BracketStart {
+				// Sanity check; this should never happen.
+				println!("Mismatch between operator stack (OpType::BracketStart) and group stack (Group::Index)!");
+				return;
+			} else if *top_op == OpType::FnStart {
+				// Sanity check; this should never happen.
+				println!("Mismatch between operator stack (OpType::FnStart) and group stack (Group::Index)!");
+				return;
 			} else {
-				// Any other operators get moved.
+				// Any other operators get moved, since we are moving everything until we hit the start delimiter.
 				let moved_op = self.operators.pop_back().unwrap();
 				self.stack.push_back(Either::Right(moved_op));
 			}
@@ -198,24 +275,34 @@ impl ShuntingYard {
 
 	/// Increases the arity of the top-most current function call.
 	fn increase_arity(&mut self) {
-		if let Some(count) = self.arity.back_mut() {
-			*count += 1;
+		// We've come across a `,` which is only valid inside of a function call group. Check that we are in a
+		// function call group, otherwise this is an error.
+		if let Some(current_group) = self.groups.back_mut() {
+			match current_group {
+				Group::Fn(count) => {
+					*count += 1;
 
-			// Now that the arity has increased, and we are parsing the next expression, we want to move all
-			// existing operators up to the function call start delimiter to the stack, to clear it for the next
-			// expression.
-			while self.operators.back().is_some() {
-				let back = self.operators.back().unwrap();
-				if *back == OpType::FnStart {
-					break;
+					// Now that the arity has increased, and we are parsing the next expression, we want to move all
+					// existing operators up to the function call start delimiter to the stack, to clear it for the next
+					// expression.
+					while self.operators.back().is_some() {
+						let back = self.operators.back().unwrap();
+						if *back == OpType::FnStart {
+							break;
+						}
+
+						let moved_op = self.operators.pop_back().unwrap();
+						self.stack.push_back(Either::Right(moved_op));
+					}
 				}
-
-				let moved_op = self.operators.pop_back().unwrap();
-				self.stack.push_back(Either::Right(moved_op));
+				_ => {
+					println!("Found a `,` expression delimiter outside of a function call!");
+					return;
+				}
 			}
 		} else {
 			println!(
-				"Found a `,` outside of a function call. This is invalid!"
+				"Found a `,` expresion delimiter outside of a function call!"
 			);
 			return;
 		}
@@ -237,41 +324,12 @@ impl ShuntingYard {
 
 			match token {
 				Token::Num { .. } | Token::Bool(_) if operand_state => {
-					if let Some(lookahead) = walker.lookahead_1() {
-						if *lookahead == Token::Comma {
-							self.stack.push_back(match Lit::parse(token) {
-								Ok(l) => Either::Left(Expr::Lit(l)),
-								Err(_) => Either::Left(Expr::Invalid),
-							});
-
-							// We have an operand, followed by a comma. If we are parsing a function call at all
-							// currently, then we can increase the arity of the top-most one. If not, then this is
-							// an error.
-							self.increase_arity();
-
-							// Consume the identifier and `,`.
-							walker.advance();
-							walker.advance();
-
-							// Don't switch state, since after a comma, we will be expecting another operand.
-							continue 'main;
-						} else {
-							// There is no following comma, so this is just a simple literal.
-							self.stack.push_back(match Lit::parse(token) {
-								Ok(l) => Either::Left(Expr::Lit(l)),
-								Err(_) => Either::Left(Expr::Invalid),
-							});
-						}
-					} else {
-						// There is no following comma, so this is just a simple literal.
-						self.stack.push_back(match Lit::parse(token) {
-							Ok(l) => Either::Left(Expr::Lit(l)),
-							Err(_) => Either::Left(Expr::Invalid),
-						});
-					}
 					// We are expecting an operand, so we can move the literal to the stack immediately.
 					// We toggle the state so that we're now looking for an operator.
-
+					self.stack.push_back(match Lit::parse(token) {
+						Ok(l) => Either::Left(Expr::Lit(l)),
+						Err(_) => Either::Left(Expr::Invalid),
+					});
 					operand_state = false;
 				}
 				Token::Ident(s) if operand_state => {
@@ -425,7 +483,9 @@ impl ShuntingYard {
 				}
 				Token::Op(op) if operand_state => match op {
 					// We are expecting an operand, but if we find one of the allowed prefix operators, we can move
-					// that to the operator stack since it's effectively part of the operand.
+					// that to the operator stack since it's effectively part of the operand. We don't switch state
+					// since after a prefix operator, we are expecting either another prefix operator or an
+					// operand.
 					OpType::Sub => self.push_operator(OpType::Neg),
 					OpType::Not => self.push_operator(OpType::Not),
 					OpType::Flip => self.push_operator(OpType::Flip),
@@ -438,7 +498,7 @@ impl ShuntingYard {
 					}
 				},
 				Token::Op(op) if !operand_state => match op {
-					// We are expecting an operator.
+					// We are expecting an operator for a binary expression.
 					OpType::Flip | OpType::Not => {
 						// These operators cannot be part of a binary expression.
 						println!("Expected a binary operator, found a prefix operator instead!");
@@ -463,7 +523,7 @@ impl ShuntingYard {
 				Token::LParen if operand_state => {
 					// We are expecting an operand, and we found a bracket group start. We move it to the operator
 					// stack and continue looking for an operand, so we don't switch state.
-					self.start_group();
+					self.start_bracket();
 				}
 				Token::LParen if !operand_state => {
 					// We are expecting an operator, but we've found an operand. This is an error.
@@ -474,24 +534,25 @@ impl ShuntingYard {
 				Token::RParen if !operand_state => {
 					// We are expecting an operator, but we found a bracket group end. We move it to the operator
 					// stack and continue looking for an operator, so we don't switch state.
-					self.end_group();
+					self.end_bracket_fn();
 				}
 				Token::RParen if operand_state => {
 					// We are expecting an operand, but we've found an bracket group end. This is an error.
 					// E.g. `..+ )` instead of `..+ 1)`
-					println!("Expected an operand or the end of expression, found `)` instead!");
+					println!("Expected an operand or a prefix operator, found `)` instead!");
 					return;
 				}
 				Token::LBracket if !operand_state => {
-					// We are expecting an operator, and we found a `[...]`, which is effectively an indexing
-					// postfix of sorts. We move it to the operator stack and want to look for an operand, so we
-					// switch state.
+					// We are expecting an operator, and we found a `[`, which denotes the start of an index
+					// operator. We move it to the operator stack and want to look for an operand, so we switch
+					// state.
 					self.start_index();
 					operand_state = true;
 				}
 				Token::LBracket if operand_state => {
-					// We are expecting an operand, but we've found a `[...]` instead. Indexing is effectively a
-					// postfix operator of sorts so it cannot be before an operand.
+					// We are expecting an operand, but we've found a `[` instead, which denotes the start of an
+					// index operator. However, we are expecting an operand or prefix operator.
+					// E.g. `..+ [` instead of `..+ i[`
 					println!("Expected an operand or the end of expression, found `[` instead!");
 					return;
 				}
@@ -502,12 +563,26 @@ impl ShuntingYard {
 				}
 				Token::RBracket if operand_state => {
 					// We are expecting an operand, but we've found the end of an index instead.
+					// E.g. `..+ ]` instead of `..+ 1]`
 					println!("Expected an operand or the end of expression, found `]` instead!");
+					return;
+				}
+				Token::Comma if !operand_state => {
+					// We are expecting an operator, and we've found a comma. We can increase the arity and switch
+					// state to look for an operand. We switch state since after an expression delimiter (`,`), we
+					// are looking for an operand.
+					self.increase_arity();
+					operand_state = true;
+				}
+				Token::Comma if operand_state => {
+					// We are expecting an operand, but we've found a comma instead.
+					// E.g. `..+ ,` instead of `..+ 1,`
+					println!("Expected an operand or the end of expression, found `,` instead!");
 					return;
 				}
 				_ => {
 					// We have a token that's not allowed to be part of an expression.
-					// TODO: Deal with this properly.
+					// FIXME: Deal with this properly.
 					println!("Unexpected token found: {token:?}");
 					return;
 				}
@@ -518,6 +593,7 @@ impl ShuntingYard {
 
 		// Move any remaining operators onto the stack.
 		while let Some(op) = self.operators.pop_back() {
+			// FIXME: Deal with unclosed delimiters
 			self.stack.push_back(Either::Right(op))
 		}
 	}
@@ -690,7 +766,7 @@ impl OpType {
 			// These two should always be converted to the *Pre or *Post versions in the shunting yard.
 			Self::AddAdd | Self::SubSub => panic!("OpType::AddAdd | OpType::SubSub do not have precedence values because they should never be passed into this function. Something has gone wrong!"),
 			// These are never directly checked for precedence, but rather have special branches.
-			Self::GroupStart | Self::FnStart | Self::FnCall(_) | Self::IndexStart | Self::Index => {
+			Self::BracketStart | Self::FnStart | Self::FnCall(_) | Self::IndexStart | Self::Index => {
 				panic!("The operator {self:?} does not have a precedence value because it should never be passed into this function. Something has gone wrong!")
 			},
 		}
@@ -756,7 +832,7 @@ impl std::fmt::Display for OpType {
 			Self::AddAddPost => write!(f, "++post"),
 			Self::SubSubPre => write!(f, "--pre"),
 			Self::SubSubPost => write!(f, "--post"),
-			Self::GroupStart | Self::FnStart | Self::IndexStart => {
+			Self::BracketStart | Self::FnStart | Self::IndexStart => {
 				write!(f, "")
 			}
 			Self::Index => write!(f, "index"),

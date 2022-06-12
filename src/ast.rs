@@ -88,10 +88,8 @@ pub enum Expr {
 	Array { type_: Type, args: Vec<Expr> },
 	/// Initializer list.
 	InitList(Vec<Expr>),
-	/// Member access.
-	///
-	/// `0` - List of identifiers seperated by dots (`.`), in left-to-right order.
-	Member(Vec<Ident>),
+	/// Object access.
+	ObjAccess { obj: Box<Expr>, access: Box<Expr> },
 }
 
 impl std::fmt::Display for Expr {
@@ -142,12 +140,8 @@ impl std::fmt::Display for Expr {
 				}
 				write!(f, "}}")
 			}
-			Expr::Member(idents) => {
-				write!(f, "Member(")?;
-				for ident in idents {
-					write!(f, "{ident}. ")?;
-				}
-				write!(f, ")")
+			Expr::ObjAccess { obj, access } => {
+				write!(f, "\x1b[36mAccess\x1b[0m({obj} -> {access})")
 			}
 		}
 	}

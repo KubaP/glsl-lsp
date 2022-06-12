@@ -114,6 +114,13 @@ impl ShuntingYard {
 				break;
 			}
 
+			// This is done to make `ObjAccess` right-associative.
+			if op == OpType::ObjAccess && *back == OpType::ObjAccess {
+				let moved_op = self.operators.pop_back().unwrap();
+				self.stack.push_back(Either::Right(moved_op));
+				break;
+			}
+
 			if op.precedence() < back.precedence() {
 				let moved_op = self.operators.pop_back().unwrap();
 				self.stack.push_back(Either::Right(moved_op));
@@ -779,6 +786,17 @@ impl ShuntingYard {
 					println!("Expected an atom or a prefix operator, found `,` instead!");
 					return;
 				}
+				Token::Dot if state == State::AfterOperand => {
+					// We switch state since after an object access we are execting an operand, i.e.
+					// `ident.something` rather than `ident. +`.
+					self.push_operator(OpType::ObjAccess);
+					state = State::Operand;
+				}
+				Token::Dot if state == State::Operand => {
+					// This is an error, e.g. `ident.+` instead of `ident.something`.
+					println!("Expected an atom or a prefix operator, found `.` instead!");
+					return;
+				}
 				_ => {
 					// We have a token that's not allowed to be part of an expression.
 					// FIXME: Deal with this properly.
@@ -885,6 +903,14 @@ impl ShuntingYard {
 							i: Box::from(i),
 						});
 					}
+					OpType::ObjAccess => {
+						let access = stack.pop_back().unwrap();
+						let obj = stack.pop_back().unwrap();
+						stack.push_back(Expr::ObjAccess {
+							obj: Box::from(obj),
+							access: Box::from(access),
+						});
+					}
 					OpType::Add
 					| OpType::Sub
 					| OpType::Mul
@@ -943,6 +969,7 @@ impl OpType {
 	/// Returns the precedence of the operator.
 	fn precedence(&self) -> u8 {
 		match self {
+			Self::ObjAccess => 33,
 			Self::AddAddPost | Self::SubSubPost => 31,
 			Self::AddAddPre
 			| Self::SubSubPre
@@ -1046,6 +1073,7 @@ impl std::fmt::Display for OpType {
 			| Self::InitStart => {
 				write!(f, "")
 			}
+			Self::ObjAccess => write!(f, "access"),
 			Self::Index => write!(f, "index"),
 			Self::FnCall(count) => write!(f, "FN:{count}"),
 			Self::Init(count) => write!(f, "INIT:{count}"),

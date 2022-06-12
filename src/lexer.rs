@@ -131,6 +131,8 @@ pub enum OpType {
 	AddAddPost,
 	SubSubPre,
 	SubSubPost,
+	/// Object access operator.
+	ObjAccess,
 	/// Index operator.
 	Index,
 	/// Function call operator. Consumes the `usize` amount of nodes as arguments for the function call. The first

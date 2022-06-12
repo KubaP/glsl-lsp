@@ -310,9 +310,15 @@ impl ShuntingYard {
 
 	/// Parses a list of tokens. Populates the internal `stack` with a RPN output.
 	fn parse(&mut self, cst: Vec<Spanned<Token>>) {
-		// `true` if we are looking for an operand (which includes parsing prefix operators). `false` if we are
-		// looking for an operator for a binary expression (or alternatively the end of the expression).
-		let mut operand_state = true;
+		#[derive(PartialEq)]
+		enum State {
+			/// We are looking for either a) a prefix operator, b) an atom, c) bracket group start.
+			Operand,
+			/// We are looking for either a) a postfix operator, b) an index operator start or end, c) a binary
+			/// operator, d) bracket group end, e) a comma, f) end of expression.
+			AfterOperand,
+		}
+		let mut state = State::Operand;
 		let mut walker = Walker { cst, cursor: 0 };
 
 		'main: while !walker.is_done() {
@@ -323,16 +329,18 @@ impl ShuntingYard {
 			};
 
 			match token {
-				Token::Num { .. } | Token::Bool(_) if operand_state => {
-					// We are expecting an operand, so we can move the literal to the stack immediately.
-					// We toggle the state so that we're now looking for an operator.
+				Token::Num { .. } | Token::Bool(_)
+					if state == State::Operand =>
+				{
+					// We switch state since after an atom, we are expecting an operator, i.e.
+					// `..10 + 5` instead of `..10 5`.
 					self.stack.push_back(match Lit::parse(token) {
 						Ok(l) => Either::Left(Expr::Lit(l)),
 						Err(_) => Either::Left(Expr::Invalid),
 					});
-					operand_state = false;
+					state = State::AfterOperand;
 				}
-				Token::Ident(s) if operand_state => {
+				Token::Ident(s) if state == State::Operand => {
 					// Depending on what is after the identifier we may want to handle member access or function
 					// calls.
 					if let Some(lookahead) = walker.lookahead_1() {
@@ -372,7 +380,7 @@ impl ShuntingYard {
 									self.stack.push_back(Either::Left(
 										Expr::Member(members),
 									));
-									operand_state = false;
+									state = State::AfterOperand;
 									continue 'main;
 								}
 
@@ -426,7 +434,7 @@ impl ShuntingYard {
 									// either an operator or an end of expression.
 									self.operators.push_back(OpType::FnCall(1));
 									walker.advance();
-									operand_state = false;
+									state = State::AfterOperand;
 									continue 'main;
 								} else {
 									// We have a function call with at least one argument.
@@ -471,113 +479,103 @@ impl ShuntingYard {
 							Err(_) => Either::Left(Expr::Invalid),
 						});
 					}
-					operand_state = false;
+					state = State::AfterOperand;
 				}
 				Token::Num { .. } | Token::Bool(_) | Token::Ident(_)
-					if !operand_state =>
+					if state == State::AfterOperand =>
 				{
-					// We are expecting an operator, but we've found an operand. This is an error.
-					// E.g. `..1 1` instead of `..1 + 1`
-					println!("Expected an operator or the end of expression, found literal/identifier instead!");
+					// This is an error, e.g. `..1 1` instead of `..1 + 1`.
+					println!("Expected a postfix, index or binary operator, or the end of expression, found an atom instead!");
 					return;
 				}
-				Token::Op(op) if operand_state => match op {
-					// We are expecting an operand, but if we find one of the allowed prefix operators, we can move
-					// that to the operator stack since it's effectively part of the operand. We don't switch state
-					// since after a prefix operator, we are expecting either another prefix operator or an
-					// operand.
+				Token::Op(op) if state == State::Operand => match op {
+					// If the operator is a valid prefix operator, we can move it to the stack. We don't switch
+					// state since after a prefix operator, we are still looking for an operand atom.
 					OpType::Sub => self.push_operator(OpType::Neg),
 					OpType::Not => self.push_operator(OpType::Not),
 					OpType::Flip => self.push_operator(OpType::Flip),
 					OpType::AddAdd => self.push_operator(OpType::AddAddPre),
 					OpType::SubSub => self.push_operator(OpType::SubSubPre),
 					_ => {
-						// Any other operator that is not a valid prefix is an error.
-						println!("Expected either a literal or a prefix operator, found a non-prefix operator instead!");
+						// This is an error, e.g. `..*1` instead of `..-1`.
+						println!("Expected an atom or a prefix operator, found a non-prefix operator instead!");
 						return;
 					}
 				},
-				Token::Op(op) if !operand_state => match op {
-					// We are expecting an operator for a binary expression.
+				Token::Op(op) if state == State::AfterOperand => match op {
 					OpType::Flip | OpType::Not => {
-						// These operators cannot be part of a binary expression.
-						println!("Expected a binary operator, found a prefix operator instead!");
+						// These operators cannot be directly after an atom.
+						println!("Expected a postfix, index or binary operator, found a prefix operator instead!");
 						return;
 					}
-					// These operators are treated as postfix operators. Since postfix operators are effectively
-					// part of the operand, we don't change state because we still want to find the binary
-					// expression operator (if there is one).
+					// These operators are postfix operators. We don't switch state since after a postfix operator,
+					// we are still looking for a binary operator or the end of expression, i.e.
+					// `..i++ - i` rather than `..i++ i`.
 					OpType::AddAdd => {
 						self.push_operator(OpType::AddAddPost);
 					}
 					OpType::SubSub => {
 						self.push_operator(OpType::SubSubPost);
 					}
-					// Any other operators can be part of a binary expression. We switch state because now we want
-					// to look for the rhs operand.
+					// Any other operators can be part of a binary expression. We switch state since after a binary
+					// operator we are expecting an operand.
 					_ => {
 						self.push_operator(*op);
-						operand_state = true;
+						state = State::Operand;
 					}
 				},
-				Token::LParen if operand_state => {
-					// We are expecting an operand, and we found a bracket group start. We move it to the operator
-					// stack and continue looking for an operand, so we don't switch state.
+				Token::LParen if state == State::Operand => {
+					// We don't switch state since after a `(`, we are expecting an operand, i.e.
+					// `..+ (1 *` rather than `..+ (*`.
 					self.start_bracket();
 				}
-				Token::LParen if !operand_state => {
-					// We are expecting an operator, but we've found an operand. This is an error.
-					// E.g. `..1 (` instead of `..1 + (`
+				Token::LParen if state == State::AfterOperand => {
+					// This is an error. e.g. `..1 (` instead of `..1 + (`.
 					println!("Expected an operator or the end of expression, found `(` instead!");
 					return;
 				}
-				Token::RParen if !operand_state => {
-					// We are expecting an operator, but we found a bracket group end. We move it to the operator
-					// stack and continue looking for an operator, so we don't switch state.
+				Token::RParen if state == State::AfterOperand => {
+					// We don't switch state since after a `)`, we are expecting an operator, i.e.
+					// `..) + 5` rather than `..) 5`.
 					self.end_bracket_fn();
 				}
-				Token::RParen if operand_state => {
-					// We are expecting an operand, but we've found an bracket group end. This is an error.
-					// E.g. `..+ )` instead of `..+ 1)`
-					println!("Expected an operand or a prefix operator, found `)` instead!");
+				Token::RParen if state == State::Operand => {
+					// This is an error, e.g. `..+ )` instead of `..+ 1)`.
+					println!("Expected an atom or a prefix operator, found `)` instead!");
 					return;
 				}
-				Token::LBracket if !operand_state => {
-					// We are expecting an operator, and we found a `[`, which denotes the start of an index
-					// operator. We move it to the operator stack and want to look for an operand, so we switch
-					// state.
+				Token::LBracket if state == State::AfterOperand => {
+					// We switch state since after a `[`, we are expecting an operand, i.e.
+					// `i[5 +..` rather than `i[+..`.
 					self.start_index();
-					operand_state = true;
+					state = State::Operand;
 				}
-				Token::LBracket if operand_state => {
-					// We are expecting an operand, but we've found a `[` instead, which denotes the start of an
-					// index operator. However, we are expecting an operand or prefix operator.
-					// E.g. `..+ [` instead of `..+ i[`
-					println!("Expected an operand or the end of expression, found `[` instead!");
+				Token::LBracket if state == State::Operand => {
+					// This is an error, e.g. `..+ [` instead of `..+ i[`.
+					println!("Expected an atom or a prefix operator, found `[` instead!");
 					return;
 				}
-				Token::RBracket if !operand_state => {
-					// We are expecting an operator, and we found the end of an index. We move it to the operator
-					// stack and continue looking for an operator, so we don't switch state.
+				Token::RBracket if state == State::AfterOperand => {
+					// We don't switch state since after a `]`, we are expecting an operator, i.e.
+					// `..] + 5` instead of `..] 5`.
 					self.end_index();
 				}
-				Token::RBracket if operand_state => {
-					// We are expecting an operand, but we've found the end of an index instead.
-					// E.g. `..+ ]` instead of `..+ 1]`
-					println!("Expected an operand or the end of expression, found `]` instead!");
+				Token::RBracket if state == State::Operand => {
+					// This is an error, e.g. `..+ ]` instead of `..+ 1]`.
+					println!("Expected an atom or a prefix operator, found `]` instead!");
 					return;
 				}
-				Token::Comma if !operand_state => {
-					// We are expecting an operator, and we've found a comma. We can increase the arity and switch
-					// state to look for an operand. We switch state since after an expression delimiter (`,`), we
-					// are looking for an operand.
+				Token::Comma if state == State::AfterOperand => {
+					// We switch state since after a comma (which delineates an expression), we're effectively
+					// starting a new expression which must start with an operand, i.e.
+					// `.., 5 + 6` instead of `.., + 6`.
+					// TODO: Check if the next token is a `)` or a `}` and in such case don't increase the arity
 					self.increase_arity();
-					operand_state = true;
+					state = State::Operand;
 				}
-				Token::Comma if operand_state => {
-					// We are expecting an operand, but we've found a comma instead.
-					// E.g. `..+ ,` instead of `..+ 1,`
-					println!("Expected an operand or the end of expression, found `,` instead!");
+				Token::Comma if state==State::Operand => {
+					// This is an error, e.g. `..+ ,` instead of `..+ 1,`.
+					println!("Expected an atom or a prefix operator, found `,` instead!");
 					return;
 				}
 				_ => {

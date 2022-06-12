@@ -123,24 +123,6 @@ impl ShuntingYard {
 		self.operators.push_back(op);
 	}
 
-	/// Registers the start of a bracket group.
-	fn start_bracket(&mut self) {
-		self.operators.push_back(OpType::BracketStart);
-		self.groups.push_back(Group::Bracket);
-	}
-
-	/// Registers the start of a function call group.
-	fn start_fn(&mut self) {
-		self.operators.push_back(OpType::FnStart);
-		self.groups.push_back(Group::Fn(1));
-	}
-
-	/// Registers the start of an index operator group.
-	fn start_index(&mut self) {
-		self.operators.push_back(OpType::IndexStart);
-		self.groups.push_back(Group::Index);
-	}
-
 	/// Registers the end of a bracket or function call group, popping any operators until the start of the group
 	/// is reached.
 	fn end_bracket_fn(&mut self) {
@@ -441,7 +423,8 @@ impl ShuntingYard {
 
 									// We push a function call group start to the operator stack, and continue
 									// looking for an operand, so we don't switch state.
-									self.start_fn();
+									self.operators.push_back(OpType::FnStart);
+									self.groups.push_back(Group::Fn(1));
 									continue 'main;
 								}
 							} else {
@@ -527,7 +510,8 @@ impl ShuntingYard {
 				Token::LParen if state == State::Operand => {
 					// We don't switch state since after a `(`, we are expecting an operand, i.e.
 					// `..+ (1 *` rather than `..+ (*`.
-					self.start_bracket();
+					self.operators.push_back(OpType::BracketStart);
+					self.groups.push_back(Group::Bracket);
 				}
 				Token::LParen if state == State::AfterOperand => {
 					// This is an error. e.g. `..1 (` instead of `..1 + (`.
@@ -547,7 +531,8 @@ impl ShuntingYard {
 				Token::LBracket if state == State::AfterOperand => {
 					// We switch state since after a `[`, we are expecting an operand, i.e.
 					// `i[5 +..` rather than `i[+..`.
-					self.start_index();
+					self.operators.push_back(OpType::IndexStart);
+					self.groups.push_back(Group::Index);
 					state = State::Operand;
 				}
 				Token::LBracket if state == State::Operand => {
@@ -573,7 +558,7 @@ impl ShuntingYard {
 					self.increase_arity();
 					state = State::Operand;
 				}
-				Token::Comma if state==State::Operand => {
+				Token::Comma if state == State::Operand => {
 					// This is an error, e.g. `..+ ,` instead of `..+ 1,`.
 					println!("Expected an atom or a prefix operator, found `,` instead!");
 					return;

@@ -1236,6 +1236,34 @@ fn fn_calls() {
 			},
 		]}
 	);
+	assert_expr!("fn(fn())",
+		Expr::Fn { ident: Ident("fn".into()), args: vec![
+			Expr::Fn { ident: Ident("fn".into()), args: vec![] }
+		]}
+	);
+	assert_expr!("fn1(5, fn2(0))", Expr::Fn {
+		ident: Ident("fn1".into()),
+		args: vec![
+			Expr::Lit(Lit::Int(5)),
+			Expr::Fn {
+				ident: Ident("fn2".into()),
+				args: vec![Expr::Lit(Lit::Int(0))]
+			}
+		]
+	});
+	assert_expr!("fn1(5, fn2(fn3()))", Expr::Fn {
+		ident: Ident("fn1".into()),
+		args: vec![
+			Expr::Lit(Lit::Int(5)),
+			Expr::Fn {
+				ident: Ident("fn2".into()),
+				args: vec![Expr::Fn {
+					ident: Ident("fn3".into()),
+					args: vec![]
+				}]
+			}
+		]
+	});
 }
 
 #[test]
@@ -1260,6 +1288,39 @@ fn indexes() {
 			i: Box::from(Expr::Lit(Lit::Int(5)))
 		})
 	});
+	assert_expr!("i[y[z[1+2]]]", Expr::Index {
+		item: Box::from(Expr::Ident(Ident("i".into()))),
+		i: Box::from(Expr::Index {
+			item: Box::from(Expr::Ident(Ident("y".into()))),
+			i: Box::from(Expr::Index {
+				item: Box::from(Expr::Ident(Ident("z".into()))),
+				i: Box::from(Expr::Binary {
+					left: Box::from(Expr::Lit(Lit::Int(1))),
+					op: OpType::Add,
+					right: Box::from(Expr::Lit(Lit::Int(2))),
+				})
+			})
+		})
+	});
+}
+
+#[test]
+#[rustfmt::skip]
+fn initializers() {
+	assert_expr!("{1}", Expr::InitList(vec![Expr::Lit(Lit::Int(1))]));
+	assert_expr!("{1,}", Expr::InitList(vec![Expr::Lit(Lit::Int(1))]));
+	assert_expr!("{1, true, i}", Expr::InitList(vec![
+		Expr::Lit(Lit::Int(1)),
+		Expr::Lit(Lit::Bool(true)),
+		Expr::Ident(Ident("i".into()))
+	]));
+	assert_expr!("{2.0, {1, s}}", Expr::InitList(vec![
+		Expr::Lit(Lit::Float(2.0)),
+		Expr::InitList(vec![
+			Expr::Lit(Lit::Int(1)),
+			Expr::Ident(Ident("s".into()))
+		])
+	]));
 }
 
 #[test]
@@ -1302,4 +1363,18 @@ fn complex() {
 			})
 		})
 	});
+	assert_expr!("{1.0, true, func(i[0], 100u)}", Expr::InitList(vec![
+		Expr::Lit(Lit::Float(1.0)),
+		Expr::Lit(Lit::Bool(true)),
+		Expr::Fn {
+			ident: Ident("func".into()),
+			args: vec![
+				Expr::Index {
+					item: Box::from(Expr::Ident(Ident("i".into()))),
+					i: Box::from(Expr::Lit(Lit::Int(0)))
+				},
+				Expr::Lit(Lit::UInt(100))
+			]
+		}
+	]));
 }

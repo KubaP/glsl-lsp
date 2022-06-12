@@ -278,40 +278,6 @@ impl ShuntingYard {
 		}
 	}
 
-	/// Registers the end of a sub-expression in a function call or initializer list, popping any operators until
-	/// the start of the group is reached.
-	fn end_comma(&mut self) {
-		if let Some(current_group) = self.groups.back_mut() {
-			match current_group {
-				Group::Fn(_) | Group::Init(_) => {
-					// Now that we have come across a `,` expression delimiter, we want to move all existing
-					// operators up to the function call or initializer list start delimiter to the stack, to clear
-					// it for the next expression after the comma.
-					while self.operators.back().is_some() {
-						let back = self.operators.back().unwrap();
-						if *back == OpType::FnStart
-							|| *back == OpType::InitStart
-						{
-							break;
-						}
-
-						let moved_op = self.operators.pop_back().unwrap();
-						self.stack.push_back(Either::Right(moved_op));
-					}
-				}
-				_ => {
-					println!("Found a `,` expression delimiter outside of a function call or initializer list!");
-					return;
-				}
-			}
-		} else {
-			println!(
-				"Found a `,` expresion delimiter outside of a function call or initializer list!"
-			);
-			return;
-		}
-	}
-
 	/// Registers the end of an initializer list group, popping any operators until the start of the group is
 	/// reached.
 	fn end_init(&mut self) {
@@ -378,6 +344,40 @@ impl ShuntingYard {
 		}
 	}
 
+	/// Registers the end of a sub-expression in a function call or initializer list, popping any operators until
+	/// the start of the group is reached.
+	fn end_comma(&mut self) {
+		if let Some(current_group) = self.groups.back_mut() {
+			match current_group {
+				Group::Fn(_) | Group::Init(_) => {
+					// Now that we have come across a `,` expression delimiter, we want to move all existing
+					// operators up to the function call or initializer list start delimiter to the stack, to clear
+					// it for the next expression after the comma.
+					while self.operators.back().is_some() {
+						let back = self.operators.back().unwrap();
+						if *back == OpType::FnStart
+							|| *back == OpType::InitStart
+						{
+							break;
+						}
+
+						let moved_op = self.operators.pop_back().unwrap();
+						self.stack.push_back(Either::Right(moved_op));
+					}
+				}
+				_ => {
+					println!("Found a `,` expression delimiter outside of a function call or initializer list!");
+					return;
+				}
+			}
+		} else {
+			println!(
+				"Found a `,` expresion delimiter outside of a function call or initializer list!"
+			);
+			return;
+		}
+	}
+
 	/// Increases the arity of the current function.
 	fn increase_arity(&mut self) {
 		if let Some(current_group) = self.groups.back_mut() {
@@ -396,7 +396,7 @@ impl ShuntingYard {
 		}
 	}
 
-	/// Returns whether we have just started to parse a function, e.g. `..fn(`
+	/// Returns whether we have just started to parse a function, i.e. `..fn(`
 	fn just_started_fn(&self) -> bool {
 		if let Some(current_group) = self.groups.back() {
 			match current_group {
@@ -408,7 +408,7 @@ impl ShuntingYard {
 		}
 	}
 
-	/// Returns whether we have just started to parse an initializer list, e.g. `..{``
+	/// Returns whether we have just started to parse an initializer list, i.e. `..{``
 	fn just_started_init(&self) -> bool {
 		if let Some(current_group) = self.groups.back() {
 			match current_group {
@@ -479,122 +479,6 @@ impl ShuntingYard {
 					}
 				}
 				Token::Ident(s) if state == State::Operand => {
-					// Depending on what is after the identifier we may want to handle member access or function
-					// calls.
-					/* if let Some(lookahead) = walker.lookahead_1() {
-						if *lookahead == Token::Dot {
-							let mut members = Vec::new();
-
-							// Push the current initial identifier.
-							members.push(match Ident::parse_name(s) {
-								Ok(i) => i,
-								Err(_) => {
-									println!(
-										"Expected an identifier, found a type!"
-									);
-									return;
-								}
-							});
-							walker.advance();
-
-							// Loop, looking for a `.ident`, until either:
-							// a) there is no input left,
-							// b) there is no following dot
-							// In both these cases, we produce a complete member access expression.
-							//
-							// In the case that there is a dot but it's not followed by an identifier (or anything
-							// period), then we error.
-							'member: loop {
-								// First, check if there is a dot next.
-								let dot = match walker.peek() {
-									Some(t) => t,
-									None => break 'member,
-								};
-								if *dot != Token::Dot {
-									// We've reached the end of the member access, so we can create an expression
-									// for it. We rerun the main loop on the current token since it will match
-									// against a different main branch, such as the operator branch. We don't
-									// advance the cursor.
-									self.stack.push_back(Either::Left(
-										Expr::Member(members),
-									));
-									state = State::AfterOperand;
-									continue 'main;
-								}
-
-								// There is a dot, so we are now expecting an identifier.
-								walker.advance();
-								let ident = match walker.peek() {
-									Some(t) => t,
-									None => {
-										println!("Expected an identifier after the `.`, found the end of input instead!");
-										break 'member;
-									}
-								};
-								if let Token::Ident(s) = ident {
-									// There is an identifier after the dot, so we can add it to the list of
-									// members. We continue looping in case there is another `.ident` afterwards.
-									members.push(match Ident::parse_name(s) {
-										Ok(i) => i,
-										Err(_) => {
-											println!("Expected an identifier, found a type!");
-											return;
-										}
-									});
-									walker.advance();
-									continue 'member;
-								} else {
-									// There is a dot, but afterwards there is no identifier. This is an error.
-									println!("Expected an identifier after the `.`, found something else instead!");
-									return;
-								}
-							}
-
-							// We've reached the end of the token list, so we can create an expression.
-							self.stack
-								.push_back(Either::Left(Expr::Member(members)));
-						} else if *lookahead == Token::LParen {
-
-
-							if let Some(lookahead_2) = walker.peek() {
-								if *lookahead_2 == Token::RParen {
-									// We have a function call with zero arguments.
-
-									// We can push the appropriate function call operator straight away since we
-									// know there's nothing else to parse. We switch state since we now expect
-									// either an operator or an end of expression.
-									self.operators.push_back(OpType::FnCall(1));
-									walker.advance();
-									state = State::AfterOperand;
-									continue 'main;
-								} else {
-									// We have a function call with at least one argument.
-
-									// We push a function call group start to the operator stack, and continue
-									// looking for an operand, so we don't switch state.
-									self.operators.push_back(OpType::FnStart);
-									self.groups.push_back(Group::Fn(1));
-									continue 'main;
-								}
-							} else {
-								println!("Expected function call arguments or `)`, found end of input instead!");
-								return;
-							}
-						} else {
-							// There is no following dot, so this is just a simple identifier.
-							self.stack.push_back(match Ident::parse_name(s) {
-								Ok(i) => Either::Left(Expr::Ident(i)),
-								Err(_) => Either::Left(Expr::Invalid),
-							});
-						}
-					} else {
-						// There is no following dot, so this is just a simple identifier.
-						self.stack.push_back(match Ident::parse_name(s) {
-							Ok(i) => Either::Left(Expr::Ident(i)),
-							Err(_) => Either::Left(Expr::Invalid),
-						});
-					} */
-
 					self.stack.push_back(match Ident::parse_name(s) {
 						Ok(i) => Either::Left(Expr::Ident(i)),
 						Err(_) => Either::Left(Expr::Invalid),

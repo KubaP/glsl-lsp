@@ -255,18 +255,15 @@ impl ShuntingYard {
 		}
 	}
 
-	/// Increases the arity of the top-most current function call.
-	fn increase_arity(&mut self) {
-		// We've come across a `,` which is only valid inside of a function call group. Check that we are in a
-		// function call group, otherwise this is an error.
+	/// Registers the end of a sub-expression in a function call, popping any operators until the start of the
+	/// function call group is reached.
+	fn end_comma(&mut self) {
 		if let Some(current_group) = self.groups.back_mut() {
 			match current_group {
-				Group::Fn(count) => {
-					*count += 1;
-
-					// Now that the arity has increased, and we are parsing the next expression, we want to move all
-					// existing operators up to the function call start delimiter to the stack, to clear it for the next
-					// expression.
+				Group::Fn(_) => {
+					// Now that we have come across a `,` expression delimiter, we want to move all existing
+					// operators up to the function call start delimiter to the stack, to clear it for the next
+					// expression after the comma.
 					while self.operators.back().is_some() {
 						let back = self.operators.back().unwrap();
 						if *back == OpType::FnStart {
@@ -290,6 +287,36 @@ impl ShuntingYard {
 		}
 	}
 
+	/// Increases the arity of the current function.
+	fn increase_arity(&mut self) {
+		if let Some(current_group) = self.groups.back_mut() {
+			match current_group {
+				Group::Fn(count) => {
+					*count += 1;
+				}
+				_ => {
+					println!("Found an incomplete function call!");
+					return;
+				}
+			}
+		} else {
+			println!("Found an incomplete function call!");
+			return;
+		}
+	}
+
+	/// Returns whether we have just started to parse a function, e.g. `..fn(`
+	fn just_started_fn(&self) -> bool {
+		if let Some(current_group) = self.groups.back() {
+			match current_group {
+				Group::Fn(count) => *count == 0,
+				_ => false,
+			}
+		} else {
+			false
+		}
+	}
+
 	/// Parses a list of tokens. Populates the internal `stack` with a RPN output.
 	fn parse(&mut self, cst: Vec<Spanned<Token>>) {
 		#[derive(PartialEq)]
@@ -301,6 +328,12 @@ impl ShuntingYard {
 			AfterOperand,
 		}
 		let mut state = State::Operand;
+		// Whether we can parse an opening parenthesis as a beginning of a function call. This is set when we
+		// encounter an `Token::Ident`.
+		let mut can_parse_fn = false;
+		// Whether to increase the arity on the next iteration. If set to `true`, on the next iteration, if we have
+		// a valid State::Operand, we increase the arity and reset the flag back to `false`.
+		let mut increase_arity = false;
 		let mut walker = Walker { cst, cursor: 0 };
 
 		'main: while !walker.is_done() {
@@ -321,11 +354,17 @@ impl ShuntingYard {
 						Err(_) => Either::Left(Expr::Invalid),
 					});
 					state = State::AfterOperand;
+
+					can_parse_fn = false;
+					if increase_arity {
+						self.increase_arity();
+						increase_arity = false;
+					}
 				}
 				Token::Ident(s) if state == State::Operand => {
 					// Depending on what is after the identifier we may want to handle member access or function
 					// calls.
-					if let Some(lookahead) = walker.lookahead_1() {
+					/* if let Some(lookahead) = walker.lookahead_1() {
 						if *lookahead == Token::Dot {
 							let mut members = Vec::new();
 
@@ -398,14 +437,7 @@ impl ShuntingYard {
 							self.stack
 								.push_back(Either::Left(Expr::Member(members)));
 						} else if *lookahead == Token::LParen {
-							// We push the function identifier to the stack.
-							self.stack.push_back(match Ident::parse_name(s) {
-								Ok(i) => Either::Left(Expr::Ident(i)),
-								Err(_) => Either::Left(Expr::Invalid),
-							});
-							// Consume the identifier and `(`.
-							walker.advance();
-							walker.advance();
+
 
 							if let Some(lookahead_2) = walker.peek() {
 								if *lookahead_2 == Token::RParen {
@@ -431,23 +463,6 @@ impl ShuntingYard {
 								println!("Expected function call arguments or `)`, found end of input instead!");
 								return;
 							}
-						} else if *lookahead == Token::Comma {
-							// We push the identifier to the stack.
-							self.stack.push_back(match Ident::parse_name(s) {
-								Ok(i) => Either::Left(Expr::Ident(i)),
-								Err(_) => Either::Left(Expr::Invalid),
-							});
-							// We have an operand, followed by a comma. If we are parsing a function call at all
-							// currently, then we can increase the arity of the top-most one. If not, then this is
-							// an error.
-							self.increase_arity();
-
-							// Consume the identifier and `,`.
-							walker.advance();
-							walker.advance();
-
-							// Don't switch state, since after a comma, we will be expecting another operand.
-							continue 'main;
 						} else {
 							// There is no following dot, so this is just a simple identifier.
 							self.stack.push_back(match Ident::parse_name(s) {
@@ -461,8 +476,20 @@ impl ShuntingYard {
 							Ok(i) => Either::Left(Expr::Ident(i)),
 							Err(_) => Either::Left(Expr::Invalid),
 						});
-					}
+					} */
+
+					self.stack.push_back(match Ident::parse_name(s) {
+						Ok(i) => Either::Left(Expr::Ident(i)),
+						Err(_) => Either::Left(Expr::Invalid),
+					});
 					state = State::AfterOperand;
+					// An identifier can lead to a function call if the next tokens are parenthesis.
+					can_parse_fn = true;
+
+					if increase_arity {
+						self.increase_arity();
+						increase_arity = false;
+					}
 				}
 				Token::Num { .. } | Token::Bool(_) | Token::Ident(_)
 					if state == State::AfterOperand =>
@@ -471,20 +498,28 @@ impl ShuntingYard {
 					println!("Expected a postfix, index or binary operator, or the end of expression, found an atom instead!");
 					return;
 				}
-				Token::Op(op) if state == State::Operand => match op {
-					// If the operator is a valid prefix operator, we can move it to the stack. We don't switch
-					// state since after a prefix operator, we are still looking for an operand atom.
-					OpType::Sub => self.push_operator(OpType::Neg),
-					OpType::Not => self.push_operator(OpType::Not),
-					OpType::Flip => self.push_operator(OpType::Flip),
-					OpType::AddAdd => self.push_operator(OpType::AddAddPre),
-					OpType::SubSub => self.push_operator(OpType::SubSubPre),
-					_ => {
-						// This is an error, e.g. `..*1` instead of `..-1`.
-						println!("Expected an atom or a prefix operator, found a non-prefix operator instead!");
-						return;
+				Token::Op(op) if state == State::Operand => {
+					match op {
+						// If the operator is a valid prefix operator, we can move it to the stack. We don't switch
+						// state since after a prefix operator, we are still looking for an operand atom.
+						OpType::Sub => self.push_operator(OpType::Neg),
+						OpType::Not => self.push_operator(OpType::Not),
+						OpType::Flip => self.push_operator(OpType::Flip),
+						OpType::AddAdd => self.push_operator(OpType::AddAddPre),
+						OpType::SubSub => self.push_operator(OpType::SubSubPre),
+						_ => {
+							// This is an error, e.g. `..*1` instead of `..-1`.
+							println!("Expected an atom or a prefix operator, found a non-prefix operator instead!");
+							return;
+						}
 					}
-				},
+
+					can_parse_fn = false;
+					if increase_arity {
+						self.increase_arity();
+						increase_arity = false;
+					}
+				}
 				Token::Op(op) if state == State::AfterOperand => match op {
 					OpType::Flip | OpType::Not => {
 						// These operators cannot be directly after an atom.
@@ -510,13 +545,34 @@ impl ShuntingYard {
 				Token::LParen if state == State::Operand => {
 					// We don't switch state since after a `(`, we are expecting an operand, i.e.
 					// `..+ (1 *` rather than `..+ (*`.
+					can_parse_fn = false;
+					if increase_arity {
+						self.increase_arity();
+						increase_arity = false;
+					}
 					self.operators.push_back(OpType::BracketStart);
 					self.groups.push_back(Group::Bracket);
 				}
 				Token::LParen if state == State::AfterOperand => {
-					// This is an error. e.g. `..1 (` instead of `..1 + (`.
-					println!("Expected an operator or the end of expression, found `(` instead!");
-					return;
+					if can_parse_fn {
+						// We have `ident(` which makes this a function call.
+						self.operators.push_back(OpType::FnStart);
+						self.groups.push_back(Group::Fn(0));
+
+						// We unset the flag, since this flag is only used to detect the `ident` -> `(` token
+						// chain.
+						can_parse_fn = false;
+
+						increase_arity = true;
+
+						// We switch state since after a `(` we are expecting an operand, i.e.
+						// `fn( 1..` rather than`fn( +..`.1
+						state = State::Operand;
+					} else {
+						// This is an error. e.g. `..1 (` instead of `..1 + (`.
+						println!("Expected an operator or the end of expression, found `(` instead!");
+						return;
+					}
 				}
 				Token::RParen if state == State::AfterOperand => {
 					// We don't switch state since after a `)`, we are expecting an operator, i.e.
@@ -524,9 +580,20 @@ impl ShuntingYard {
 					self.end_bracket_fn();
 				}
 				Token::RParen if state == State::Operand => {
-					// This is an error, e.g. `..+ )` instead of `..+ 1)`.
-					println!("Expected an atom or a prefix operator, found `)` instead!");
-					return;
+					if self.just_started_fn() {
+						// This is valid, i.e. `fn()`.
+						self.end_bracket_fn();
+						increase_arity = false;
+
+						// We switch state since after a function call we are expecting an operator, i.e.
+						// `..fn() + 5` rather than `..fn() 5`.
+						state = State::AfterOperand;
+					} else {
+						// This is an error, e.g. `..+ )` instead of `..+ 1)`,
+						// or `fn(..,)` instead of `fn(.., 1)`.
+						println!("Expected an atom or a prefix operator, found `)` instead!");
+						return;
+					}
 				}
 				Token::LBracket if state == State::AfterOperand => {
 					// We switch state since after a `[`, we are expecting an operand, i.e.
@@ -554,9 +621,10 @@ impl ShuntingYard {
 					// We switch state since after a comma (which delineates an expression), we're effectively
 					// starting a new expression which must start with an operand, i.e.
 					// `.., 5 + 6` instead of `.., + 6`.
-					// TODO: Check if the next token is a `)` or a `}` and in such case don't increase the arity
-					self.increase_arity();
+					self.end_comma();
 					state = State::Operand;
+
+					increase_arity = true;
 				}
 				Token::Comma if state == State::Operand => {
 					// This is an error, e.g. `..+ ,` instead of `..+ 1,`.

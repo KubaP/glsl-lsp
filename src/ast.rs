@@ -69,7 +69,10 @@ pub enum Expr {
 	/// A not.
 	Not(Box<Expr>),
 	/// An index into, e.g. `arr[i]`.
-	Index { item: Box<Expr>, i: Box<Expr> },
+	Index {
+		item: Box<Expr>,
+		i: Option<Box<Expr>>,
+	},
 	/// Binary expression with a left and right hand-side.
 	Binary {
 		left: Box<Expr>,
@@ -86,8 +89,9 @@ pub enum Expr {
 	Fn { ident: Ident, args: Vec<Expr> },
 	/// Array constructor.
 	ArrInit {
-		ident: Ident,
-		i: Option<Box<Expr>>,
+		/// Contains the first part of an array constructor, e.g. `int[3]`.
+		arr: Box<Expr>,
+		/// Contains the expressions within the brackets i.e. `..](...)`.
 		args: Vec<Expr>,
 	},
 	/// Initializer list.
@@ -113,7 +117,15 @@ impl std::fmt::Display for Expr {
 			Expr::Flip(expr) => write!(f, "\x1b[36mFlip\x1b[0m({expr})"),
 			Expr::Not(expr) => write!(f, "\x1b[36mNot\x1b[0m({expr})"),
 			Expr::Index { item, i } => {
-				write!(f, "\x1b[36mIndex\x1b[0m({item}, i: {i})")
+				write!(
+					f,
+					"\x1b[36mIndex\x1b[0m({item}, i: {})",
+					if let Some(e) = i {
+						format!("{e}")
+					} else {
+						format!("_")
+					}
+				)
 			}
 			Expr::Binary { left, op, right } => {
 				write!(f, "({left} \x1b[36m{op:?}\x1b[0m {right})")
@@ -130,16 +142,8 @@ impl std::fmt::Display for Expr {
 				}
 				write!(f, "])")
 			}
-			Expr::ArrInit { ident, i, args } => {
-				write!(
-					f,
-					"\x1b[34mArr\x1b[0m(type: {ident} i: {} args: [",
-					if let Some(e) = i {
-						format!("{e}")
-					} else {
-						format!("_")
-					}
-				)?;
+			Expr::ArrInit { arr, args } => {
+				write!(f, "\x1b[34mArr\x1b[0m(arr: {arr} args: [")?;
 				for arg in args {
 					write!(f, "{arg}, ")?;
 				}

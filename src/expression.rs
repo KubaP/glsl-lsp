@@ -80,8 +80,8 @@ impl Walker {
 enum Group {
 	/// A bracket group, `(...)`.
 	Bracket,
-	/// An index operator `[...]`.
-	Index,
+	/// An index operator `[...]`. `false` means there is no expression within the `[...]` brackets.
+	Index(bool),
 	/// A function call `fn(...)`.
 	Fn(usize),
 	/// An initializer list `{...}`.
@@ -152,7 +152,7 @@ impl ShuntingYard {
 					return;
 				}
 			};
-		if *current_group == Group::Index {
+		if let Group::Index(_) = current_group {
 			println!("Found a `)` delimiter, but we still have an open `[` index operator!");
 			return;
 		} else if let Group::Init(_) = current_group {
@@ -264,7 +264,7 @@ impl ShuntingYard {
 
 	/// Registers the end of an index operator group, popping any operators until the start of the index group is
 	/// reached.
-	fn end_index(&mut self) {
+	fn end_index(&mut self, contains_i: bool) {
 		// We've encountered a `]` delimiter, but we first want to check that we are actually within a group, i.e.
 		// there was a start delimiter of some kind, and that the delimiter is a `[` as opposed to the other `(` or
 		// `{` delimiters.
@@ -302,7 +302,8 @@ impl ShuntingYard {
 				// We remove the operator and push it to the stack.
 				self.operators.pop_back();
 				self.groups.pop_back();
-				self.stack.push_back(Either::Right(OpType::Index));
+				self.stack
+					.push_back(Either::Right(OpType::Index(contains_i)));
 				break;
 			} else if *top_op == OpType::BracketStart {
 				// Sanity check; this should never happen.
@@ -351,7 +352,7 @@ impl ShuntingYard {
 		} else if let Group::Fn(_) = current_group {
 			println!("Found a `}}` delimiter, but we still have an open `(` function call!");
 			return;
-		} else if *current_group == Group::Index {
+		} else if let Group::Index(_) = current_group {
 			println!("Found a `}}` delimiter, but we still have an open `[` index operator!");
 			return;
 		} else if let Group::ArrInit(_) = current_group {
@@ -505,7 +506,7 @@ impl ShuntingYard {
 			AfterOperand,
 		}
 		let mut state = State::Operand;
-		
+
 		#[derive(PartialEq)]
 		enum Start {
 			/// Nothing.
@@ -514,6 +515,8 @@ impl ShuntingYard {
 			Fn,
 			/// We have found an `Expr::Index`; we can start an array constructor assuming we find `(` next.
 			ArrInit,
+			/// We have found a `[`. If the next token is a `]` we have an empty index operator.
+			EmptyIndex,
 		}
 		let mut can_start = Start::None;
 
@@ -540,6 +543,8 @@ impl ShuntingYard {
 						Err(_) => Either::Left(Expr::Invalid),
 					});
 					state = State::AfterOperand;
+
+					can_start = Start::None;
 
 					if increase_arity {
 						self.increase_arity();
@@ -586,6 +591,8 @@ impl ShuntingYard {
 						}
 					}
 
+					can_start = Start::None;
+
 					if increase_arity {
 						self.increase_arity();
 						increase_arity = false;
@@ -629,6 +636,8 @@ impl ShuntingYard {
 
 					self.operators.push_back(OpType::BracketStart);
 					self.groups.push_back(Group::Bracket);
+
+					can_start = Start::None;
 				}
 				Token::LParen if state == State::AfterOperand => {
 					if can_start == Start::Fn {
@@ -681,6 +690,8 @@ impl ShuntingYard {
 						state = State::AfterOperand;
 
 						increase_arity = false;
+
+						can_start = Start::None;
 					} else {
 						// This is an error, e.g. `..+ )` instead of `..+ 1)`,
 						// or `fn(..,)` instead of `fn(.., 1)`.
@@ -692,10 +703,10 @@ impl ShuntingYard {
 					// We switch state since after a `[`, we are expecting an operand, i.e.
 					// `i[5 +..` rather than `i[+..`.
 					self.operators.push_back(OpType::IndexStart);
-					self.groups.push_back(Group::Index);
+					self.groups.push_back(Group::Index(true));
 					state = State::Operand;
 
-					can_start = Start::None;
+					can_start = Start::EmptyIndex;
 				}
 				Token::LBracket if state == State::Operand => {
 					// This is an error, e.g. `..+ [` instead of `..+ i[`.
@@ -705,15 +716,25 @@ impl ShuntingYard {
 				Token::RBracket if state == State::AfterOperand => {
 					// We don't switch state since after a `]`, we are expecting an operator, i.e.
 					// `..] + 5` instead of `..] 5`.
-					self.end_index();
+					self.end_index(true);
 
 					// After an index `]` we may have an array constructor.
 					can_start = Start::ArrInit;
 				}
 				Token::RBracket if state == State::Operand => {
-					// This is an error, e.g. `..+ ]` instead of `..+ 1]`.
-					println!("Expected an atom or a prefix operator, found `]` instead!");
-					return;
+					if can_start == Start::EmptyIndex {
+						// We switch state since after a `]`, we are expecting an operator, i.e.
+						// `..[] + 5` rather than `..[] 5`.
+						self.end_index(false);
+						state = State::AfterOperand;
+
+						// After an index `]` we may have an array constructor.
+						can_start = Start::ArrInit;
+					} else {
+						// This is an error, e.g. `..+ ]` instead of `..+ 1]`.
+						println!("Expected an atom or a prefix operator, found `]` instead!");
+						return;
+					}
 				}
 				Token::LBrace if state == State::Operand => {
 					// We don't switch state since after a `{`, we are expecting an operand, i.e.
@@ -729,6 +750,8 @@ impl ShuntingYard {
 					self.groups.push_back(Group::Init(0));
 
 					increase_arity = true;
+
+					can_start = Start::None;
 				}
 				Token::LBrace if state == State::AfterOperand => {
 					// This is an error, e.g. `.. {` instead of `.. + {`.
@@ -752,6 +775,8 @@ impl ShuntingYard {
 						state = State::AfterOperand;
 
 						increase_arity = false;
+
+						can_start = Start::None;
 					} else {
 						// This is an error, e.g. `..+ }` instead of `..+ 1}`.
 						println!("Expected an atom or a prefix operator, found `}}` instead!");
@@ -882,22 +907,17 @@ impl ShuntingYard {
 							args.push_front(stack.pop_back().unwrap());
 						}
 
-						// Get the identifier (which is the first expression).
-						let (ident, i) = if let Expr::Index { item, i } =
-							args.pop_front().unwrap()
-						{
-							let ident = match *item {
-								Expr::Ident(ident) => ident,
-								_ => panic!("invalid identifier"),
-							};
-							(ident, Some(i))
-						} else {
-							panic!("The first expression of a function call operator is not an identifier!");
-						};
+						// Get the index operator (which is the first expression).
+						let arr = args.pop_front().unwrap();
+						match arr {
+							Expr::Index { .. } => {}
+							_ => {
+								panic!("The first expression of an array constructor operator is not an `Expr::Index`!");
+							}
+						}
 
 						stack.push_back(Expr::ArrInit {
-							ident,
-							i,
+							arr: Box::from(arr),
 							args: args.into(),
 						});
 					}
@@ -910,12 +930,16 @@ impl ShuntingYard {
 
 						stack.push_back(Expr::InitList(args));
 					}
-					OpType::Index => {
-						let i = stack.pop_back().unwrap();
+					OpType::Index(contains_i) => {
+						let i = if contains_i {
+							Some(Box::from(stack.pop_back().unwrap()))
+						} else {
+							None
+						};
 						let expr = stack.pop_back().unwrap();
 						stack.push_back(Expr::Index {
 							item: Box::from(expr),
-							i: Box::from(i),
+							i,
 						});
 					}
 					OpType::ObjAccess => {
@@ -1016,7 +1040,7 @@ impl OpType {
 			// These two should always be converted to the *Pre or *Post versions in the shunting yard.
 			Self::AddAdd | Self::SubSub => panic!("OpType::AddAdd | OpType::SubSub do not have precedence values because they should never be passed into this function. Something has gone wrong!"),
 			// These are never directly checked for precedence, but rather have special branches.
-			Self::BracketStart | Self::FnStart | Self::FnCall(_) | Self::IndexStart | Self::Index | Self::InitStart | Self::Init(_) | Self::ArrInitStart | Self::ArrInit(_,_) => {
+			Self::BracketStart | Self::FnStart | Self::FnCall(_) | Self::IndexStart | Self::Index(_) | Self::InitStart | Self::Init(_) | Self::ArrInitStart | Self::ArrInit(_,_) => {
 				panic!("The operator {self:?} does not have a precedence value because it should never be passed into this function. Something has gone wrong!")
 			},
 		}
@@ -1090,7 +1114,8 @@ impl std::fmt::Display for OpType {
 				write!(f, "")
 			}
 			Self::ObjAccess => write!(f, "access"),
-			Self::Index => write!(f, "index"),
+			Self::Index(true) => write!(f, "index"),
+			Self::Index(false) => write!(f, "empty_index"),
 			Self::FnCall(count) => write!(f, "FN:{count}"),
 			Self::Init(count) => write!(f, "INIT:{count}"),
 			Self::ArrInit(count, bool) => write!(f, "ARR_INIT:{count}:{bool}"),
@@ -1316,30 +1341,30 @@ fn fn_calls() {
 fn indexes() {
 	assert_expr!("i[0]", Expr::Index {
 		item: Box::from(Expr::Ident(Ident("i".into()))),
-		i: Box::from(Expr::Lit(Lit::Int(0)))
+		i: Some(Box::from(Expr::Lit(Lit::Int(0))))
 	});
 	assert_expr!("s[z+1]", Expr::Index {
 		item: Box::from(Expr::Ident(Ident("s".into()))),
-		i: Box::from(Expr::Binary {
+		i: Some(Box::from(Expr::Binary {
 			left: Box::from(Expr::Ident(Ident("z".into()))),
 			op: OpType::Add,
 			right: Box::from(Expr::Lit(Lit::Int(1)))
-		})
+		}))
 	});
 	assert_expr!("i[y[5]]", Expr::Index {
 		item: Box::from(Expr::Ident(Ident("i".into()))),
-		i: Box::from(Expr::Index {
+		i: Some(Box::from(Expr::Index {
 			item: Box::from(Expr::Ident(Ident("y".into()))),
-			i: Box::from(Expr::Lit(Lit::Int(5)))
-		})
+			i: Some(Box::from(Expr::Lit(Lit::Int(5))))
+		}))
 	});
 	assert_expr!("i[y[z[1+2]]]", Expr::Index {
 		item: Box::from(Expr::Ident(Ident("i".into()))),
-		i: Box::from(Expr::Index {
+		i: Some(Box::from(Expr::Index {
 			item: Box::from(Expr::Ident(Ident("y".into()))),
-			i: Box::from(Expr::Index {
+			i: Some(Box::from(Expr::Index {
 				item: Box::from(Expr::Ident(Ident("z".into()))),
-				i: Box::from(Expr::Binary {
+				i: Some(Box::from(Expr::Binary {
 					left: Box::from(Expr::Lit(Lit::Int(1))),
 					op: OpType::Add,
 					right: Box::from(Expr::Lit(Lit::Int(2))),
@@ -1376,7 +1401,7 @@ fn complex() {
 		args: vec![
 			Expr::Index {
 				item: Box::from(Expr::Ident(Ident("i".into()))),
-				i: Box::from(Expr::Lit(Lit::Int(9))),
+				i: Some(Box::from(Expr::Lit(Lit::Int(9)))),
 			},
 			Expr::Binary {
 				left: Box::from(
@@ -1392,7 +1417,7 @@ fn complex() {
 		op: OpType::LShift,
 		right: Box::from(Expr::Index {
 			item: Box::from(Expr::Ident(Ident("i".into()))),
-			i: Box::from(Expr::Fn {
+			i: Some(Box::from(Expr::Fn {
 				ident: Ident("func".into()),
 				args: vec![
 					Expr::Binary {
@@ -1405,7 +1430,7 @@ fn complex() {
 						right: Box::from(Expr::Lit(Lit::Float(5.0)))
 					}
 				]
-			})
+			}))
 		})
 	});
 	assert_expr!("{1.0, true, func(i[0], 100u)}", Expr::InitList(vec![
@@ -1416,7 +1441,7 @@ fn complex() {
 			args: vec![
 				Expr::Index {
 					item: Box::from(Expr::Ident(Ident("i".into()))),
-					i: Box::from(Expr::Lit(Lit::Int(0)))
+					i: Some(Box::from(Expr::Lit(Lit::Int(0))))
 				},
 				Expr::Lit(Lit::UInt(100))
 			]

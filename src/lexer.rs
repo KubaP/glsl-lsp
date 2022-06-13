@@ -133,8 +133,8 @@ pub enum OpType {
 	SubSubPost,
 	/// Object access operator.
 	ObjAccess,
-	/// Index operator.
-	Index,
+	/// Index operator. `false` if the operator has no expression value inside the `[...]` brackets.
+	Index(bool),
 	/// Function call operator. Consumes the `usize` amount of nodes as arguments for the function call. The first
 	/// node is always an `Expr::Ident` which is the function identifier.
 	FnCall(usize),

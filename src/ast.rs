@@ -85,7 +85,11 @@ pub enum Expr {
 	/// Function call.
 	Fn { ident: Ident, args: Vec<Expr> },
 	/// Array constructor.
-	Array { type_: Type, args: Vec<Expr> },
+	ArrInit {
+		ident: Ident,
+		i: Option<Box<Expr>>,
+		args: Vec<Expr>,
+	},
 	/// Initializer list.
 	InitList(Vec<Expr>),
 	/// Object access.
@@ -126,8 +130,16 @@ impl std::fmt::Display for Expr {
 				}
 				write!(f, "])")
 			}
-			Expr::Array { type_, args } => {
-				write!(f, "\x1b[34mArr\x1b[0m(type: {type_} args: [)")?;
+			Expr::ArrInit { ident, i, args } => {
+				write!(
+					f,
+					"\x1b[34mArr\x1b[0m(type: {ident} i: {} args: [",
+					if let Some(e) = i {
+						format!("{e}")
+					} else {
+						format!("_")
+					}
+				)?;
 				for arg in args {
 					write!(f, "{arg}, ")?;
 				}
@@ -420,20 +432,15 @@ impl std::fmt::Display for Ident {
 }
 
 impl Ident {
+	pub fn parse_any(s: &str) -> Result<Self, ()> {
+		Ok(Self(s.to_owned()))
+	}
 	pub fn parse_name(s: &str) -> Result<Self, ()> {
 		// If the string matches a primitive, then it can't be a valid name.
 		match Primitive::parse(s) {
 			Ok(_) => Err(()),
 			Err(_) => Ok(Self(s.to_owned())),
 		}
-	}
-
-	pub fn parse_struct(s: &str) -> Result<Self, ()> {
-		if s.len() >= 3 && &s[0..3] == "gl_" {
-			return Err(());
-		}
-
-		Ok(Self(s.to_owned()))
 	}
 }
 

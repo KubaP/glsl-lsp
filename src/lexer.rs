@@ -140,11 +140,16 @@ pub enum OpType {
 	FnCall(usize),
 	/// Initializer list operator. Consumes the `usize` amount of nodes as arguments for the initializer list.
 	Init(usize),
+	/// Array constructor operator. Consumes the `usize` amount of nodes as arguments for the function call. The
+	/// first node is always an `Expr::Ident` which is the array constructor type. If `bool` is `true`, then the
+	/// second node is an `Expr::Index` which is the index count.
+	ArrInit(usize, bool),
 	// The following are never present in the final output of the shunting yard.
 	BracketStart,
 	IndexStart,
 	FnStart,
 	InitStart,
+	ArrInitStart,
 }
 
 pub type Spanned<T> = (T, std::ops::Range<usize>);

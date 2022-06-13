@@ -1168,6 +1168,15 @@ fn binaries() {
 			})
 		}
 	);
+	assert_expr!("5 * 4 * 3", Expr::Binary {
+		left: Box::from(Expr::Lit(Lit::Int(5))),
+		op: OpType::Mul,
+		right: Box::from(Expr::Binary {
+			left: Box::from(Expr::Lit(Lit::Int(4))),
+			op:OpType::Mul,
+			right: Box::from(Expr::Lit(Lit::Int(3)))
+		})
+	});
 	assert_expr!("5 + 1 / 3 * i",
 		Expr::Binary {
 			left: Box::from(Expr::Lit(Lit::Int(5))),
@@ -1338,6 +1347,36 @@ fn fn_calls() {
 
 #[test]
 #[rustfmt::skip]
+fn obj_access() {
+	assert_expr!("ident.something", Expr::ObjAccess {
+		obj: Box::from(Expr::Ident(Ident("ident".into()))),
+		access: Box::from(Expr::Ident(Ident("something".into())))
+	});
+	/* assert_expr!("a.b.c", Expr::ObjAccess {
+		obj: Box::from(Expr::Ident(Ident("a".into()))),
+		access: Box::from(Expr::ObjAccess {
+			obj: Box::from(Expr::Ident(Ident("b".into()))),
+			access: Box::from(Expr::Ident(Ident("c".into())))
+		})
+	}); */
+	assert_expr!("a.b.c", Expr::ObjAccess {
+		obj: Box::from(Expr::ObjAccess {
+			obj: Box::from(Expr::Ident(Ident("a".into()))),
+			access: Box::from(Expr::Ident(Ident("b".into())))
+		}),
+		access: Box::from(Expr::Ident(Ident("c".into())))
+	});
+	assert_expr!("fn().x", Expr::ObjAccess {
+		obj: Box::from(Expr::Fn {
+			ident: Ident("fn".into()),
+			args: vec![]
+		}),
+		access: Box::from(Expr::Ident(Ident("x".into())))
+	});
+}
+
+#[test]
+#[rustfmt::skip]
 fn indexes() {
 	assert_expr!("i[0]", Expr::Index {
 		item: Box::from(Expr::Ident(Ident("i".into()))),
@@ -1368,9 +1407,70 @@ fn indexes() {
 					left: Box::from(Expr::Lit(Lit::Int(1))),
 					op: OpType::Add,
 					right: Box::from(Expr::Lit(Lit::Int(2))),
-				})
-			})
-		})
+				}))
+			}))
+		}))
+	});
+
+	// Empty indexes
+	assert_expr!("int[]", Expr::Index {
+		item: Box::from(Expr::Ident(Ident("int".into()))),
+		i: None
+	});
+	assert_expr!("int[i[]]", Expr::Index {
+		item: Box::from(Expr::Ident(Ident("int".into()))),
+		i: Some(Box::from(Expr::Index {
+			item: Box::from(Expr::Ident(Ident("i".into()))),
+			i: None
+		}))
+	});
+}
+
+#[test]
+#[rustfmt::skip]
+fn arr_constructors() {
+	assert_expr!("int[1](2)", Expr::ArrInit {
+		arr: Box::from(Expr::Index {
+			item: Box::from(Expr::Ident(Ident("int".into()))),
+			i: Some(Box::from(Expr::Lit(Lit::Int(1))))
+		}),
+		args: vec![
+			Expr::Lit(Lit::Int(2))
+		]
+	});
+	assert_expr!("int[size](2, false, 5.0)", Expr::ArrInit {
+		arr: Box::from(Expr::Index {
+			item: Box::from(Expr::Ident(Ident("int".into()))),
+			i: Some(Box::from(Expr::Ident(Ident("size".into()))))
+		}),
+		args: vec![
+			Expr::Lit(Lit::Int(2)),
+			Expr::Lit(Lit::Bool(false)),
+			Expr::Lit(Lit::Float(5.0)),
+		]
+	});
+	assert_expr!("int[1+5](2)", Expr::ArrInit {
+		arr: Box::from(Expr::Index {
+			item: Box::from(Expr::Ident(Ident("int".into()))),
+			i: Some(Box::from(Expr::Binary {
+				left: Box::from(Expr::Lit(Lit::Int(1))),
+				op: OpType::Add,
+				right: Box::from(Expr::Lit(Lit::Int(5)))
+			}))
+		}),
+		args: vec![
+			Expr::Lit(Lit::Int(2))
+		]
+	});
+
+	assert_expr!("vec3[](2)", Expr::ArrInit {
+		arr: Box::from(Expr::Index {
+			item: Box::from(Expr::Ident(Ident("vec3".into()))),
+			i: None
+		}),
+		args: vec![
+			Expr::Lit(Lit::Int(2))
+		]
 	});
 }
 
@@ -1447,4 +1547,26 @@ fn complex() {
 			]
 		}
 	]));
+	assert_expr!("mat2[]({vec2(1, 2), vec2(3, 4)})", Expr::ArrInit {
+		arr: Box::from(Expr::Index {
+			item: Box::from(Expr::Ident(Ident("mat2".into()))),
+			i: None
+		}),
+		args: vec![Expr::InitList(vec![
+			Expr::Fn {
+				ident: Ident("vec2".into()),
+				args: vec![
+					Expr::Lit(Lit::Int(1)),
+					Expr::Lit(Lit::Int(2)),
+				]
+			},
+			Expr::Fn {
+				ident: Ident("vec2".into()),
+				args: vec![
+					Expr::Lit((Lit::Int(3))),
+					Expr::Lit((Lit::Int(4))),
+				]
+			}
+		])]
+	});
 }

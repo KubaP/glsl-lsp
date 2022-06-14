@@ -325,6 +325,19 @@ mat2 m = mat2({1.0, 2.0}, {3.0, 4.0});
 
 int i[2][3] = int[2]({1, 2, 3}, {4, 5, 6});
 ```
+Initializer Lists can have a trailing comma after the arguments, i.e. this is valid:
+```glsl
+// Valid
+vec2 v = {1, 2,};
+
+// Also valid
+vec2 v = {1, 2};
+
+// This however is invalid
+vec3 v = {1, 2, ,};
+//             ^ expected argument between the two commas
+```
+Note that this is **unlike** function calls, where a trailing comma is invalid.
 
 ## Implicit Conversions
 The following implicit conversions are available:
@@ -596,6 +609,15 @@ fn3(inout int i) {
 int i = 5;
 fn3(i);
 // `i` is now 10
+```
+Note that an argument is expected after a comma, i.e. this is invalid:
+```glsl
+// Invalid
+vec2(1, 2, )
+//       ^ expected argument here
+
+// Valid
+vec2(1, 2)
 ```
 
 ## Control Flow

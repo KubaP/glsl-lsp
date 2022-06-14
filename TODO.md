@@ -13,11 +13,12 @@
     - ~~Literals~~
     - ~~Identifiers~~
     - ~~Binary expressions (inc. parenthesis)~~
-    - ~~Prefix/postfix~~
-    - Function calls
-    - Initializer lists
-    - Array constructors
-    - Struct member access
+    - ~~Prefix/postfix operators~~
+    - ~~Indexing operator~~
+    - ~~Function calls~~
+    - ~~Initializer lists~~
+    - ~~Array constructors~~
+    - ~~Object access (inc. function calls)~~
     - Ternary
     
 TODO: Implement rest

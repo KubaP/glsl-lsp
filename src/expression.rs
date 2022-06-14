@@ -1378,6 +1378,7 @@ fn obj_access() {
 #[test]
 #[rustfmt::skip]
 fn indexes() {
+	// Single-dimensional indexes
 	assert_expr!("i[0]", Expr::Index {
 		item: Box::from(Expr::Ident(Ident("i".into()))),
 		i: Some(Box::from(Expr::Lit(Lit::Int(0))))
@@ -1412,6 +1413,25 @@ fn indexes() {
 		}))
 	});
 
+	// Multi-dimensional indexes
+	assert_expr!("i[5][2]", Expr::Index {
+		item: Box::from(Expr::Index {
+			item: Box::from(Expr::Ident(Ident("i".into()))),
+			i: Some(Box::from(Expr::Lit(Lit::Int(5))))
+		}),
+		i: Some(Box::from(Expr::Lit(Lit::Int(2))))
+	});
+	assert_expr!("i[5][2][size]", Expr::Index {
+		item: Box::from(Expr::Index {
+			item: Box::from(Expr::Index {
+				item: Box::from(Expr::Ident(Ident("i".into()))),
+				i: Some(Box::from(Expr::Lit(Lit::Int(5))))
+			}),
+			i: Some(Box::from(Expr::Lit(Lit::Int(2))))
+		}),
+		i: Some(Box::from(Expr::Ident(Ident("size".into()))))
+	});
+
 	// Empty indexes
 	assert_expr!("int[]", Expr::Index {
 		item: Box::from(Expr::Ident(Ident("int".into()))),
@@ -1423,6 +1443,23 @@ fn indexes() {
 			item: Box::from(Expr::Ident(Ident("i".into()))),
 			i: None
 		}))
+	});
+	assert_expr!("i[][]", Expr::Index {
+		item: Box::from(Expr::Index {
+			item: Box::from(Expr::Ident(Ident("i".into()))),
+			i: None
+		}),
+		i: None
+	});
+	assert_expr!("i[5][2][]", Expr::Index {
+		item: Box::from(Expr::Index {
+			item: Box::from(Expr::Index {
+				item: Box::from(Expr::Ident(Ident("i".into()))),
+				i: Some(Box::from(Expr::Lit(Lit::Int(5))))
+			}),
+			i: Some(Box::from(Expr::Lit(Lit::Int(2))))
+		}),
+		i: None
 	});
 }
 

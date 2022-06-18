@@ -2,16 +2,17 @@
 use crate::{
 	ast::{Either, Expr, Ident, Lit},
 	lexer::{lexer, OpType, Spanned, Token},
+	parser::Walker,
 };
 use std::{collections::VecDeque, iter::Peekable, slice::Iter};
 
-pub fn expr_parser(cst: Vec<Spanned<Token>>) -> Expr {
+pub fn expr_parser(walker: &mut Walker) -> Option<Expr> {
 	let mut parser = ShuntingYard {
 		stack: VecDeque::new(),
 		operators: VecDeque::new(),
 		groups: VecDeque::new(),
 	};
-	parser.parse(cst);
+	parser.parse(walker);
 	parser.create_ast()
 }
 
@@ -32,49 +33,6 @@ https://matklad.github.io/2020/04/15/from-pratt-to-dijkstra.html
 	- two parter, first writing a pratt parser, and then refactoring into a shunting yard parser with a slightly
 	  different approach
 */
-
-struct Walker {
-	cst: Vec<Spanned<Token>>,
-	cursor: usize,
-}
-
-impl Walker {
-	/// Returns the current token under the cursor, without advancing the cursor.
-	fn peek(&self) -> Option<&Token> {
-		self.cst.get(self.cursor).map(|(t, _)| t)
-	}
-
-	/// Peeks the next token without advancing the cursor; (returns the token under `cursor + 1`).
-	fn lookahead_1(&self) -> Option<&Token> {
-		self.cst.get(self.cursor + 1).map(|(t, _)| t)
-	}
-
-	/// Advances the cursor by one.
-	fn advance(&mut self) {
-		self.cursor += 1;
-	}
-
-	/// Returns the current token under the cursor and advances the cursor by one.
-	///
-	/// Equivalent to [`peek()`](Self::peek) followed by [`advance()`](Self::advance).
-	fn next(&mut self) -> Option<&Token> {
-		// If we are successful in getting the token, advance the cursor.
-		match self.cst.get(self.cursor) {
-			Some((t, _)) => {
-				self.cursor += 1;
-				Some(t)
-			}
-			None => None,
-		}
-	}
-
-	/// Returns whether the `Lexer` has reached the end of the token list.
-	fn is_done(&self) -> bool {
-		// We check that the cursor is equal to the length, because that means we have gone past the last token
-		// of the string, and hence, we are done.
-		self.cursor == self.cst.len()
-	}
-}
 
 #[derive(Debug, PartialEq)]
 enum Group {
@@ -494,7 +452,7 @@ impl ShuntingYard {
 	}
 
 	/// Parses a list of tokens. Populates the internal `stack` with a RPN output.
-	fn parse(&mut self, cst: Vec<Spanned<Token>>) {
+	fn parse(&mut self, walker: &mut Walker) {
 		#[derive(PartialEq)]
 		enum State {
 			/// We are looking for either a) a prefix operator, b) an atom, c) bracket group start, d) function
@@ -523,7 +481,6 @@ impl ShuntingYard {
 		// Whether to increase the arity on the next iteration. If set to `true`, on the next iteration, if we have
 		// a valid State::Operand, we increase the arity and reset the flag back to `false`.
 		let mut increase_arity = false;
-		let mut walker = Walker { cst, cursor: 0 };
 
 		'main: while !walker.is_done() {
 			let token = match walker.peek() {
@@ -831,8 +788,14 @@ impl ShuntingYard {
 	}
 
 	/// Converts the internal RPN stack into a singular `Expr` node, which contains the entire expression.
-	fn create_ast(&mut self) -> Expr {
+	fn create_ast(&mut self) -> Option<Expr> {
 		let mut stack = VecDeque::new();
+
+		// We have "parsed" the token stream and we immediately hit a token which cannot be part of an expression.
+		// Hence, there is no expression to return at all.
+		if self.stack.len() == 0 {
+			return None;
+		}
 
 		// Consume the stack from the front. If we have an expression, we move it to the back of a temporary stack.
 		// If we have an operator, we take the x-most expressions from the back of the temporary stack, process
@@ -1000,7 +963,7 @@ impl ShuntingYard {
 		}
 
 		// Return the one root expression.
-		stack.pop_back().unwrap()
+		Some(stack.pop_back().unwrap())
 	}
 }
 
@@ -1126,7 +1089,11 @@ impl std::fmt::Display for OpType {
 /// Asserts the expression output of the `expr_parser()` matches the right hand side.
 macro_rules! assert_expr {
 	($source:expr, $rest: expr) => {
-		assert_eq!(expr_parser(lexer($source)), $rest);
+		let mut walker = Walker {
+			cst: lexer($source),
+			cursor: 0,
+		};
+		assert_eq!(expr_parser(&mut walker).unwrap(), $rest);
 	};
 }
 

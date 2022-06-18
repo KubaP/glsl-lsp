@@ -1,28 +1,57 @@
-use crate::ast::{
-	Either, Expr, ExtBehaviour, Ident, Lit, Preproc, Primitive, Stmt, Type,
+use crate::{
+	ast::{Either, Expr, Stmt},
+	expression::expr_parser,
+	lexer::{lexer, Spanned, Token},
 };
-use crate::lexer::{lexer, NumType, OpType, Spanned, Token};
-use crate::expression::expr_parser;
-use chumsky::{prelude::*, Stream};
+
+pub struct Walker {
+	pub cst: Vec<Spanned<Token>>,
+	pub cursor: usize,
+}
+
+impl Walker {
+	/// Returns the current token under the cursor, without advancing the cursor.
+	pub fn peek(&self) -> Option<&Token> {
+		self.cst.get(self.cursor).map(|(t, _)| t)
+	}
+
+	/// Peeks the next token without advancing the cursor; (returns the token under `cursor + 1`).
+	pub fn lookahead_1(&self) -> Option<&Token> {
+		self.cst.get(self.cursor + 1).map(|(t, _)| t)
+	}
+
+	/// Advances the cursor by one.
+	pub fn advance(&mut self) {
+		self.cursor += 1;
+	}
+
+	/// Returns the current token under the cursor and advances the cursor by one.
+	///
+	/// Equivalent to [`peek()`](Self::peek) followed by [`advance()`](Self::advance).
+	pub fn next(&mut self) -> Option<&Token> {
+		// If we are successful in getting the token, advance the cursor.
+		match self.cst.get(self.cursor) {
+			Some((t, _)) => {
+				self.cursor += 1;
+				Some(t)
+			}
+			None => None,
+		}
+	}
+
+	/// Returns whether the `Lexer` has reached the end of the token list.
+	pub fn is_done(&self) -> bool {
+		// We check that the cursor is equal to the length, because that means we have gone past the last token
+		// of the string, and hence, we are done.
+		self.cursor == self.cst.len()
+	}
+}
 
 pub fn parse(source: &str) {
 	let cst = lexer(source);
 	println!("{cst:?}");
 
-	/* let len = source.chars().count();
-	let (ast, errors) = old_parser()
-		.parse_recovery(Stream::from_iter(len..len + 1, cst.into_iter()));
-	println!("{ast:?}");
-	if let Some(ast) = ast {
-		for stmt in ast {
-			print_stmt(&stmt, 0);
-		}
-	}
-	println!("\r\nerrors: {errors:?}"); */
-
-	let expr = expr_parser(cst);
-	println!("{expr}");
-	//println!("{ast:?}");
+	parser(cst);
 }
 
 fn print_stmt(stmt: &Stmt, indent: usize) {

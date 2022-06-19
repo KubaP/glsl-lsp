@@ -6,6 +6,7 @@
 - ~~Comments~~
 - ~~Preprocessor directives~~
 - ~~Illegals~~
+- Properly parse the line continuation character (`\`) everywhere that it's valid
 
 ## Parsing
 ### custom parser
@@ -20,8 +21,8 @@
     - ~~Array constructors~~
     - ~~Object access (inc. function calls)~~
     - Ternary
-    
-TODO: Implement rest
+- Variable definitions
+- Variable declarations
 
 ### chumsky parser
 - ~~Version directive~~

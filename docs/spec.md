@@ -460,11 +460,16 @@ Only the `==`, `!=`, `=` and `[]` index operators are allowed to operate on [Arr
 
 ## Variable Definitions & Declarations
 Variable declaration & definition statements are valid at the top-level of a shader file, and within functions or any other control flow statements or scopes. Variables can be of any type (other than `void`).
+```glsl
+// A definition
+int i;
+
+// A declaration
+int i = 5;
+```
 
 ### Initialization
 See [Initialization](#initialization) for an overview of how different types can be initialized.
-
-For `const` qualified variables (or other constant variables such as `uniform` globals), any assignment expression must also be a *Constant Expression*.
 
 If a variable is not initialized at the site of definition, it must be later initialized (through assignment, or through declaration) before it can be used:
 ```glsl
@@ -479,9 +484,13 @@ float b[3] = {1, 2, 3};
 
 // Can be used...
 ```
+For `const` qualified variables (or other constant variables such as `uniform` globals), any assignment expression must also be a *Constant Expression*.
 
 ### Assignment
-Variable can be assigned in a similar fashion to how they are declared:
+
+
+## Variable Assignment
+Variable assignment statements are valid at the top-level of a shader file, and within functions or any other control flow statements or scopes:
 ```glsl
 // Assuming int p;
 p = 5;
@@ -491,6 +500,18 @@ b = {
     {1, 2, 3, 4},
     {5, 6, 7, 8}
 };
+```
+Variable assignment can also take a shorthand form if the expression involves the variable:
+```glsl
+p += 1;
+
+// The same as:
+p = p + 1;
+```
+Note: These operators can also be used within expressions like so:
+```glsl
+// This will increment `p` by 4, and assign a copy of this new value to `i`.
+int i = p+= 4;
 ```
 
 ## Function Definitions & Declarations

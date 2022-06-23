@@ -135,10 +135,11 @@ impl ShuntingYard {
 					return;
 				}
 
-				// We remove the operator without pushing it to the stack. Bracket groups don't actually create an
-				// AST node, they are just used to prioritise the order of binary expressions, hence no need for an
-				// operator.
+				// We remove the operator without push it to the stack. Whilst there is technically no need for a
+				// parenthesis operator, we use this operator to construct a parenthesis expression for
+				// completeness sake.
 				self.operators.pop_back();
+				self.stack.push_back(Either::Right(OpType::Paren));
 				self.groups.pop_back();
 				break;
 			} else if *top_op == OpType::FnStart {
@@ -804,18 +805,6 @@ impl ShuntingYard {
 			match e {
 				Either::Left(e) => stack.push_back(e),
 				Either::Right(op) => match op {
-					OpType::Neg => {
-						let expr = stack.pop_back().unwrap();
-						stack.push_back(Expr::Neg(Box::from(expr)));
-					}
-					OpType::Flip => {
-						let expr = stack.pop_back().unwrap();
-						stack.push_back(Expr::Flip(Box::from(expr)));
-					}
-					OpType::Not => {
-						let expr = stack.pop_back().unwrap();
-						stack.push_back(Expr::Not(Box::from(expr)));
-					}
 					OpType::AddAddPre => {
 						let expr = stack.pop_back().unwrap();
 						stack.push_back(Expr::Prefix(
@@ -843,6 +832,42 @@ impl ShuntingYard {
 							Box::from(expr),
 							OpType::Sub,
 						));
+					}
+					OpType::Neg => {
+						let expr = stack.pop_back().unwrap();
+						stack.push_back(Expr::Neg(Box::from(expr)));
+					}
+					OpType::Flip => {
+						let expr = stack.pop_back().unwrap();
+						stack.push_back(Expr::Flip(Box::from(expr)));
+					}
+					OpType::Not => {
+						let expr = stack.pop_back().unwrap();
+						stack.push_back(Expr::Not(Box::from(expr)));
+					}
+					OpType::Index(contains_i) => {
+						let i = if contains_i {
+							Some(Box::from(stack.pop_back().unwrap()))
+						} else {
+							None
+						};
+						let expr = stack.pop_back().unwrap();
+						stack.push_back(Expr::Index {
+							item: Box::from(expr),
+							i,
+						});
+					}
+					OpType::ObjAccess => {
+						let access = stack.pop_back().unwrap();
+						let obj = stack.pop_back().unwrap();
+						stack.push_back(Expr::ObjAccess {
+							obj: Box::from(obj),
+							access: Box::from(access),
+						});
+					}
+					OpType::Paren => {
+						let expr = stack.pop_back().unwrap();
+						stack.push_back(Expr::Paren(Box::from(expr)));
 					}
 					OpType::FnCall(count) => {
 						let mut args = VecDeque::new();
@@ -892,26 +917,6 @@ impl ShuntingYard {
 						args.reverse();
 
 						stack.push_back(Expr::InitList(args));
-					}
-					OpType::Index(contains_i) => {
-						let i = if contains_i {
-							Some(Box::from(stack.pop_back().unwrap()))
-						} else {
-							None
-						};
-						let expr = stack.pop_back().unwrap();
-						stack.push_back(Expr::Index {
-							item: Box::from(expr),
-							i,
-						});
-					}
-					OpType::ObjAccess => {
-						let access = stack.pop_back().unwrap();
-						let obj = stack.pop_back().unwrap();
-						stack.push_back(Expr::ObjAccess {
-							obj: Box::from(obj),
-							access: Box::from(access),
-						});
 					}
 					OpType::Add
 					| OpType::Sub
@@ -1003,7 +1008,16 @@ impl OpType {
 			// These two should always be converted to the *Pre or *Post versions in the shunting yard.
 			Self::AddAdd | Self::SubSub => panic!("OpType::AddAdd | OpType::SubSub do not have precedence values because they should never be passed into this function. Something has gone wrong!"),
 			// These are never directly checked for precedence, but rather have special branches.
-			Self::BracketStart | Self::FnStart | Self::FnCall(_) | Self::IndexStart | Self::Index(_) | Self::InitStart | Self::Init(_) | Self::ArrInitStart | Self::ArrInit(_,_) => {
+			Self::BracketStart
+			| Self::Paren 
+			| Self::FnStart 
+			| Self::FnCall(_) 
+			| Self::IndexStart 
+			| Self::Index(_) 
+			| Self::InitStart 
+			| Self::Init(_) 
+			| Self::ArrInitStart 
+			| Self::ArrInit(_,_) => {
 				panic!("The operator {self:?} does not have a precedence value because it should never be passed into this function. Something has gone wrong!")
 			},
 		}
@@ -1070,15 +1084,16 @@ impl std::fmt::Display for OpType {
 			Self::SubSubPre => write!(f, "--pre"),
 			Self::SubSubPost => write!(f, "--post"),
 			Self::BracketStart
-			| Self::IndexStart
 			| Self::FnStart
+			| Self::IndexStart
 			| Self::InitStart
 			| Self::ArrInitStart => {
 				write!(f, "")
 			}
-			Self::ObjAccess => write!(f, "access"),
+			Self::Paren => write!(f, ""),
 			Self::Index(true) => write!(f, "index"),
 			Self::Index(false) => write!(f, "empty_index"),
+			Self::ObjAccess => write!(f, "access"),
 			Self::FnCall(count) => write!(f, "FN:{count}"),
 			Self::Init(count) => write!(f, "INIT:{count}"),
 			Self::ArrInit(count, bool) => write!(f, "ARR_INIT:{count}:{bool}"),
@@ -1181,26 +1196,26 @@ fn binaries() {
 fn brackets() {
 	assert_expr!("(5 + 1) * 8",
 		Expr::Binary {
-			left: Box::from(Expr::Binary {
+			left: Box::from(Expr::Paren(Box::from(Expr::Binary {
 				left: Box::from(Expr::Lit(Lit::Int(5))),
 				op: OpType::Add,
 				right: Box::from(Expr::Lit(Lit::Int(1))),
-			}),
+			}))),
 			op: OpType::Mul,
 			right: Box::from(Expr::Lit(Lit::Int(8)))
 		}
 	);
 	assert_expr!("((5 + 1) < 100) * 8",
 		Expr::Binary {
-			left: Box::from(Expr::Binary {
-				left: Box::from(Expr::Binary {
+			left: Box::from(Expr::Paren(Box::from(Expr::Binary {
+				left: Box::from(Expr::Paren(Box::from(Expr::Binary {
 					left: Box::from(Expr::Lit(Lit::Int(5))),
 					op: OpType::Add,
 					right: Box::from(Expr::Lit(Lit::Int(1))),
-				}),
+				}))),
 				op: OpType::Lt,
 				right: Box::from(Expr::Lit(Lit::Int(100))),
-			}),
+			}))),
 			op: OpType::Mul,
 			right: Box::from(Expr::Lit(Lit::Int(8)))
 		}
@@ -1525,11 +1540,11 @@ fn complex() {
 				ident: Ident("func".into()),
 				args: vec![
 					Expr::Binary {
-						left: Box::from(Expr::Binary {
+						left: Box::from(Expr::Paren(Box::from(Expr::Binary {
 							left: Box::from(Expr::Lit(Lit::Int(1))),
 							op: OpType::Add,
 							right: Box::from(Expr::Lit(Lit::Int(1))),
-						}),
+						}))),
 						op: OpType::Mul,
 						right: Box::from(Expr::Lit(Lit::Float(5.0)))
 					}

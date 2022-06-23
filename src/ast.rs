@@ -58,12 +58,12 @@ pub enum Expr {
 	Lit(Lit),
 	/// An identifier; could be a variable name, function name, etc.
 	Ident(Ident),
-	/// A negation of an expression.
-	Neg(Box<Expr>),
 	/// An expression prefix.
 	Prefix(Box<Expr>, OpType),
 	/// An expression postfix.
 	Postfix(Box<Expr>, OpType),
+	/// A negation of an expression.
+	Neg(Box<Expr>),
 	/// A bitflip.
 	Flip(Box<Expr>),
 	/// A not.
@@ -73,12 +73,16 @@ pub enum Expr {
 		item: Box<Expr>,
 		i: Option<Box<Expr>>,
 	},
+	/// Object access.
+	ObjAccess { obj: Box<Expr>, access: Box<Expr> },
 	/// Binary expression with a left and right hand-side.
 	Binary {
 		left: Box<Expr>,
 		op: OpType,
 		right: Box<Expr>,
 	},
+	/// A parenthesis group. *Note:* currently this has no real use.
+	Paren(Box<Expr>),
 	/// Ternary if.
 	Ternary {
 		cond: Box<Expr>,
@@ -107,13 +111,13 @@ impl std::fmt::Display for Expr {
 			Expr::Invalid => write!(f, "\x1b[31;4mINVALID\x1b[0m"),
 			Expr::Lit(l) => write!(f, "Lit<{l}>"),
 			Expr::Ident(i) => write!(f, "Ident<{i}>"),
-			Expr::Neg(expr) => write!(f, "\x1b[36mNeg\x1b[0m({expr})"),
 			Expr::Prefix(expr, op) => {
 				write!(f, "\x1b[36mPre\x1b[0m({expr} \x1b[36m{op:?}\x1b[0m)")
 			}
 			Expr::Postfix(expr, op) => {
 				write!(f, "\x1b[36mPost\x1b[0m({expr} \x1b[36m{op:?}\x1b[0m)")
 			}
+			Expr::Neg(expr) => write!(f, "\x1b[36mNeg\x1b[0m({expr})"),
 			Expr::Flip(expr) => write!(f, "\x1b[36mFlip\x1b[0m({expr})"),
 			Expr::Not(expr) => write!(f, "\x1b[36mNot\x1b[0m({expr})"),
 			Expr::Index { item, i } => {
@@ -130,6 +134,7 @@ impl std::fmt::Display for Expr {
 			Expr::Binary { left, op, right } => {
 				write!(f, "({left} \x1b[36m{op:?}\x1b[0m {right})")
 			}
+			Expr::Paren(expr) => write!(f, "({expr})"),
 			Expr::Ternary {
 				cond,
 				true_,

@@ -131,10 +131,12 @@ pub enum OpType {
 	AddAddPost,
 	SubSubPre,
 	SubSubPost,
-	/// Object access operator.
-	ObjAccess,
+	/// Parenthesis group.
+	Paren,
 	/// Index operator. `false` if the operator has no expression value inside the `[...]` brackets.
 	Index(bool),
+	/// Object access operator.
+	ObjAccess,
 	/// Function call operator. Consumes the `usize` amount of nodes as arguments for the function call. The first
 	/// node is always an `Expr::Ident` which is the function identifier.
 	FnCall(usize),
@@ -146,8 +148,8 @@ pub enum OpType {
 	ArrInit(usize, bool),
 	// The following are never present in the final output of the shunting yard.
 	BracketStart,
-	IndexStart,
 	FnStart,
+	IndexStart,
 	InitStart,
 	ArrInitStart,
 }

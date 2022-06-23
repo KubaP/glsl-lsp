@@ -52,7 +52,7 @@ pub enum Token {
 	Index,
 	FragTest,
 	// Punctuation
-	Op(OpType),
+	Op(Op),
 	Eq,
 	Comma,
 	Dot,
@@ -78,7 +78,7 @@ pub enum NumType {
 
 /// Mathematical and comparison operators.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub enum OpType {
+pub enum Op {
 	// Maths
 	Add,
 	Sub,
@@ -290,27 +290,27 @@ macro_rules! match_op {
 
 /// Matches punctuation.
 fn match_punctuation(lexer: &mut Lexer) -> Token {
-	match_op!(lexer, "<<=", Token::Op(OpType::LShiftEq));
-	match_op!(lexer, ">>=", Token::Op(OpType::RShiftEq));
-	match_op!(lexer, "==", Token::Op(OpType::EqEq));
-	match_op!(lexer, "!=", Token::Op(OpType::NotEq));
-	match_op!(lexer, ">=", Token::Op(OpType::Ge));
-	match_op!(lexer, "<=", Token::Op(OpType::Le));
-	match_op!(lexer, "&&", Token::Op(OpType::AndAnd));
-	match_op!(lexer, "||", Token::Op(OpType::OrOr));
-	match_op!(lexer, "++", Token::Op(OpType::AddAdd));
-	match_op!(lexer, "--", Token::Op(OpType::SubSub));
-	match_op!(lexer, "<<", Token::Op(OpType::LShift));
-	match_op!(lexer, ">>", Token::Op(OpType::RShift));
-	match_op!(lexer, "+=", Token::Op(OpType::AddEq));
-	match_op!(lexer, "-=", Token::Op(OpType::SubEq));
-	match_op!(lexer, "*=", Token::Op(OpType::MulEq));
-	match_op!(lexer, "/=", Token::Op(OpType::DivEq));
-	match_op!(lexer, "%=", Token::Op(OpType::RemEq));
-	match_op!(lexer, "&=", Token::Op(OpType::AndEq));
-	match_op!(lexer, "|=", Token::Op(OpType::OrEq));
-	match_op!(lexer, "^^", Token::Op(OpType::XorXor));
-	match_op!(lexer, "^=", Token::Op(OpType::XorEq));
+	match_op!(lexer, "<<=", Token::Op(Op::LShiftEq));
+	match_op!(lexer, ">>=", Token::Op(Op::RShiftEq));
+	match_op!(lexer, "==", Token::Op(Op::EqEq));
+	match_op!(lexer, "!=", Token::Op(Op::NotEq));
+	match_op!(lexer, ">=", Token::Op(Op::Ge));
+	match_op!(lexer, "<=", Token::Op(Op::Le));
+	match_op!(lexer, "&&", Token::Op(Op::AndAnd));
+	match_op!(lexer, "||", Token::Op(Op::OrOr));
+	match_op!(lexer, "++", Token::Op(Op::AddAdd));
+	match_op!(lexer, "--", Token::Op(Op::SubSub));
+	match_op!(lexer, "<<", Token::Op(Op::LShift));
+	match_op!(lexer, ">>", Token::Op(Op::RShift));
+	match_op!(lexer, "+=", Token::Op(Op::AddEq));
+	match_op!(lexer, "-=", Token::Op(Op::SubEq));
+	match_op!(lexer, "*=", Token::Op(Op::MulEq));
+	match_op!(lexer, "/=", Token::Op(Op::DivEq));
+	match_op!(lexer, "%=", Token::Op(Op::RemEq));
+	match_op!(lexer, "&=", Token::Op(Op::AndEq));
+	match_op!(lexer, "|=", Token::Op(Op::OrEq));
+	match_op!(lexer, "^^", Token::Op(Op::XorXor));
+	match_op!(lexer, "^=", Token::Op(Op::XorEq));
 	match_op!(lexer, ";", Token::Semi);
 	match_op!(lexer, ".", Token::Dot);
 	match_op!(lexer, ",", Token::Comma);
@@ -322,19 +322,19 @@ fn match_punctuation(lexer: &mut Lexer) -> Token {
 	match_op!(lexer, "{", Token::LBrace);
 	match_op!(lexer, "}", Token::RBrace);
 	match_op!(lexer, ":", Token::Colon);
-	match_op!(lexer, "+", Token::Op(OpType::Add));
-	match_op!(lexer, "-", Token::Op(OpType::Sub));
-	match_op!(lexer, "*", Token::Op(OpType::Mul));
-	match_op!(lexer, "/", Token::Op(OpType::Div));
-	match_op!(lexer, ">", Token::Op(OpType::Gt));
-	match_op!(lexer, "<", Token::Op(OpType::Lt));
-	match_op!(lexer, "!", Token::Op(OpType::Not));
-	match_op!(lexer, "~", Token::Op(OpType::Flip));
+	match_op!(lexer, "+", Token::Op(Op::Add));
+	match_op!(lexer, "-", Token::Op(Op::Sub));
+	match_op!(lexer, "*", Token::Op(Op::Mul));
+	match_op!(lexer, "/", Token::Op(Op::Div));
+	match_op!(lexer, ">", Token::Op(Op::Gt));
+	match_op!(lexer, "<", Token::Op(Op::Lt));
+	match_op!(lexer, "!", Token::Op(Op::Not));
+	match_op!(lexer, "~", Token::Op(Op::Flip));
 	match_op!(lexer, "?", Token::Question);
-	match_op!(lexer, "%", Token::Op(OpType::Rem));
-	match_op!(lexer, "&", Token::Op(OpType::And));
-	match_op!(lexer, "|", Token::Op(OpType::Or));
-	match_op!(lexer, "^", Token::Op(OpType::Xor));
+	match_op!(lexer, "%", Token::Op(Op::Rem));
+	match_op!(lexer, "&", Token::Op(Op::And));
+	match_op!(lexer, "|", Token::Op(Op::Or));
+	match_op!(lexer, "^", Token::Op(Op::Xor));
 	unreachable!()
 }
 
@@ -1032,8 +1032,8 @@ fn spans() {
 	assert_eq!(lexer("1.2."), vec![(Token::Num { num: "1.2".into(), suffix: None, type_: NumType::Float }, 0..3), (Token::Dot, 3..4)]);
 	assert_eq!(lexer("1e"), vec![(Token::Num { num: "1".into(), suffix: Some("e".into()), type_: NumType::Dec }, 0..2)]);
 	assert_eq!(lexer("123 "), vec![(Token::Num { num: "123".into(), suffix: None, type_: NumType::Dec }, 0..3)]);
-	assert_eq!(lexer("1e+="), vec![(Token::Num { num: "1".into(), suffix: Some("e".into()), type_: NumType::Dec }, 0..2), (Token::Op(OpType::AddEq), 2..4)]);
-	assert_eq!(lexer("1e+"), vec![(Token::Num { num: "1".into(), suffix: Some("e".into()), type_: NumType::Dec }, 0..2), (Token::Op(OpType::Add), 2..3)]);
+	assert_eq!(lexer("1e+="), vec![(Token::Num { num: "1".into(), suffix: Some("e".into()), type_: NumType::Dec }, 0..2), (Token::Op(Op::AddEq), 2..4)]);
+	assert_eq!(lexer("1e+"), vec![(Token::Num { num: "1".into(), suffix: Some("e".into()), type_: NumType::Dec }, 0..2), (Token::Op(Op::Add), 2..3)]);
 }
 
 /// Asserts the token output of the `lexer()` matches the right hand side; ignores the spans.
@@ -1154,40 +1154,40 @@ fn punctuation() {
 	assert_tokens!("{", Token::LBrace);
 	assert_tokens!("}", Token::RBrace);
 	assert_tokens!(":", Token::Colon);
-	assert_tokens!("+", Token::Op(OpType::Add));
-	assert_tokens!("-", Token::Op(OpType::Sub));
-	assert_tokens!("*", Token::Op(OpType::Mul));
-	assert_tokens!("/", Token::Op(OpType::Div));
-	assert_tokens!(">", Token::Op(OpType::Gt));
-	assert_tokens!("<", Token::Op(OpType::Lt));
-	assert_tokens!("!", Token::Op(OpType::Not));
-	assert_tokens!("~", Token::Op(OpType::Flip));
+	assert_tokens!("+", Token::Op(Op::Add));
+	assert_tokens!("-", Token::Op(Op::Sub));
+	assert_tokens!("*", Token::Op(Op::Mul));
+	assert_tokens!("/", Token::Op(Op::Div));
+	assert_tokens!(">", Token::Op(Op::Gt));
+	assert_tokens!("<", Token::Op(Op::Lt));
+	assert_tokens!("!", Token::Op(Op::Not));
+	assert_tokens!("~", Token::Op(Op::Flip));
 	assert_tokens!("?", Token::Question);
-	assert_tokens!("%", Token::Op(OpType::Rem));
-	assert_tokens!("&", Token::Op(OpType::And));
-	assert_tokens!("|", Token::Op(OpType::Or));
-	assert_tokens!("^", Token::Op(OpType::Xor));
-	assert_tokens!("==", Token::Op(OpType::EqEq));
-	assert_tokens!("!=", Token::Op(OpType::NotEq));
-	assert_tokens!(">=", Token::Op(OpType::Ge));
-	assert_tokens!("<=", Token::Op(OpType::Le));
-	assert_tokens!("&&", Token::Op(OpType::AndAnd));
-	assert_tokens!("||", Token::Op(OpType::OrOr));
-	assert_tokens!("^^", Token::Op(OpType::XorXor));
-	assert_tokens!("++", Token::Op(OpType::AddAdd));
-	assert_tokens!("--", Token::Op(OpType::SubSub));
-	assert_tokens!("<<", Token::Op(OpType::LShift));
-	assert_tokens!(">>", Token::Op(OpType::RShift));
-	assert_tokens!("+=", Token::Op(OpType::AddEq));
-	assert_tokens!("-=", Token::Op(OpType::SubEq));
-	assert_tokens!("*=", Token::Op(OpType::MulEq));
-	assert_tokens!("/=", Token::Op(OpType::DivEq));
-	assert_tokens!("%=", Token::Op(OpType::RemEq));
-	assert_tokens!("&=", Token::Op(OpType::AndEq));
-	assert_tokens!("|=", Token::Op(OpType::OrEq));
-	assert_tokens!("^=", Token::Op(OpType::XorEq));
-	assert_tokens!("<<=", Token::Op(OpType::LShiftEq));
-	assert_tokens!(">>=", Token::Op(OpType::RShiftEq));
+	assert_tokens!("%", Token::Op(Op::Rem));
+	assert_tokens!("&", Token::Op(Op::And));
+	assert_tokens!("|", Token::Op(Op::Or));
+	assert_tokens!("^", Token::Op(Op::Xor));
+	assert_tokens!("==", Token::Op(Op::EqEq));
+	assert_tokens!("!=", Token::Op(Op::NotEq));
+	assert_tokens!(">=", Token::Op(Op::Ge));
+	assert_tokens!("<=", Token::Op(Op::Le));
+	assert_tokens!("&&", Token::Op(Op::AndAnd));
+	assert_tokens!("||", Token::Op(Op::OrOr));
+	assert_tokens!("^^", Token::Op(Op::XorXor));
+	assert_tokens!("++", Token::Op(Op::AddAdd));
+	assert_tokens!("--", Token::Op(Op::SubSub));
+	assert_tokens!("<<", Token::Op(Op::LShift));
+	assert_tokens!(">>", Token::Op(Op::RShift));
+	assert_tokens!("+=", Token::Op(Op::AddEq));
+	assert_tokens!("-=", Token::Op(Op::SubEq));
+	assert_tokens!("*=", Token::Op(Op::MulEq));
+	assert_tokens!("/=", Token::Op(Op::DivEq));
+	assert_tokens!("%=", Token::Op(Op::RemEq));
+	assert_tokens!("&=", Token::Op(Op::AndEq));
+	assert_tokens!("|=", Token::Op(Op::OrEq));
+	assert_tokens!("^=", Token::Op(Op::XorEq));
+	assert_tokens!("<<=", Token::Op(Op::LShiftEq));
+	assert_tokens!(">>=", Token::Op(Op::RShiftEq));
 }
 
 #[test]

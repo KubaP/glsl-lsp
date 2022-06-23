@@ -1,7 +1,7 @@
 #![allow(unused)]
 use crate::{
 	ast::{Either, Expr, Ident, Lit},
-	lexer::{lexer, OpType, Spanned, Token},
+	lexer::{lexer, Op, Spanned, Token},
 	parser::Walker,
 };
 use std::{collections::VecDeque, iter::Peekable, slice::Iter};
@@ -50,9 +50,9 @@ enum Group {
 
 struct ShuntingYard {
 	/// The final output stack in RPN.
-	stack: VecDeque<Either<Expr, OpType>>,
+	stack: VecDeque<Either<Expr, Op>>,
 	/// Temporary stack to hold operators.
-	operators: VecDeque<OpType>,
+	operators: VecDeque<Op>,
 	/// Temporary stack to hold expression groups. The top-most entry is the group being currently parsed.
 	groups: VecDeque<Group>,
 }
@@ -60,14 +60,14 @@ struct ShuntingYard {
 impl ShuntingYard {
 	/// Pushes an operator onto the stack, potentially popping any operators which have a greater precedence than
 	/// the operator being pushed.
-	fn push_operator(&mut self, op: OpType) {
+	fn push_operator(&mut self, op: Op) {
 		while self.operators.back().is_some() {
 			let back = self.operators.back().unwrap();
 
-			if *back == OpType::BracketStart
-				|| *back == OpType::IndexStart
-				|| *back == OpType::FnStart
-				|| *back == OpType::InitStart
+			if *back == Op::BracketStart
+				|| *back == Op::IndexStart
+				|| *back == Op::FnStart
+				|| *back == Op::InitStart
 			{
 				// Group delimiter start operators always have the highest precedence, so we don't need to check
 				// further.
@@ -75,7 +75,7 @@ impl ShuntingYard {
 			}
 
 			// This is done to make `ObjAccess` right-associative.
-			if op == OpType::ObjAccess && *back == OpType::ObjAccess {
+			if op == Op::ObjAccess && *back == Op::ObjAccess {
 				let moved_op = self.operators.pop_back().unwrap();
 				self.stack.push_back(Either::Right(moved_op));
 				break;
@@ -121,7 +121,7 @@ impl ShuntingYard {
 		while self.operators.back().is_some() {
 			let top_op = self.operators.back().unwrap();
 
-			if *top_op == OpType::BracketStart {
+			if *top_op == Op::BracketStart {
 				// We have reached the start of the current bracket group.
 
 				// Sanity check; this should never happen.
@@ -139,10 +139,10 @@ impl ShuntingYard {
 				// parenthesis operator, we use this operator to construct a parenthesis expression for
 				// completeness sake.
 				self.operators.pop_back();
-				self.stack.push_back(Either::Right(OpType::Paren));
+				self.stack.push_back(Either::Right(Op::Paren));
 				self.groups.pop_back();
 				break;
-			} else if *top_op == OpType::FnStart {
+			} else if *top_op == Op::FnStart {
 				// We have reached the start of the current function call group.
 
 				match current_group {
@@ -153,7 +153,7 @@ impl ShuntingYard {
 						// Note: The first expression will always be the expression containing the function
 						// identifier (hence the `+ 1`).
 						self.operators.pop_back();
-						self.stack.push_back(Either::Right(OpType::FnCall(
+						self.stack.push_back(Either::Right(Op::FnCall(
 							count + 1,
 						)));
 						self.groups.pop_back();
@@ -172,7 +172,7 @@ impl ShuntingYard {
 					}
 					_ => unreachable!(),
 				}
-			} else if *top_op == OpType::ArrInitStart {
+			} else if *top_op == Op::ArrInitStart {
 				// We have reached the start of the current array constructor call group.
 
 				match current_group {
@@ -184,7 +184,7 @@ impl ShuntingYard {
 						// Note: The first expression will always be the `Index` expression containing the
 						// identifier/item and the array index (hence the `+1`).
 						self.operators.pop_back();
-						self.stack.push_back(Either::Right(OpType::ArrInit(
+						self.stack.push_back(Either::Right(Op::ArrInit(
 							count + 1,
 							true,
 						)));
@@ -205,11 +205,11 @@ impl ShuntingYard {
 					}
 					_ => unreachable!(),
 				}
-			} else if *top_op == OpType::IndexStart {
+			} else if *top_op == Op::IndexStart {
 				// Sanity check; this should never happen.
 				println!("Mismatch between operator stack (OpType::IndexStart) and group stack (Group::Bracket|Group::Fn|Group::ArrInit)!");
 				return;
-			} else if *top_op == OpType::InitStart {
+			} else if *top_op == Op::InitStart {
 				// Sanity check; this should never happen.
 				println!("Mismatch between operator stack (OpType::InitStart) and group stack (Group::Bracket|Group::Fn|Group::ArrInit)!");
 				return;
@@ -255,28 +255,28 @@ impl ShuntingYard {
 		while self.operators.back().is_some() {
 			let top_op = self.operators.back().unwrap();
 
-			if *top_op == OpType::IndexStart {
+			if *top_op == Op::IndexStart {
 				// We have reached the start of the current index group.
 
 				// We remove the operator and push it to the stack.
 				self.operators.pop_back();
 				self.groups.pop_back();
 				self.stack
-					.push_back(Either::Right(OpType::Index(contains_i)));
+					.push_back(Either::Right(Op::Index(contains_i)));
 				break;
-			} else if *top_op == OpType::BracketStart {
+			} else if *top_op == Op::BracketStart {
 				// Sanity check; this should never happen.
 				println!("Mismatch between operator stack (OpType::BracketStart) and group stack (Group::Index)!");
 				return;
-			} else if *top_op == OpType::FnStart {
+			} else if *top_op == Op::FnStart {
 				// Sanity check; this should never happen.
 				println!("Mismatch between operator stack (OpType::FnStart) and group stack (Group::Index)!");
 				return;
-			} else if *top_op == OpType::InitStart {
+			} else if *top_op == Op::InitStart {
 				// Sanity check; this should never happen.
 				println!("Mismatch between operator stack (OpType::InitStart) and group stack (Group::Index)!");
 				return;
-			} else if *top_op == OpType::ArrInitStart {
+			} else if *top_op == Op::ArrInitStart {
 				// Sanity check; this should never happen.
 				println!("Mismatch between operator stack (OpType::ArrInitStart) and group stack (Group::Index)!");
 				return;
@@ -322,7 +322,7 @@ impl ShuntingYard {
 		while self.operators.back().is_some() {
 			let top_op = self.operators.back().unwrap();
 
-			if *top_op == OpType::InitStart {
+			if *top_op == Op::InitStart {
 				// We have reached the start of the current initializer list group.
 
 				match current_group {
@@ -331,25 +331,25 @@ impl ShuntingYard {
 						// how many of the previous expressions are part of the current initializer list group.
 						self.operators.pop_back();
 						self.stack
-							.push_back(Either::Right(OpType::Init(*count)));
+							.push_back(Either::Right(Op::Init(*count)));
 						self.groups.pop_back();
 						break;
 					}
 					_ => unreachable!(),
 				}
-			} else if *top_op == OpType::BracketStart {
+			} else if *top_op == Op::BracketStart {
 				// Sanity check; this should never happen.
 				println!("Mismatch between operator stack (OpType::BracketStart) and group stack (Group::Init)!");
 				return;
-			} else if *top_op == OpType::FnStart {
+			} else if *top_op == Op::FnStart {
 				// Sanity check; this should never happen.
 				println!("Mismatch between operator stack (OpType::FnStart) and group stack (Group::Init)!");
 				return;
-			} else if *top_op == OpType::IndexStart {
+			} else if *top_op == Op::IndexStart {
 				// Sanity check; this should never happen.
 				println!("Mismatch between operator stack (OpType::IndexStart) and group stack (Group::Init)!");
 				return;
-			} else if *top_op == OpType::ArrInitStart {
+			} else if *top_op == Op::ArrInitStart {
 				// Sanity check; this should never happen.
 				println!("Mismatch between operator stack (OpType::ArrInitStart) and group stack (Group::Init)!");
 				return;
@@ -372,9 +372,9 @@ impl ShuntingYard {
 					// the stack, to clear it for the next expression after the comma.
 					while self.operators.back().is_some() {
 						let back = self.operators.back().unwrap();
-						if *back == OpType::FnStart
-							|| *back == OpType::InitStart
-							|| *back == OpType::ArrInitStart
+						if *back == Op::FnStart
+							|| *back == Op::InitStart
+							|| *back == Op::ArrInitStart
 						{
 							break;
 						}
@@ -537,11 +537,11 @@ impl ShuntingYard {
 					match op {
 						// If the operator is a valid prefix operator, we can move it to the stack. We don't switch
 						// state since after a prefix operator, we are still looking for an operand atom.
-						OpType::Sub => self.push_operator(OpType::Neg),
-						OpType::Not => self.push_operator(OpType::Not),
-						OpType::Flip => self.push_operator(OpType::Flip),
-						OpType::AddAdd => self.push_operator(OpType::AddAddPre),
-						OpType::SubSub => self.push_operator(OpType::SubSubPre),
+						Op::Sub => self.push_operator(Op::Neg),
+						Op::Not => self.push_operator(Op::Not),
+						Op::Flip => self.push_operator(Op::Flip),
+						Op::AddAdd => self.push_operator(Op::AddAddPre),
+						Op::SubSub => self.push_operator(Op::SubSubPre),
 						_ => {
 							// This is an error, e.g. `..*1` instead of `..-1`.
 							println!("Expected an atom or a prefix operator, found a non-prefix operator instead!");
@@ -558,7 +558,7 @@ impl ShuntingYard {
 				}
 				Token::Op(op) if state == State::AfterOperand => {
 					match op {
-						OpType::Flip | OpType::Not => {
+						Op::Flip | Op::Not => {
 							// These operators cannot be directly after an atom.
 							println!("Expected a postfix, index or binary operator, found a prefix operator instead!");
 							return;
@@ -566,11 +566,11 @@ impl ShuntingYard {
 						// These operators are postfix operators. We don't switch state since after a postfix operator,
 						// we are still looking for a binary operator or the end of expression, i.e.
 						// `..i++ - i` rather than `..i++ i`.
-						OpType::AddAdd => {
-							self.push_operator(OpType::AddAddPost);
+						Op::AddAdd => {
+							self.push_operator(Op::AddAddPost);
 						}
-						OpType::SubSub => {
-							self.push_operator(OpType::SubSubPost);
+						Op::SubSub => {
+							self.push_operator(Op::SubSubPost);
 						}
 						// Any other operators can be part of a binary expression. We switch state since after a binary
 						// operator we are expecting an operand.
@@ -592,7 +592,7 @@ impl ShuntingYard {
 						increase_arity = false;
 					}
 
-					self.operators.push_back(OpType::BracketStart);
+					self.operators.push_back(Op::BracketStart);
 					self.groups.push_back(Group::Bracket);
 
 					can_start = Start::None;
@@ -600,7 +600,7 @@ impl ShuntingYard {
 				Token::LParen if state == State::AfterOperand => {
 					if can_start == Start::Fn {
 						// We have `ident(` which makes this a function call.
-						self.operators.push_back(OpType::FnStart);
+						self.operators.push_back(Op::FnStart);
 						self.groups.push_back(Group::Fn(0));
 
 						// We switch state since after a `(` we are expecting an operand, i.e.
@@ -614,7 +614,7 @@ impl ShuntingYard {
 						increase_arity = true;
 					} else if can_start == Start::ArrInit {
 						// We have `something[something](` which makes this an array constructor.
-						self.operators.push_back(OpType::ArrInitStart);
+						self.operators.push_back(Op::ArrInitStart);
 						self.groups.push_back(Group::ArrInit(0));
 
 						// We switch state since after a `(` we are expecting an operand, i.e.
@@ -660,7 +660,7 @@ impl ShuntingYard {
 				Token::LBracket if state == State::AfterOperand => {
 					// We switch state since after a `[`, we are expecting an operand, i.e.
 					// `i[5 +..` rather than `i[+..`.
-					self.operators.push_back(OpType::IndexStart);
+					self.operators.push_back(Op::IndexStart);
 					self.groups.push_back(Group::Index(true));
 					state = State::Operand;
 
@@ -704,7 +704,7 @@ impl ShuntingYard {
 						increase_arity = false;
 					}
 
-					self.operators.push_back(OpType::InitStart);
+					self.operators.push_back(Op::InitStart);
 					self.groups.push_back(Group::Init(0));
 
 					increase_arity = true;
@@ -760,7 +760,7 @@ impl ShuntingYard {
 				Token::Dot if state == State::AfterOperand => {
 					// We switch state since after an object access we are execting an operand, i.e.
 					// `ident.something` rather than `ident. +`.
-					self.push_operator(OpType::ObjAccess);
+					self.push_operator(Op::ObjAccess);
 					state = State::Operand;
 
 					can_start = Start::None;
@@ -805,47 +805,47 @@ impl ShuntingYard {
 			match e {
 				Either::Left(e) => stack.push_back(e),
 				Either::Right(op) => match op {
-					OpType::AddAddPre => {
+					Op::AddAddPre => {
 						let expr = stack.pop_back().unwrap();
 						stack.push_back(Expr::Prefix(
 							Box::from(expr),
-							OpType::Add,
+							Op::Add,
 						));
 					}
-					OpType::SubSubPre => {
+					Op::SubSubPre => {
 						let expr = stack.pop_back().unwrap();
 						stack.push_back(Expr::Prefix(
 							Box::from(expr),
-							OpType::Sub,
+							Op::Sub,
 						));
 					}
-					OpType::AddAddPost => {
+					Op::AddAddPost => {
 						let expr = stack.pop_back().unwrap();
 						stack.push_back(Expr::Postfix(
 							Box::from(expr),
-							OpType::Add,
+							Op::Add,
 						));
 					}
-					OpType::SubSubPost => {
+					Op::SubSubPost => {
 						let expr = stack.pop_back().unwrap();
 						stack.push_back(Expr::Postfix(
 							Box::from(expr),
-							OpType::Sub,
+							Op::Sub,
 						));
 					}
-					OpType::Neg => {
+					Op::Neg => {
 						let expr = stack.pop_back().unwrap();
 						stack.push_back(Expr::Neg(Box::from(expr)));
 					}
-					OpType::Flip => {
+					Op::Flip => {
 						let expr = stack.pop_back().unwrap();
 						stack.push_back(Expr::Flip(Box::from(expr)));
 					}
-					OpType::Not => {
+					Op::Not => {
 						let expr = stack.pop_back().unwrap();
 						stack.push_back(Expr::Not(Box::from(expr)));
 					}
-					OpType::Index(contains_i) => {
+					Op::Index(contains_i) => {
 						let i = if contains_i {
 							Some(Box::from(stack.pop_back().unwrap()))
 						} else {
@@ -857,7 +857,7 @@ impl ShuntingYard {
 							i,
 						});
 					}
-					OpType::ObjAccess => {
+					Op::ObjAccess => {
 						let access = stack.pop_back().unwrap();
 						let obj = stack.pop_back().unwrap();
 						stack.push_back(Expr::ObjAccess {
@@ -865,11 +865,11 @@ impl ShuntingYard {
 							access: Box::from(access),
 						});
 					}
-					OpType::Paren => {
+					Op::Paren => {
 						let expr = stack.pop_back().unwrap();
 						stack.push_back(Expr::Paren(Box::from(expr)));
 					}
-					OpType::FnCall(count) => {
+					Op::FnCall(count) => {
 						let mut args = VecDeque::new();
 						for _ in 0..count {
 							args.push_front(stack.pop_back().unwrap());
@@ -889,7 +889,7 @@ impl ShuntingYard {
 							args: args.into(),
 						});
 					}
-					OpType::ArrInit(count, _) => {
+					Op::ArrInit(count, _) => {
 						let mut args = VecDeque::new();
 						for _ in 0..count {
 							args.push_front(stack.pop_back().unwrap());
@@ -909,7 +909,7 @@ impl ShuntingYard {
 							args: args.into(),
 						});
 					}
-					OpType::Init(count) => {
+					Op::Init(count) => {
 						let mut args = Vec::new();
 						for _ in 0..count {
 							args.push(stack.pop_back().unwrap());
@@ -918,35 +918,35 @@ impl ShuntingYard {
 
 						stack.push_back(Expr::InitList(args));
 					}
-					OpType::Add
-					| OpType::Sub
-					| OpType::Mul
-					| OpType::Div
-					| OpType::Rem
-					| OpType::And
-					| OpType::Or
-					| OpType::Xor
-					| OpType::LShift
-					| OpType::RShift
-					| OpType::EqEq
-					| OpType::NotEq
-					| OpType::Gt
-					| OpType::Lt
-					| OpType::Ge
-					| OpType::Le
-					| OpType::AndAnd
-					| OpType::OrOr
-					| OpType::XorXor
-					| OpType::AddEq
-					| OpType::SubEq
-					| OpType::MulEq
-					| OpType::DivEq
-					| OpType::RemEq
-					| OpType::AndEq
-					| OpType::OrEq
-					| OpType::XorEq
-					| OpType::LShiftEq
-					| OpType::RShiftEq => {
+					Op::Add
+					| Op::Sub
+					| Op::Mul
+					| Op::Div
+					| Op::Rem
+					| Op::And
+					| Op::Or
+					| Op::Xor
+					| Op::LShift
+					| Op::RShift
+					| Op::EqEq
+					| Op::NotEq
+					| Op::Gt
+					| Op::Lt
+					| Op::Ge
+					| Op::Le
+					| Op::AndAnd
+					| Op::OrOr
+					| Op::XorXor
+					| Op::AddEq
+					| Op::SubEq
+					| Op::MulEq
+					| Op::DivEq
+					| Op::RemEq
+					| Op::AndEq
+					| Op::OrEq
+					| Op::XorEq
+					| Op::LShiftEq
+					| Op::RShiftEq => {
 						let right = stack.pop_back().unwrap();
 						let left = stack.pop_back().unwrap();
 						stack.push_back(Expr::Binary {
@@ -972,7 +972,7 @@ impl ShuntingYard {
 	}
 }
 
-impl OpType {
+impl Op {
 	/// Returns the precedence of the operator.
 	fn precedence(&self) -> u8 {
 		match self {
@@ -1037,7 +1037,7 @@ impl std::fmt::Display for ShuntingYard {
 	}
 }
 
-impl std::fmt::Display for OpType {
+impl std::fmt::Display for Op {
 	fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
 		match self {
 			// Maths
@@ -1119,21 +1119,21 @@ fn binaries() {
 	assert_expr!("5 + 1",
 		Expr::Binary {
 			left: Box::from(Expr::Lit(Lit::Int(5))),
-			op: OpType::Add,
+			op: Op::Add,
 			right: Box::from(Expr::Lit(Lit::Int(1)))
 		}
 	);
 	assert_expr!("ident * 100.4",
 		Expr::Binary {
 			left: Box::from(Expr::Ident(Ident("ident".into()))),
-			op: OpType::Mul,
+			op: Op::Mul,
 			right: Box::from(Expr::Lit(Lit::Float(100.4)))
 		}
 	);
 	assert_expr!("30 << 8u",
 		Expr::Binary {
 			left: Box::from(Expr::Lit(Lit::Int(30))),
-			op: OpType::LShift,
+			op: Op::LShift,
 			right: Box::from(Expr::Lit(Lit::UInt(8)))
 		}
 	);
@@ -1142,33 +1142,33 @@ fn binaries() {
 	assert_expr!("5 + 1 / 3",
 		Expr::Binary {
 			left: Box::from(Expr::Lit(Lit::Int(5))),
-			op: OpType::Add,
+			op: Op::Add,
 			right: Box::from(Expr::Binary {
 				left: Box::from(Expr::Lit(Lit::Int(1))),
-				op: OpType::Div,
+				op: Op::Div,
 				right: Box::from(Expr::Lit(Lit::Int(3)))
 			})
 		}
 	);
 	assert_expr!("5 * 4 * 3", Expr::Binary {
 		left: Box::from(Expr::Lit(Lit::Int(5))),
-		op: OpType::Mul,
+		op: Op::Mul,
 		right: Box::from(Expr::Binary {
 			left: Box::from(Expr::Lit(Lit::Int(4))),
-			op:OpType::Mul,
+			op:Op::Mul,
 			right: Box::from(Expr::Lit(Lit::Int(3)))
 		})
 	});
 	assert_expr!("5 + 1 / 3 * i",
 		Expr::Binary {
 			left: Box::from(Expr::Lit(Lit::Int(5))),
-			op: OpType::Add,
+			op: Op::Add,
 			right: Box::from(Expr::Binary {
 				left: Box::from(Expr::Lit(Lit::Int(1))),
-				op: OpType::Div,
+				op: Op::Div,
 				right: Box::from(Expr::Binary {
 					left: Box::from(Expr::Lit(Lit::Int(3))),
-					op: OpType::Mul,
+					op: Op::Mul,
 					right: Box::from(Expr::Ident(Ident("i".into())))
 				})
 			})
@@ -1178,13 +1178,13 @@ fn binaries() {
 		Expr::Binary {
 			left: Box::from(Expr::Binary {
 				left: Box::from(Expr::Lit(Lit::Int(5))),
-				op: OpType::Add,
+				op: Op::Add,
 				right: Box::from(Expr::Lit(Lit::Int(1)))
 			}),
-			op: OpType::EqEq,
+			op: Op::EqEq,
 			right: Box::from(Expr::Binary {
 				left: Box::from(Expr::Lit(Lit::Bool(true))),
-				op: OpType::Mul,
+				op: Op::Mul,
 				right: Box::from(Expr::Ident(Ident("i".into())))
 			})
 		}
@@ -1198,10 +1198,10 @@ fn brackets() {
 		Expr::Binary {
 			left: Box::from(Expr::Paren(Box::from(Expr::Binary {
 				left: Box::from(Expr::Lit(Lit::Int(5))),
-				op: OpType::Add,
+				op: Op::Add,
 				right: Box::from(Expr::Lit(Lit::Int(1))),
 			}))),
-			op: OpType::Mul,
+			op: Op::Mul,
 			right: Box::from(Expr::Lit(Lit::Int(8)))
 		}
 	);
@@ -1210,13 +1210,13 @@ fn brackets() {
 			left: Box::from(Expr::Paren(Box::from(Expr::Binary {
 				left: Box::from(Expr::Paren(Box::from(Expr::Binary {
 					left: Box::from(Expr::Lit(Lit::Int(5))),
-					op: OpType::Add,
+					op: Op::Add,
 					right: Box::from(Expr::Lit(Lit::Int(1))),
 				}))),
-				op: OpType::Lt,
+				op: Op::Lt,
 				right: Box::from(Expr::Lit(Lit::Int(100))),
 			}))),
-			op: OpType::Mul,
+			op: Op::Mul,
 			right: Box::from(Expr::Lit(Lit::Int(8)))
 		}
 	);
@@ -1229,10 +1229,10 @@ fn unaries() {
 	assert_expr!("-5", Expr::Neg(Box::from(Expr::Lit(Lit::Int(5)))));
 	assert_expr!("~5", Expr::Flip(Box::from(Expr::Lit(Lit::Int(5)))));
 	assert_expr!("!5", Expr::Not(Box::from(Expr::Lit(Lit::Int(5)))));
-	assert_expr!("++5", Expr::Prefix(Box::from(Expr::Lit(Lit::Int(5))), OpType::Add));
-	assert_expr!("--5", Expr::Prefix(Box::from(Expr::Lit(Lit::Int(5))), OpType::Sub));
-	assert_expr!("5++", Expr::Postfix(Box::from(Expr::Lit(Lit::Int(5))), OpType::Add));
-	assert_expr!("5--", Expr::Postfix(Box::from(Expr::Lit(Lit::Int(5))), OpType::Sub));
+	assert_expr!("++5", Expr::Prefix(Box::from(Expr::Lit(Lit::Int(5))), Op::Add));
+	assert_expr!("--5", Expr::Prefix(Box::from(Expr::Lit(Lit::Int(5))), Op::Sub));
+	assert_expr!("5++", Expr::Postfix(Box::from(Expr::Lit(Lit::Int(5))), Op::Add));
+	assert_expr!("5--", Expr::Postfix(Box::from(Expr::Lit(Lit::Int(5))), Op::Sub));
 	
 	// Multiple operators
 	assert_expr!("- -5",
@@ -1257,19 +1257,19 @@ fn unaries() {
 			Box::from(
 				Expr::Prefix(
 					Box::from(Expr::Lit(Lit::Int(5))),
-					OpType::Add
+					Op::Add
 				)
 			),
-			OpType::Add
+			Op::Add
 		)
 	);
 	assert_expr!("--5++",
 		Expr::Prefix(
 			Box::from(Expr::Postfix(
 				Box::from(Expr::Lit(Lit::Int(5))),
-				OpType::Add
+				Op::Add
 			)),
-			OpType::Sub
+			Op::Sub
 		)
 	);
 }
@@ -1287,12 +1287,12 @@ fn fn_calls() {
 		Expr::Fn { ident: Ident("fn".into()), args: vec![
 			Expr::Binary {
 				left: Box::from(Expr::Lit(Lit::Int(5))),
-				op: OpType::Add,
+				op: Op::Add,
 				right: Box::from(Expr::Lit(Lit::Int(1))),
 			},
 			Expr::Binary {
 				left: Box::from(Expr::Ident(Ident("i".into()))),
-				op: OpType::LShift,
+				op: Op::LShift,
 				right: Box::from(Expr::Lit(Lit::Int(6))),
 			},
 		]}
@@ -1369,7 +1369,7 @@ fn indexes() {
 		item: Box::from(Expr::Ident(Ident("s".into()))),
 		i: Some(Box::from(Expr::Binary {
 			left: Box::from(Expr::Ident(Ident("z".into()))),
-			op: OpType::Add,
+			op: Op::Add,
 			right: Box::from(Expr::Lit(Lit::Int(1)))
 		}))
 	});
@@ -1388,7 +1388,7 @@ fn indexes() {
 				item: Box::from(Expr::Ident(Ident("z".into()))),
 				i: Some(Box::from(Expr::Binary {
 					left: Box::from(Expr::Lit(Lit::Int(1))),
-					op: OpType::Add,
+					op: Op::Add,
 					right: Box::from(Expr::Lit(Lit::Int(2))),
 				}))
 			}))
@@ -1473,7 +1473,7 @@ fn arr_constructors() {
 			item: Box::from(Expr::Ident(Ident("int".into()))),
 			i: Some(Box::from(Expr::Binary {
 				left: Box::from(Expr::Lit(Lit::Int(1))),
-				op: OpType::Add,
+				op: Op::Add,
 				right: Box::from(Expr::Lit(Lit::Int(5)))
 			}))
 		}),
@@ -1524,16 +1524,16 @@ fn complex() {
 			},
 			Expr::Binary {
 				left: Box::from(
-					Expr::Postfix(Box::from(Expr::Ident(Ident("foo".into()))), OpType::Sub)
+					Expr::Postfix(Box::from(Expr::Ident(Ident("foo".into()))), Op::Sub)
 				),
-				op: OpType::Sub,
+				op: Op::Sub,
 				right: Box::from(Expr::Lit(Lit::Int(6)))
 			}
 		]
 	});
 	assert_expr!("true << i[func((1 + 1) * 5.0)]", Expr::Binary {
 		left: Box::from(Expr::Lit(Lit::Bool(true))),
-		op: OpType::LShift,
+		op: Op::LShift,
 		right: Box::from(Expr::Index {
 			item: Box::from(Expr::Ident(Ident("i".into()))),
 			i: Some(Box::from(Expr::Fn {
@@ -1542,10 +1542,10 @@ fn complex() {
 					Expr::Binary {
 						left: Box::from(Expr::Paren(Box::from(Expr::Binary {
 							left: Box::from(Expr::Lit(Lit::Int(1))),
-							op: OpType::Add,
+							op: Op::Add,
 							right: Box::from(Expr::Lit(Lit::Int(1))),
 						}))),
-						op: OpType::Mul,
+						op: Op::Mul,
 						right: Box::from(Expr::Lit(Lit::Float(5.0)))
 					}
 				]

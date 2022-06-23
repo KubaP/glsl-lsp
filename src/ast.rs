@@ -1,4 +1,4 @@
-use crate::lexer::{NumType, OpType, Token};
+use crate::lexer::{NumType, Op, Token};
 
 /// Holds either one or the other value.
 #[derive(Debug, Clone, PartialEq)]
@@ -59,9 +59,9 @@ pub enum Expr {
 	/// An identifier; could be a variable name, function name, etc.
 	Ident(Ident),
 	/// An expression prefix.
-	Prefix(Box<Expr>, OpType),
+	Prefix(Box<Expr>, Op),
 	/// An expression postfix.
-	Postfix(Box<Expr>, OpType),
+	Postfix(Box<Expr>, Op),
 	/// A negation of an expression.
 	Neg(Box<Expr>),
 	/// A bitflip.
@@ -78,7 +78,7 @@ pub enum Expr {
 	/// Binary expression with a left and right hand-side.
 	Binary {
 		left: Box<Expr>,
-		op: OpType,
+		op: Op,
 		right: Box<Expr>,
 	},
 	/// A parenthesis group. *Note:* currently this has no real use.
@@ -201,7 +201,7 @@ pub enum Stmt {
 	VarEq {
 		ident: Ident,
 		value: Box<Expr>,
-		op: OpType,
+		op: Op,
 	},
 	/// Preprocessor calls.
 	Preproc(Preproc),

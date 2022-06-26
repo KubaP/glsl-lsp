@@ -146,6 +146,8 @@ pub enum Op {
 	/// first node is always an `Expr::Ident` which is the array constructor type. If `bool` is `true`, then the
 	/// second node is an `Expr::Index` which is the index count.
 	ArrInit(usize, bool),
+	/// A list group, e.g. `a, b`. Consumes the `usize` amount of nodes as arguments for the list.
+	List(usize),
 	// The following are never present in the final output of the shunting yard.
 	BracketStart,
 	FnStart,

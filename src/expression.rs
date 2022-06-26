@@ -37,6 +37,10 @@ https://matklad.github.io/2020/04/15/from-pratt-to-dijkstra.html
 #[derive(Debug, PartialEq)]
 enum Group {
 	/// A bracket group, `(...)`.
+	///
+	/// *Note:* Whilst there is currently no real use to storing bracket groups in the AST, keeping track of this
+	/// in the shunting yard is necessary to correctly deal with lists within bracket groups, so this should never
+	/// be removed.
 	Bracket,
 	/// An index operator `[...]`. `false` means there is no expression within the `[...]` brackets.
 	Index(bool),
@@ -46,6 +50,8 @@ enum Group {
 	Init(usize),
 	/// An array constructor `type[...](...)`.
 	ArrInit(usize),
+	/// A comma-seperated list **outside** of function calls, array constructors and initializer lists `..., ...`.
+	List(usize),
 }
 
 struct ShuntingYard {
@@ -116,6 +122,40 @@ impl ShuntingYard {
 		} else if let Group::Init(_) = current_group {
 			println!("Found a `)` delimiter, but we still have an open `{{` initializer list!");
 			return;
+		} else if let Group::List(count) = current_group {
+			while self.operators.back().is_some() {
+				let top_op = self.operators.back().unwrap();
+
+				if *top_op == Op::BracketStart {
+					break;
+				}
+
+				let moved_op = self.operators.pop_back().unwrap();
+				self.stack.push_back(Either::Right(moved_op));
+			}
+			self.stack.push_back(Either::Right(Op::List(*count)));
+			self.groups.pop_back();
+		}
+
+		let current_group =
+			match self.groups.back() {
+				Some(g) => g,
+				None => {
+					println!("Found a `)` delimiter without a starting `(` delimiter!");
+					return;
+				}
+			};
+
+		match current_group {
+			Group::Index(_) => {
+				println!("Found a `)` delimiter, but we still have an open `[` index operator!");
+				return;
+			}
+			Group::Init(_) => {
+				println!("Found a `)` delimiter, but we still have an open `{{` initializer list!");
+				return;
+			}
+			_ => {}
 		}
 
 		while self.operators.back().is_some() {
@@ -153,9 +193,8 @@ impl ShuntingYard {
 						// Note: The first expression will always be the expression containing the function
 						// identifier (hence the `+ 1`).
 						self.operators.pop_back();
-						self.stack.push_back(Either::Right(Op::FnCall(
-							count + 1,
-						)));
+						self.stack
+							.push_back(Either::Right(Op::FnCall(count + 1)));
 						self.groups.pop_back();
 						break;
 					}
@@ -238,18 +277,55 @@ impl ShuntingYard {
 					return;
 				}
 			};
-		if *current_group == Group::Bracket {
-			println!("Found a `]` delimiter, but we still have an open `(` bracket group!");
-			return;
-		} else if let Group::Fn(_) = current_group {
-			println!("Found a `]` delimiter, but we still have an open `(` function call!");
-			return;
-		} else if let Group::Init(_) = current_group {
-			println!("Found a `]` delimiter, but we still have an open `{{` initializer list!");
-			return;
-		} else if let Group::ArrInit(_) = current_group {
-			println!("Found a `]` delimiter, but we still have an open `(` array constructor!");
-			return;
+		match current_group {
+			Group::Bracket => {
+				println!("Found a `]` delimiter, but we still have an open `(` bracket group!");
+				return;
+			}
+			Group::Fn(_) => {
+				println!("Found a `]` delimiter, but we still have an open `(` function call!");
+				return;
+			}
+			Group::Init(_) => {
+				println!("Found a `]` delimiter, but we still have an open `{{` initializer list!");
+				return;
+			}
+			Group::ArrInit(_) => {
+				println!("Found a `]` delimiter, but we still have an open `(` array constructor!");
+				return;
+			}
+			Group::List(count) => {
+				while self.operators.back().is_some() {
+					let top_op = self.operators.back().unwrap();
+
+					if *top_op == Op::IndexStart {
+						break;
+					}
+
+					let moved_op = self.operators.pop_back().unwrap();
+					self.stack.push_back(Either::Right(moved_op));
+				}
+				self.stack.push_back(Either::Right(Op::List(*count)));
+				self.groups.pop_back();
+
+				// Since we've removed the top-most `Group::List`, perform another check to ensure the next group is an
+				// index.
+				let current_group = match self.groups.back() {
+					Some(g) => g,
+					None => {
+						println!("Found a `]` delimiter without a starting `[` delimiter!");
+						return;
+					}
+				};
+				match current_group {
+					Group::Index(_) => {}
+					_ => {
+						println!("Found a `]` delimiter, but we still have an open list!");
+						return;
+					}
+				}
+			}
+			_ => (),
 		}
 
 		while self.operators.back().is_some() {
@@ -261,8 +337,7 @@ impl ShuntingYard {
 				// We remove the operator and push it to the stack.
 				self.operators.pop_back();
 				self.groups.pop_back();
-				self.stack
-					.push_back(Either::Right(Op::Index(contains_i)));
+				self.stack.push_back(Either::Right(Op::Index(contains_i)));
 				break;
 			} else if *top_op == Op::BracketStart {
 				// Sanity check; this should never happen.
@@ -330,8 +405,7 @@ impl ShuntingYard {
 						// We remove the operator and instead push a new operator which contains information about
 						// how many of the previous expressions are part of the current initializer list group.
 						self.operators.pop_back();
-						self.stack
-							.push_back(Either::Right(Op::Init(*count)));
+						self.stack.push_back(Either::Right(Op::Init(*count)));
 						self.groups.pop_back();
 						break;
 					}
@@ -361,20 +435,19 @@ impl ShuntingYard {
 		}
 	}
 
-	/// Registers the end of a sub-expression in a function call, initializer list or array constructor, popping
-	/// any operators until the start of the group is reached.
+	/// Registers the end of a sub-expression, popping any operators until the start of the group (or expression)
+	/// is reached.
 	fn end_comma(&mut self) {
 		if let Some(current_group) = self.groups.back_mut() {
 			match current_group {
 				Group::Fn(_) | Group::Init(_) | Group::ArrInit(_) => {
-					// Now that we have come across a `,` expression delimiter, we want to move all existing
-					// operators up to the function call, initializer list, or array constructor start delimiter to
-					// the stack, to clear it for the next expression after the comma.
+					// We want to move all existing operators up to the function call, initializer list, or array
+					// constructor start delimiter to the stack, to clear it for the next expression.
 					while self.operators.back().is_some() {
 						let back = self.operators.back().unwrap();
 						if *back == Op::FnStart
-							|| *back == Op::InitStart
-							|| *back == Op::ArrInitStart
+							|| *back == Op::InitStart || *back
+							== Op::ArrInitStart
 						{
 							break;
 						}
@@ -383,16 +456,47 @@ impl ShuntingYard {
 						self.stack.push_back(Either::Right(moved_op));
 					}
 				}
-				_ => {
-					println!("Found a `,` expression delimiter outside of a function call, initializer list or array constructor!");
-					return;
+				Group::List(count) => {
+					// We want to move all existing operators up to the bracket or index start delimiter, or to the
+					// beginning of the expression. We don't push a new list group since we are already within a
+					// list group, and it accepts a variable amount of arguments.
+					while self.operators.back().is_some() {
+						let back = self.operators.back().unwrap();
+						if *back == Op::BracketStart || *back == Op::IndexStart
+						{
+							break;
+						}
+
+						let moved_op = self.operators.pop_back().unwrap();
+						self.stack.push_back(Either::Right(moved_op));
+					}
+				}
+				Group::Bracket | Group::Index(_) => {
+					// Same as the branch above, but we do push a new list group. Since list groups don't have a
+					// start delimiter, we can only do it now that we've encountered a comma within these two
+					// groups.
+					while self.operators.back().is_some() {
+						let back = self.operators.back().unwrap();
+						if *back == Op::BracketStart || *back == Op::IndexStart
+						{
+							break;
+						}
+
+						let moved_op = self.operators.pop_back().unwrap();
+						self.stack.push_back(Either::Right(moved_op));
+					}
+					self.groups.push_back(Group::List(1));
 				}
 			}
 		} else {
-			println!(
-				"Found a `,` expresion delimiter outside of a function call, initializer list or array constructor!"
-			);
-			return;
+			// Since we are outside of any group, we can just push all the operators to the stack to clear it for
+			// the next expression. We also push a new list group. Since list groups don't have a start delimiter,
+			// we can only do it now that we've encountered a comma in an otherwise ungrouped expression.
+			while self.operators.back().is_some() {
+				let moved_op = self.operators.pop_back().unwrap();
+				self.stack.push_back(Either::Right(moved_op));
+			}
+			self.groups.push_back(Group::List(1));
 		}
 	}
 
@@ -402,16 +506,17 @@ impl ShuntingYard {
 			match current_group {
 				Group::Fn(count)
 				| Group::Init(count)
-				| Group::ArrInit(count) => {
+				| Group::ArrInit(count)
+				| Group::List(count) => {
 					*count += 1;
 				}
 				_ => {
-					println!("Found an incomplete function call, initializer list or array constructor!");
+					println!("Found an incomplete function call, initializer list, array constructor or general list expression!");
 					return;
 				}
 			}
 		} else {
-			println!("Found an incomplete function call, initializer list or array constructor!");
+			println!("Found an incomplete function call, initializer list, array constructor or general list expression!");
 			return;
 		}
 	}
@@ -807,31 +912,21 @@ impl ShuntingYard {
 				Either::Right(op) => match op {
 					Op::AddAddPre => {
 						let expr = stack.pop_back().unwrap();
-						stack.push_back(Expr::Prefix(
-							Box::from(expr),
-							Op::Add,
-						));
+						stack.push_back(Expr::Prefix(Box::from(expr), Op::Add));
 					}
 					Op::SubSubPre => {
 						let expr = stack.pop_back().unwrap();
-						stack.push_back(Expr::Prefix(
-							Box::from(expr),
-							Op::Sub,
-						));
+						stack.push_back(Expr::Prefix(Box::from(expr), Op::Sub));
 					}
 					Op::AddAddPost => {
 						let expr = stack.pop_back().unwrap();
-						stack.push_back(Expr::Postfix(
-							Box::from(expr),
-							Op::Add,
-						));
+						stack
+							.push_back(Expr::Postfix(Box::from(expr), Op::Add));
 					}
 					Op::SubSubPost => {
 						let expr = stack.pop_back().unwrap();
-						stack.push_back(Expr::Postfix(
-							Box::from(expr),
-							Op::Sub,
-						));
+						stack
+							.push_back(Expr::Postfix(Box::from(expr), Op::Sub));
 					}
 					Op::Neg => {
 						let expr = stack.pop_back().unwrap();
@@ -918,6 +1013,15 @@ impl ShuntingYard {
 
 						stack.push_back(Expr::InitList(args));
 					}
+					Op::List(count) => {
+						let mut args = Vec::new();
+						for _ in 0..count {
+							args.push(stack.pop_back().unwrap());
+						}
+						args.reverse();
+
+						stack.push_back(Expr::List(args));
+					}
 					Op::Add
 					| Op::Sub
 					| Op::Mul
@@ -972,6 +1076,7 @@ impl ShuntingYard {
 	}
 }
 
+#[rustfmt::skip]
 impl Op {
 	/// Returns the precedence of the operator.
 	fn precedence(&self) -> u8 {
@@ -1017,7 +1122,8 @@ impl Op {
 			| Self::InitStart 
 			| Self::Init(_) 
 			| Self::ArrInitStart 
-			| Self::ArrInit(_,_) => {
+			| Self::ArrInit(_,_)
+			| Self::List(_) => {
 				panic!("The operator {self:?} does not have a precedence value because it should never be passed into this function. Something has gone wrong!")
 			},
 		}
@@ -1097,6 +1203,7 @@ impl std::fmt::Display for Op {
 			Self::FnCall(count) => write!(f, "FN:{count}"),
 			Self::Init(count) => write!(f, "INIT:{count}"),
 			Self::ArrInit(count, bool) => write!(f, "ARR_INIT:{count}:{bool}"),
+			Self::List(count) => write!(f, "LIST:{count}"),
 		}
 	}
 }

@@ -100,8 +100,8 @@ pub enum Expr {
 	},
 	/// Initializer list.
 	InitList(Vec<Expr>),
-	/// Object access.
-	ObjAccess { obj: Box<Expr>, access: Box<Expr> },
+	/// List, e.g. `a, b`.
+	List(Vec<Expr>),
 }
 
 impl std::fmt::Display for Expr {
@@ -163,6 +163,13 @@ impl std::fmt::Display for Expr {
 			}
 			Expr::ObjAccess { obj, access } => {
 				write!(f, "\x1b[36mAccess\x1b[0m({obj} -> {access})")
+			}
+			Expr::List(exprs) => {
+				write!(f, "{{")?;
+				for expr in exprs {
+					write!(f, "{expr}, ")?;
+				}
+				write!(f, "}}")
 			}
 		}
 	}

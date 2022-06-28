@@ -14,6 +14,7 @@ pub mod parser;
 pub mod shader;
 pub mod lexer;
 pub mod expression;
+pub mod span;
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum Type {

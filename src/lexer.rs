@@ -1,4 +1,6 @@
 #![allow(unused)]
+use crate::span::{span, Span, Spanned};
+
 // Note: The `Hash` derives are only needed because of the chumsky parser.
 
 /// Concrete syntax tree tokens.
@@ -155,8 +157,6 @@ pub enum Op {
 	InitStart,
 	ArrInitStart,
 }
-
-pub type Spanned<T> = (T, std::ops::Range<usize>);
 
 /// A lexer which allows stepping through a string character by character.
 struct Lexer {
@@ -524,7 +524,10 @@ pub fn lexer(source: &str) -> Vec<Spanned<Token>> {
 						// We have reached the end of the source string, and therefore the end of the word.
 						tokens.push((
 							match_word(std::mem::take(&mut buffer)),
-							buffer_start..lexer.position(),
+							Span {
+								start: buffer_start,
+								end: lexer.position(),
+							},
 						));
 						break 'word;
 					}
@@ -540,7 +543,10 @@ pub fn lexer(source: &str) -> Vec<Spanned<Token>> {
 					// consuming it.
 					tokens.push((
 						match_word(std::mem::take(&mut buffer)),
-						buffer_start..lexer.position(),
+						Span {
+							start: buffer_start,
+							end: lexer.position(),
+						},
 					));
 					break 'word;
 				}
@@ -584,15 +590,26 @@ pub fn lexer(source: &str) -> Vec<Spanned<Token>> {
 						// We have a `.` followed by a character that is not a digit, so this must be a punctuation
 						// token. We consume the character because otherwise we'd end up back in this branch again.
 						lexer.advance();
-						tokens
-							.push((Token::Dot, buffer_start..lexer.position()));
+						tokens.push((
+							Token::Dot,
+							Span {
+								start: buffer_start,
+								end: lexer.position(),
+							},
+						));
 						continue;
 					}
 				} else {
 					// We have a `.` followed by the end of the source string, so this must be a punctuation token.
 					// We consume the character because otherwise we'd end up back in this branch again.
 					lexer.advance();
-					tokens.push((Token::Dot, buffer_start..lexer.position()));
+					tokens.push((
+						Token::Dot,
+						Span {
+							start: buffer_start,
+							end: lexer.position(),
+						},
+					));
 					continue;
 				}
 			} else {
@@ -627,7 +644,10 @@ pub fn lexer(source: &str) -> Vec<Spanned<Token>> {
 								suffix: suffix_buffer,
 								type_,
 							},
-							buffer_start..lexer.position(),
+							Span {
+								start: buffer_start,
+								end: lexer.position(),
+							},
 						));
 						break 'number;
 					}
@@ -643,11 +663,17 @@ pub fn lexer(source: &str) -> Vec<Spanned<Token>> {
 							suffix: suffix_buffer,
 							type_: NumType::Hex,
 						},
-						buffer_start..lexer.position(),
+						Span {
+							start: buffer_start,
+							end: lexer.position(),
+						},
 					));
 					tokens.push((
 						Token::Dot,
-						lexer.position()..lexer.position() + 1,
+						Span {
+							start: lexer.position(),
+							end: lexer.position() + 1,
+						},
 					));
 					lexer.advance();
 					break 'number;
@@ -675,11 +701,17 @@ pub fn lexer(source: &str) -> Vec<Spanned<Token>> {
 							suffix: suffix_buffer,
 							type_,
 						},
-						buffer_start..lexer.position(),
+						Span {
+							start: buffer_start,
+							end: lexer.position(),
+						},
 					));
 					tokens.push((
 						Token::Dot,
-						lexer.position()..lexer.position() + 1,
+						Span {
+							start: lexer.position(),
+							end: lexer.position() + 1,
+						},
 					));
 					lexer.advance();
 					break 'number;
@@ -719,11 +751,17 @@ pub fn lexer(source: &str) -> Vec<Spanned<Token>> {
 							suffix: suffix_buffer,
 							type_,
 						},
-						buffer_start..lexer.position(),
+						Span {
+							start: buffer_start,
+							end: lexer.position(),
+						},
 					));
 					tokens.push((
 						Token::Dot,
-						lexer.position()..lexer.position() + 1,
+						Span {
+							start: lexer.position(),
+							end: lexer.position() + 1,
+						},
 					));
 					lexer.advance();
 					break 'number;
@@ -779,7 +817,10 @@ pub fn lexer(source: &str) -> Vec<Spanned<Token>> {
 											suffix: suffix_buffer,
 											type_,
 										},
-										buffer_start..lexer.position(),
+										Span {
+											start: buffer_start,
+											end: lexer.position(),
+										},
 									));
 									break 'number;
 								}
@@ -806,7 +847,10 @@ pub fn lexer(source: &str) -> Vec<Spanned<Token>> {
 										suffix: suffix_buffer,
 										type_,
 									},
-									buffer_start..lexer.position(),
+									Span {
+										start: buffer_start,
+										end: lexer.position(),
+									},
 								));
 								break 'number;
 							}
@@ -870,7 +914,10 @@ pub fn lexer(source: &str) -> Vec<Spanned<Token>> {
 							suffix: suffix_buffer,
 							type_,
 						},
-						buffer_start..lexer.position(),
+						Span {
+							start: buffer_start,
+							end: lexer.position(),
+						},
 					));
 					break 'number;
 				}
@@ -890,7 +937,10 @@ pub fn lexer(source: &str) -> Vec<Spanned<Token>> {
 									str: std::mem::take(&mut buffer),
 									contains_eof: false,
 								},
-								buffer_start..lexer.position(),
+								Span {
+									start: buffer_start,
+									end: lexer.position(),
+								},
 							));
 							break 'line_comment;
 						}
@@ -905,7 +955,10 @@ pub fn lexer(source: &str) -> Vec<Spanned<Token>> {
 								str: std::mem::take(&mut buffer),
 								contains_eof: false,
 							},
-							buffer_start..lexer.position(),
+							Span {
+								start: buffer_start,
+								end: lexer.position(),
+							},
 						));
 						break 'line_comment;
 					} else {
@@ -924,7 +977,10 @@ pub fn lexer(source: &str) -> Vec<Spanned<Token>> {
 								str: std::mem::take(&mut buffer),
 								contains_eof: false,
 							},
-							buffer_start..lexer.position(),
+							Span {
+								start: buffer_start,
+								end: lexer.position(),
+							},
 						));
 						break 'comment;
 					}
@@ -940,7 +996,10 @@ pub fn lexer(source: &str) -> Vec<Spanned<Token>> {
 								str: std::mem::take(&mut buffer),
 								contains_eof: true,
 							},
-							buffer_start..lexer.position(),
+							Span {
+								start: buffer_start,
+								end: lexer.position(),
+							},
 						));
 						break 'comment;
 					}
@@ -948,7 +1007,10 @@ pub fn lexer(source: &str) -> Vec<Spanned<Token>> {
 			} else {
 				tokens.push((
 					match_punctuation(&mut lexer),
-					buffer_start..lexer.position(),
+					Span {
+						start: buffer_start,
+						end: lexer.position(),
+					},
 				));
 			}
 		} else if current.is_whitespace() {
@@ -969,7 +1031,10 @@ pub fn lexer(source: &str) -> Vec<Spanned<Token>> {
 						// We have reached the end of the source string, and therefore the end of the comment.
 						tokens.push((
 							Token::Directive(std::mem::take(&mut buffer)),
-							buffer_start..lexer.position(),
+							Span {
+								start: buffer_start,
+								end: lexer.position(),
+							},
 						));
 						break 'directive;
 					}
@@ -981,7 +1046,10 @@ pub fn lexer(source: &str) -> Vec<Spanned<Token>> {
 					// We have an EOL without a line-continuator, so therefore this is the end of the directive.
 					tokens.push((
 						Token::Directive(std::mem::take(&mut buffer)),
-						buffer_start..lexer.position(),
+						Span {
+							start: buffer_start,
+							end: lexer.position(),
+						},
 					));
 					break 'directive;
 				} else {
@@ -995,7 +1063,10 @@ pub fn lexer(source: &str) -> Vec<Spanned<Token>> {
 			lexer.advance();
 			tokens.push((
 				Token::Invalid(current),
-				buffer_start..lexer.position(),
+				Span {
+					start: buffer_start,
+					end: lexer.position(),
+				},
 			));
 		}
 	}
@@ -1007,35 +1078,35 @@ pub fn lexer(source: &str) -> Vec<Spanned<Token>> {
 #[rustfmt::skip]
 fn spans() {
 	// Identifiers/keywords
-	assert_eq!(lexer("return"), vec![(Token::Return, 0..6)]);
-	assert_eq!(lexer("break "), vec![(Token::Break, 0..5)]);
-	assert_eq!(lexer("return break"), vec![(Token::Return, 0..6), (Token::Break, 7..12)]);
+	assert_eq!(lexer("return"), vec![(Token::Return, span(0, 6))]);
+	assert_eq!(lexer("break "), vec![(Token::Break, span(0, 5))]);
+	assert_eq!(lexer("return break"), vec![(Token::Return, span(0, 6)), (Token::Break, span(7, 12))]);
 	// Punctuation
-	assert_eq!(lexer(";"), vec![(Token::Semi, 0..1)]);
-	assert_eq!(lexer(": "), vec![(Token::Colon, 0..1)]);
-	assert_eq!(lexer("; :"), vec![(Token::Semi, 0..1), (Token::Colon, 2..3)]);
+	assert_eq!(lexer(";"), vec![(Token::Semi, span(0, 1))]);
+	assert_eq!(lexer(": "), vec![(Token::Colon, span(0, 1))]);
+	assert_eq!(lexer("; :"), vec![(Token::Semi, span(0, 1)), (Token::Colon, span(2, 3))]);
 	// Comments
-	assert_eq!(lexer("// comment"), vec![(Token::Comment { str: " comment".into(), contains_eof: false }, 0..10)]);
-	assert_eq!(lexer("/* a */"), vec![(Token::Comment { str: " a ".into(), contains_eof: false }, 0..7)]);
-	assert_eq!(lexer("/* a"), vec![(Token::Comment { str: " a".into(), contains_eof: true }, 0..4)]);
+	assert_eq!(lexer("// comment"), vec![(Token::Comment { str: " comment".into(), contains_eof: false }, span(0, 10))]);
+	assert_eq!(lexer("/* a */"), vec![(Token::Comment { str: " a ".into(), contains_eof: false }, span(0, 7))]);
+	assert_eq!(lexer("/* a"), vec![(Token::Comment { str: " a".into(), contains_eof: true }, span(0, 4))]);
 	// Directive
-	assert_eq!(lexer("#dir"), vec![(Token::Directive("dir".into()), 0..4)]);
-	assert_eq!(lexer("#dir a "), vec![(Token::Directive("dir a ".into()), 0..7)]);
+	assert_eq!(lexer("#dir"), vec![(Token::Directive("dir".into()), span(0, 4))]);
+	assert_eq!(lexer("#dir a "), vec![(Token::Directive("dir a ".into()), span(0, 7))]);
 	// Invalid
-	assert_eq!(lexer("@"), vec![(Token::Invalid('@'), 0..1)]);
-	assert_eq!(lexer("¬"), vec![(Token::Invalid('¬'), 0..1)]);
-	assert_eq!(lexer("@  ¬"), vec![(Token::Invalid('@'), 0..1), (Token::Invalid('¬'), 3..4)]);
+	assert_eq!(lexer("@"), vec![(Token::Invalid('@'), span(0, 1))]);
+	assert_eq!(lexer("¬"), vec![(Token::Invalid('¬'), span(0, 1))]);
+	assert_eq!(lexer("@  ¬"), vec![(Token::Invalid('@'), span(0, 1)), (Token::Invalid('¬'), span(3, 4))]);
 	// Numbers
-	assert_eq!(lexer("."), vec![(Token::Dot, 0..1)]);
-	assert_eq!(lexer(". "), vec![(Token::Dot, 0..1)]);
-	assert_eq!(lexer("0xF."), vec![(Token::Num { num: "F".into(), suffix: None, type_: NumType::Hex }, 0..3), (Token::Dot, 3..4)]);
-	assert_eq!(lexer("123u."), vec![(Token::Num { num: "123".into(), suffix: Some("u".into()), type_: NumType::Dec }, 0..4), (Token::Dot, 4..5)]);
-	assert_eq!(lexer("1.2."), vec![(Token::Num { num: "1.2".into(), suffix: None, type_: NumType::Float }, 0..3), (Token::Dot, 3..4)]);
-	assert_eq!(lexer("1.2."), vec![(Token::Num { num: "1.2".into(), suffix: None, type_: NumType::Float }, 0..3), (Token::Dot, 3..4)]);
-	assert_eq!(lexer("1e"), vec![(Token::Num { num: "1".into(), suffix: Some("e".into()), type_: NumType::Dec }, 0..2)]);
-	assert_eq!(lexer("123 "), vec![(Token::Num { num: "123".into(), suffix: None, type_: NumType::Dec }, 0..3)]);
-	assert_eq!(lexer("1e+="), vec![(Token::Num { num: "1".into(), suffix: Some("e".into()), type_: NumType::Dec }, 0..2), (Token::Op(Op::AddEq), 2..4)]);
-	assert_eq!(lexer("1e+"), vec![(Token::Num { num: "1".into(), suffix: Some("e".into()), type_: NumType::Dec }, 0..2), (Token::Op(Op::Add), 2..3)]);
+	assert_eq!(lexer("."), vec![(Token::Dot, span(0, 1))]);
+	assert_eq!(lexer(". "), vec![(Token::Dot, span(0, 1))]);
+	assert_eq!(lexer("0xF."), vec![(Token::Num { num: "F".into(), suffix: None, type_: NumType::Hex }, span(0, 3)), (Token::Dot, span(3, 4))]);
+	assert_eq!(lexer("123u."), vec![(Token::Num { num: "123".into(), suffix: Some("u".into()), type_: NumType::Dec }, span(0, 4)), (Token::Dot, span(4, 5))]);
+	assert_eq!(lexer("1.2."), vec![(Token::Num { num: "1.2".into(), suffix: None, type_: NumType::Float }, span(0, 3)), (Token::Dot, span(3, 4))]);
+	assert_eq!(lexer("1.2."), vec![(Token::Num { num: "1.2".into(), suffix: None, type_: NumType::Float }, span(0, 3)), (Token::Dot, span(3, 4))]);
+	assert_eq!(lexer("1e"), vec![(Token::Num { num: "1".into(), suffix: Some("e".into()), type_: NumType::Dec }, span(0, 2))]);
+	assert_eq!(lexer("123 "), vec![(Token::Num { num: "123".into(), suffix: None, type_: NumType::Dec }, span(0, 3))]);
+	assert_eq!(lexer("1e+="), vec![(Token::Num { num: "1".into(), suffix: Some("e".into()), type_: NumType::Dec }, span(0, 2)), (Token::Op(Op::AddEq), span(2, 4))]);
+	assert_eq!(lexer("1e+"), vec![(Token::Num { num: "1".into(), suffix: Some("e".into()), type_: NumType::Dec }, span(0, 2)), (Token::Op(Op::Add), span(2, 3))]);
 }
 
 /// Asserts the token output of the `lexer()` matches the right hand side; ignores the spans.

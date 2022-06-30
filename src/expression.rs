@@ -1017,9 +1017,7 @@ impl ShuntingYard {
 						// state since after a prefix operator, we are still looking for an operand atom.
 						Op::Sub => self.push_operator((Op::Neg, *span)),
 						Op::Not => self.push_operator((Op::Not, *span)),
-						Op::Flip => {
-							self.push_operator((Op::Flip, *span))
-						}
+						Op::Flip => self.push_operator((Op::Flip, *span)),
 						Op::AddAdd => {
 							self.push_operator((Op::AddAddPre, *span))
 						}
@@ -1106,8 +1104,7 @@ impl ShuntingYard {
 						increase_arity = true;
 					} else if can_start == Start::ArrInit {
 						// We have `something[something](` which makes this an array constructor.
-						self.operators
-							.push_back((Op::ArrInitStart, *span));
+						self.operators.push_back((Op::ArrInitStart, *span));
 						self.groups.push_back((
 							Group::ArrInit(0),
 							possible_delim_start,
@@ -2076,6 +2073,33 @@ fn initializers() {
 
 #[test]
 #[rustfmt::skip]
+fn lists() {
+	// Note: Lists cannot exist within function calls, array constructors or initializer lists. Hence the absence
+	// of those from this test.
+	assert_expr!("a, b", Expr::List(vec![
+		Expr::Ident(Ident("a".into())),
+		Expr::Ident(Ident("b".into()))
+	]));
+	assert_expr!("a, b, c", Expr::List(vec![
+		Expr::Ident(Ident("a".into())),
+		Expr::Ident(Ident("b".into())),
+		Expr::Ident(Ident("c".into()))
+	]));
+	assert_expr!("i[a, b]", Expr::Index {
+		item: Box::from(Expr::Ident(Ident("i".into()))),
+		i: Some(Box::from(Expr::List(vec![
+			Expr::Ident(Ident("a".into())),
+			Expr::Ident(Ident("b".into()))
+		])))
+	});
+	assert_expr!("(a, b)", Expr::Paren(Box::from(Expr::List(vec![
+		Expr::Ident(Ident("a".into())),
+		Expr::Ident(Ident("b".into()))
+	]))));	
+}
+
+#[test]
+#[rustfmt::skip]
 fn complex() {
 	assert_expr!("func(i[9], foo-- -6)", Expr::Fn {
 		ident: Ident("func".into()),
@@ -2150,4 +2174,32 @@ fn complex() {
 			}
 		])]
 	});
+}
+
+#[test]
+#[rustfmt::skip]
+fn incomplete() {
+	assert_expr!("i+5]", Expr::Incomplete);
+	assert_expr!("i[(5+1]", Expr::Index {
+		item: Box::from(Expr::Ident(Ident("i".into()))),
+		i: Some(Box::from(Expr::Incomplete))
+	});
+	assert_expr!("i[fn((5+1]", Expr::Index {
+		item: Box::from(Expr::Ident(Ident("i".into()))),
+		i: Some(Box::from(Expr::Incomplete))
+	});
+	assert_expr!("(i+5])", Expr::Paren(Box::from(Expr::Incomplete)));
+	assert_expr!("fn(1])", Expr::Fn {
+		ident: Ident("fn".into()),
+		args: vec![Expr::Incomplete]
+	});
+	assert_expr!("int[3](i])", Expr::ArrInit {
+		arr: Box::from(Expr::Index {
+			item: Box::from(Expr::Ident(Ident("int".into()))),
+			i: Some(Box::from(Expr::Lit(Lit::Int(3))))
+		}),
+		args: vec![Expr::Incomplete]
+	});
+	//assert_expr!("i[5+1", Expr::Incomplete);
+	//assert_expr!("fn(5+(i]", Expr::Incomplete);
 }

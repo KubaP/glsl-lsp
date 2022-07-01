@@ -424,21 +424,15 @@ impl ShuntingYard {
 
 	/// Registers the end of a bracket, function call or array constructor group, popping any operators until the
 	/// start of the group is reached.
-	fn end_bracket_fn(&mut self, end_span: Span) {
+	fn end_bracket_fn(&mut self, end_span: Span) -> Result<(), ()> {
 		let (current_group, _, current_group_inner_start) =
 			match self.groups.back() {
 				Some(t) => t,
 				None => {
-					// Since we have no groups, that means we have a lonely `)`. This makes the entire expression
-					// so far incomplete.
+					// Since we have no groups, that means we have a lonely `)`. This means we want to stop parsing
+					// further tokens.
 					println!("Found a `)` delimiter without a starting `(` delimiter!");
-					self.operators.clear();
-					self.stack.clear();
-					self.stack.push_back(Either::Left((
-						Expr::Incomplete,
-						span(self.start_position, end_span.end),
-					)));
-					return;
+					return Err(());
 				}
 			};
 
@@ -534,7 +528,7 @@ impl ShuntingYard {
 							end: end_span.end,
 						},
 					)));
-					return;
+					return Ok(());
 				}
 			}
 		}
@@ -547,27 +541,22 @@ impl ShuntingYard {
 			// groups and are now at a parenthesis-delimited group, hence this branch will never occur.
 			_ => unreachable!(),
 		}
+		Ok(())
 	}
 
 	/// Registers the end of an index operator group, popping any operators until the start of the index group is
 	/// reached.
 	///
 	/// `end_span` is a span which ends at the end of this index operator. (The start value is irrelevant).
-	fn end_index(&mut self, end_span: Span) {
+	fn end_index(&mut self, end_span: Span) -> Result<(), ()> {
 		let (current_group, _, current_group_inner_start) =
 			match self.groups.back() {
 				Some(t) => t,
 				None => {
-					// Since we have no groups, that means we have a lonely `]`. This makes the entire expression so
-					// far incomplete.
+					// Since we have no groups, that means we have a lonely `]`. This means we want to stop parsing
+					// further tokens.
 					println!("Found a `]` delimiter without a starting `[` delimiter!");
-					self.operators.clear();
-					self.stack.clear();
-					self.stack.push_back(Either::Left((
-						Expr::Incomplete,
-						span(self.start_position, end_span.end),
-					)));
-					return;
+					return Err(());
 				}
 			};
 
@@ -670,30 +659,25 @@ impl ShuntingYard {
 						end: end_span.end,
 					},
 				)));
-				return;
+				return Ok(());
 			}
 		}
 
 		self.collapse_index(end_span.end, false);
+		Ok(())
 	}
 
 	/// Registers the end of an initializer list group, popping any operators until the start of the group is
 	/// reached.
-	fn end_init(&mut self, end_span: Span) {
+	fn end_init(&mut self, end_span: Span) -> Result<(), ()> {
 		let (current_group, _, current_group_inner_start) =
 			match self.groups.back() {
 				Some(t) => t,
 				None => {
-					// Since we have no groups, that means we have a lonely `]`. This makes the entire expression so
-					// far incomplete.
+					// Since we have no groups, that means we have a lonely `}`. This means we want to stop parsing
+					// further tokens.
 					print!("Found a `}}` delimiter without a starting `{{` delimiter!");
-					self.operators.clear();
-					self.stack.clear();
-					self.stack.push_back(Either::Left((
-						Expr::Incomplete,
-						span(self.start_position, end_span.end),
-					)));
-					return;
+					return Err(());
 				}
 			};
 
@@ -794,11 +778,12 @@ impl ShuntingYard {
 						end: end_span.end,
 					},
 				)));
-				return;
+				return Ok(());
 			}
 		}
 
 		self.collapse_init(end_span.end, false);
+		Ok(())
 	}
 
 	/// Registers the end of a sub-expression, popping any operators until the start of the group (or expression)
@@ -1128,14 +1113,20 @@ impl ShuntingYard {
 				Token::RParen if state == State::AfterOperand => {
 					// We don't switch state since after a `)`, we are expecting an operator, i.e.
 					// `..) + 5` rather than `..) 5`.
-					self.end_bracket_fn(*span);
+					match self.end_bracket_fn(*span) {
+						Ok(_) => {}
+						Err(_) => break 'main,
+					}
 
 					can_start = Start::None;
 				}
 				Token::RParen if state == State::Operand => {
 					if self.just_started_fn() {
 						// This is valid, i.e. `fn()`.
-						self.end_bracket_fn(*span);
+						match self.end_bracket_fn(*span) {
+							Ok(_) => {}
+							Err(_) => break 'main,
+						}
 
 						// We switch state since after a function call we are expecting an operator, i.e.
 						// `..fn() + 5` rather than `..fn() 5`.
@@ -1172,7 +1163,10 @@ impl ShuntingYard {
 				Token::RBracket if state == State::AfterOperand => {
 					// We don't switch state since after a `]`, we are expecting an operator, i.e.
 					// `..] + 5` instead of `..] 5`.
-					self.end_index(*span);
+					match self.end_index(*span) {
+						Ok(_) => {}
+						Err(_) => break 'main,
+					}
 
 					// After an index `]` we may have an array constructor.
 					can_start = Start::ArrInit;
@@ -1190,7 +1184,10 @@ impl ShuntingYard {
 							None => unreachable!(),
 						}
 
-						self.end_index(*span);
+						match self.end_index(*span) {
+							Ok(_) => {}
+							Err(_) => break 'main,
+						}
 						state = State::AfterOperand;
 
 						// After an index `]` we may have an array constructor.
@@ -1230,14 +1227,20 @@ impl ShuntingYard {
 				Token::RBrace if state == State::AfterOperand => {
 					// We don't switch state since after a `}}`, we are expecting an operator, i.e.
 					// `..}, {..` rather than `..} {..`.
-					self.end_init(*span);
+					match self.end_init(*span) {
+						Ok(_) => {}
+						Err(_) => break 'main,
+					}
 
 					can_start = Start::None;
 				}
 				Token::RBrace if state == State::Operand => {
 					if self.just_started_init() || self.is_in_init() {
 						// This is valid, i.e. `{}`, or `{1, }`.
-						self.end_init(*span);
+						match self.end_init(*span) {
+							Ok(_) => {}
+							Err(_) => break 'main,
+						}
 
 						// We switch state since after an init list we are expecting an operator, i.e.
 						// `..}, {..` rather than `..} {..`.
@@ -2179,7 +2182,11 @@ fn complex() {
 #[test]
 #[rustfmt::skip]
 fn incomplete() {
-	assert_expr!("i+5]", Expr::Incomplete);
+	assert_expr!("i+5]", Expr::Binary {
+		left: Box::from(Expr::Ident(Ident("i".into()))),
+		op: Op::Add,
+		right: Box::from(Expr::Lit(Lit::Int(5)))
+	});
 	assert_expr!("i[(5+1]", Expr::Index {
 		item: Box::from(Expr::Ident(Ident("i".into()))),
 		i: Some(Box::from(Expr::Incomplete))

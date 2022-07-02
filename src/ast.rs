@@ -1,19 +1,12 @@
 use crate::lexer::{NumType, Op, Token};
 
-/// Holds either one or the other value.
-#[derive(Debug, Clone, PartialEq)]
-pub enum Either<L, R> {
-	Left(L),
-	Right(R),
-}
-
 /// An expression which will be part of an encompassing statement. Expressions cannot exist on their own.
 #[derive(Debug, Clone, PartialEq)]
 pub enum Expr {
 	/// An expression which is incomplete, e.g. `3+5-`.
 	///
-	/// This token exists to allow the parser/analyser to gracefully deal with expression errors without affecting
-	/// the ability to deal with higher expression scopes or statements. E.g.
+	/// This token exists to allow the analyzer to gracefully deal with expression errors without affecting the
+	/// ability to deal with surrounding expressions or statements. E.g.
 	/// ```c
 	/// int i = 3+5-;
 	///
@@ -26,81 +19,86 @@ pub enum Expr {
 	/// }
 	/// ```
 	/// We can produce an error about the incomplete expression but still reason about the existence of `i`, such
-	/// as later references. Obviously however, we cannot analyse whether the expression evaluates to a valid
-	/// integer value.
+	/// as in later uses. Obviously however, we cannot analyze whether the expression evaluates to a valid integer
+	/// value.
 	///
-	/// Note: This token is not used for unclosed parenthesis. E.g.
+	/// This token is also used to represent unclosed delimiter groups, e.g.
+	/// ```c
+	/// fn(1+2
+	///
+	/// // or
+	///
+	/// i[0
+	/// ```
+	///
+	/// Note: This token is not used for unclosed parenthesis groups, e.g.
 	/// ```c
 	/// (5+1
 	///
 	/// // becomes
 	///
 	/// Expr:: Binary {
-	/// 	left: Expr::Lit(5),
-	/// 	op: Add,
-	/// 	right: Expr::Lit(1)
+	///     left: Expr::Lit(5),
+	///     op: Add,
+	///     right: Expr::Lit(1)
 	/// }
 	/// ```
-	/// We can produce an error about the missing parenthesis, but we can assume that the bracket group extends
-	/// till the end. This is because bracket groups aren't an `Expr` type. Bracket groups will always come to
-	/// either a binary expression, or one of the pre/postfix expressions, hence there is no need to actually have
-	/// a bracket group expression. In theory we could replace a valid expression token within the parenthesis with
-	/// an invalid token if the bracket group is unclosed, but I don't see good reason to do that. An error is
-	/// produce anyway and the code won't compile so no harm in treating the expression as valid; at least we can
-	/// evaluate it for correctness.
+	/// We produce an error about the missing parenthesis, but we can assume that the bracket group extends till
+	/// the end. This is because whilst the position of the closing parenthesis may be unknown, no matter where it
+	/// is placed it will not affect the analysis; either the types match or they don't. (It will affect the result
+	/// of the evaluation but that is irrelevant to our analysis).
 	Incomplete,
 	/// An expression which is invalid when converted from a token, e.g.
 	///
-	/// - A token number `1.0B` cannot be converted to a valid `Lit`,
-	/// - An identifier `vec3` cannot be converted to an `Ident`.
+	/// - A token number `1.0B` cannot be converted to a valid `Lit` because `B` is not a valid suffix,.
 	Invalid,
-	/// A literal value; either a number, a boolean.
+	/// A literal value; either a number or a boolean.
 	Lit(Lit),
-	/// An identifier; could be a variable name, function name, etc.
+	/// An identifier; could be a variable name, function name, type name, etc.
 	Ident(Ident),
-	/// An expression prefix.
+	/// A prefix.
 	Prefix(Box<Expr>, Op),
-	/// An expression postfix.
+	/// A postfix.
 	Postfix(Box<Expr>, Op),
-	/// A negation of an expression.
+	/// A negation.
 	Neg(Box<Expr>),
 	/// A bitflip.
 	Flip(Box<Expr>),
 	/// A not.
 	Not(Box<Expr>),
-	/// An index into, e.g. `arr[i]`.
-	Index {
-		item: Box<Expr>,
-		i: Option<Box<Expr>>,
-	},
-	/// Object access.
-	ObjAccess { obj: Box<Expr>, access: Box<Expr> },
 	/// Binary expression with a left and right hand-side.
 	Binary {
 		left: Box<Expr>,
 		op: Op,
 		right: Box<Expr>,
 	},
-	/// A parenthesis group. *Note:* currently this has no real use.
-	Paren(Box<Expr>),
-	/// Ternary if.
+	/// Ternary condition.
 	Ternary {
 		cond: Box<Expr>,
 		true_: Box<Expr>,
 		false_: Box<Expr>,
 	},
+	/// A parenthesis group. *Note:* currently this has no real use.
+	Paren(Box<Expr>),
+	/// Index operator, e.g. `item[i]`.
+	Index {
+		item: Box<Expr>,
+		i: Option<Box<Expr>>,
+	},
+	/// Object access.
+	ObjAccess { obj: Box<Expr>, leaf: Box<Expr> },
 	/// Function call.
 	Fn { ident: Ident, args: Vec<Expr> },
+	/// Initializer list.
+	Init(Vec<Expr>),
 	/// Array constructor.
 	ArrInit {
 		/// Contains the first part of an array constructor, e.g. `int[3]`.
 		arr: Box<Expr>,
-		/// Contains the expressions within the brackets i.e. `..](...)`.
+		/// Contains the expressions within the brackets i.e. `..](a, b, ...)`.
 		args: Vec<Expr>,
 	},
-	/// Initializer list.
-	InitList(Vec<Expr>),
-	/// List, e.g. `a, b`.
+	/// A general list expression, e.g. `a, b`.
 	List(Vec<Expr>),
 }
 
@@ -120,6 +118,15 @@ impl std::fmt::Display for Expr {
 			Expr::Neg(expr) => write!(f, "\x1b[36mNeg\x1b[0m({expr})"),
 			Expr::Flip(expr) => write!(f, "\x1b[36mFlip\x1b[0m({expr})"),
 			Expr::Not(expr) => write!(f, "\x1b[36mNot\x1b[0m({expr})"),
+			Expr::Binary { left, op, right } => {
+				write!(f, "({left} \x1b[36m{op:?}\x1b[0m {right})")
+			}
+			Expr::Ternary {
+				cond,
+				true_,
+				false_,
+			} => write!(f, "IF({cond}) {{ {true_} }} ELSE {{ {false_} }}"),
+			Expr::Paren(expr) => write!(f, "({expr})"),
 			Expr::Index { item, i } => {
 				write!(
 					f,
@@ -131,15 +138,9 @@ impl std::fmt::Display for Expr {
 					}
 				)
 			}
-			Expr::Binary { left, op, right } => {
-				write!(f, "({left} \x1b[36m{op:?}\x1b[0m {right})")
+			Expr::ObjAccess { obj, leaf } => {
+				write!(f, "\x1b[36mAccess\x1b[0m({obj} -> {leaf})")
 			}
-			Expr::Paren(expr) => write!(f, "({expr})"),
-			Expr::Ternary {
-				cond,
-				true_,
-				false_,
-			} => write!(f, "IF({cond}) {{ {true_} }} ELSE {{ {false_} }}"),
 			Expr::Fn { ident, args } => {
 				write!(f, "\x1b[34mCall\x1b[0m(ident: {ident}, args: [")?;
 				for arg in args {
@@ -147,22 +148,19 @@ impl std::fmt::Display for Expr {
 				}
 				write!(f, "])")
 			}
-			Expr::ArrInit { arr, args } => {
-				write!(f, "\x1b[34mArr\x1b[0m(arr: {arr} args: [")?;
-				for arg in args {
-					write!(f, "{arg}, ")?;
-				}
-				write!(f, "])")
-			}
-			Expr::InitList(args) => {
+			Expr::Init(args) => {
 				write!(f, "\x1b[34mInit\x1b[0m{{")?;
 				for arg in args {
 					write!(f, "{arg}, ")?;
 				}
 				write!(f, "}}")
 			}
-			Expr::ObjAccess { obj, access } => {
-				write!(f, "\x1b[36mAccess\x1b[0m({obj} -> {access})")
+			Expr::ArrInit { arr, args } => {
+				write!(f, "\x1b[34mArr\x1b[0m(arr: {arr} args: [")?;
+				for arg in args {
+					write!(f, "{arg}, ")?;
+				}
+				write!(f, "])")
 			}
 			Expr::List(exprs) => {
 				write!(f, "{{")?;

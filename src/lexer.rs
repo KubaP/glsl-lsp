@@ -1,10 +1,10 @@
-#![allow(unused)]
-use crate::span::{span, Span, Spanned};
+use crate::span::{Span, Spanned};
 
-// Note: The `Hash` derives are only needed because of the chumsky parser.
+#[cfg(test)]
+use crate::span::span;
 
-/// Concrete syntax tree tokens.
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+/// Lexer tokens.
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Token {
 	Num {
 		num: String,
@@ -70,7 +70,7 @@ pub enum Token {
 }
 
 /// The different number types/notations.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum NumType {
 	Dec,
 	Oct,
@@ -79,7 +79,7 @@ pub enum NumType {
 }
 
 /// Mathematical and comparison operators.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Op {
 	// Maths
 	Add,
@@ -92,6 +92,9 @@ pub enum Op {
 	Xor,
 	LShift,
 	RShift,
+	Flip,
+	AddAdd,
+	SubSub,
 	AddEq,
 	SubEq,
 	MulEq,
@@ -102,9 +105,6 @@ pub enum Op {
 	XorEq,
 	LShiftEq,
 	RShiftEq,
-	Flip,
-	AddAdd,
-	SubSub,
 	//
 	// Comparison
 	EqEq,
@@ -121,13 +121,13 @@ pub enum Op {
 	// Shunting Yard
 	//
 	// These variants are never constructed by the Lexer. These are constructed when the shunting yard is looking
-	// for prefix/postfix operators and comes across one of the above that is valid. It gets converted into these
-	// variants depending on the state of the yard to make the distinction clear when building the ast once the
-	// yard has finished.
+	// for prefix/postfix operators and comes across one of the above ambiguous operators. It gets converted into
+	// these variants depending on the state of the yard to make the distinction clear when building the ast.
 	//
-	// The reason these are in this type is because the yard stores this type. It makes more sense to add these
-	// special variants rather than create a new type just for the shunting yard, which then will most of the time
-	// be converted back to this type since this is the type stored inside of `ast::Expr`.
+	// The reason these variants are in this type is because the shunting yard stores this type in its stack. It
+	// makes more sense to add these variants to this type rather than to create a new subtype which includes all
+	// of the above plus these variants. Furthermore these operators in the shunting yard stack are later converted
+	// to `ast::Expr` which stores this type.
 	Neg,
 	AddAddPre,
 	AddAddPost,
@@ -135,22 +135,21 @@ pub enum Op {
 	SubSubPost,
 	/// Parenthesis group.
 	Paren,
-	/// Index operator. `false` if the operator has no expression value inside the `[...]` brackets.
+	/// Index operator. `bool` notes whether there is a node within the `[...]` brackets.
 	Index(bool),
 	/// Object access operator.
 	ObjAccess,
-	/// Function call operator. Consumes the `usize` amount of nodes as arguments for the function call. The first
-	/// node is always an `Expr::Ident` which is the function identifier.
+	/// Function call. Consumes the `usize` amount of nodes as arguments for the function call. The first node is
+	/// guaranteed to be an `Expr::Ident` which is the function identifier.
 	FnCall(usize),
-	/// Initializer list operator. Consumes the `usize` amount of nodes as arguments for the initializer list.
+	/// Initializer list. Consumes the `usize` amount of nodes as arguments for the initializer list.
 	Init(usize),
-	/// Array constructor operator. Consumes the `usize` amount of nodes as arguments for the function call. The
-	/// first node is always an `Expr::Ident` which is the array constructor type. If `bool` is `true`, then the
-	/// second node is an `Expr::Index` which is the index count.
-	ArrInit(usize, bool),
-	/// A list group, e.g. `a, b`. Consumes the `usize` amount of nodes as arguments for the list.
+	/// Array constructor. Consumes the `usize` amount of nodes as arguments for the function call. The first node
+	/// is guaranteed to be a `Expr::Index` which is the array constructor type.
+	ArrInit(usize),
+	/// A list, e.g. `a, b`. Consumes the `usize` amount of nodes as arguments for the list.
 	List(usize),
-	// The following are never present in the final output of the shunting yard.
+	// The following are never present in the final output of the shunting yard; just stored temporarily.
 	BracketStart,
 	FnStart,
 	IndexStart,
@@ -263,6 +262,7 @@ fn is_number_start(c: &char) -> bool {
 }
 
 /// Whether the character is allowed to be part of an octal number.
+#[allow(unused)]
 fn is_octal(c: &char) -> bool {
 	match c {
 		'0' | '1' | '2' | '3' | '4' | '5' | '6' | '7' => true,
@@ -461,35 +461,20 @@ fn match_line_continuator(buffer: &mut String, lexer: &mut Lexer) -> bool {
 	}
 }
 
-/// The current state when parsing a number.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum NumState {
-	/// Parsing either an octal or decimal or a floating point number (depending on what follows).
-	Zero,
-	/// Parsing a hexadecimal number.
-	Hex,
-	/// Parsing a decimal number.
-	Dec,
-	/// Parsing a decimal floating point number.
-	Float,
-}
-
 /// Performs lexical analysis of the source string and returns a vector of [`Token`]s.
 ///
 /// This lexer uses the "Maximal munch" principle to greedily create Tokens. This means the longest possible valid
 /// token is always produced. Some examples:
 ///
 /// ```text
-/// i---7 lexes as (--) (-)
-/// i-----7 lexes as (--) (--) (-)
+/// i---7     lexes as (--) (-)
+/// i-----7   lexes as (--) (--) (-)
 /// i-- - --7 lexes as (--) (-) (--)
 /// ```
 pub fn lexer(source: &str) -> Vec<Spanned<Token>> {
 	let mut tokens = Vec::new();
 	let mut lexer = Lexer::new(source);
-	let mut buffer_start: usize = 0;
 	let mut buffer = String::new();
-	let mut current = ' ';
 	let mut can_start_directive = true;
 
 	// Any time we want to test the next character, we first `peek()` to see what it is. If it is valid in whatever
@@ -502,9 +487,9 @@ pub fn lexer(source: &str) -> Vec<Spanned<Token>> {
 	// makes it easy to keep track of when we are allowed to parse a directive, since they must exist at the start
 	// of a line barring any whitespace.
 	while !lexer.is_done() {
-		buffer_start = lexer.position();
+		let buffer_start = lexer.position();
 		// Peek the current character.
-		current = match lexer.peek() {
+		let mut current = match lexer.peek() {
 			Some(c) => c,
 			None => {
 				break;
@@ -552,7 +537,21 @@ pub fn lexer(source: &str) -> Vec<Spanned<Token>> {
 				}
 			}
 		} else if is_number_start(&current) {
+			/// The current state when parsing a number.
+			#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+			enum NumState {
+				/// Parsing either an octal or decimal or a floating point number (depending on what follows).
+				Zero,
+				/// Parsing a hexadecimal number.
+				Hex,
+				/// Parsing a decimal number.
+				Dec,
+				/// Parsing a decimal floating point number.
+				Float,
+			}
+
 			can_start_directive = false;
+
 			// We don't need to worry about having a word character before this first digit character because if
 			// there was a word character before, this digit character would be getting parsed as part of the
 			// word in the first place, so this branch would not be executing.
@@ -1110,10 +1109,10 @@ fn spans() {
 }
 
 /// Asserts the token output of the `lexer()` matches the right hand side; ignores the spans.
-#[allow(unused_macros)]
+#[cfg(test)]
 macro_rules! assert_tokens {
     ($src:expr, $($token:expr),*) => {
-		let output = lexer($src).into_iter().map(|(t, s)| t).collect::<Vec<_>>();
+		let output = lexer($src).into_iter().map(|(t, _)| t).collect::<Vec<_>>();
         assert_eq!(output, vec![
             $(
                 $token,

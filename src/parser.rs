@@ -1,7 +1,9 @@
 use crate::{
-	ast::{Either, Expr, Stmt},
+	ast::{Expr, Stmt, Type},
 	expression::expr_parser,
-	lexer::{lexer, Spanned, Token},
+	lexer::{lexer, Token},
+	span::Spanned,
+	Either,
 };
 
 pub struct Walker {

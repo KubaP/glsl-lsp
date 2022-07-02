@@ -10,16 +10,17 @@ use std::{
 };
 
 pub mod ast;
+pub mod expression;
+pub mod lexer;
 pub mod parser;
 pub mod shader;
-pub mod lexer;
-pub mod expression;
 pub mod span;
 
-#[derive(Clone, Copy, PartialEq, Eq)]
-enum Type {
-	Compile,
-	Parse,
+/// Holds either one or the other value.
+#[derive(Debug, Clone, PartialEq)]
+pub enum Either<L, R> {
+	Left(L),
+	Right(R),
 }
 
 #[allow(unused_assignments)]
@@ -38,6 +39,12 @@ fn main() {
 	}
 	if !Path::exists(Path::new("./test.frag")) {
 		panic!("Could not find 'test.frag' in the project root!");
+	}
+
+	#[derive(Clone, Copy, PartialEq, Eq)]
+	enum Type {
+		Compile,
+		Parse,
 	}
 
 	// Setup file watching.

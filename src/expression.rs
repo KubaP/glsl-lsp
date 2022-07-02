@@ -1324,26 +1324,46 @@ impl ShuntingYard {
 				}
 				_ => {
 					// We have a token that's not allowed to be part of an expression.
-					// FIXME: Deal with this properly.
 					println!("Unexpected token found: {token:?}");
-					return;
+					break 'main;
 				}
 			}
 
 			walker.advance();
 		}
 
+		// FIXME: This should be -1 I think?
 		let end_position = walker.cursor;
 
+		// Close any open groups.
 		while self.groups.back().is_some() {
 			let (group, _, _) = self.groups.back().unwrap();
+			println!("Found an unclosed: {group:?}");
 
+			// Reasoning about what gets invalidated and what doesn't: will it potentially produce semantic errors
+			//
+			// Brackets - no matter where the closing parenthesis is located, it won't change whether the
+			// 	 expression type checks or not.
+			// Index - depending on where the closing bracket is placed, it can change whether the expression
+			// 	 type checks or not.
+			// Fn - depending on where the closing parenthesis is, it can change the number of arguments.
+			// Init - same as above.
+			// ArrInit - same as above.
+			// List - a perfectly valid top-level grouping structure.
 			match group {
+				Group::Bracket => self.collapse_bracket(end_position, false),
+				Group::Index(_) => self.collapse_index(end_position, true),
+				Group::Fn(_) => self.collapse_fn(end_position, true),
+				Group::Init(_) => self.collapse_init(end_position, true),
+				Group::ArrInit(_) => self.collapse_arr_init(end_position, true),
 				Group::List(_) => self.collapse_list(end_position, false),
 				_ => {}
 			}
 		}
 
+		// If there is an open group, then all of the operators will have been already moved as part of the
+		// collapsing functions. However, if we didn't need to close any groups, we may have leftover operators
+		// which still need moving.
 		while let Some(op) = self.operators.pop_back() {
 			self.stack.push_back(Either::Right(op));
 		}

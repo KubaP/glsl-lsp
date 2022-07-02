@@ -156,7 +156,7 @@ impl ShuntingYard {
 			}
 
 			if invalidate {
-				self.invalidate_range(group_start, span_end);
+				self.invalidate_range(group_start, span_end, false);
 			}
 		} else {
 			unreachable!()
@@ -204,7 +204,7 @@ impl ShuntingYard {
 			}
 
 			if invalidate {
-				self.invalidate_range(group_start, span_end);
+				self.invalidate_range(group_start, span_end, false);
 			}
 		} else {
 			unreachable!()
@@ -250,7 +250,7 @@ impl ShuntingYard {
 			}
 
 			if invalidate {
-				self.invalidate_range(group_start, span_end);
+				self.invalidate_range(group_start, span_end, true);
 			}
 		} else {
 			unreachable!()
@@ -294,7 +294,7 @@ impl ShuntingYard {
 			}
 
 			if invalidate {
-				self.invalidate_range(group_start, span_end);
+				self.invalidate_range(group_start, span_end, false);
 			}
 		} else {
 			unreachable!()
@@ -340,7 +340,7 @@ impl ShuntingYard {
 			}
 
 			if invalidate {
-				self.invalidate_range(group_start, span_end);
+				self.invalidate_range(group_start, span_end, false);
 			}
 		} else {
 			unreachable!()
@@ -391,7 +391,7 @@ impl ShuntingYard {
 			)));
 
 			if invalidate {
-				self.invalidate_range(group_start, span_end);
+				self.invalidate_range(group_start, span_end, false);
 			}
 		} else {
 			unreachable!()
@@ -399,7 +399,12 @@ impl ShuntingYard {
 	}
 
 	/// Invalidates the stack between the given start and end positions.
-	fn invalidate_range(&mut self, start_pos: usize, end_pos: usize) {
+	fn invalidate_range(
+		&mut self,
+		start_pos: usize,
+		end_pos: usize,
+		invalidating_index: bool,
+	) {
 		while self.stack.back().is_some() {
 			let span = match self.stack.back().unwrap() {
 				Either::Left((_, s)) => s,
@@ -420,6 +425,39 @@ impl ShuntingYard {
 				end: end_pos,
 			},
 		)));
+
+		// Index groups are a bit different than other groups, so we must treat them differently; hence the extra
+		// bool parameter in this function.
+		//
+		// With all other groups, the start span includes all of the relevant expression nodes like so:
+		//
+		//  func( 1, 2
+		// ^     ^
+		//
+		// However, the index start span only starts at the beginning of the `[` bracket. This is because the
+		// expression before the index can be arbitrary like so, (this is because unlike the other groups, the
+		// index group is a postfix operator):
+		//
+		//  obj.fun() [ 0 ]
+		//           ^ ^     : current span
+		// ^           ^     : ideal span, pretty much impossible to keep track of
+		//
+		// If we just placed an `Expr::Incomplete` in such a case, we'd get a stack which looks something like:
+		//  <SOME_EXPR> <INCOMPLETE>
+		// which in turn would not result in a singular `Expr` node once collapsed down.
+		//
+		// Hence, what we must do is something like this instead:
+		//  <SOME_EXPR> <INCOMPLETE> <INDEX>
+		// which will collapse into a singular `Expr` node.
+		if invalidating_index {
+			self.stack.push_back(Either::Right((
+				Op::Index(true),
+				Span {
+					start: start_pos,
+					end: end_pos,
+				},
+			)));
+		}
 	}
 
 	/// Registers the end of a bracket, function call or array constructor group, popping any operators until the

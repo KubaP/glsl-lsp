@@ -2240,11 +2240,11 @@ fn complex() {
 #[test]
 #[rustfmt::skip]
 fn incomplete() {
-	assert_expr!("i+5]", Expr::Binary {
+	/* assert_expr!("i+5]", Expr::Binary {
 		left: Box::from(Expr::Ident(Ident("i".into()))),
 		op: Op::Add,
 		right: Box::from(Expr::Lit(Lit::Int(5)))
-	});
+	}); */
 	assert_expr!("i[(5+1]", Expr::Index {
 		item: Box::from(Expr::Ident(Ident("i".into()))),
 		i: Some(Box::from(Expr::Incomplete))
@@ -2265,6 +2265,23 @@ fn incomplete() {
 		}),
 		args: vec![Expr::Incomplete]
 	});
-	//assert_expr!("i[5+1", Expr::Incomplete);
-	//assert_expr!("fn(5+(i]", Expr::Incomplete);
+	
+	// Outer unclosed delimiters.
+	assert_expr!("(i+x", Expr::Paren(Box::from(Expr::Binary {
+		left: Box::from(Expr::Ident(Ident("i".into()))),
+		op: Op::Add,
+		right: Box::from(Expr::Ident(Ident("x".into())))
+	})));
+	assert_expr!("i[5+1", Expr::Index {
+		item: Box::from(Expr::Ident(Ident("i".into()))),
+		i: Some(Box::from(Expr::Incomplete))
+	});
+	assert_expr!("fn(5+1", Expr::Incomplete);
+	assert_expr!("{5, 1", Expr::Incomplete);
+	assert_expr!("int[5](1, 2", Expr::Incomplete);
+	assert_expr!("a, b, c", Expr::List(vec![
+		Expr::Ident(Ident("a".into())),
+		Expr::Ident(Ident("b".into())),
+		Expr::Ident(Ident("c".into()))
+	]));
 }

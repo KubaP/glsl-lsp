@@ -69,6 +69,45 @@ pub enum Token {
 	RBrace,
 }
 
+impl Token {
+	pub fn starts_statement(&self) -> bool {
+		match self {
+			Self::If
+			| Self::Else
+			| Self::For
+			| Self::Do
+			| Self::While
+			| Self::Continue
+			| Self::Switch
+			| Self::Case
+			| Self::Default
+			| Self::Break
+			| Self::Return
+			| Self::Discard
+			| Self::Struct
+			| Self::Subroutine
+			| Self::Reserved(_)
+			| Self::In
+			| Self::Out
+			| Self::InOut
+			| Self::Uniform
+			| Self::Buffer
+			| Self::Const
+			| Self::Invariant
+			| Self::Interpolation
+			| Self::Precision
+			| Self::Layout
+			| Self::Location
+			| Self::Component
+			| Self::FragCoord
+			| Self::FragDepth
+			| Self::Index
+			| Self::FragTest => true,
+			_ => false,
+		}
+	}
+}
+
 /// The different number types/notations.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum NumType {

@@ -973,6 +973,7 @@ impl ShuntingYard {
 			EmptyIndex,
 		}
 		let mut can_start = Start::None;
+
 		// The start position of a potential delimiter, i.e. an `Ident` which may become a function call or an
 		// array constructor.
 		let mut possible_delim_start = 0;
@@ -1010,10 +1011,10 @@ impl ShuntingYard {
 				Token::Ident(s) if state == State::Operand => {
 					// We switch state since after an atom, we are expecting an operator, i.e.
 					// `..ident + i` instead of `..ident i`.
-					self.stack.push_back(match Ident::parse_any(s) {
-						Ok(i) => (Either::Left(Expr::Ident(i)), *span),
-						Err(_) => (Either::Left(Expr::Invalid), *span),
-					});
+					self.stack.push_back((
+						Either::Left(Expr::Ident(Ident(s.clone()))),
+						*span,
+					));
 					state = State::AfterOperand;
 
 					// After an identifier, we may start a function call.
@@ -1030,7 +1031,7 @@ impl ShuntingYard {
 				{
 					// This is an error, e.g. `..1 1` instead of `..1 + 1`.
 					println!("Expected a postfix, index or binary operator, or the end of expression, found an atom instead!");
-					return;
+					break 'main;
 				}
 				Token::Op(op) if state == State::Operand => {
 					match op {

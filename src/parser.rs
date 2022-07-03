@@ -1,5 +1,5 @@
 use crate::{
-	ast::{Expr, Stmt, Type},
+	ast::{Stmt, Type},
 	expression::expr_parser,
 	lexer::{lexer, Token},
 	span::Spanned,
@@ -390,4 +390,129 @@ fn print_stmt(stmt: &Stmt, indent: usize) {
 			print!("\r\n{:indent$}DISCARD", "", indent = indent * 4)
 		}
 	}
+}
+
+/// Asserts the list of statements from the `parse()` function matches the right hand side.
+#[cfg(test)]
+macro_rules! assert_stmt {
+    ($src:expr, $($stmt:expr),*) => {
+        assert_eq!(parse($src), vec![
+            $(
+                $stmt,
+            )*
+        ])
+    };
+}
+
+#[cfg(test)]
+use crate::ast::{Expr, Fundamental, Ident, Lit, Primitive};
+
+#[test]
+#[rustfmt::skip]
+fn var_def_decl() {
+	// Variable definitions.
+	assert_stmt!("int i;", Stmt::VarDef {
+		type_: Type::Basic(Primitive::Scalar(Fundamental::Int)),
+		ident: Ident("i".into())
+	});
+	assert_stmt!("bool[2] b;", Stmt::VarDef {
+		type_: Type::Array(Primitive::Scalar(Fundamental::Bool), Some(Expr::Lit(Lit::Int(2)))),
+		ident: Ident("b".into())
+	});
+	assert_stmt!("mat4 m[2][6];", Stmt::VarDef {
+		type_: Type::Array2D(Primitive::Matrix(4, 4), Some(Expr::Lit(Lit::Int(2))), Some(Expr::Lit(Lit::Int(6)))),
+		ident: Ident("m".into())
+	});
+	assert_stmt!("double[6] d[2];", Stmt::VarDef {
+		type_: Type::Array2D(
+			Primitive::Scalar(Fundamental::Double),
+			Some(Expr::Lit(Lit::Int(2))),
+			Some(Expr::Lit(Lit::Int(6)))
+		),
+		ident: Ident("d".into())
+	});
+	assert_stmt!("float a, b;", Stmt::VarDefs(vec![
+		(Type::Basic(Primitive::Scalar(Fundamental::Float)), Ident("a".into())),
+		(Type::Basic(Primitive::Scalar(Fundamental::Float)), Ident("b".into())),
+	]));
+	assert_stmt!("vec3[7][9] a[1], b[3];", Stmt::VarDefs(vec![
+		(
+			Type::ArrayND(Primitive::Vector(Fundamental::Float, 3), vec![
+				Some(Expr::Lit(Lit::Int(1))),
+				Some(Expr::Lit(Lit::Int(7))),
+				Some(Expr::Lit(Lit::Int(9))),
+				]),
+			Ident("a".into())
+		),
+		(
+			Type::ArrayND(Primitive::Vector(Fundamental::Float, 3), vec![
+				Some(Expr::Lit(Lit::Int(3))),
+				Some(Expr::Lit(Lit::Int(7))),
+				Some(Expr::Lit(Lit::Int(9))),
+				]),
+			Ident("b".into())
+		)
+	]));
+
+	// Variable declarations.
+	assert_stmt!("uint u = 5;", Stmt::VarDecl {
+		type_: Type::Basic(Primitive::Scalar(Fundamental::Uint)),
+		ident: Ident("u".into()),
+		value: Expr::Lit(Lit::Int(5)),
+		is_const: false
+	});
+	assert_stmt!("int[3] a[1] = {{4, 5, 6}};", Stmt::VarDecl {
+		type_: Type::Array2D(
+			Primitive::Scalar(Fundamental::Int),
+			Some(Expr::Lit(Lit::Int(1))),
+			Some(Expr::Lit(Lit::Int(3)))
+		),
+		ident: Ident("a".into()),
+		value: Expr::Init(vec![Expr::Init(vec![
+			Expr::Lit(Lit::Int(4)),
+			Expr::Lit(Lit::Int(5)),
+			Expr::Lit(Lit::Int(6))
+		])]),
+		is_const: false
+	});
+	assert_stmt!("double[] d = {1.0LF, 2.0LF};", Stmt::VarDecl {
+		type_: Type::Array(Primitive::Scalar(Fundamental::Double), None),
+		ident: Ident("d".into()),
+		value: Expr::Init(vec![
+			Expr::Lit(Lit::Double(1.0)),
+			Expr::Lit(Lit::Double(2.0))
+		]),
+		is_const: false
+	});
+	assert_stmt!("vec2 a, b = vec2(1, 2);", Stmt::VarDecls {
+		vars: vec![
+			(Type::Basic(Primitive::Vector(Fundamental::Float, 2)), Ident("a".into())),
+			(Type::Basic(Primitive::Vector(Fundamental::Float, 2)), Ident("b".into())),
+		],
+		value: Expr::Fn {
+			ident: Ident("vec2".into()),
+			args: vec![
+				Expr::Lit(Lit::Int(1)),
+				Expr::Lit(Lit::Int(2)),
+			]
+		},
+		is_const: false
+	});
+	assert_stmt!("float[2] a, b = float[](5, 6);", Stmt::VarDecls {
+		vars: vec![
+			(Type::Array(Primitive::Scalar(Fundamental::Float), Some(Expr::Lit(Lit::Int(2)))), Ident("a".into())),
+			(Type::Array(Primitive::Scalar(Fundamental::Float), Some(Expr::Lit(Lit::Int(2)))), Ident("b".into()))
+		],
+		value: Expr::ArrInit {
+			arr: Box::from(Expr::Index {
+				item: Box::from(Expr::Ident(Ident("float".into()))),
+				i: None
+			}),
+			args: vec![
+				Expr::Lit(Lit::Int(5)),
+				Expr::Lit(Lit::Int(6))
+			]
+		},
+		is_const: false
+	});
 }

@@ -368,11 +368,7 @@ fn print_stmt(stmt: &Stmt, indent: usize) {
 			for stmt in members {
 				print_stmt(stmt, indent + 1);
 			}
-			print!(
-				"\r\n{:indent$}}})",
-				"",
-				indent = indent * 4
-			);
+			print!("\r\n{:indent$}}})", "", indent = indent * 4);
 		}
 		Stmt::FnCall { ident, args } => {
 			print!(
@@ -628,5 +624,84 @@ fn var_def_decl() {
 			]
 		},
 		is_const: false
+	});
+}
+
+#[test]
+#[rustfmt::skip]
+fn struct_decl() {
+	assert_stmt!("struct S { int i; };", Stmt::StructDecl {
+		ident: Ident("S".into()),
+		members: vec![Stmt::VarDef {
+			type_: Type::Basic(Primitive::Scalar(Fundamental::Int)),
+			ident: Ident("i".into())
+		}]
+	});
+	assert_stmt!("struct S { bool[2] b; };", Stmt::StructDecl {
+		ident: Ident("S".into()),
+		members: vec![Stmt::VarDef {
+			type_: Type::Array(Primitive::Scalar(Fundamental::Bool), Some(Expr::Lit(Lit::Int(2)))),
+			ident: Ident("b".into())
+		}]
+	});
+	assert_stmt!("struct S { mat4 m[2][6]; };", Stmt::StructDecl {
+		ident: Ident("S".into()),
+		members: vec![Stmt::VarDef {
+			type_: Type::Array2D(Primitive::Matrix(4, 4), Some(Expr::Lit(Lit::Int(2))), Some(Expr::Lit(Lit::Int(6)))),
+			ident: Ident("m".into())
+		}]
+	});
+	assert_stmt!("struct S { vec3[7][9] a[1], b[3]; };", Stmt::StructDecl {
+		ident: Ident("S".into()),
+		members: vec![Stmt::VarDefs(vec![
+			(
+				Type::ArrayND(Primitive::Vector(Fundamental::Float, 3), vec![
+					Some(Expr::Lit(Lit::Int(1))),
+					Some(Expr::Lit(Lit::Int(7))),
+					Some(Expr::Lit(Lit::Int(9))),
+					]),
+				Ident("a".into())
+			),
+			(
+				Type::ArrayND(Primitive::Vector(Fundamental::Float, 3), vec![
+					Some(Expr::Lit(Lit::Int(3))),
+					Some(Expr::Lit(Lit::Int(7))),
+					Some(Expr::Lit(Lit::Int(9))),
+					]),
+				Ident("b".into())
+			)
+		])]
+	});
+
+	assert_stmt!("struct S { int i; bool b; float f1, f2; dvec2[1] d[2]; };", Stmt::StructDecl {
+		ident: Ident("S".into()),
+		members: vec![
+			Stmt::VarDef {
+				type_: Type::Basic(Primitive::Scalar(Fundamental::Int)),
+				ident: Ident("i".into())
+			},
+			Stmt::VarDef {
+				type_: Type::Basic(Primitive::Scalar(Fundamental::Bool)),
+				ident: Ident("b".into())
+			},
+			Stmt::VarDefs(vec![
+				(
+					Type::Basic(Primitive::Scalar(Fundamental::Float)),
+					Ident("f1".into())
+				),
+				(
+					Type::Basic(Primitive::Scalar(Fundamental::Float)),
+					Ident("f2".into())
+				)
+			]),
+			Stmt::VarDef {
+				type_: Type::Array2D(
+					Primitive::Vector(Fundamental::Double, 2),
+					Some(Expr::Lit(Lit::Int(2))),
+					Some(Expr::Lit(Lit::Int(1)))
+				),
+				ident: Ident("d".into())
+			}
+		]
 	});
 }

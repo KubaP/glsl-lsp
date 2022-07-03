@@ -132,7 +132,7 @@ fn main() {
 								fs::read_to_string("./test.parse").unwrap();
 
 							println!("\r\n");
-							parser::parse(&parse_source);
+							parser::parse_file(&parse_source);
 
 							has_reparsed = true;
 						}

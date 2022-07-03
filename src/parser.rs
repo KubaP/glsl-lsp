@@ -1,5 +1,5 @@
 use crate::{
-	ast::{Stmt, Type},
+	ast::{Expr, Stmt, Type},
 	expression::expr_parser,
 	lexer::{lexer, Token},
 	span::Spanned,
@@ -65,34 +65,51 @@ pub fn parse(source: &str) -> Vec<Stmt> {
 	let mut stmts = Vec::new();
 
 	'parser: while !walker.is_done() {
-		let start = match expr_parser(&mut walker) {
-			Some(e) => e,
-			None => break 'parser,
-		};
+		match expr_parser(&mut walker) {
+			// We tried to parse an expression and succeeded. We have an expression consisting of at least one
+			// token.
+			Some(expr) => {
+				if let Some(type_) = expr.to_type() {
+					match parse_type_start(&mut walker, type_) {
+						Some(s) => stmts.push(s),
+						None => 'till_next: loop {
+							// We did not successfully parse a statement.
+							let (next, _) = match walker.peek() {
+								Some(t) => t,
+								None => break 'parser,
+							};
 
-		if let Some(type_) = start.to_type() {
-			match parse_type_start(&mut walker, type_) {
-				Some(s) => stmts.push(s),
-				None => 'till_next: loop {
-					// We did not successfully parse a statement.
-					let (next, _) = match walker.peek() {
-						Some(t) => t,
-						None => break 'parser,
+							if *next == Token::Semi {
+								walker.advance();
+								break 'till_next;
+							} else if next.starts_statement() {
+								// We don't advance because we are currently at a token which begins a new statement, so we
+								// don't want to consume it before we rerun the main loop.
+								break 'till_next;
+							} else {
+								walker.advance();
+								continue 'till_next;
+							}
+						},
 					};
+				}
+			}
+			// We tried to parse an expression but that immediately failed. This means the current token is one
+			// which cannot start an expression.
+			None => {
+				let (token, _) = walker.peek().unwrap();
 
-					if *next == Token::Semi {
+				match token {
+					Token::Struct => {
 						walker.advance();
-						break 'till_next;
-					} else if next.starts_statement() {
-						// We don't advance because we are currently at a token which begins a new statement, so we
-						// don't want to consume it before we rerun the main loop.
-						break 'till_next;
-					} else {
-						walker.advance();
-						continue 'till_next;
+						match parse_struct(&mut walker) {
+							Some(s) => stmts.push(s),
+							None => break 'parser,
+						}
 					}
-				},
-			};
+					_ => break 'parser,
+				}
+			}
 		}
 	}
 
@@ -174,6 +191,99 @@ fn parse_type_start(walker: &mut Walker, type_: Type) -> Option<Stmt> {
 	}
 }
 
+/// Parse a struct declaration.
+fn parse_struct(walker: &mut Walker) -> Option<Stmt> {
+	let ident = match expr_parser(walker) {
+		Some(e) => match e {
+			Expr::Ident(i) => i,
+			_ => return None,
+		},
+		None => return None,
+	};
+
+	let (next, _) = match walker.peek() {
+		Some(t) => t,
+		None => return None,
+	};
+	if *next == Token::LBrace {
+		walker.advance();
+	} else {
+		return None;
+	}
+
+	let mut members = Vec::new();
+	'members: loop {
+		match expr_parser(walker) {
+			Some(expr) => {
+				if let Some(type_) = expr.to_type() {
+					let next = match expr_parser(walker) {
+						Some(e) => e,
+						None => return None,
+					};
+
+					let idents = next.to_var_decl();
+					if idents.len() == 0 {
+						return None;
+					}
+					let mut typenames = idents
+						.into_iter()
+						.map(|i| match i {
+							Either::Left(ident) => (type_.clone(), ident),
+							Either::Right((ident, v)) => {
+								(type_.clone().add_var_decl_arr_size(v), ident)
+							}
+						})
+						.collect::<Vec<_>>();
+
+					let (next, _) = match walker.peek() {
+						Some(t) => t,
+						None => return None,
+					};
+
+					if *next == Token::Semi {
+						// We have a variable definition.
+						walker.advance();
+						members.push(match typenames.len() {
+							1 => {
+								let (type_, ident) = typenames.remove(0);
+								Stmt::VarDef { type_, ident }
+							}
+							_ => Stmt::VarDefs(typenames),
+						});
+					} else {
+						return None;
+					}
+				} else {
+					return None;
+				}
+			}
+			None => break 'members,
+		}
+	}
+
+	let (next, _) = match walker.peek() {
+		Some(t) => t,
+		None => return None,
+	};
+	if *next == Token::RBrace {
+		walker.advance();
+	} else {
+		return None;
+	}
+
+	let (next, _) = match walker.peek() {
+		Some(t) => t,
+		None => return None,
+	};
+	if *next == Token::Semi {
+		walker.advance();
+	} else {
+		return None;
+	}
+
+	Some(Stmt::StructDecl { ident, members })
+}
+
 fn print_stmt(stmt: &Stmt, indent: usize) {
 	match stmt {
 		Stmt::Empty => print!(
@@ -251,14 +361,18 @@ fn print_stmt(stmt: &Stmt, indent: usize) {
 		}
 		Stmt::StructDecl { ident, members } => {
 			print!(
-				"\r\n{:indent$}\x1b[32mStruct\x1b[0m(ident: {ident}, members: [",
+				"\r\n{:indent$}\x1b[32mStruct\x1b[0m(ident: {ident}, members: {{",
 				"",
 				indent = indent * 4
 			);
-			for (t, i) in members {
-				print!("{i}: {t}, ");
+			for stmt in members {
+				print_stmt(stmt, indent + 1);
 			}
-			print!("])");
+			print!(
+				"\r\n{:indent$}}})",
+				"",
+				indent = indent * 4
+			);
 		}
 		Stmt::FnCall { ident, args } => {
 			print!(
@@ -405,7 +519,7 @@ macro_rules! assert_stmt {
 }
 
 #[cfg(test)]
-use crate::ast::{Expr, Fundamental, Ident, Lit, Primitive};
+use crate::ast::{Fundamental, Ident, Lit, Primitive};
 
 #[test]
 #[rustfmt::skip]

@@ -8,17 +8,7 @@
             "type": "lldb",
             "request": "launch",
             "name": "Debug executable",
-            "cargo": {
-                "args": [
-                    "build",
-                    "--bin=glsl-parser",
-                    "--package=glsl-parser"
-                ],
-                "filter": {
-                    "name": "glsl-parser",
-                    "kind": "bin"
-                }
-            },
+            "program": "${workspaceFolder}\\target\\debug\\glsl-parser.exe",
             "args": [],
             "cwd": "${workspaceFolder}",
             "env": {
@@ -26,7 +16,8 @@
             },
             "sourceLanguages": [
                 "rust"
-            ]
+            ],
+            "preLaunchTask": "Cargo build"
         },
         {
             "type": "lldb",

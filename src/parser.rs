@@ -1,6 +1,6 @@
 use crate::{
-	ast::{Expr, Stmt, Type},
-	expression::expr_parser,
+	ast::{Expr, Ident, Stmt, Type},
+	expression::{expr_parser, Mode},
 	lexer::{lexer, Token},
 	span::Spanned,
 	Either,
@@ -65,7 +65,7 @@ pub fn parse(source: &str) -> Vec<Stmt> {
 	let mut stmts = Vec::new();
 
 	'parser: while !walker.is_done() {
-		match expr_parser(&mut walker) {
+		match expr_parser(&mut walker, Mode::Default) {
 			// We tried to parse an expression and succeeded. We have an expression consisting of at least one
 			// token.
 			Some(expr) => {
@@ -118,13 +118,33 @@ pub fn parse(source: &str) -> Vec<Stmt> {
 
 /// Parse statements which begin with a type.
 fn parse_type_start(walker: &mut Walker, type_: Type) -> Option<Stmt> {
-	let next = match expr_parser(walker) {
+	// Check whether we have a function definition/declaration.
+	match walker.peek() {
+		Some((t, _)) => match t {
+			Token::Ident(i) => match walker.lookahead_1() {
+				Some((t2, _)) => match t2 {
+					Token::LParen => {
+						let ident = Ident(i.clone());
+						walker.advance();
+						walker.advance();
+						return parse_fn(walker, type_, ident);
+					}
+					_ => {}
+				},
+				None => return None,
+			},
+			_ => {}
+		},
+		None => return None,
+	};
+
+	let next = match expr_parser(walker, Mode::Default) {
 		Some(e) => e,
 		None => return None,
 	};
 
-	let idents = next.to_var_decl();
-	if idents.len() == 0 {
+	let idents = next.to_var_def_decl_or_fn_ident();
+	if idents.is_empty() {
 		return None;
 	}
 	let mut typenames = idents
@@ -155,7 +175,7 @@ fn parse_type_start(walker: &mut Walker, type_: Type) -> Option<Stmt> {
 	} else if *next == Token::Eq {
 		walker.advance();
 		// We have a variable declaration.
-		let value = match expr_parser(walker) {
+		let value = match expr_parser(walker, Mode::Default) {
 			Some(e) => e,
 			None => return None,
 		};
@@ -191,9 +211,93 @@ fn parse_type_start(walker: &mut Walker, type_: Type) -> Option<Stmt> {
 	}
 }
 
+fn parse_fn(
+	walker: &mut Walker,
+	return_type: Type,
+	ident: Ident,
+) -> Option<Stmt> {
+	let mut params = Vec::new();
+
+	loop {
+		let expr = match expr_parser(walker, Mode::DisallowTopLevelList) {
+			Some(e) => e,
+			None => {
+				let (current, _) = match walker.peek() {
+					Some(t) => t,
+					None => return None,
+				};
+
+				if *current == Token::RParen {
+					walker.advance();
+					break;
+				} else if *current == Token::Comma {
+					walker.advance();
+					continue;
+				} else {
+					return None;
+				}
+			}
+		};
+
+		let type_ = match Type::parse(&expr) {
+			Some(t) => t,
+			None => return None,
+		};
+
+		let expr_2 = match expr_parser(walker, Mode::DisallowTopLevelList) {
+			Some(e) => e,
+			None => {
+				let (current, _) = match walker.peek() {
+					Some(t) => t,
+					None => return None,
+				};
+
+				if *current == Token::Comma {
+					walker.advance();
+					params.push((type_, None));
+					continue;
+				} else if *current == Token::RParen {
+					walker.advance();
+					params.push((type_, None));
+					break;
+				} else {
+					return None;
+				}
+			}
+		};
+
+		let (type_, ident) =
+			match expr_2.to_var_def_decl_or_fn_ident().remove(0) {
+				Either::Left(ident) => (type_.clone(), ident),
+				Either::Right((ident, v)) => {
+					(type_.clone().add_var_decl_arr_size(v), ident)
+				}
+			};
+
+		params.push((type_, Some(ident)));
+	}
+
+	let (next, _) = match walker.peek() {
+		Some(t) => t,
+		None => return None,
+	};
+	if *next == Token::Semi {
+		walker.advance();
+	} else {
+		// TODO: Deal with { function scope... }.
+		return None;
+	}
+
+	Some(Stmt::FnDef {
+		return_type,
+		ident,
+		params,
+	})
+}
+
 /// Parse a struct declaration.
 fn parse_struct(walker: &mut Walker) -> Option<Stmt> {
-	let ident = match expr_parser(walker) {
+	let ident = match expr_parser(walker, Mode::Default) {
 		Some(e) => match e {
 			Expr::Ident(i) => i,
 			_ => return None,
@@ -213,15 +317,15 @@ fn parse_struct(walker: &mut Walker) -> Option<Stmt> {
 
 	let mut members = Vec::new();
 	'members: loop {
-		match expr_parser(walker) {
+		match expr_parser(walker, Mode::Default) {
 			Some(expr) => {
 				if let Some(type_) = expr.to_type() {
-					let next = match expr_parser(walker) {
+					let next = match expr_parser(walker, Mode::Default) {
 						Some(e) => e,
 						None => return None,
 					};
 
-					let idents = next.to_var_decl();
+					let idents = next.to_var_def_decl_or_fn_ident();
 					if idents.len() == 0 {
 						return None;
 					}
@@ -339,19 +443,42 @@ fn print_stmt(stmt: &Stmt, indent: usize) {
 			}
 			print!(") = {value}");
 		}
+		Stmt::FnDef {
+			return_type,
+			ident,
+			params,
+		} => {
+			print!(
+				"\r\n{:indent$}\x1b[34mFn\x1b[0m(return: {return_type}, ident: {ident}, params: [",
+				"",
+				indent = indent * 4
+			);
+			for (type_, ident) in params {
+				if let Some(ident) = ident {
+					print!("{type_}: {ident}, ");
+				} else {
+					print!("{type_}, ");
+				}
+			}
+			print!("])");
+		}
 		Stmt::FnDecl {
-			type_,
+			return_type,
 			ident,
 			params,
 			body,
 		} => {
 			print!(
-				"\r\n{:indent$}\x1b[34mFn\x1b[0m(return: {type_} ident: {ident}, params: [",
+				"\r\n{:indent$}\x1b[34mFn\x1b[0m(return: {return_type}, ident: {ident}, params: [",
 				"",
 				indent = indent * 4
 			);
 			for (type_, ident) in params {
-				print!("{type_}: {ident}, ");
+				if let Some(ident) = ident {
+					print!("{type_}: {ident}, ");
+				} else {
+					print!("{type_}, ");
+				}
 			}
 			print!("]) {{");
 			for inner in body {
@@ -515,7 +642,7 @@ macro_rules! assert_stmt {
 }
 
 #[cfg(test)]
-use crate::ast::{Fundamental, Ident, Lit, Primitive};
+use crate::ast::{Fundamental, Lit, Primitive};
 
 #[test]
 #[rustfmt::skip]

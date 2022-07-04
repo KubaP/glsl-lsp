@@ -177,13 +177,18 @@ impl std::fmt::Display for Expr {
 }
 
 impl Expr {
-	/// Tries to create a `Type`.
+	/// Tries to create a `Type`, e.g. `int` or `MyStruct` or `float[3][2]`.
 	pub fn to_type(&self) -> Option<Type> {
 		Type::parse(self)
 	}
 
-	/// Tries to create a variable declarations.
-	pub fn to_var_decl(&self) -> Vec<Either<Ident, (Ident, Vec<ArrSize>)>> {
+	/// Tries to create variable definition/declaration identifiers, e.g. `my_num` or `a, b` or `c[1], p[3]`.
+	///
+	/// Each entry is either just an [`Ident`] if the expression is something like `my_num`, or it is an `Ident`
+	/// plus one or more [`ArrSize`] if the expression is something like `a[1]` or `b[][3]`.
+	pub fn to_var_def_decl_or_fn_ident(
+		&self,
+	) -> Vec<Either<Ident, (Ident, Vec<ArrSize>)>> {
 		let mut idents = Vec::new();
 
 		match self {
@@ -203,7 +208,12 @@ impl Expr {
 
 		idents
 	}
+
+	/// Tries to create a function identifier, e.g. `my_func`.
+	pub fn to_fn_ident(&self) {}
 }
+
+type Param = (Type, Option<Ident>);
 
 /// A top-level statement. Some of these statements are only valid at the file top-level. Others are only valid
 /// inside of functions.
@@ -228,11 +238,17 @@ pub enum Stmt {
 		value: Expr,
 		is_const: bool,
 	},
+	/// Function definition.
+	FnDef {
+		return_type: Type,
+		ident: Ident,
+		params: Vec<Param>,
+	},
 	/// Function declaration.
 	FnDecl {
-		type_: Type,
+		return_type: Type,
 		ident: Ident,
-		params: Vec<(Type, Ident)>,
+		params: Vec<Param>,
 		body: Vec<Stmt>,
 	},
 	/// Struct declaration.
@@ -490,9 +506,7 @@ impl std::fmt::Display for Ident {
 }
 
 impl Ident {
-	fn from_expr(
-		expr: &Expr,
-	) -> Option<Either<Ident, (Ident, Vec<ArrSize>)>> {
+	fn from_expr(expr: &Expr) -> Option<Either<Ident, (Ident, Vec<ArrSize>)>> {
 		match expr {
 			Expr::Ident(i) => Some(Either::Left(i.clone())),
 			Expr::Index { item, i } => {

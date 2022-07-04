@@ -10,8 +10,14 @@ use std::collections::VecDeque;
 #[cfg(test)]
 use crate::lexer::lexer;
 
+#[derive(Debug, PartialEq, Eq)]
+pub enum Mode {
+	Default,
+	DisallowTopLevelList,
+}
+
 /// Tries to parse an expression beginning at the current position.
-pub fn expr_parser(walker: &mut Walker) -> Option<Expr> {
+pub fn expr_parser(walker: &mut Walker, mode: Mode) -> Option<Expr> {
 	let start_position = match walker.peek() {
 		Some((_, span)) => span.start,
 		None => return None,
@@ -21,6 +27,7 @@ pub fn expr_parser(walker: &mut Walker) -> Option<Expr> {
 		operators: VecDeque::new(),
 		groups: VecDeque::new(),
 		start_position,
+		mode,
 	};
 	parser.parse(walker);
 	parser.create_ast()
@@ -87,6 +94,7 @@ struct ShuntingYard {
 	groups: VecDeque<(Group, usize, usize)>,
 	/// The start position of the first item in this expression.
 	start_position: usize,
+	mode: Mode,
 }
 
 impl ShuntingYard {
@@ -1288,6 +1296,13 @@ impl ShuntingYard {
 					}
 				}
 				Token::Comma if state == State::AfterOperand => {
+					if self.mode == Mode::DisallowTopLevelList
+						&& self.groups.is_empty()
+					{
+						println!("Found a `,` outside of a group, with `Mode::DisallowTopLevelList`!");
+						break 'main;
+					}
+
 					// We switch state since after a comma (which delineates an expression), we're effectively
 					// starting a new expression which must start with an operand, i.e.
 					// `.., 5 + 6` instead of `.., + 6`.
@@ -1722,7 +1737,7 @@ macro_rules! assert_expr {
 			cst: lexer($source),
 			cursor: 0,
 		};
-		assert_eq!(expr_parser(&mut walker).unwrap(), $rest);
+		assert_eq!(expr_parser(&mut walker, Mode::Default).unwrap(), $rest);
 	};
 }
 

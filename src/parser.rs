@@ -311,6 +311,9 @@ fn parse_struct(walker: &mut Walker) -> Option<Stmt> {
 	};
 	if *next == Token::LBrace {
 		walker.advance();
+	} else if *next == Token::Semi {
+		walker.advance();
+		return Some(Stmt::StructDef { ident });
 	} else {
 		return None;
 	}
@@ -485,6 +488,13 @@ fn print_stmt(stmt: &Stmt, indent: usize) {
 				print_stmt(inner, indent + 1);
 			}
 			print!("\r\n{:indent$}}}", "", indent = indent * 4);
+		}
+		Stmt::StructDef { ident } => {
+			print!(
+				"\r\n{:indent$}\x1b[90;9mStruct\x1b[90m(ident: {ident}\x1b[90;9m)\x1b[0m",
+				"",
+				indent = indent * 4
+			);
 		}
 		Stmt::StructDecl { ident, members } => {
 			print!(

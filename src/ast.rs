@@ -251,6 +251,10 @@ pub enum Stmt {
 		params: Vec<Param>,
 		body: Vec<Stmt>,
 	},
+	/// Struct definition. *Note:* this is invalid glsl.
+	StructDef {
+		ident: Ident,
+	},
 	/// Struct declaration.
 	StructDecl {
 		ident: Ident,

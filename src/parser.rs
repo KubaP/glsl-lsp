@@ -1,5 +1,5 @@
 use crate::{
-	ast::{Expr, Ident, Stmt, Type},
+	ast::{Expr, Ident, Qualifier, Stmt, Type},
 	expression::{expr_parser, Mode},
 	lexer::{lexer, Token},
 	span::Spanned,
@@ -70,7 +70,7 @@ pub fn parse(source: &str) -> Vec<Stmt> {
 			// token.
 			Some(expr) => {
 				if let Some(type_) = expr.to_type() {
-					match parse_type_start(&mut walker, type_) {
+					match parse_type_start(&mut walker, type_, vec![]) {
 						Some(s) => stmts.push(s),
 						None => 'till_next: loop {
 							// We did not successfully parse a statement.
@@ -99,6 +99,32 @@ pub fn parse(source: &str) -> Vec<Stmt> {
 			None => {
 				let (token, _) = walker.peek().unwrap();
 
+				if token.is_qualifier() {
+					match parse_qualifier_list(&mut walker) {
+						Some(s) => stmts.push(s),
+						None => 'till_next_2: loop {
+							// We did not successfully parse a statement.
+							let (next, _) = match walker.peek() {
+								Some(t) => t,
+								None => break 'parser,
+							};
+
+							if *next == Token::Semi {
+								walker.advance();
+								break 'till_next_2;
+							} else if next.starts_statement() {
+								// We don't advance because we are currently at a token which begins a new statement, so we
+								// don't want to consume it before we rerun the main loop.
+								break 'till_next_2;
+							} else {
+								walker.advance();
+								continue 'till_next_2;
+							}
+						},
+					}
+					continue 'parser;
+				}
+
 				match token {
 					Token::Struct => {
 						walker.advance();
@@ -116,8 +142,170 @@ pub fn parse(source: &str) -> Vec<Stmt> {
 	stmts
 }
 
+/// Parse a list of qualifiers, e.g. `const in ...` or `flat uniform ...` or `layout(location = 1) ...`.
+fn parse_qualifier_list(walker: &mut Walker) -> Option<Stmt> {
+	// Take tokens until we've run out of qualifiers.
+	let mut qualifiers = Vec::new();
+	loop {
+		let current = match walker.peek() {
+			Some((t, _)) => t,
+			None => return None,
+		};
+
+		use crate::ast::{Interpolation, Memory, Storage};
+
+		match current {
+			Token::Const => qualifiers.push(Qualifier::Storage(Storage::Const)),
+			Token::In => qualifiers.push(Qualifier::Storage(Storage::In)),
+			Token::Out => qualifiers.push(Qualifier::Storage(Storage::Out)),
+			Token::InOut => qualifiers.push(Qualifier::Storage(Storage::InOut)),
+			Token::Attribute => {
+				qualifiers.push(Qualifier::Storage(Storage::Attribute))
+			}
+			Token::Uniform => {
+				qualifiers.push(Qualifier::Storage(Storage::Uniform))
+			}
+			Token::Varying => {
+				qualifiers.push(Qualifier::Storage(Storage::Varying))
+			}
+			Token::Buffer => {
+				qualifiers.push(Qualifier::Storage(Storage::Buffer))
+			}
+			Token::Shared => {
+				qualifiers.push(Qualifier::Storage(Storage::Shared))
+			}
+			Token::Centroid => {
+				qualifiers.push(Qualifier::Storage(Storage::Centroid))
+			}
+			Token::Sample => {
+				qualifiers.push(Qualifier::Storage(Storage::Sample))
+			}
+			Token::Patch => qualifiers.push(Qualifier::Storage(Storage::Patch)),
+			Token::Flat => {
+				qualifiers.push(Qualifier::Interpolation(Interpolation::Flat))
+			}
+			Token::Smooth => {
+				qualifiers.push(Qualifier::Interpolation(Interpolation::Smooth))
+			}
+			Token::NoPerspective => qualifiers
+				.push(Qualifier::Interpolation(Interpolation::NoPerspective)),
+			Token::HighP => qualifiers.push(Qualifier::Precision),
+			Token::MediumP => qualifiers.push(Qualifier::Precision),
+			Token::LowP => qualifiers.push(Qualifier::Precision),
+			Token::Invariant => qualifiers.push(Qualifier::Invariant),
+			Token::Precise => qualifiers.push(Qualifier::Precise),
+			Token::Coherent => {
+				qualifiers.push(Qualifier::Memory(Memory::Coherent))
+			}
+			Token::Volatile => {
+				qualifiers.push(Qualifier::Memory(Memory::Volatile))
+			}
+			Token::Restrict => {
+				qualifiers.push(Qualifier::Memory(Memory::Restrict))
+			}
+			Token::Readonly => {
+				qualifiers.push(Qualifier::Memory(Memory::Readonly))
+			}
+			Token::Writeonly => {
+				qualifiers.push(Qualifier::Memory(Memory::Writeonly))
+			}
+			Token::Layout => {
+				walker.advance();
+
+				// Consume the opening `(` parenthesis.
+				let current = match walker.peek() {
+					Some((t, _)) => t,
+					None => return None,
+				};
+				if *current == Token::LParen {
+					walker.advance();
+				} else {
+					return None;
+				}
+
+				// Take layout identifiers until we reach the closing `)` parenthesis.
+				let mut layouts = Vec::new();
+				'identifiers: loop {
+					let current = match walker.peek() {
+						Some((t, _)) => t,
+						None => return None,
+					};
+
+					match current {
+						Token::Comma => {
+							walker.advance();
+							continue 'identifiers;
+						}
+						Token::RParen => break 'identifiers,
+						Token::Semi => return None,
+						_ => {}
+					}
+
+					match current.to_layout() {
+						Some(e) => {
+							walker.advance();
+
+							match e {
+								Either::Left(layout) => {
+									layouts.push(layout);
+								}
+								Either::Right(constructor) => {
+									// Consume the `=` in `ident = expression`.
+									let current = match walker.peek() {
+										Some((t, _)) => t,
+										None => return None,
+									};
+									if *current == Token::Eq {
+										walker.advance();
+									} else {
+										return None;
+									}
+
+									let expr = match expr_parser(
+										walker,
+										Mode::DisallowTopLevelList,
+									) {
+										Some(e) => e,
+										None => return None,
+									};
+									layouts.push(constructor(expr));
+								}
+							}
+						}
+						None => return None,
+					}
+				}
+
+				qualifiers.push(Qualifier::Layout(layouts));
+			}
+			Token::Semi => return None,
+			// If we encounter anything other than a qualifier, that means we have reached the end of this list of
+			// qualifiers and can move onto the next parsing step.
+			_ => break,
+		}
+
+		walker.advance();
+	}
+
+	match expr_parser(walker, Mode::Default) {
+		// After qualifiers, we are expecting a type, be it either for a variable or a function.
+		Some(expr) => {
+			if let Some(type_) = expr.to_type() {
+				parse_type_start(walker, type_, qualifiers)
+			} else {
+				None
+			}
+		}
+		None => None,
+	}
+}
+
 /// Parse statements which begin with a type.
-fn parse_type_start(walker: &mut Walker, type_: Type) -> Option<Stmt> {
+fn parse_type_start(
+	walker: &mut Walker,
+	type_: Type,
+	qualifiers: Vec<Qualifier>,
+) -> Option<Stmt> {
 	// Check whether we have a function definition/declaration.
 	match walker.peek() {
 		Some((t, _)) => match t {
@@ -168,9 +356,13 @@ fn parse_type_start(walker: &mut Walker, type_: Type) -> Option<Stmt> {
 		return match typenames.len() {
 			1 => {
 				let (type_, ident) = typenames.remove(0);
-				Some(Stmt::VarDef { type_, ident })
+				Some(Stmt::VarDef {
+					type_,
+					ident,
+					qualifiers,
+				})
 			}
-			_ => Some(Stmt::VarDefs(typenames)),
+			_ => Some(Stmt::VarDefs(typenames, qualifiers)),
 		};
 	} else if *next == Token::Eq {
 		walker.advance();
@@ -353,9 +545,13 @@ fn parse_struct(walker: &mut Walker) -> Option<Stmt> {
 						members.push(match typenames.len() {
 							1 => {
 								let (type_, ident) = typenames.remove(0);
-								Stmt::VarDef { type_, ident }
+								Stmt::VarDef {
+									type_,
+									ident,
+									qualifiers: vec![],
+								}
 							}
-							_ => Stmt::VarDefs(typenames),
+							_ => Stmt::VarDefs(typenames, vec![]),
 						});
 					} else {
 						return None;
@@ -364,7 +560,37 @@ fn parse_struct(walker: &mut Walker) -> Option<Stmt> {
 					return None;
 				}
 			}
-			None => break 'members,
+			None => {
+				let (token, _) = walker.peek().unwrap();
+
+				if token.is_qualifier() {
+					match parse_qualifier_list(walker) {
+						Some(s) => members.push(s),
+						None => 'till_next_2: loop {
+							// We did not successfully parse a statement.
+							let (next, _) = match walker.peek() {
+								Some(t) => t,
+								None => break 'members,
+							};
+
+							if *next == Token::Semi {
+								walker.advance();
+								break 'till_next_2;
+							} else if next.starts_statement() {
+								// We don't advance because we are currently at a token which begins a new statement, so we
+								// don't want to consume it before we rerun the main loop.
+								break 'till_next_2;
+							} else {
+								walker.advance();
+								continue 'till_next_2;
+							}
+						},
+					}
+					continue 'members;
+				}
+
+				break 'members;
+			}
 		}
 	}
 
@@ -398,17 +624,28 @@ fn print_stmt(stmt: &Stmt, indent: usize) {
 			"",
 			indent = indent * 4
 		),
-		Stmt::VarDef { type_, ident } => {
-			print!("\r\n{:indent$}\x1b[32mVar\x1b[0m(type: {type_}, ident: {ident})", "", indent = indent*4);
+		Stmt::VarDef {
+			type_,
+			ident,
+			qualifiers,
+		} => {
+			print!("\r\n{:indent$}\x1b[32mVar\x1b[0m(type: {type_}, ident: {ident}, qualifiers: [", "", indent = indent*4);
+			for qualifier in qualifiers {
+				print!("{qualifier}, ");
+			}
+			print!("])");
 		}
-		Stmt::VarDefs(vars) => {
+		Stmt::VarDefs(vars, qualifiers) => {
 			print!(
-				"\r\n{:indent$}\x1b[32mVar\x1b[0m(",
+				"\r\n{:indent$}\x1b[32mVar\x1b[0m(qualifiers: [",
 				"",
 				indent = indent * 4
 			);
+			for qualifier in qualifiers {
+				print!("{qualifier}, ");
+			}
 			for var in vars {
-				print!("[type: {}, ident: {}], ", var.0, var.1);
+				print!("], [type: {}, ident: {}], ", var.0, var.1);
 			}
 			print!(")");
 		}
@@ -660,15 +897,18 @@ fn var_def_decl() {
 	// Variable definitions.
 	assert_stmt!("int i;", Stmt::VarDef {
 		type_: Type::Basic(Primitive::Scalar(Fundamental::Int)),
-		ident: Ident("i".into())
+		ident: Ident("i".into()),
+		qualifiers: vec![]
 	});
 	assert_stmt!("bool[2] b;", Stmt::VarDef {
 		type_: Type::Array(Primitive::Scalar(Fundamental::Bool), Some(Expr::Lit(Lit::Int(2)))),
-		ident: Ident("b".into())
+		ident: Ident("b".into()),
+		qualifiers: vec![]
 	});
 	assert_stmt!("mat4 m[2][6];", Stmt::VarDef {
 		type_: Type::Array2D(Primitive::Matrix(4, 4), Some(Expr::Lit(Lit::Int(2))), Some(Expr::Lit(Lit::Int(6)))),
-		ident: Ident("m".into())
+		ident: Ident("m".into()),
+		qualifiers: vec![]
 	});
 	assert_stmt!("double[6] d[2];", Stmt::VarDef {
 		type_: Type::Array2D(
@@ -676,12 +916,13 @@ fn var_def_decl() {
 			Some(Expr::Lit(Lit::Int(2))),
 			Some(Expr::Lit(Lit::Int(6)))
 		),
-		ident: Ident("d".into())
+		ident: Ident("d".into()),
+		qualifiers: vec![]
 	});
 	assert_stmt!("float a, b;", Stmt::VarDefs(vec![
 		(Type::Basic(Primitive::Scalar(Fundamental::Float)), Ident("a".into())),
 		(Type::Basic(Primitive::Scalar(Fundamental::Float)), Ident("b".into())),
-	]));
+	], vec![]));
 	assert_stmt!("vec3[7][9] a[1], b[3];", Stmt::VarDefs(vec![
 		(
 			Type::ArrayND(Primitive::Vector(Fundamental::Float, 3), vec![
@@ -699,7 +940,7 @@ fn var_def_decl() {
 				]),
 			Ident("b".into())
 		)
-	]));
+	], vec![]));
 
 	// Variable declarations.
 	assert_stmt!("uint u = 5;", Stmt::VarDecl {
@@ -766,26 +1007,30 @@ fn var_def_decl() {
 
 #[test]
 #[rustfmt::skip]
-fn struct_decl() {
+fn struct_def_decl() {
+	assert_stmt!("struct S;", Stmt::StructDef { ident: Ident("S".into()) });
 	assert_stmt!("struct S { int i; };", Stmt::StructDecl {
 		ident: Ident("S".into()),
 		members: vec![Stmt::VarDef {
 			type_: Type::Basic(Primitive::Scalar(Fundamental::Int)),
-			ident: Ident("i".into())
+			ident: Ident("i".into()),
+			qualifiers: vec![]
 		}]
 	});
 	assert_stmt!("struct S { bool[2] b; };", Stmt::StructDecl {
 		ident: Ident("S".into()),
 		members: vec![Stmt::VarDef {
 			type_: Type::Array(Primitive::Scalar(Fundamental::Bool), Some(Expr::Lit(Lit::Int(2)))),
-			ident: Ident("b".into())
+			ident: Ident("b".into()),
+			qualifiers: vec![]
 		}]
 	});
 	assert_stmt!("struct S { mat4 m[2][6]; };", Stmt::StructDecl {
 		ident: Ident("S".into()),
 		members: vec![Stmt::VarDef {
 			type_: Type::Array2D(Primitive::Matrix(4, 4), Some(Expr::Lit(Lit::Int(2))), Some(Expr::Lit(Lit::Int(6)))),
-			ident: Ident("m".into())
+			ident: Ident("m".into()),
+			qualifiers: vec![]
 		}]
 	});
 	assert_stmt!("struct S { vec3[7][9] a[1], b[3]; };", Stmt::StructDecl {
@@ -807,7 +1052,7 @@ fn struct_decl() {
 					]),
 				Ident("b".into())
 			)
-		])]
+		], vec![])]
 	});
 
 	assert_stmt!("struct S { int i; bool b; float f1, f2; dvec2[1] d[2]; };", Stmt::StructDecl {
@@ -815,11 +1060,13 @@ fn struct_decl() {
 		members: vec![
 			Stmt::VarDef {
 				type_: Type::Basic(Primitive::Scalar(Fundamental::Int)),
-				ident: Ident("i".into())
+				ident: Ident("i".into()),
+				qualifiers: vec![]
 			},
 			Stmt::VarDef {
 				type_: Type::Basic(Primitive::Scalar(Fundamental::Bool)),
-				ident: Ident("b".into())
+				ident: Ident("b".into()),
+				qualifiers: vec![]
 			},
 			Stmt::VarDefs(vec![
 				(
@@ -830,14 +1077,15 @@ fn struct_decl() {
 					Type::Basic(Primitive::Scalar(Fundamental::Float)),
 					Ident("f2".into())
 				)
-			]),
+			], vec![]),
 			Stmt::VarDef {
 				type_: Type::Array2D(
 					Primitive::Vector(Fundamental::Double, 2),
 					Some(Expr::Lit(Lit::Int(2))),
 					Some(Expr::Lit(Lit::Int(1)))
 				),
-				ident: Ident("d".into())
+				ident: Ident("d".into()),
+				qualifiers: vec![]
 			}
 		]
 	});

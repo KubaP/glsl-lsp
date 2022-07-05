@@ -222,9 +222,13 @@ pub enum Stmt {
 	/// An empty statement, i.e. just a `;`.
 	Empty,
 	/// Variable definition.
-	VarDef { type_: Type, ident: Ident },
+	VarDef {
+		type_: Type,
+		ident: Ident,
+		qualifiers: Vec<Qualifier>,
+	},
 	/// Multiple variable definitions, e.g. `int a, b;`.
-	VarDefs(Vec<(Type, Ident)>),
+	VarDefs(Vec<(Type, Ident)>, Vec<Qualifier>),
 	/// Variable declaration.
 	VarDecl {
 		type_: Type,
@@ -360,12 +364,205 @@ impl std::fmt::Display for Preproc {
 }
 
 /// The valid options for the behaviour setting in a `#extension` directive.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq)]
 pub enum ExtBehaviour {
 	Enable,
 	Require,
 	Warn,
 	Disable,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub enum Qualifier {
+	Storage(Storage),
+	Layout(Vec<Layout>),
+	Interpolation(Interpolation),
+	Precision,
+	Invariant,
+	Precise,
+	Memory(Memory),
+}
+
+impl std::fmt::Display for Qualifier {
+	fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+		match self {
+			Self::Storage(s) => write!(
+				f,
+				"\x1b[95m{}\x1b[0m",
+				match s {
+					Storage::Const => "const",
+					Storage::In => "in",
+					Storage::Out => "out",
+					Storage::InOut => "inout",
+					Storage::Attribute => "attribute",
+					Storage::Uniform => "uniform",
+					Storage::Varying => "varying",
+					Storage::Buffer => "buffer",
+					Storage::Shared => "shared",
+					Storage::Centroid => "centroid",
+					Storage::Sample => "sample",
+					Storage::Patch => "patch"
+				}
+			),
+			Self::Layout(v) => {
+				write!(f, "\x1b[95mlayout\x1b[0m: [")?;
+				for l in v {
+					write!(f, "{l}, ")?;
+				}
+				write!(f, "]")
+			}
+			Self::Interpolation(i) => write!(
+				f,
+				"\x1b[95m{}\x1b[0m",
+				match i {
+					Interpolation::Smooth => "smooth",
+					Interpolation::Flat => "flat",
+					Interpolation::NoPerspective => "noperspective",
+				}
+			),
+			Self::Precision => write!(f, "\x1b[90;9mprecision\x1b[0m"),
+			Self::Invariant => write!(f, "\x1b[95minvariant\x1b[0m"),
+			Self::Precise => write!(f, "\x1b[95mprecise\x1b[0m"),
+			Self::Memory(m) => write!(f, "\x1b[95m{}\x1b[0m", match m {
+				Memory::Coherent => "coherent",
+				Memory::Volatile => "volatile",
+				Memory::Restrict => "restrict",
+				Memory::Readonly => "readonly",
+				Memory::Writeonly => "writeonly"
+			})
+		}
+	}
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub enum Storage {
+	Const,
+	In,
+	Out,
+	InOut,
+	Attribute,
+	Uniform,
+	Varying,
+	Buffer,
+	Shared,
+	Centroid,
+	Sample,
+	Patch,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub enum Interpolation {
+	Smooth,
+	Flat,
+	NoPerspective,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub enum Memory {
+	Coherent,
+	Volatile,
+	Restrict,
+	Readonly,
+	Writeonly,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub enum Layout {
+	Shared,
+	Packed,
+	Std140,
+	Std430,
+	RowMajor,
+	ColumnMajor,
+	Binding(Expr),
+	Offset(Expr),
+	Align(Expr),
+	Location(Expr),
+	Component(Expr),
+	Index(Expr),
+	Points,
+	Lines,
+	Isolines,
+	Triangles,
+	Quads,
+	EqualSpacing,
+	FractionalEvenSpacing,
+	FractionalOddSpacing,
+	Clockwise,
+	CounterClockwise,
+	PointMode,
+	LinesAdjacency,
+	TrianglesAdjacency,
+	Invocations(Expr),
+	OriginUpperLeft,
+	PixelCenterInteger,
+	EarlyFragmentTests,
+	LocalSizeX(Expr),
+	LocalSizeY(Expr),
+	LocalSizeZ(Expr),
+	XfbBuffer(Expr),
+	XfbStride(Expr),
+	XfbOffset(Expr),
+	Vertices(Expr),
+	LineStrip,
+	TriangleStrip,
+	MaxVertices(Expr),
+	Stream(Expr),
+	DepthAny,
+	DepthGreater,
+	DepthLess,
+	DepthUnchanged,
+}
+
+impl std::fmt::Display for Layout {
+	fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+		match self {
+			Self::Shared => write!(f, "shared"),
+			Self::Packed => write!(f, "packed"),
+			Self::Std140 => write!(f, "std140"),
+			Self::Std430 => write!(f, "std430"),
+			Self::RowMajor => write!(f, "row-major"),
+			Self::ColumnMajor => write!(f, "column-major"),
+			Self::Binding(e) => write!(f, "binding = {e}"),
+			Self::Offset(e) => write!(f, "offset = {e}"),
+			Self::Align(e) => write!(f, "align = {e}"),
+			Self::Location(e) => write!(f, "location = {e}"),
+			Self::Component(e) => write!(f, "component = {e}"),
+			Self::Index(e) => write!(f, "index = {e}"),
+			Self::Points => write!(f, "points"),
+			Self::Lines => write!(f, "lines"),
+			Self::Isolines => write!(f, "isolines"),
+			Self::Triangles => write!(f, "triangles"),
+			Self::Quads => write!(f, "quads"),
+			Self::EqualSpacing => write!(f, "equal-spacing"),
+			Self::FractionalEvenSpacing => write!(f, "fragment-even-spacing"),
+			Self::FractionalOddSpacing => write!(f, "fragment-odd-spacing"),
+			Self::Clockwise => write!(f, "clockwise"),
+			Self::CounterClockwise => write!(f, "counter-clockwise"),
+			Self::PointMode => write!(f, "point-mode"),
+			Self::LinesAdjacency => write!(f, "lines-adjacency"),
+			Self::TrianglesAdjacency => write!(f, "triangles-adjacency"),
+			Self::Invocations(e) => write!(f, "invocations = {e}"),
+			Self::OriginUpperLeft => write!(f, "origin-upper-left"),
+			Self::PixelCenterInteger => write!(f, "pixel-center-integer"),
+			Self::EarlyFragmentTests => write!(f, "early-fragment-tests"),
+			Self::LocalSizeX(e) => write!(f, "local-size-x = {e}"),
+			Self::LocalSizeY(e) => write!(f, "local-size-y = {e}"),
+			Self::LocalSizeZ(e) => write!(f, "local-size-z = {e}"),
+			Self::XfbBuffer(e) => write!(f, "xfb-buffer = {e}"),
+			Self::XfbStride(e) => write!(f, "xfb-stride = {e}"),
+			Self::XfbOffset(e) => write!(f, "xfb-offset = {e}"),
+			Self::Vertices(e) => write!(f, "vertices = {e}"),
+			Self::LineStrip => write!(f, "line-strip"),
+			Self::TriangleStrip => write!(f, "triangle-strip"),
+			Self::MaxVertices(e) => write!(f, "max-vertices = {e}"),
+			Self::Stream(e) => write!(f, "stream = {e}"),
+			Self::DepthAny => write!(f, "depth-any"),
+			Self::DepthGreater => write!(f, "depth-greater"),
+			Self::DepthLess => write!(f, "depth-less"),
+			Self::DepthUnchanged => write!(f, "depth-unchanged"),
+		}
+	}
 }
 
 /// A literal value.

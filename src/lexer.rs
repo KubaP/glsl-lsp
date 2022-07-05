@@ -1,4 +1,8 @@
-use crate::span::{Span, Spanned};
+use crate::{
+	ast::{Expr, Layout},
+	span::{Span, Spanned},
+	Either,
+};
 
 #[cfg(test)]
 use crate::span::span;
@@ -37,22 +41,32 @@ pub enum Token {
 	Subroutine,
 	Reserved(String),
 	// Qualifier keywords
+	Const,
 	In,
 	Out,
 	InOut,
+	Attribute,
 	Uniform,
+	Varying,
 	Buffer,
-	Const,
-	Invariant,
-	Interpolation,
-	Precision,
+	Shared,
+	Centroid,
+	Sample,
+	Patch,
 	Layout,
-	Location,
-	Component,
-	FragCoord,
-	FragDepth,
-	Index,
-	FragTest,
+	Flat,
+	Smooth,
+	NoPerspective,
+	HighP,
+	MediumP,
+	LowP,
+	Invariant,
+	Precise,
+	Coherent,
+	Volatile,
+	Restrict,
+	Readonly,
+	Writeonly,
 	// Punctuation
 	Op(Op),
 	Eq,
@@ -87,23 +101,130 @@ impl Token {
 			| Self::Struct
 			| Self::Subroutine
 			| Self::Reserved(_)
+			| Self::Const
 			| Self::In
 			| Self::Out
 			| Self::InOut
+			| Self::Attribute
 			| Self::Uniform
+			| Self::Varying
 			| Self::Buffer
-			| Self::Const
-			| Self::Invariant
-			| Self::Interpolation
-			| Self::Precision
+			| Self::Shared
+			| Self::Centroid
+			| Self::Sample
+			| Self::Patch
 			| Self::Layout
-			| Self::Location
-			| Self::Component
-			| Self::FragCoord
-			| Self::FragDepth
-			| Self::Index
-			| Self::FragTest => true,
+			| Self::Flat
+			| Self::Smooth
+			| Self::NoPerspective
+			| Self::HighP
+			| Self::MediumP
+			| Self::LowP
+			| Self::Invariant
+			| Self::Precise
+			| Self::Coherent
+			| Self::Volatile
+			| Self::Restrict
+			| Self::Readonly
+			| Self::Writeonly => true,
 			_ => false,
+		}
+	}
+
+	pub fn is_qualifier(&self) -> bool {
+		match self {
+			Self::Const
+			| Self::In
+			| Self::Out
+			| Self::InOut
+			| Self::Attribute
+			| Self::Uniform
+			| Self::Varying
+			| Self::Buffer
+			| Self::Shared
+			| Self::Centroid
+			| Self::Sample
+			| Self::Patch
+			| Self::Layout
+			| Self::Flat
+			| Self::Smooth
+			| Self::NoPerspective
+			| Self::HighP
+			| Self::MediumP
+			| Self::LowP
+			| Self::Invariant
+			| Self::Precise
+			| Self::Coherent
+			| Self::Volatile
+			| Self::Restrict
+			| Self::Readonly
+			| Self::Writeonly => true,
+			_ => false,
+		}
+	}
+
+	pub fn to_layout(&self) -> Option<Either<Layout, fn(Expr) -> Layout>> {
+		match self {
+			Self::Shared => Some(Either::Left(Layout::Shared)),
+			Self::Ident(s) => match s.as_ref() {
+				"packed" => Some(Either::Left(Layout::Packed)),
+				"std140" => Some(Either::Left(Layout::Std140)),
+				"std430" => Some(Either::Left(Layout::Std430)),
+				"row_major" => Some(Either::Left(Layout::RowMajor)),
+				"column_major" => Some(Either::Left(Layout::ColumnMajor)),
+				"binding" => Some(Either::Right(Layout::Binding)),
+				"offset" => Some(Either::Right(Layout::Offset)),
+				"align" => Some(Either::Right(Layout::Align)),
+				"location" => Some(Either::Right(Layout::Location)),
+				"component" => Some(Either::Right(Layout::Component)),
+				"index" => Some(Either::Right(Layout::Index)),
+				"points" => Some(Either::Left(Layout::Points)),
+				"lines" => Some(Either::Left(Layout::Lines)),
+				"isolines" => Some(Either::Left(Layout::Isolines)),
+				"triangles" => Some(Either::Left(Layout::Triangles)),
+				"quads" => Some(Either::Left(Layout::Quads)),
+				"equal_spacing" => Some(Either::Left(Layout::EqualSpacing)),
+				"fractional_even_spacing" => {
+					Some(Either::Left(Layout::FractionalEvenSpacing))
+				}
+				"fractional_odd_spacing" => {
+					Some(Either::Left(Layout::FractionalOddSpacing))
+				}
+				"cw" => Some(Either::Left(Layout::Clockwise)),
+				"ccw" => Some(Either::Left(Layout::CounterClockwise)),
+				"point_mode" => Some(Either::Left(Layout::PointMode)),
+				"line_adjacency" => Some(Either::Left(Layout::LinesAdjacency)),
+				"triangle_adjacency" => {
+					Some(Either::Left(Layout::TrianglesAdjacency))
+				}
+				"invocations" => Some(Either::Right(Layout::Invocations)),
+				"origin_upper_left" => {
+					Some(Either::Left(Layout::OriginUpperLeft))
+				}
+				"pixel_center_integer" => {
+					Some(Either::Left(Layout::PixelCenterInteger))
+				}
+				"early_fragment_tests" => {
+					Some(Either::Left(Layout::EarlyFragmentTests))
+				}
+				"local_size_x" => Some(Either::Right(Layout::LocalSizeX)),
+				"local_size_y" => Some(Either::Right(Layout::LocalSizeY)),
+				"local_size_z" => Some(Either::Right(Layout::LocalSizeZ)),
+				"xfb_buffer" => Some(Either::Right(Layout::XfbBuffer)),
+				"xfb_stride" => Some(Either::Right(Layout::XfbStride)),
+				"xfb_offset" => Some(Either::Right(Layout::XfbOffset)),
+				"vertices" => Some(Either::Right(Layout::Vertices)),
+				"line_strip" => Some(Either::Left(Layout::LineStrip)),
+				"triangle_strip" => Some(Either::Left(Layout::TriangleStrip)),
+				"max_vertices" => Some(Either::Right(Layout::MaxVertices)),
+				"stream" => Some(Either::Right(Layout::Stream)),
+				"depth_any" => Some(Either::Left(Layout::DepthAny)),
+				"depth_greater" => Some(Either::Left(Layout::DepthGreater)),
+				"depth_less" => Some(Either::Left(Layout::DepthLess)),
+				"depth_unchanged" => Some(Either::Left(Layout::DepthUnchanged)),
+				_ => None,
+			},
+			_ => None,
 		}
 	}
 }
@@ -401,30 +522,32 @@ fn match_word(str: String) -> Token {
 		"struct" => Token::Struct,
 		"subroutine" => Token::Subroutine,
 		// Qualifiers
+		"const" => Token::Const,
 		"in" => Token::In,
 		"out" => Token::Out,
 		"inout" => Token::InOut,
+		"attribute" => Token::Attribute,
 		"uniform" => Token::Uniform,
+		"varying" => Token::Varying,
 		"buffer" => Token::Buffer,
-		"const" => Token::Const,
-		"invariant" => Token::Invariant,
-		"highp" => Token::Precision,
-		"mediump" => Token::Precision,
-		"lowp" => Token::Precision,
-		"flat" => Token::Interpolation,
-		"smooth" => Token::Interpolation,
-		"noperspective" => Token::Interpolation,
+		"shared" => Token::Shared,
+		"centroid" => Token::Centroid,
+		"sample" => Token::Sample,
+		"patch" => Token::Patch,
 		"layout" => Token::Layout,
-		"location" => Token::Location,
-		"component" => Token::Component,
-		"origin_upper_left" => Token::FragCoord,
-		"pixel_center_integer" => Token::FragCoord,
-		"depth_any" => Token::FragDepth,
-		"depth_greater" => Token::FragDepth,
-		"depth_less" => Token::FragDepth,
-		"depth_unchanged" => Token::FragDepth,
-		"index" => Token::Index,
-		"early_fragment_test" => Token::FragTest,
+		"flat" => Token::Flat,
+		"smooth" => Token::Smooth,
+		"noperspective" => Token::NoPerspective,
+		"highp" => Token::HighP,
+		"mediump" => Token::MediumP,
+		"lowp" => Token::LowP,
+		"invariant" => Token::Invariant,
+		"precise" => Token::Precise,
+		"coherent" => Token::Coherent,
+		"volatile" => Token::Volatile,
+		"restrict" => Token::Restrict,
+		"readonly" => Token::Readonly,
+		"writeonly" => Token::Writeonly,
 		// Reserved
 		"common" | "partition" | "active" | "asm" | "class" | "union"
 		| "enum" | "typedef" | "template" | "this" | "resource" | "goto"
@@ -1186,30 +1309,32 @@ fn keywords() {
 	assert_tokens!("discard", Token::Discard);
 	assert_tokens!("struct", Token::Struct);
 	assert_tokens!("subroutine", Token::Subroutine);
+	assert_tokens!("const", Token::Const);
 	assert_tokens!("in", Token::In);
 	assert_tokens!("out", Token::Out);
 	assert_tokens!("inout", Token::InOut);
+	assert_tokens!("attribute", Token::Attribute);
 	assert_tokens!("uniform", Token::Uniform);
+	assert_tokens!("varying", Token::Varying);
 	assert_tokens!("buffer", Token::Buffer);
-	assert_tokens!("const", Token::Const);
-	assert_tokens!("invariant", Token::Invariant);
-	assert_tokens!("highp", Token::Precision);
-	assert_tokens!("mediump", Token::Precision);
-	assert_tokens!("lowp", Token::Precision);
-	assert_tokens!("flat", Token::Interpolation);
-	assert_tokens!("smooth", Token::Interpolation);
-	assert_tokens!("noperspective", Token::Interpolation);
+	assert_tokens!("shared", Token::Shared);
+	assert_tokens!("centroid", Token::Centroid);
+	assert_tokens!("sample", Token::Sample);
+	assert_tokens!("patch", Token::Patch);
 	assert_tokens!("layout", Token::Layout);
-	assert_tokens!("location", Token::Location);
-	assert_tokens!("component", Token::Component);
-	assert_tokens!("origin_upper_left", Token::FragCoord);
-	assert_tokens!("pixel_center_integer", Token::FragCoord);
-	assert_tokens!("depth_any", Token::FragDepth);
-	assert_tokens!("depth_greater", Token::FragDepth);
-	assert_tokens!("depth_less", Token::FragDepth);
-	assert_tokens!("depth_unchanged", Token::FragDepth);
-	assert_tokens!("index", Token::Index);
-	assert_tokens!("early_fragment_test", Token::FragTest);
+	assert_tokens!("flat", Token::Flat);
+	assert_tokens!("smooth", Token::Smooth);
+	assert_tokens!("noperspective", Token::NoPerspective);
+	assert_tokens!("highp", Token::HighP);
+	assert_tokens!("mediump", Token::MediumP);
+	assert_tokens!("lowp", Token::LowP);
+	assert_tokens!("invariant", Token::Invariant);
+	assert_tokens!("precise", Token::Precise);
+	assert_tokens!("coherent", Token::Coherent);
+	assert_tokens!("volatile", Token::Volatile);
+	assert_tokens!("restrict", Token::Restrict);
+	assert_tokens!("readonly", Token::Readonly);
+	assert_tokens!("writeonly", Token::Writeonly);
 	// Reserved
 	assert_tokens!("common", Token::Reserved("common".into()));
 	assert_tokens!("partition", Token::Reserved("partition".into()));

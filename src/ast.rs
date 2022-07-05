@@ -256,9 +256,7 @@ pub enum Stmt {
 		body: Vec<Stmt>,
 	},
 	/// Struct definition. *Note:* this is invalid glsl.
-	StructDef {
-		ident: Ident,
-	},
+	StructDef { ident: Ident },
 	/// Struct declaration.
 	StructDecl {
 		ident: Ident,
@@ -401,7 +399,7 @@ impl std::fmt::Display for Qualifier {
 					Storage::Shared => "shared",
 					Storage::Centroid => "centroid",
 					Storage::Sample => "sample",
-					Storage::Patch => "patch"
+					Storage::Patch => "patch",
 				}
 			),
 			Self::Layout(v) => {
@@ -423,13 +421,17 @@ impl std::fmt::Display for Qualifier {
 			Self::Precision => write!(f, "\x1b[90;9mprecision\x1b[0m"),
 			Self::Invariant => write!(f, "\x1b[95minvariant\x1b[0m"),
 			Self::Precise => write!(f, "\x1b[95mprecise\x1b[0m"),
-			Self::Memory(m) => write!(f, "\x1b[95m{}\x1b[0m", match m {
-				Memory::Coherent => "coherent",
-				Memory::Volatile => "volatile",
-				Memory::Restrict => "restrict",
-				Memory::Readonly => "readonly",
-				Memory::Writeonly => "writeonly"
-			})
+			Self::Memory(m) => write!(
+				f,
+				"\x1b[95m{}\x1b[0m",
+				match m {
+					Memory::Coherent => "coherent",
+					Memory::Volatile => "volatile",
+					Memory::Restrict => "restrict",
+					Memory::Readonly => "readonly",
+					Memory::Writeonly => "writeonly",
+				}
+			),
 		}
 	}
 }

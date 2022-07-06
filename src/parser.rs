@@ -65,12 +65,16 @@ pub fn parse(source: &str) -> Vec<Stmt> {
 	let mut stmts = Vec::new();
 
 	'parser: while !walker.is_done() {
+		// First, we look for any qualifiers which are always located first in a statement.
+		let qualifiers = parse_qualifier_list(&mut walker);
+
+		// Next, we look for any syntax which can be parsed as an expression, e.g. a `int[3]`.
 		match expr_parser(&mut walker, Mode::Default) {
 			// We tried to parse an expression and succeeded. We have an expression consisting of at least one
 			// token.
 			Some(expr) => {
 				if let Some(type_) = expr.to_type() {
-					match parse_type_start(&mut walker, type_, vec![]) {
+					match parse_type_start(&mut walker, type_, qualifiers) {
 						Some(s) => stmts.push(s),
 						None => 'till_next: loop {
 							// We did not successfully parse a statement.
@@ -99,32 +103,6 @@ pub fn parse(source: &str) -> Vec<Stmt> {
 			None => {
 				let (token, _) = walker.peek().unwrap();
 
-				if token.is_qualifier() {
-					match parse_qualifier_list(&mut walker) {
-						Some(s) => stmts.push(s),
-						None => 'till_next_2: loop {
-							// We did not successfully parse a statement.
-							let (next, _) = match walker.peek() {
-								Some(t) => t,
-								None => break 'parser,
-							};
-
-							if *next == Token::Semi {
-								walker.advance();
-								break 'till_next_2;
-							} else if next.starts_statement() {
-								// We don't advance because we are currently at a token which begins a new statement, so we
-								// don't want to consume it before we rerun the main loop.
-								break 'till_next_2;
-							} else {
-								walker.advance();
-								continue 'till_next_2;
-							}
-						},
-					}
-					continue 'parser;
-				}
-
 				match token {
 					Token::Struct => {
 						walker.advance();
@@ -142,14 +120,17 @@ pub fn parse(source: &str) -> Vec<Stmt> {
 	stmts
 }
 
-/// Parse a list of qualifiers, e.g. `const in ...` or `flat uniform ...` or `layout(location = 1) ...`.
-fn parse_qualifier_list(walker: &mut Walker) -> Option<Stmt> {
+/// Parse a list of qualifiers if there are any, e.g.
+/// - `const in ...`
+/// - `flat uniform ...`
+/// - `layout(location = 1) ...`.
+fn parse_qualifier_list(walker: &mut Walker) -> Vec<Qualifier> {
 	// Take tokens until we've run out of qualifiers.
 	let mut qualifiers = Vec::new();
-	loop {
+	'outer: loop {
 		let current = match walker.peek() {
 			Some((t, _)) => t,
-			None => return None,
+			None => break 'outer,
 		};
 
 		use crate::ast::{Interpolation, Memory, Storage};
@@ -215,12 +196,12 @@ fn parse_qualifier_list(walker: &mut Walker) -> Option<Stmt> {
 				// Consume the opening `(` parenthesis.
 				let current = match walker.peek() {
 					Some((t, _)) => t,
-					None => return None,
+					None => break,
 				};
 				if *current == Token::LParen {
 					walker.advance();
 				} else {
-					return None;
+					break 'outer;
 				}
 
 				// Take layout identifiers until we reach the closing `)` parenthesis.
@@ -228,7 +209,7 @@ fn parse_qualifier_list(walker: &mut Walker) -> Option<Stmt> {
 				'identifiers: loop {
 					let current = match walker.peek() {
 						Some((t, _)) => t,
-						None => return None,
+						None => break 'outer,
 					};
 
 					match current {
@@ -237,7 +218,7 @@ fn parse_qualifier_list(walker: &mut Walker) -> Option<Stmt> {
 							continue 'identifiers;
 						}
 						Token::RParen => break 'identifiers,
-						Token::Semi => return None,
+						Token::Semi => break 'outer,
 						_ => {}
 					}
 
@@ -253,12 +234,12 @@ fn parse_qualifier_list(walker: &mut Walker) -> Option<Stmt> {
 									// Consume the `=` in `ident = expression`.
 									let current = match walker.peek() {
 										Some((t, _)) => t,
-										None => return None,
+										None => break 'outer,
 									};
 									if *current == Token::Eq {
 										walker.advance();
 									} else {
-										return None;
+										break 'outer;
 									}
 
 									let expr = match expr_parser(
@@ -266,38 +247,28 @@ fn parse_qualifier_list(walker: &mut Walker) -> Option<Stmt> {
 										Mode::DisallowTopLevelList,
 									) {
 										Some(e) => e,
-										None => return None,
+										None => break 'outer,
 									};
 									layouts.push(constructor(expr));
 								}
 							}
 						}
-						None => return None,
+						None => break 'outer,
 					}
 				}
 
 				qualifiers.push(Qualifier::Layout(layouts));
 			}
-			Token::Semi => return None,
+			Token::Semi => break 'outer,
 			// If we encounter anything other than a qualifier, that means we have reached the end of this list of
 			// qualifiers and can move onto the next parsing step.
-			_ => break,
+			_ => break 'outer,
 		}
 
 		walker.advance();
 	}
 
-	match expr_parser(walker, Mode::Default) {
-		// After qualifiers, we are expecting a type, be it either for a variable or a function.
-		Some(expr) => {
-			if let Some(type_) = expr.to_type() {
-				parse_type_start(walker, type_, qualifiers)
-			} else {
-				None
-			}
-		}
-		None => None,
-	}
+	qualifiers
 }
 
 /// Parse statements which begin with a type.
@@ -408,11 +379,13 @@ fn parse_fn(
 	walker: &mut Walker,
 	return_type: Type,
 	ident: Ident,
-	qualifiers: Vec<Qualifier>
+	qualifiers: Vec<Qualifier>,
 ) -> Option<Stmt> {
 	let mut params = Vec::new();
 
 	loop {
+		let qualifiers = parse_qualifier_list(walker);
+
 		let expr = match expr_parser(walker, Mode::DisallowTopLevelList) {
 			Some(e) => e,
 			None => {
@@ -448,11 +421,11 @@ fn parse_fn(
 
 				if *current == Token::Comma {
 					walker.advance();
-					params.push((type_, None));
+					params.push((type_, None, qualifiers));
 					continue;
 				} else if *current == Token::RParen {
 					walker.advance();
-					params.push((type_, None));
+					params.push((type_, None, qualifiers));
 					break;
 				} else {
 					return None;
@@ -468,7 +441,7 @@ fn parse_fn(
 				}
 			};
 
-		params.push((type_, Some(ident)));
+		params.push((type_, Some(ident), qualifiers));
 	}
 
 	let (next, _) = match walker.peek() {
@@ -486,7 +459,7 @@ fn parse_fn(
 		return_type,
 		ident,
 		params,
-		qualifiers
+		qualifiers,
 	})
 }
 
@@ -515,6 +488,8 @@ fn parse_struct(walker: &mut Walker) -> Option<Stmt> {
 
 	let mut members = Vec::new();
 	'members: loop {
+		let qualifiers = parse_qualifier_list(walker);
+
 		match expr_parser(walker, Mode::Default) {
 			Some(expr) => {
 				if let Some(type_) = expr.to_type() {
@@ -551,10 +526,10 @@ fn parse_struct(walker: &mut Walker) -> Option<Stmt> {
 								Stmt::VarDef {
 									type_,
 									ident,
-									qualifiers: vec![],
+									qualifiers,
 								}
 							}
-							_ => Stmt::VarDefs(typenames, vec![]),
+							_ => Stmt::VarDefs(typenames, qualifiers),
 						});
 					} else {
 						return None;
@@ -563,37 +538,7 @@ fn parse_struct(walker: &mut Walker) -> Option<Stmt> {
 					return None;
 				}
 			}
-			None => {
-				let (token, _) = walker.peek().unwrap();
-
-				if token.is_qualifier() {
-					match parse_qualifier_list(walker) {
-						Some(s) => members.push(s),
-						None => 'till_next_2: loop {
-							// We did not successfully parse a statement.
-							let (next, _) = match walker.peek() {
-								Some(t) => t,
-								None => break 'members,
-							};
-
-							if *next == Token::Semi {
-								walker.advance();
-								break 'till_next_2;
-							} else if next.starts_statement() {
-								// We don't advance because we are currently at a token which begins a new statement, so we
-								// don't want to consume it before we rerun the main loop.
-								break 'till_next_2;
-							} else {
-								walker.advance();
-								continue 'till_next_2;
-							}
-						},
-					}
-					continue 'members;
-				}
-
-				break 'members;
-			}
+			None => break 'members,
 		}
 	}
 
@@ -686,7 +631,7 @@ fn print_stmt(stmt: &Stmt, indent: usize) {
 			for qualifier in qualifiers {
 				print!("{qualifier}, ");
 			}
-			print!("]) = {value}");			
+			print!("]) = {value}");
 		}
 		Stmt::FnDef {
 			return_type,
@@ -699,11 +644,24 @@ fn print_stmt(stmt: &Stmt, indent: usize) {
 				"",
 				indent = indent * 4
 			);
-			for (type_, ident) in params {
-				if let Some(ident) = ident {
-					print!("{type_}: {ident}, ");
-				} else {
-					print!("{type_}, ");
+			for (type_, ident, qualifiers) in params {
+				match (ident, qualifiers) {
+					(Some(ident), _) if !qualifiers.is_empty() => {
+						print!("{type_}: {ident} qualifiers: [");
+						for qualifier in qualifiers {
+							print!("{qualifier}, ");
+						}
+						print!("], ");
+					}
+					(Some(ident), _) => print!("{type_}: {ident}, "),
+					(None, _) if !qualifiers.is_empty() => {
+						print!("{type_} qualifiers: [");
+						for qualifier in qualifiers {
+							print!("{qualifier}, ");
+						}
+						print!("], ");
+					}
+					(None, _) => print!("{type_}, "),
 				}
 			}
 			print!("], qualifiers: [");
@@ -724,11 +682,24 @@ fn print_stmt(stmt: &Stmt, indent: usize) {
 				"",
 				indent = indent * 4
 			);
-			for (type_, ident) in params {
-				if let Some(ident) = ident {
-					print!("{type_}: {ident}, ");
-				} else {
-					print!("{type_}, ");
+			for (type_, ident, qualifiers) in params {
+				match (ident, qualifiers) {
+					(Some(ident), _) if !qualifiers.is_empty() => {
+						print!("{type_}: {ident} qualifiers: [");
+						for qualifier in qualifiers {
+							print!("{qualifier}, ");
+						}
+						print!("], ");
+					}
+					(Some(ident), _) => print!("{type_}: {ident}, "),
+					(None, _) if !qualifiers.is_empty() => {
+						print!("{type_} qualifiers: [");
+						for qualifier in qualifiers {
+							print!("{qualifier}, ");
+						}
+						print!("], ");
+					}
+					(None, _) => print!("{type_}, "),
 				}
 			}
 			print!("], qualifiers: [");

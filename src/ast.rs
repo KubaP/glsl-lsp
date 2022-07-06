@@ -213,7 +213,7 @@ impl Expr {
 	pub fn to_fn_ident(&self) {}
 }
 
-type Param = (Type, Option<Ident>);
+type Param = (Type, Option<Ident>, Vec<Qualifier>);
 
 /// A top-level statement. Some of these statements are only valid at the file top-level. Others are only valid
 /// inside of functions.

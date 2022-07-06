@@ -51,9 +51,21 @@ struct NAME {
     vec3 v;
 };
 ```
-Structs must have at least one member defined. Members cannot be default initialized.
+Structs must have at least one member defined. Members cannot be initialized. Note the semi-colon (`;`) at the end; this is necessary.
 
 If a struct contains an [Opaque Type](#opaque-types), then it can only be used in places that accept such types (mainly `uniform` globals).
+
+Struct members are defined using standard [Variable Definition](#variable-definitions--declarations) statements, i.e. all of the following are valid:
+```glsl
+struct NAME {
+    int[3] a;
+    bool b[3];
+    float[1] c[5];
+    vec2 one, two;
+    mat4[2] m1[1], m2;
+};
+```
+Unlike with variable definitions, array members **must** be sized. Anonymous members are not allowed. Embedded struct definitions are also not allowed.
 
 ## Arrays
 Any type (other than `void`) can be aggregated into an array of homogenous values:
@@ -76,10 +88,15 @@ Multi-dimensional arrays can also be typed:
 float f[3][5]
 
 // Equivalent to above
-vec3[3] v[5]
+float[5] f[3]
 
 // A 3d array
 mat4 m[2][3][9]
+
+// Equivalent to above
+mat4[3][9] m[2]
+
+mat4[9] m[2][3]
 ```
 
 ## Initialization
@@ -168,12 +185,12 @@ int i[3] = int[](1, 2, 3);
 // You can skip out the size entirely if you are initializing in one go
 int i[] = int[](1, 2, 3);
 
-// Invalid
-int i[3] = int[](1, 2);
+// Alternatively, the size can go on the type
+int[3] i = int[](1, 2, 3);
+int[] i = int[](1, 2, 3);
 
-// Alternatively, put the size first
-int[3] i = int[](1, 2);
-int[] i = int[](1, 2);
+// Invalid, incorrect number of arguments
+int i[3] = int[](1, 2);
 ```
 The number of arguments in a constructor must match the size of the array (if explicitly specified). Each expression must evaluate to the element type, or a type which can be implicitly converted to the element type. If no explicit size is specified, the number of arguments can be arbitrary.
 
@@ -486,8 +503,16 @@ float b[3] = {1, 2, 3};
 ```
 For `const` qualified variables (or other constant variables such as `uniform` globals), any assignment expression must also be a *Constant Expression*.
 
-### Assignment
+### Multiple
+In a variable declaration or definition, multiple variables can be created in one statement.
+```glsl
+int a, b;
 
+int a, b = 5;
+
+// Defines `a` of `int[3][1]` and `b` of `int[5][1]`
+int[1] a[3], b[5];
+```
 
 ## Variable Assignment
 Variable assignment statements are valid at the top-level of a shader file, and within functions or any other control flow statements or scopes:
@@ -543,7 +568,11 @@ mat4 func(int i, float f, mat4 m);
 void func(void v);
 
 // A function with arrays
-vec3[3] func(int i[2]);
+vec3[3] func(int[2] i);
+
+// Just like with variable definitions/declarations, array sizes can be disjointed
+vec3[3] func(int[2] i);
+vec3[3] func(int[2] i[1]);
 
 // Invalid, arrays must be sized
 vec3[] func(int[2] i);
@@ -585,7 +614,7 @@ void func(const inout int i);
 The `const` qualifier can only be used with the `in` passing qualifier.
 
 #### Precision
-The precision of the return type can be specified with a [qualifier](#precision-qualifiers):
+The precision of the return type can be specified with a [precision qualifier](#precision-qualifiers):
 ```glsl
 PRECISION float func();
 ```
@@ -890,6 +919,13 @@ For standard global variables, i.e. without any `in`/`out`/`uniform` storage qua
 const type ...
 ```
 
+## Const Qualifier
+The const qualifier is:
+```glsl
+const
+```
+This makes the variable read-only; it cannot be written to.
+
 ## Invariant Qualifier
 Invariant qualifiers are declared like so:
 ```glsl
@@ -906,17 +942,18 @@ invariant gl_Position;
 Invariant qualifiers are entirely useless on inputs; they do not have to conform to *Interface Matching*.
 
 ## Interpolation Qualifiers
-Interpolation qualifiers are declared like so:
+Interpolation qualifiers are one of the following:
 ```glsl
-... out vec3 p;
-// where ... =
 flat
 smooth
 noperspective
 ```
+- `flat` - The value will not be interpolated. It will have the same value for every fragment within a triangle.
+- `smooth` - The value will be interpolated in a perspective-correct manner over the primitive being rendered.
+- `noperspective` - The value will be interpolated in a linear screen-space manner.
 
 ## Precision Qualifiers
-Precision qualifiers have no use; they are only a feature in OpenGL ES and exist in normal OpenGL for syntax compatibility:
+Precision qualifiers have no use; they are only a feature in OpenGL ES and exist in standard OpenGL for syntax compatibility:
 ```glsl
 highp
 mediump
@@ -925,25 +962,39 @@ lowp
 They can only be applied to `int`, `float`, `{_, i}vecn` and `matmxn` types.
 
 ## Layout Qualifiers
-Layout qualifiers are annotations which precede the rest of a global variable's declaration:
+Layout qualifiers are declared like so:
 ```glsl
-layout(...) ...
-// Valid to have more than one qualifier
-layout(location = 5, component = 2) ...
+// With an identifier:
+layout(depth_any)
+
+// Or with an identifier-value pair:
+layout(location = 1)
+```
+Layout qualifiers can take one or more identifiers in the form of a list. A given identifier can also be re-declared within the list (and if that is the case, only the last occurrence of the identifier is applied).
+```glsl
+layout(location = 0)
+
+layout(location = 2, component = 5)
+
+// `location = 0` is effectively ignored
+layout(location = 0, index = 1, location = 6)
 ```
 
 ### Location
 Location qualifiers are declared like so:
 ```glsl
-location = #
-
-// OR
-
-location = n
-//where
-const n = #;
+location = EXPR
 ```
-If there is no location qualifier for a global variable, then it is randomly assigned an index. This index is **completely arbitrary**.
+`EXPR` is a *Constant Expression* which evaluates to a positive integer.
+
+<!-- If there is no location qualifier for a global variable, then it is randomly assigned an index. This index is **completely arbitrary**. -->
+
+### Component
+Component qualifiers are declared like so:
+```glsl
+component = EXPR
+```
+`EXPR` is a *Constant Expression* which evaluates to a positive integer.
 
 ### Type Sizing
 Along with an index, there is a size for the location which depends on the type:

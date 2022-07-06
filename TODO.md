@@ -21,8 +21,30 @@
     - ~~Array constructors~~
     - ~~Object access (inc. function calls)~~
     - Ternary
-- Variable definitions
-- Variable declarations
+    - ~~General lists (outside of things like function calls)~~
+- Variables
+    - ~~Definitions~~
+    - ~~Declarations~~
+    - ~~Multiple identifiers in one statement~~
+    - ~~Out-of-order array sizing~~
+    - ~~Qualifiers~~
+- Functions
+    - ~~Definitions~~
+    - Declarations
+    - ~~Named parameters~~
+    - ~~Anonymous parameters~~
+    - ~~Parameter qualifiers~~
+    - ~~Return type qualifiers~~
+- Structs
+    - ~~Declarations~~
+    - Qualifiers
+    - Instance definition
+- Control flow
+    - If statements
+    - Switch statements
+    - For loop
+    - Do loop
+    - Return/Break/Discard
 
 ### chumsky parser
 - ~~Version directive~~

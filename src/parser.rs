@@ -315,7 +315,7 @@ fn parse_type_start(
 						let ident = Ident(i.clone());
 						walker.advance();
 						walker.advance();
-						return parse_fn(walker, type_, ident);
+						return parse_fn(walker, type_, ident, qualifiers);
 					}
 					_ => {}
 				},
@@ -389,13 +389,13 @@ fn parse_type_start(
 					type_,
 					ident,
 					value,
-					is_const: false,
+					qualifiers,
 				})
 			}
 			_ => Some(Stmt::VarDecls {
 				vars: typenames,
 				value,
-				is_const: false,
+				qualifiers,
 			}),
 		};
 	} else {
@@ -403,10 +403,12 @@ fn parse_type_start(
 	}
 }
 
+/// Parse a function definition or declaration.
 fn parse_fn(
 	walker: &mut Walker,
 	return_type: Type,
 	ident: Ident,
+	qualifiers: Vec<Qualifier>
 ) -> Option<Stmt> {
 	let mut params = Vec::new();
 
@@ -484,6 +486,7 @@ fn parse_fn(
 		return_type,
 		ident,
 		params,
+		qualifiers
 	})
 }
 
@@ -637,38 +640,39 @@ fn print_stmt(stmt: &Stmt, indent: usize) {
 		}
 		Stmt::VarDefs(vars, qualifiers) => {
 			print!(
-				"\r\n{:indent$}\x1b[32mVar\x1b[0m(qualifiers: [",
+				"\r\n{:indent$}\x1b[32mVar\x1b[0m(",
+				"",
+				indent = indent * 4
+			);
+			for var in vars {
+				print!("[type: {}, ident: {}], ", var.0, var.1);
+			}
+			print!(" qualifiers: [");
+			for qualifier in qualifiers {
+				print!("{qualifier}, ");
+			}
+			print!("])");
+		}
+		Stmt::VarDecl {
+			type_,
+			ident,
+			value,
+			qualifiers,
+		} => {
+			print!(
+				"\r\n{:indent$}\x1b[32mVar\x1b[0m(type: {type_}, ident: {ident}, qualifiers: [",
 				"",
 				indent = indent * 4
 			);
 			for qualifier in qualifiers {
 				print!("{qualifier}, ");
 			}
-			for var in vars {
-				print!("], [type: {}, ident: {}], ", var.0, var.1);
-			}
-			print!(")");
-		}
-		Stmt::VarDecl {
-			type_,
-			ident,
-			value,
-			is_const,
-		} => {
-			print!(
-				"\r\n{:indent$}\x1b[32mVar\x1b[0m(type: {type_}, ident: {ident}",
-				"",
-				indent = indent * 4
-			);
-			if *is_const {
-				print!(", \x1b[4mconst\x1b[0m");
-			}
-			print!(") = {value}");
+			print!("]) = {value}");
 		}
 		Stmt::VarDecls {
 			vars,
 			value,
-			is_const,
+			qualifiers,
 		} => {
 			print!(
 				"\r\n{:indent$}\x1b[32mVar\x1b[0m(",
@@ -676,17 +680,19 @@ fn print_stmt(stmt: &Stmt, indent: usize) {
 				indent = indent * 4
 			);
 			for var in vars {
-				print!("[type: {}, ident: {}],", var.0, var.1);
+				print!("[type: {}, ident: {}], ", var.0, var.1);
 			}
-			if *is_const {
-				print!(" \x1b[4mconst\x1b[0m");
+			print!(" qualifiers: [");
+			for qualifier in qualifiers {
+				print!("{qualifier}, ");
 			}
-			print!(") = {value}");
+			print!("]) = {value}");			
 		}
 		Stmt::FnDef {
 			return_type,
 			ident,
 			params,
+			qualifiers,
 		} => {
 			print!(
 				"\r\n{:indent$}\x1b[34mFn\x1b[0m(return: {return_type}, ident: {ident}, params: [",
@@ -699,6 +705,10 @@ fn print_stmt(stmt: &Stmt, indent: usize) {
 				} else {
 					print!("{type_}, ");
 				}
+			}
+			print!("], qualifiers: [");
+			for qualifier in qualifiers {
+				print!("{qualifier}, ");
 			}
 			print!("])");
 		}
@@ -707,6 +717,7 @@ fn print_stmt(stmt: &Stmt, indent: usize) {
 			ident,
 			params,
 			body,
+			qualifiers,
 		} => {
 			print!(
 				"\r\n{:indent$}\x1b[34mFn\x1b[0m(return: {return_type}, ident: {ident}, params: [",
@@ -719,6 +730,10 @@ fn print_stmt(stmt: &Stmt, indent: usize) {
 				} else {
 					print!("{type_}, ");
 				}
+			}
+			print!("], qualifiers: [");
+			for qualifier in qualifiers {
+				print!("{qualifier}, ");
 			}
 			print!("]) {{");
 			for inner in body {
@@ -947,7 +962,7 @@ fn var_def_decl() {
 		type_: Type::Basic(Primitive::Scalar(Fundamental::Uint)),
 		ident: Ident("u".into()),
 		value: Expr::Lit(Lit::Int(5)),
-		is_const: false
+		qualifiers: vec![]
 	});
 	assert_stmt!("int[3] a[1] = {{4, 5, 6}};", Stmt::VarDecl {
 		type_: Type::Array2D(
@@ -961,7 +976,7 @@ fn var_def_decl() {
 			Expr::Lit(Lit::Int(5)),
 			Expr::Lit(Lit::Int(6))
 		])]),
-		is_const: false
+		qualifiers: vec![]
 	});
 	assert_stmt!("double[] d = {1.0LF, 2.0LF};", Stmt::VarDecl {
 		type_: Type::Array(Primitive::Scalar(Fundamental::Double), None),
@@ -970,7 +985,7 @@ fn var_def_decl() {
 			Expr::Lit(Lit::Double(1.0)),
 			Expr::Lit(Lit::Double(2.0))
 		]),
-		is_const: false
+		qualifiers: vec![]
 	});
 	assert_stmt!("vec2 a, b = vec2(1, 2);", Stmt::VarDecls {
 		vars: vec![
@@ -984,7 +999,7 @@ fn var_def_decl() {
 				Expr::Lit(Lit::Int(2)),
 			]
 		},
-		is_const: false
+		qualifiers: vec![]
 	});
 	assert_stmt!("float[2] a, b = float[](5, 6);", Stmt::VarDecls {
 		vars: vec![
@@ -1001,7 +1016,7 @@ fn var_def_decl() {
 				Expr::Lit(Lit::Int(6))
 			]
 		},
-		is_const: false
+		qualifiers: vec![]
 	});
 }
 

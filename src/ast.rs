@@ -221,7 +221,7 @@ type Param = (Type, Option<Ident>);
 pub enum Stmt {
 	/// An empty statement, i.e. just a `;`.
 	Empty,
-	/// Variable definition.
+	/// Variable definition, e.g. `int a;`.
 	VarDef {
 		type_: Type,
 		ident: Ident,
@@ -229,24 +229,25 @@ pub enum Stmt {
 	},
 	/// Multiple variable definitions, e.g. `int a, b;`.
 	VarDefs(Vec<(Type, Ident)>, Vec<Qualifier>),
-	/// Variable declaration.
+	/// Variable declaration, e.g. `int a = <EXPR>;`.
 	VarDecl {
 		type_: Type,
 		ident: Ident,
 		value: Expr,
-		is_const: bool, // TODO: Refactor to be a Vec<Qualifier> or something similar.
+		qualifiers: Vec<Qualifier>,
 	},
 	/// Multiple variable declarations, e.g. `int a, b = <EXPR>;`.
 	VarDecls {
 		vars: Vec<(Type, Ident)>,
 		value: Expr,
-		is_const: bool,
+		qualifiers: Vec<Qualifier>,
 	},
 	/// Function definition.
 	FnDef {
 		return_type: Type,
 		ident: Ident,
 		params: Vec<Param>,
+		qualifiers: Vec<Qualifier>,
 	},
 	/// Function declaration.
 	FnDecl {
@@ -254,6 +255,7 @@ pub enum Stmt {
 		ident: Ident,
 		params: Vec<Param>,
 		body: Vec<Stmt>,
+		qualifiers: Vec<Qualifier>,
 	},
 	/// Struct definition. *Note:* this is invalid glsl.
 	StructDef { ident: Ident },

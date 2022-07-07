@@ -177,12 +177,13 @@ impl std::fmt::Display for Expr {
 }
 
 impl Expr {
-	/// Tries to create a `Type`, e.g. `int` or `MyStruct` or `float[3][2]`.
+	/// Tries to convert this `Expr` to a [`Type`], e.g. `int` or `MyStruct` or `float[3][2]`.
 	pub fn to_type(&self) -> Option<Type> {
 		Type::parse(self)
 	}
 
-	/// Tries to create variable definition/declaration identifiers, e.g. `my_num` or `a, b` or `c[1], p[3]`.
+	/// Tries to convert this `Expr` to variable definition/declaration identifiers, e.g. `my_num` or `a, b` or
+	/// `c[1], p[3]`.
 	///
 	/// Each entry is either just an [`Ident`] if the expression is something like `my_num`, or it is an `Ident`
 	/// plus one or more [`ArrSize`] if the expression is something like `a[1]` or `b[][3]`.
@@ -208,9 +209,6 @@ impl Expr {
 
 		idents
 	}
-
-	/// Tries to create a function identifier, e.g. `my_func`.
-	pub fn to_fn_ident(&self) {}
 }
 
 type Param = (Type, Option<Ident>, Vec<Qualifier>);
@@ -257,7 +255,7 @@ pub enum Stmt {
 		body: Vec<Stmt>,
 		qualifiers: Vec<Qualifier>,
 	},
-	/// Struct definition. *Note:* This is invalid glsl.
+	/// Struct definition. *Note:* This is invalid glsl grammar.
 	StructDef {
 		ident: Ident,
 		qualifiers: Vec<Qualifier>,
@@ -377,6 +375,7 @@ pub enum ExtBehaviour {
 	Disable,
 }
 
+/// A qualifier which is associated with a definition/declaration or a parameter.
 #[derive(Debug, Clone, PartialEq)]
 pub enum Qualifier {
 	Storage(Storage),

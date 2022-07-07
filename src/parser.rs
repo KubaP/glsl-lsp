@@ -57,6 +57,7 @@ pub fn parse_file(source: &str) {
 	print!("\r\n");
 }
 
+/// Parse all of the top-level statements in the file.
 pub fn parse(source: &str) -> Vec<Stmt> {
 	let cst = lexer(source);
 	println!("{cst:?}");
@@ -73,6 +74,8 @@ pub fn parse(source: &str) -> Vec<Stmt> {
 			// We tried to parse an expression and succeeded. We have an expression consisting of at least one
 			// token.
 			Some(expr) => {
+				// Check if the expression can be parsed as a typename. If so, then we try to parse the following
+				// tokens as statements which can start with a typename, i.e. variable or function defs/decls.
 				if let Some(type_) = expr.to_type() {
 					match parse_type_start(&mut walker, type_, qualifiers) {
 						Some(s) => stmts.push(s),
@@ -104,9 +107,10 @@ pub fn parse(source: &str) -> Vec<Stmt> {
 				let (token, _) = walker.peek().unwrap();
 
 				match token {
+					// After the `struct` keyword we are expecting a struct def/decl.
 					Token::Struct => {
 						walker.advance();
-						match parse_struct(&mut walker) {
+						match parse_struct(&mut walker, qualifiers) {
 							Some(s) => stmts.push(s),
 							None => break 'parser,
 						}
@@ -217,6 +221,7 @@ fn parse_qualifier_list(walker: &mut Walker) -> Vec<Qualifier> {
 							walker.advance();
 							continue 'identifiers;
 						}
+						// We don't consume the token because we perform that at the end of the 'outer loop.
 						Token::RParen => break 'identifiers,
 						Token::Semi => break 'outer,
 						_ => {}
@@ -259,9 +264,8 @@ fn parse_qualifier_list(walker: &mut Walker) -> Vec<Qualifier> {
 
 				qualifiers.push(Qualifier::Layout(layouts));
 			}
-			Token::Semi => break 'outer,
 			// If we encounter anything other than a qualifier, that means we have reached the end of this list of
-			// qualifiers and can move onto the next parsing step.
+			// qualifiers and can move onto the next parsing step without consuming the current token.
 			_ => break 'outer,
 		}
 
@@ -463,7 +467,7 @@ fn parse_fn(
 	})
 }
 
-/// Parse a struct declaration.
+/// Parse a struct definition or declaration.
 fn parse_struct(
 	walker: &mut Walker,
 	qualifiers: Vec<Qualifier>,

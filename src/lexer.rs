@@ -84,6 +84,7 @@ pub enum Token {
 }
 
 impl Token {
+	/// Returns whether the current `Token` is a keyword that can start a statement.
 	pub fn starts_statement(&self) -> bool {
 		match self {
 			Self::If
@@ -131,6 +132,8 @@ impl Token {
 		}
 	}
 
+	/// Returns whether the current `Token` is a qualifier, or in the case of `layout`, whether it starts a
+	/// qualifier (since a layout has a parenthesis group after it).
 	pub fn is_qualifier(&self) -> bool {
 		match self {
 			Self::Const
@@ -163,8 +166,18 @@ impl Token {
 		}
 	}
 
+	/// Tries to convert the current `Token` into a [`Layout`] identifier.
+	/// 
+	/// If the token matches a layout identifier that doesn't take an expression, e.g. `early_fragment_tests`, then
+	/// `Left` is returned with the converted `Layout`. If the token matches a layout identifier that takes an
+	/// expression, e.g. `location = n`, then `Right` is returned with a constructor for the appropriate `Layout`
+	/// (the constructor takes the expression once that has been parsed).
+	/// 
+	/// If `None` is returned, the current token is not a valid layout identifier.
 	pub fn to_layout(&self) -> Option<Either<Layout, fn(Expr) -> Layout>> {
 		match self {
+			// `shared` is a keyword in all circumstances, apart from when it is used as a qualifier, hence it's a
+			// distinct variant rather than a string.
 			Self::Shared => Some(Either::Left(Layout::Shared)),
 			Self::Ident(s) => match s.as_ref() {
 				"packed" => Some(Either::Left(Layout::Packed)),

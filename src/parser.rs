@@ -464,7 +464,10 @@ fn parse_fn(
 }
 
 /// Parse a struct declaration.
-fn parse_struct(walker: &mut Walker) -> Option<Stmt> {
+fn parse_struct(
+	walker: &mut Walker,
+	qualifiers: Vec<Qualifier>,
+) -> Option<Stmt> {
 	let ident = match expr_parser(walker, Mode::Default) {
 		Some(e) => match e {
 			Expr::Ident(i) => i,
@@ -481,7 +484,7 @@ fn parse_struct(walker: &mut Walker) -> Option<Stmt> {
 		walker.advance();
 	} else if *next == Token::Semi {
 		walker.advance();
-		return Some(Stmt::StructDef { ident });
+		return Some(Stmt::StructDef { ident, qualifiers });
 	} else {
 		return None;
 	}
@@ -552,6 +555,14 @@ fn parse_struct(walker: &mut Walker) -> Option<Stmt> {
 		return None;
 	}
 
+	let instance = match expr_parser(walker, Mode::Default) {
+		Some(e) => match e {
+			Expr::Ident(i) => Some(i),
+			_ => return None,
+		},
+		None => None,
+	};
+
 	let (next, _) = match walker.peek() {
 		Some(t) => t,
 		None => return None,
@@ -562,7 +573,12 @@ fn parse_struct(walker: &mut Walker) -> Option<Stmt> {
 		return None;
 	}
 
-	Some(Stmt::StructDecl { ident, members })
+	Some(Stmt::StructDecl {
+		ident,
+		members,
+		qualifiers,
+		instance,
+	})
 }
 
 fn print_stmt(stmt: &Stmt, indent: usize) {
@@ -712,14 +728,23 @@ fn print_stmt(stmt: &Stmt, indent: usize) {
 			}
 			print!("\r\n{:indent$}}}", "", indent = indent * 4);
 		}
-		Stmt::StructDef { ident } => {
+		Stmt::StructDef { ident, qualifiers } => {
 			print!(
-				"\r\n{:indent$}\x1b[90;9mStruct\x1b[90m(ident: {ident}\x1b[90;9m)\x1b[0m",
+				"\r\n{:indent$}\x1b[90;9mStruct\x1b[0m(ident: {ident}, qualifiers: [",
 				"",
 				indent = indent * 4
 			);
+			for qualifier in qualifiers {
+				print!("{qualifier}, ");
+			}
+			print!("])");
 		}
-		Stmt::StructDecl { ident, members } => {
+		Stmt::StructDecl {
+			ident,
+			members,
+			qualifiers,
+			instance,
+		} => {
 			print!(
 				"\r\n{:indent$}\x1b[32mStruct\x1b[0m(ident: {ident}, members: {{",
 				"",
@@ -728,7 +753,15 @@ fn print_stmt(stmt: &Stmt, indent: usize) {
 			for stmt in members {
 				print_stmt(stmt, indent + 1);
 			}
-			print!("\r\n{:indent$}}})", "", indent = indent * 4);
+			print!("\r\n{:indent$}}}, qualifiers: [", "", indent = indent * 4);
+			for qualifier in qualifiers {
+				print!("{qualifier}, ");
+			}
+			if let Some(instance) = instance {
+				print!("], instance: {instance})");
+			} else {
+				print!("])");
+			}
 		}
 		Stmt::FnCall { ident, args } => {
 			print!(
@@ -994,14 +1027,17 @@ fn var_def_decl() {
 #[test]
 #[rustfmt::skip]
 fn struct_def_decl() {
-	assert_stmt!("struct S;", Stmt::StructDef { ident: Ident("S".into()) });
+	// Single-member structs.
+	assert_stmt!("struct S;", Stmt::StructDef { ident: Ident("S".into()), qualifiers: vec![] });
 	assert_stmt!("struct S { int i; };", Stmt::StructDecl {
 		ident: Ident("S".into()),
 		members: vec![Stmt::VarDef {
 			type_: Type::Basic(Primitive::Scalar(Fundamental::Int)),
 			ident: Ident("i".into()),
 			qualifiers: vec![]
-		}]
+		}],
+		qualifiers: vec![],
+		instance: None,
 	});
 	assert_stmt!("struct S { bool[2] b; };", Stmt::StructDecl {
 		ident: Ident("S".into()),
@@ -1009,7 +1045,9 @@ fn struct_def_decl() {
 			type_: Type::Array(Primitive::Scalar(Fundamental::Bool), Some(Expr::Lit(Lit::Int(2)))),
 			ident: Ident("b".into()),
 			qualifiers: vec![]
-		}]
+		}],
+		qualifiers: vec![],
+		instance: None,
 	});
 	assert_stmt!("struct S { mat4 m[2][6]; };", Stmt::StructDecl {
 		ident: Ident("S".into()),
@@ -1017,7 +1055,9 @@ fn struct_def_decl() {
 			type_: Type::Array2D(Primitive::Matrix(4, 4), Some(Expr::Lit(Lit::Int(2))), Some(Expr::Lit(Lit::Int(6)))),
 			ident: Ident("m".into()),
 			qualifiers: vec![]
-		}]
+		}],
+		qualifiers: vec![],
+		instance: None,
 	});
 	assert_stmt!("struct S { vec3[7][9] a[1], b[3]; };", Stmt::StructDecl {
 		ident: Ident("S".into()),
@@ -1038,9 +1078,12 @@ fn struct_def_decl() {
 					]),
 				Ident("b".into())
 			)
-		], vec![])]
+		], vec![])],
+		qualifiers: vec![],
+		instance: None,
 	});
 
+	// Multi-member struct.
 	assert_stmt!("struct S { int i; bool b; float f1, f2; dvec2[1] d[2]; };", Stmt::StructDecl {
 		ident: Ident("S".into()),
 		members: vec![
@@ -1073,6 +1116,8 @@ fn struct_def_decl() {
 				ident: Ident("d".into()),
 				qualifiers: vec![]
 			}
-		]
+		],
+		qualifiers: vec![],
+		instance: None,
 	});
 }

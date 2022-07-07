@@ -269,6 +269,8 @@ pub enum Stmt {
 		qualifiers: Vec<Qualifier>,
 		instance: Option<Ident>,
 	},
+	/// General expression, e.g. `i+5;`.
+	Expr(Expr),
 	/// Function call (on its own, as opposed to being part of a larger expression).
 	FnCall { ident: Ident, args: Vec<Expr> },
 	/// Variable assignment.
@@ -301,6 +303,10 @@ pub enum Stmt {
 		inc: Option<Expr>,
 		body: Vec<Stmt>,
 	},
+	/// While loop, i.e. `while ( /*..*/ ) { /*..*/ }`.
+	While { cond: Expr, body: Vec<Stmt> },
+	/// Do-While loop, i.e. `do { /*..*/ } while ( /*..*/ );`.
+	DoWhile { cond: Expr, body: Vec<Stmt> },
 	/// Return statement.
 	Return(Option<Expr>),
 	/// Break keyword.

@@ -540,6 +540,241 @@ fn parse_scope_contents(walker: &mut Walker) -> Vec<Stmt> {
 						walker.advance();
 						stmts.push(Stmt::Empty);
 					}
+					Token::For => {
+						walker.advance();
+
+						// Consume the opening `(` parenthesis.
+						let current = match walker.peek() {
+							Some((t, _)) => t,
+							None => continue,
+						};
+						if *current == Token::LParen {
+							walker.advance();
+						} else {
+							continue;
+						}
+
+						let var = match expr_parser(walker, Mode::Default) {
+							Some(expr) => {
+								if let Some(type_) = expr.to_type() {
+									match parse_type_start(
+										walker,
+										type_,
+										vec![],
+									) {
+										Some(s) => Some(Box::from(s)),
+										None => None,
+									}
+								} else {
+									Some(Box::from(Stmt::Expr(expr)))
+								}
+							}
+							None => None,
+						};
+
+						// Consume the seperator `;` semicolon.
+						let current = match walker.peek() {
+							Some((t, _)) => t,
+							None => continue,
+						};
+						if *current == Token::Semi {
+							walker.advance();
+						} else {
+							// parse_type_start consumes the `;` if there is one.
+							//continue;
+						}
+
+						let cond = expr_parser(walker, Mode::Default);
+
+						// Consume the seperator `;` semicolon.
+						let current = match walker.peek() {
+							Some((t, _)) => t,
+							None => continue,
+						};
+						if *current == Token::Semi {
+							walker.advance();
+						} else {
+							continue;
+						}
+
+						let inc = expr_parser(walker, Mode::Default);
+
+						// Consume the closing `)` parenthesis.
+						let current = match walker.peek() {
+							Some((t, _)) => t,
+							None => continue,
+						};
+						if *current == Token::RParen {
+							walker.advance();
+						} else {
+							continue;
+						}
+
+						// Consume the opening `{` scope brace.
+						let current = match walker.peek() {
+							Some((t, _)) => t,
+							None => continue,
+						};
+						if *current == Token::LBrace {
+							walker.advance();
+						} else {
+							continue;
+						}
+
+						let body = parse_scope_contents(walker);
+
+						// Consume the opening `}` scope brace.
+						let current = match walker.peek() {
+							Some((t, _)) => t,
+							None => continue,
+						};
+						if *current == Token::RBrace {
+							walker.advance();
+						} else {
+							continue;
+						}
+
+						stmts.push(Stmt::For {
+							var,
+							cond,
+							inc,
+							body,
+						});
+					}
+					Token::While => {
+						walker.advance();
+
+						// Consume the opening `(` parenthesis.
+						let current = match walker.peek() {
+							Some((t, _)) => t,
+							None => continue,
+						};
+						if *current == Token::LParen {
+							walker.advance();
+						} else {
+							continue;
+						}
+
+						let cond = match expr_parser(walker, Mode::Default) {
+							Some(e) => e,
+							None => continue,
+						};
+
+						// Consume the closing `)` parenthesis.
+						let current = match walker.peek() {
+							Some((t, _)) => t,
+							None => continue,
+						};
+						if *current == Token::RParen {
+							walker.advance();
+						} else {
+							continue;
+						}
+
+						// Consume the opening `{` scope brace.
+						let current = match walker.peek() {
+							Some((t, _)) => t,
+							None => continue,
+						};
+						if *current == Token::LBrace {
+							walker.advance();
+						} else {
+							continue;
+						}
+
+						let body = parse_scope_contents(walker);
+
+						// Consume the opening `}` scope brace.
+						let current = match walker.peek() {
+							Some((t, _)) => t,
+							None => continue,
+						};
+						if *current == Token::RBrace {
+							walker.advance();
+						} else {
+							continue;
+						}
+
+						stmts.push(Stmt::While { cond, body });
+					}
+					Token::Do => {
+						walker.advance();
+
+						// Consume the opening `{` scope brace.
+						let current = match walker.peek() {
+							Some((t, _)) => t,
+							None => continue,
+						};
+						if *current == Token::LBrace {
+							walker.advance();
+						} else {
+							continue;
+						}
+
+						let body = parse_scope_contents(walker);
+
+						// Consume the opening `}` scope brace.
+						let current = match walker.peek() {
+							Some((t, _)) => t,
+							None => continue,
+						};
+						if *current == Token::RBrace {
+							walker.advance();
+						} else {
+							continue;
+						}
+
+						// Consume the `while` keyword.
+						let current = match walker.peek() {
+							Some((t, _)) => t,
+							None => continue,
+						};
+						if *current == Token::While {
+							walker.advance();
+						} else {
+							continue;
+						}
+
+						// Consume the opening `(` parenthesis.
+						let current = match walker.peek() {
+							Some((t, _)) => t,
+							None => continue,
+						};
+						if *current == Token::LParen {
+							walker.advance();
+						} else {
+							continue;
+						}
+
+						let cond = match expr_parser(walker, Mode::Default) {
+							Some(e) => e,
+							None => continue,
+						};
+
+						// Consume the closing `)` parenthesis.
+						let current = match walker.peek() {
+							Some((t, _)) => t,
+							None => continue,
+						};
+						if *current == Token::RParen {
+							walker.advance();
+						} else {
+							continue;
+						}
+
+						// Consume the statement-ending `;` semicolon.
+						let current = match walker.peek() {
+							Some((t, _)) => t,
+							None => continue,
+						};
+						if *current == Token::Semi {
+							walker.advance();
+						} else {
+							continue;
+						}
+
+						stmts.push(Stmt::DoWhile { cond, body });
+					}
 					Token::Return => {
 						walker.advance();
 

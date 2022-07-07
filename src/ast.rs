@@ -305,6 +305,8 @@ pub enum Stmt {
 	Return(Option<Expr>),
 	/// Break keyword.
 	Break,
+	/// Continue keyword.
+	Continue,
 	/// Discard keyword.
 	Discard,
 }

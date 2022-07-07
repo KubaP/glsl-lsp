@@ -454,8 +454,30 @@ fn parse_fn(
 	};
 	if *next == Token::Semi {
 		walker.advance();
+	} else if *next == Token::LBrace {
+		walker.advance();
+
+		let stmts = parse_scope_contents(walker);
+
+		// Take the closing `}` scope brace.
+		let (next, _) = match walker.peek() {
+			Some(t) => t,
+			None => return None,
+		};
+		if *next == Token::RBrace {
+			walker.advance();
+		} else {
+			return None;
+		}
+
+		return Some(Stmt::FnDecl {
+			return_type,
+			ident,
+			params,
+			body: stmts,
+			qualifiers,
+		});
 	} else {
-		// TODO: Deal with { function scope... }.
 		return None;
 	}
 
@@ -465,6 +487,129 @@ fn parse_fn(
 		params,
 		qualifiers,
 	})
+}
+
+/// Parse the contents of a scope other than the top-level scope.
+fn parse_scope_contents(walker: &mut Walker) -> Vec<Stmt> {
+	let mut stmts = Vec::new();
+
+	'stmt: loop {
+		// First, we look for any qualifiers which are always located first in a statement.
+		let qualifiers = parse_qualifier_list(walker);
+
+		// Next, we look for any syntax which can be parsed as an expression, e.g. a `int[3]`.
+		match expr_parser(walker, Mode::Default) {
+			// We tried to parse an expression and succeeded. We have an expression consisting of at least one
+			// token.
+			Some(expr) => {
+				// Check if the expression can be parsed as a typename. If so, then we try to parse the following
+				// tokens as statements which can start with a typename, i.e. variable or function defs/decls.
+				// FIXME: Cannot have a function within a function?
+				if let Some(type_) = expr.to_type() {
+					match parse_type_start(walker, type_, qualifiers) {
+						Some(s) => stmts.push(s),
+						None => 'till_next: loop {
+							// We did not successfully parse a statement.
+							let (next, _) = match walker.peek() {
+								Some(t) => t,
+								None => break 'stmt,
+							};
+
+							if *next == Token::Semi {
+								walker.advance();
+								break 'till_next;
+							} else if next.starts_statement() {
+								// We don't advance because we are currently at a token which begins a new statement, so we
+								// don't want to consume it before we rerun the main loop.
+								break 'till_next;
+							} else {
+								walker.advance();
+								continue 'till_next;
+							}
+						},
+					};
+				}
+			}
+			// We tried to parse an expression but that immediately failed. This means the current token is one
+			// which cannot start an expression.
+			None => {
+				let (token, _) = walker.peek().unwrap();
+
+				match token {
+					Token::Semi => {
+						walker.advance();
+						stmts.push(Stmt::Empty);
+					}
+					Token::Return => {
+						walker.advance();
+
+						// Look for the optional return value expression.
+						let return_expr = expr_parser(walker, Mode::Default);
+
+						let current = match walker.peek() {
+							Some((t, _)) => t,
+							None => continue,
+						};
+						if *current == Token::Semi {
+							walker.advance();
+						} else {
+							continue;
+						}
+
+						stmts.push(Stmt::Return(return_expr));
+					}
+					Token::Break => {
+						walker.advance();
+
+						let current = match walker.peek() {
+							Some((t, _)) => t,
+							None => continue,
+						};
+						if *current == Token::Semi {
+							walker.advance();
+						} else {
+							continue;
+						}
+
+						stmts.push(Stmt::Break);
+					}
+					Token::Continue => {
+						walker.advance();
+
+						let current = match walker.peek() {
+							Some((t, _)) => t,
+							None => continue,
+						};
+						if *current == Token::Semi {
+							walker.advance();
+						} else {
+							continue;
+						}
+
+						stmts.push(Stmt::Continue);
+					}
+					Token::Discard => {
+						walker.advance();
+
+						let current = match walker.peek() {
+							Some((t, _)) => t,
+							None => continue,
+						};
+						if *current == Token::Semi {
+							walker.advance();
+						} else {
+							continue;
+						}
+
+						stmts.push(Stmt::Discard);
+					}
+					_ => break 'stmt,
+				}
+			}
+		}
+	}
+
+	stmts
 }
 
 /// Parse a struct definition or declaration.
@@ -892,6 +1037,9 @@ fn print_stmt(stmt: &Stmt, indent: usize) {
 		}
 		Stmt::Break => {
 			print!("\r\n{:indent$}BREAK", "", indent = indent * 4)
+		}
+		Stmt::Continue => {
+			print!("\r\n{:indent$}CONTINUE", "", indent = indent * 4)
 		}
 		Stmt::Discard => {
 			print!("\r\n{:indent$}DISCARD", "", indent = indent * 4)

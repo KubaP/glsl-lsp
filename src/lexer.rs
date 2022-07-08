@@ -69,7 +69,6 @@ pub enum Token {
 	Writeonly,
 	// Punctuation
 	Op(Op),
-	Eq,
 	Comma,
 	Dot,
 	Semi,
@@ -266,6 +265,7 @@ pub enum Op {
 	LShift,
 	RShift,
 	Flip,
+	Eq,
 	AddAdd,
 	SubSub,
 	AddEq,
@@ -486,10 +486,10 @@ fn match_punctuation(lexer: &mut Lexer) -> Token {
 	match_op!(lexer, "|=", Token::Op(Op::OrEq));
 	match_op!(lexer, "^^", Token::Op(Op::XorXor));
 	match_op!(lexer, "^=", Token::Op(Op::XorEq));
+	match_op!(lexer, "=", Token::Op(Op::Eq));
 	match_op!(lexer, ";", Token::Semi);
 	match_op!(lexer, ".", Token::Dot);
 	match_op!(lexer, ",", Token::Comma);
-	match_op!(lexer, "=", Token::Eq);
 	match_op!(lexer, "(", Token::LParen);
 	match_op!(lexer, ")", Token::RParen);
 	match_op!(lexer, "[", Token::LBracket);
@@ -1395,7 +1395,6 @@ fn punctuation() {
 	assert_tokens!(";", Token::Semi);
 	assert_tokens!(".", Token::Dot);
 	assert_tokens!(",", Token::Comma);
-	assert_tokens!("=", Token::Eq);
 	assert_tokens!("(", Token::LParen);
 	assert_tokens!(")", Token::RParen);
 	assert_tokens!("[", Token::LBracket);
@@ -1403,6 +1402,7 @@ fn punctuation() {
 	assert_tokens!("{", Token::LBrace);
 	assert_tokens!("}", Token::RBrace);
 	assert_tokens!(":", Token::Colon);
+	assert_tokens!("=", Token::Op(Op::Eq));
 	assert_tokens!("+", Token::Op(Op::Add));
 	assert_tokens!("-", Token::Op(Op::Sub));
 	assert_tokens!("*", Token::Op(Op::Mul));

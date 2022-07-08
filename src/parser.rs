@@ -1,7 +1,7 @@
 use crate::{
 	ast::{Expr, Ident, Qualifier, Stmt, Type},
 	expression::{expr_parser, Mode},
-	lexer::{lexer, Token},
+	lexer::{lexer, Op, Token},
 	span::Spanned,
 	Either,
 };
@@ -241,7 +241,7 @@ fn parse_qualifier_list(walker: &mut Walker) -> Vec<Qualifier> {
 										Some((t, _)) => t,
 										None => break 'outer,
 									};
-									if *current == Token::Eq {
+									if *current == Token::Op(Op::Eq) {
 										walker.advance();
 									} else {
 										break 'outer;
@@ -301,7 +301,7 @@ fn parse_type_start(
 		None => return None,
 	};
 
-	let next = match expr_parser(walker, Mode::Default) {
+	let next = match expr_parser(walker, Mode::BreakAtEq) {
 		Some(e) => e,
 		None => return None,
 	};
@@ -339,7 +339,7 @@ fn parse_type_start(
 			}
 			_ => Some(Stmt::VarDefs(typenames, qualifiers)),
 		};
-	} else if *next == Token::Eq {
+	} else if *next == Token::Op(Op::Eq) {
 		walker.advance();
 		// We have a variable declaration.
 		let value = match expr_parser(walker, Mode::Default) {
@@ -557,6 +557,17 @@ fn parse_scope_contents(
 							}
 						},
 					};
+				} else {
+					let current = match walker.peek() {
+						Some((t, _)) => t,
+						None => continue,
+					};
+					if *current == Token::Semi {
+						walker.advance();
+						stmts.push(Stmt::Expr(expr));
+					} else {
+						continue;
+					}
 				}
 			}
 			// We tried to parse an expression but that immediately failed. This means the current token is one
@@ -1387,32 +1398,7 @@ fn print_stmt(stmt: &Stmt, indent: usize) {
 			}
 		}
 		Stmt::Expr(expr) => {
-			print!("\r\n{:indent$}Expr({expr})", "", indent = indent * 4)
-		}
-		Stmt::FnCall { ident, args } => {
-			print!(
-				"\r\n{:indent$}\x1b[34mCall\x1b[0m(ident: {ident}, args: [",
-				"",
-				indent = indent * 4
-			);
-			for arg in args {
-				print!("{arg}, ");
-			}
-			print!("])");
-		}
-		Stmt::VarAssign { ident, value } => {
-			print!(
-				"\r\n{:indent$}\x1b[32mAssign\x1b[0m(ident: {ident}) = {value}",
-				"",
-				indent = indent * 4
-			);
-		}
-		Stmt::VarEq { ident, value, op } => {
-			print!(
-				"\r\n{:indent$}\x1b[32mAssign\x1b[0m(ident: {ident}, op: \x1b[36m{op:?}\x1b[0m) = {value}",
-				"",
-				indent = indent * 4
-			);
+			print!("\r\n{:indent$}{expr}", "", indent = indent * 4);
 		}
 		Stmt::Preproc(p) => print!(
 			"\r\n{:indent$}\x1b[4mPreproc({p})\x1b[0m",

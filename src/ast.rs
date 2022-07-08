@@ -269,18 +269,13 @@ pub enum Stmt {
 		qualifiers: Vec<Qualifier>,
 		instance: Option<Ident>,
 	},
-	/// General expression, e.g. `i+5;`.
+	/// General expression, e.g.
+	/// 
+	/// - `i + 5;`
+	/// - `fn();`
+	/// - `i = 5 + 1;`
+	/// - `i *= fn();`
 	Expr(Expr),
-	/// Function call (on its own, as opposed to being part of a larger expression).
-	FnCall { ident: Ident, args: Vec<Expr> },
-	/// Variable assignment.
-	VarAssign { ident: Ident, value: Expr },
-	/// Variable assignment through `+=`/`-=`/etc. operators.
-	VarEq {
-		ident: Ident,
-		value: Box<Expr>,
-		op: Op,
-	},
 	/// Preprocessor calls.
 	Preproc(Preproc),
 	/// If statement.

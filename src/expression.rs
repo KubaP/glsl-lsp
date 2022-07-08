@@ -14,6 +14,7 @@ use crate::lexer::lexer;
 pub enum Mode {
 	Default,
 	DisallowTopLevelList,
+	BreakAtEq,
 }
 
 /// Tries to parse an expression beginning at the current position.
@@ -1042,6 +1043,10 @@ impl ShuntingYard {
 					break 'main;
 				}
 				Token::Op(op) if state == State::Operand => {
+					if self.mode == Mode::BreakAtEq && *op == Op::Eq {
+						break 'main;
+					}
+
 					match op {
 						// If the operator is a valid prefix operator, we can move it to the stack. We don't switch
 						// state since after a prefix operator, we are still looking for an operand atom.
@@ -1069,6 +1074,10 @@ impl ShuntingYard {
 					}
 				}
 				Token::Op(op) if state == State::AfterOperand => {
+					if self.mode == Mode::BreakAtEq && *op == Op::Eq {
+						break 'main;
+					}
+
 					match op {
 						Op::Flip | Op::Not => {
 							// These operators cannot be directly after an atom.
@@ -1559,6 +1568,7 @@ impl ShuntingYard {
 					| Op::AndAnd
 					| Op::OrOr
 					| Op::XorXor
+					| Op::Eq
 					| Op::AddEq
 					| Op::SubEq
 					| Op::MulEq
@@ -1621,7 +1631,8 @@ impl Op {
 			Self::XorXor => 9,
 			Self::OrOr => 7,
 			// TODO: Ternary
-			Self::AddEq
+			Self::Eq
+			| Self::AddEq
 			| Self::SubEq
 			| Self::MulEq
 			| Self::DivEq
@@ -1678,6 +1689,7 @@ impl std::fmt::Display for Op {
 			Self::Xor => write!(f, "^"),
 			Self::LShift => write!(f, "<<"),
 			Self::RShift => write!(f, ">>"),
+			Self::Eq => write!(f, "="),
 			Self::AddEq => write!(f, "+="),
 			Self::SubEq => write!(f, "-="),
 			Self::MulEq => write!(f, "*="),

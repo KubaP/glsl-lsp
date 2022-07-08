@@ -540,6 +540,165 @@ fn parse_scope_contents(walker: &mut Walker) -> Vec<Stmt> {
 						walker.advance();
 						stmts.push(Stmt::Empty);
 					}
+					Token::If => {
+						walker.advance();
+
+						// Consume the opening `(` parenthesis.
+						let current = match walker.peek() {
+							Some((t, _)) => t,
+							None => continue,
+						};
+						if *current == Token::LParen {
+							walker.advance();
+						} else {
+							continue;
+						}
+
+						let cond = match expr_parser(walker, Mode::Default) {
+							Some(e) => e,
+							None => continue,
+						};
+
+						// Consume the closing `)` parenthesis.
+						let current = match walker.peek() {
+							Some((t, _)) => t,
+							None => continue,
+						};
+						if *current == Token::RParen {
+							walker.advance();
+						} else {
+							continue;
+						}
+
+						// Consume the opening `{` scope brace.
+						let current = match walker.peek() {
+							Some((t, _)) => t,
+							None => continue,
+						};
+						if *current == Token::LBrace {
+							walker.advance();
+						} else {
+							continue;
+						}
+
+						let body = parse_scope_contents(walker);
+
+						// Consume the opening `}` scope brace.
+						let current = match walker.peek() {
+							Some((t, _)) => t,
+							None => continue,
+						};
+						if *current == Token::RBrace {
+							walker.advance();
+						} else {
+							continue;
+						}
+
+						let mut else_ = None;
+						let mut else_ifs = Vec::new();
+						'elseifs: loop {
+							// Consume the opening `}` scope brace.
+							let current = match walker.peek() {
+								Some((t, _)) => t,
+								None => continue,
+							};
+							if *current == Token::Else {
+								walker.advance();
+							} else {
+								break 'elseifs;
+							}
+
+							let current = match walker.peek() {
+								Some((t, _)) => t,
+								None => continue,
+							};
+							if *current == Token::LBrace {
+								// A final else branch.
+								walker.advance();
+
+								let body = parse_scope_contents(walker);
+
+								// Consume the opening `}` scope brace.
+								let current = match walker.peek() {
+									Some((t, _)) => t,
+									None => continue,
+								};
+								if *current == Token::RBrace {
+									walker.advance();
+								} else {
+									continue;
+								}
+
+								else_ = Some(body);
+								break 'elseifs;
+							} else if *current == Token::If {
+								walker.advance();
+
+								// Consume the opening `(` parenthesis.
+								let current = match walker.peek() {
+									Some((t, _)) => t,
+									None => continue,
+								};
+								if *current == Token::LParen {
+									walker.advance();
+								} else {
+									continue;
+								}
+
+								let cond =
+									match expr_parser(walker, Mode::Default) {
+										Some(e) => e,
+										None => continue,
+									};
+
+								// Consume the closing `)` parenthesis.
+								let current = match walker.peek() {
+									Some((t, _)) => t,
+									None => continue,
+								};
+								if *current == Token::RParen {
+									walker.advance();
+								} else {
+									continue;
+								}
+
+								// Consume the opening `{` scope brace.
+								let current = match walker.peek() {
+									Some((t, _)) => t,
+									None => continue,
+								};
+								if *current == Token::LBrace {
+									walker.advance();
+								} else {
+									continue;
+								}
+
+								let body = parse_scope_contents(walker);
+
+								// Consume the opening `}` scope brace.
+								let current = match walker.peek() {
+									Some((t, _)) => t,
+									None => continue,
+								};
+								if *current == Token::RBrace {
+									walker.advance();
+								} else {
+									continue;
+								}
+
+								else_ifs.push((cond, body));
+							} else {
+								continue;
+							}
+						}
+
+						stmts.push(Stmt::If {
+							cond,
+							body,
+							else_ifs,
+							else_,
+						});
+					}
 					Token::For => {
 						walker.advance();
 

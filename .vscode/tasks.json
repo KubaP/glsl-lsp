@@ -48,26 +48,6 @@
             ]
         },
         {
-            "label": "Cargo check",
-            "type": "cargo",
-            "command": "check",
-            "group": {
-                "kind": "test",
-                "isDefault": true
-            },
-            "presentation": {
-                "echo": true,
-                "reveal": "always",
-                "focus": true,
-                "panel": "shared",
-                "showReuseMessage": true,
-                "clear": true
-            },
-            "problemMatcher": [
-                "$rustc"
-            ]
-        },
-        {
             "label": "Cargo build",
             "type": "cargo",
             "command": "build",
@@ -103,6 +83,41 @@
             "problemMatcher": [
                 "$rustc"
             ],
+        },
+        {
+            "label": "Cargo check",
+            "type": "cargo",
+            "command": "check",
+            "group": "test",
+            "presentation": {
+                "echo": true,
+                "reveal": "always",
+                "focus": true,
+                "panel": "shared",
+                "showReuseMessage": true,
+                "clear": true
+            },
+            "problemMatcher": [
+                "$rustc"
+            ]
+        },
+        {
+            "label": "Cargo test",
+            "type": "cargo",
+            "command": "test",
+            "group": {
+                "kind": "test",
+                "isDefault": true
+            },
+            "presentation": {
+                "echo": true,
+                "reveal": "always",
+                "focus": true,
+                "panel": "dedicated",
+            },
+            "problemMatcher": [
+                "$rustc"
+            ]
         },
         {
             "label": "Cargo docs",

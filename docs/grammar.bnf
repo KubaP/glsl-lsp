@@ -1,3 +1,5 @@
+# LEXER GRAMMAR
+
 ## Identifiers/Keywords/Built-in types/Structs
 word ::= ident_start ident_char*
 

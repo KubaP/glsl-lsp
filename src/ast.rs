@@ -1,25 +1,70 @@
-use crate::lexer::{NumType, OpType};
+use crate::{
+	lexer::{NumType, Op, Token},
+	Either,
+};
 
-/// Holds either one or the other value.
-#[derive(Debug, Clone)]
-pub enum Either<L, R> {
-	Left(L),
-	Right(R),
-}
-
-/// An expression which will be part of a statement. Expressions cannot exist on their own.
-#[derive(Debug, Clone)]
+/// An expression which will be part of an encompassing statement. Expressions cannot exist on their own.
+#[derive(Debug, Clone, PartialEq)]
 pub enum Expr {
-	/// A literal value; either a number, a boolean.
+	/// An expression which is incomplete, e.g. `3+5-`.
+	///
+	/// This token exists to allow the analyzer to gracefully deal with expression errors without affecting the
+	/// ability to deal with surrounding expressions or statements. E.g.
+	/// ```c
+	/// int i = 3+5-;
+	///
+	/// // becomes
+	///
+	/// Expr::Binary {
+	///     left: Expr::Lit(3),
+	///     op: Add
+	///     right: Expr::Incomplete
+	/// }
+	/// ```
+	/// We can produce an error about the incomplete expression but still reason about the existence of `i`, such
+	/// as in later uses. Obviously however, we cannot analyze whether the expression evaluates to a valid integer
+	/// value.
+	///
+	/// This token is also used to represent unclosed delimiter groups, e.g.
+	/// ```c
+	/// fn(1+2
+	///
+	/// // or
+	///
+	/// i[0
+	/// ```
+	///
+	/// Note: This token is not used for unclosed parenthesis groups, e.g.
+	/// ```c
+	/// (5+1
+	///
+	/// // becomes
+	///
+	/// Expr:: Binary {
+	///     left: Expr::Lit(5),
+	///     op: Add,
+	///     right: Expr::Lit(1)
+	/// }
+	/// ```
+	/// We produce an error about the missing parenthesis, but we can assume that the bracket group extends till
+	/// the end. This is because whilst the position of the closing parenthesis may be unknown, no matter where it
+	/// is placed it will not affect the analysis; either the types match or they don't. (It will affect the result
+	/// of the evaluation but that is irrelevant to our analysis).
+	Incomplete,
+	/// An expression which is invalid when converted from a token, e.g.
+	///
+	/// - A token number `1.0B` cannot be converted to a valid `Lit` because `B` is not a valid suffix,.
+	Invalid,
+	/// A literal value; either a number or a boolean.
 	Lit(Lit),
-	/// An identifier; could be a variable name, function name, etc.
+	/// An identifier; could be a variable name, function name, type name, etc.
 	Ident(Ident),
-	/// A negation of an expression.
+	/// A prefix.
+	Prefix(Box<Expr>, Op),
+	/// A postfix.
+	Postfix(Box<Expr>, Op),
+	/// A negation.
 	Neg(Box<Expr>),
-	/// An expression prefix.
-	Prefix(Box<Expr>, OpType),
-	/// An expression postfix.
-	Postfix(Box<Expr>, OpType),
 	/// A bitflip.
 	Flip(Box<Expr>),
 	/// A not.
@@ -27,39 +72,53 @@ pub enum Expr {
 	/// Binary expression with a left and right hand-side.
 	Binary {
 		left: Box<Expr>,
-		op: OpType,
+		op: Op,
 		right: Box<Expr>,
 	},
-	/// Ternary if.
+	/// Ternary condition.
 	Ternary {
 		cond: Box<Expr>,
 		true_: Box<Expr>,
 		false_: Box<Expr>,
 	},
+	/// A parenthesis group. *Note:* currently this has no real use.
+	Paren(Box<Expr>),
+	/// Index operator, e.g. `item[i]`.
+	Index {
+		item: Box<Expr>,
+		i: Option<Box<Expr>>,
+	},
+	/// Object access.
+	ObjAccess { obj: Box<Expr>, leaf: Box<Expr> },
 	/// Function call.
 	Fn { ident: Ident, args: Vec<Expr> },
-	/// Array constructor.
-	Array { type_: Type, args: Vec<Expr> },
 	/// Initializer list.
-	InitList(Vec<Expr>),
-	/// Member access.
-	///
-	/// `0` - List of identifiers seperated by dots (`.`), in left-to-right order.
-	Member(Vec<Ident>),
+	Init(Vec<Expr>),
+	/// Array constructor.
+	ArrInit {
+		/// Contains the first part of an array constructor, e.g. `int[3]`.
+		arr: Box<Expr>,
+		/// Contains the expressions within the brackets i.e. `..](a, b, ...)`.
+		args: Vec<Expr>,
+	},
+	/// A general list expression, e.g. `a, b`.
+	List(Vec<Expr>),
 }
 
 impl std::fmt::Display for Expr {
 	fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
 		match self {
-			Expr::Lit(l) => write!(f, "Lit<{l}>"),
-			Expr::Ident(i) => write!(f, "Ident<{i}>"),
-			Expr::Neg(expr) => write!(f, "\x1b[36mNeg\x1b[0m({expr})"),
+			Expr::Incomplete => write!(f, "\x1b[31;4mINCOMPLETE\x1b[0m"),
+			Expr::Invalid => write!(f, "\x1b[31;4mINVALID\x1b[0m"),
+			Expr::Lit(l) => write!(f, "{l}"),
+			Expr::Ident(i) => write!(f, "{i}"),
 			Expr::Prefix(expr, op) => {
 				write!(f, "\x1b[36mPre\x1b[0m({expr} \x1b[36m{op:?}\x1b[0m)")
 			}
 			Expr::Postfix(expr, op) => {
 				write!(f, "\x1b[36mPost\x1b[0m({expr} \x1b[36m{op:?}\x1b[0m)")
 			}
+			Expr::Neg(expr) => write!(f, "\x1b[36mNeg\x1b[0m({expr})"),
 			Expr::Flip(expr) => write!(f, "\x1b[36mFlip\x1b[0m({expr})"),
 			Expr::Not(expr) => write!(f, "\x1b[36mNot\x1b[0m({expr})"),
 			Expr::Binary { left, op, right } => {
@@ -70,6 +129,21 @@ impl std::fmt::Display for Expr {
 				true_,
 				false_,
 			} => write!(f, "IF({cond}) {{ {true_} }} ELSE {{ {false_} }}"),
+			Expr::Paren(expr) => write!(f, "({expr})"),
+			Expr::Index { item, i } => {
+				write!(
+					f,
+					"\x1b[36mIndex\x1b[0m({item}, i: {})",
+					if let Some(e) = i {
+						format!("{e}")
+					} else {
+						format!("_")
+					}
+				)
+			}
+			Expr::ObjAccess { obj, leaf } => {
+				write!(f, "\x1b[36mAccess\x1b[0m({obj} -> {leaf})")
+			}
 			Expr::Fn { ident, args } => {
 				write!(f, "\x1b[34mCall\x1b[0m(ident: {ident}, args: [")?;
 				for arg in args {
@@ -77,66 +151,131 @@ impl std::fmt::Display for Expr {
 				}
 				write!(f, "])")
 			}
-			Expr::Array { type_, args } => {
-				write!(f, "\x1b[34mArr\x1b[0m(type: {type_} args: [)")?;
-				for arg in args {
-					write!(f, "{arg}, ")?;
-				}
-				write!(f, "])")
-			}
-			Expr::InitList(args) => {
+			Expr::Init(args) => {
 				write!(f, "\x1b[34mInit\x1b[0m{{")?;
 				for arg in args {
 					write!(f, "{arg}, ")?;
 				}
 				write!(f, "}}")
 			}
-			Expr::Member(idents) => {
-				write!(f, "Member(")?;
-				for ident in idents {
-					write!(f, "{ident}. ")?;
+			Expr::ArrInit { arr, args } => {
+				write!(f, "\x1b[34mArr\x1b[0m(arr: {arr} args: [")?;
+				for arg in args {
+					write!(f, "{arg}, ")?;
 				}
-				write!(f, ")")
+				write!(f, "])")
+			}
+			Expr::List(exprs) => {
+				write!(f, "{{")?;
+				for expr in exprs {
+					write!(f, "{expr}, ")?;
+				}
+				write!(f, "}}")
 			}
 		}
 	}
 }
 
+impl Expr {
+	/// Tries to convert this `Expr` to a [`Type`], e.g. `int` or `MyStruct` or `float[3][2]`.
+	pub fn to_type(&self) -> Option<Type> {
+		Type::parse(self)
+	}
+
+	/// Tries to convert this `Expr` to variable definition/declaration identifiers, e.g. `my_num` or `a, b` or
+	/// `c[1], p[3]`.
+	///
+	/// Each entry is either just an [`Ident`] if the expression is something like `my_num`, or it is an `Ident`
+	/// plus one or more [`ArrSize`] if the expression is something like `a[1]` or `b[][3]`.
+	pub fn to_var_def_decl_or_fn_ident(
+		&self,
+	) -> Vec<Either<Ident, (Ident, Vec<ArrSize>)>> {
+		let mut idents = Vec::new();
+
+		match self {
+			Self::List(v) => {
+				for expr in v {
+					match Ident::from_expr(expr) {
+						Some(result) => idents.push(result),
+						None => {}
+					}
+				}
+			}
+			_ => match Ident::from_expr(self) {
+				Some(result) => idents.push(result),
+				None => {}
+			},
+		}
+
+		idents
+	}
+}
+
+type Param = (Type, Option<Ident>, Vec<Qualifier>);
+
 /// A top-level statement. Some of these statements are only valid at the file top-level. Others are only valid
 /// inside of functions.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub enum Stmt {
 	/// An empty statement, i.e. just a `;`.
 	Empty,
-	/// Variable declaration.
+	/// Variable definition, e.g. `int a;`.
+	VarDef {
+		type_: Type,
+		ident: Ident,
+		qualifiers: Vec<Qualifier>,
+	},
+	/// Multiple variable definitions, e.g. `int a, b;`.
+	VarDefs(Vec<(Type, Ident)>, Vec<Qualifier>),
+	/// Variable declaration, e.g. `int a = <EXPR>;`.
 	VarDecl {
 		type_: Type,
 		ident: Ident,
-		value: Option<Expr>,
-		is_const: bool, // TODO: Refactor to be a Vec<Qualifier> or something similar.
+		value: Expr,
+		qualifiers: Vec<Qualifier>,
+	},
+	/// Multiple variable declarations, e.g. `int a, b = <EXPR>;`.
+	VarDecls {
+		vars: Vec<(Type, Ident)>,
+		value: Expr,
+		qualifiers: Vec<Qualifier>,
+	},
+	/// Function definition.
+	FnDef {
+		return_type: Type,
+		ident: Ident,
+		params: Vec<Param>,
+		qualifiers: Vec<Qualifier>,
 	},
 	/// Function declaration.
 	FnDecl {
-		type_: Type,
+		return_type: Type,
 		ident: Ident,
-		params: Vec<(Type, Ident)>,
+		params: Vec<Param>,
 		body: Vec<Stmt>,
+		qualifiers: Vec<Qualifier>,
+	},
+	/// Struct definition. *Note:* This is invalid glsl grammar.
+	StructDef {
+		ident: Ident,
+		qualifiers: Vec<Qualifier>,
 	},
 	/// Struct declaration.
 	StructDecl {
 		ident: Ident,
-		members: Vec<(Type, Ident)>,
+		/// # Invariants
+		/// These will only be of type `Stmt::VarDef` or `Stmt::VarDefs`.
+		members: Vec<Stmt>,
+		qualifiers: Vec<Qualifier>,
+		instance: Option<Ident>,
 	},
-	/// Function call (on its own, as opposed to being part of a larger expression).
-	FnCall { ident: Ident, args: Vec<Expr> },
-	/// Variable assignment.
-	VarAssign { ident: Ident, value: Expr },
-	/// Variable assignment through `+=`/`-=`/etc. operators.
-	VarEq {
-		ident: Ident,
-		value: Box<Expr>,
-		op: OpType,
-	},
+	/// General expression, e.g.
+	/// 
+	/// - `i + 5;`
+	/// - `fn();`
+	/// - `i = 5 + 1;`
+	/// - `i *= fn();`
+	Expr(Expr),
 	/// Preprocessor calls.
 	Preproc(Preproc),
 	/// If statement.
@@ -159,16 +298,22 @@ pub enum Stmt {
 		inc: Option<Expr>,
 		body: Vec<Stmt>,
 	},
+	/// While loop, i.e. `while ( /*..*/ ) { /*..*/ }`.
+	While { cond: Expr, body: Vec<Stmt> },
+	/// Do-While loop, i.e. `do { /*..*/ } while ( /*..*/ );`.
+	DoWhile { cond: Expr, body: Vec<Stmt> },
 	/// Return statement.
 	Return(Option<Expr>),
 	/// Break keyword.
 	Break,
+	/// Continue keyword.
+	Continue,
 	/// Discard keyword.
 	Discard,
 }
 
 /// A preprocessor directive.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub enum Preproc {
 	Version {
 		version: usize,
@@ -225,7 +370,7 @@ impl std::fmt::Display for Preproc {
 }
 
 /// The valid options for the behaviour setting in a `#extension` directive.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq)]
 pub enum ExtBehaviour {
 	Enable,
 	Require,
@@ -233,8 +378,206 @@ pub enum ExtBehaviour {
 	Disable,
 }
 
+/// A qualifier which is associated with a definition/declaration or a parameter.
+#[derive(Debug, Clone, PartialEq)]
+pub enum Qualifier {
+	Storage(Storage),
+	Layout(Vec<Layout>),
+	Interpolation(Interpolation),
+	Precision,
+	Invariant,
+	Precise,
+	Memory(Memory),
+}
+
+impl std::fmt::Display for Qualifier {
+	fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+		match self {
+			Self::Storage(s) => write!(
+				f,
+				"\x1b[95m{}\x1b[0m",
+				match s {
+					Storage::Const => "const",
+					Storage::In => "in",
+					Storage::Out => "out",
+					Storage::InOut => "inout",
+					Storage::Attribute => "attribute",
+					Storage::Uniform => "uniform",
+					Storage::Varying => "varying",
+					Storage::Buffer => "buffer",
+					Storage::Shared => "shared",
+					Storage::Centroid => "centroid",
+					Storage::Sample => "sample",
+					Storage::Patch => "patch",
+				}
+			),
+			Self::Layout(v) => {
+				write!(f, "\x1b[95mlayout\x1b[0m: [")?;
+				for l in v {
+					write!(f, "{l}, ")?;
+				}
+				write!(f, "]")
+			}
+			Self::Interpolation(i) => write!(
+				f,
+				"\x1b[95m{}\x1b[0m",
+				match i {
+					Interpolation::Smooth => "smooth",
+					Interpolation::Flat => "flat",
+					Interpolation::NoPerspective => "noperspective",
+				}
+			),
+			Self::Precision => write!(f, "\x1b[90;9mprecision\x1b[0m"),
+			Self::Invariant => write!(f, "\x1b[95minvariant\x1b[0m"),
+			Self::Precise => write!(f, "\x1b[95mprecise\x1b[0m"),
+			Self::Memory(m) => write!(
+				f,
+				"\x1b[95m{}\x1b[0m",
+				match m {
+					Memory::Coherent => "coherent",
+					Memory::Volatile => "volatile",
+					Memory::Restrict => "restrict",
+					Memory::Readonly => "readonly",
+					Memory::Writeonly => "writeonly",
+				}
+			),
+		}
+	}
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub enum Storage {
+	Const,
+	In,
+	Out,
+	InOut,
+	Attribute,
+	Uniform,
+	Varying,
+	Buffer,
+	Shared,
+	Centroid,
+	Sample,
+	Patch,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub enum Interpolation {
+	Smooth,
+	Flat,
+	NoPerspective,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub enum Memory {
+	Coherent,
+	Volatile,
+	Restrict,
+	Readonly,
+	Writeonly,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub enum Layout {
+	Shared,
+	Packed,
+	Std140,
+	Std430,
+	RowMajor,
+	ColumnMajor,
+	Binding(Expr),
+	Offset(Expr),
+	Align(Expr),
+	Location(Expr),
+	Component(Expr),
+	Index(Expr),
+	Points,
+	Lines,
+	Isolines,
+	Triangles,
+	Quads,
+	EqualSpacing,
+	FractionalEvenSpacing,
+	FractionalOddSpacing,
+	Clockwise,
+	CounterClockwise,
+	PointMode,
+	LinesAdjacency,
+	TrianglesAdjacency,
+	Invocations(Expr),
+	OriginUpperLeft,
+	PixelCenterInteger,
+	EarlyFragmentTests,
+	LocalSizeX(Expr),
+	LocalSizeY(Expr),
+	LocalSizeZ(Expr),
+	XfbBuffer(Expr),
+	XfbStride(Expr),
+	XfbOffset(Expr),
+	Vertices(Expr),
+	LineStrip,
+	TriangleStrip,
+	MaxVertices(Expr),
+	Stream(Expr),
+	DepthAny,
+	DepthGreater,
+	DepthLess,
+	DepthUnchanged,
+}
+
+impl std::fmt::Display for Layout {
+	fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+		match self {
+			Self::Shared => write!(f, "shared"),
+			Self::Packed => write!(f, "packed"),
+			Self::Std140 => write!(f, "std140"),
+			Self::Std430 => write!(f, "std430"),
+			Self::RowMajor => write!(f, "row-major"),
+			Self::ColumnMajor => write!(f, "column-major"),
+			Self::Binding(e) => write!(f, "binding = {e}"),
+			Self::Offset(e) => write!(f, "offset = {e}"),
+			Self::Align(e) => write!(f, "align = {e}"),
+			Self::Location(e) => write!(f, "location = {e}"),
+			Self::Component(e) => write!(f, "component = {e}"),
+			Self::Index(e) => write!(f, "index = {e}"),
+			Self::Points => write!(f, "points"),
+			Self::Lines => write!(f, "lines"),
+			Self::Isolines => write!(f, "isolines"),
+			Self::Triangles => write!(f, "triangles"),
+			Self::Quads => write!(f, "quads"),
+			Self::EqualSpacing => write!(f, "equal-spacing"),
+			Self::FractionalEvenSpacing => write!(f, "fragment-even-spacing"),
+			Self::FractionalOddSpacing => write!(f, "fragment-odd-spacing"),
+			Self::Clockwise => write!(f, "clockwise"),
+			Self::CounterClockwise => write!(f, "counter-clockwise"),
+			Self::PointMode => write!(f, "point-mode"),
+			Self::LinesAdjacency => write!(f, "lines-adjacency"),
+			Self::TrianglesAdjacency => write!(f, "triangles-adjacency"),
+			Self::Invocations(e) => write!(f, "invocations = {e}"),
+			Self::OriginUpperLeft => write!(f, "origin-upper-left"),
+			Self::PixelCenterInteger => write!(f, "pixel-center-integer"),
+			Self::EarlyFragmentTests => write!(f, "early-fragment-tests"),
+			Self::LocalSizeX(e) => write!(f, "local-size-x = {e}"),
+			Self::LocalSizeY(e) => write!(f, "local-size-y = {e}"),
+			Self::LocalSizeZ(e) => write!(f, "local-size-z = {e}"),
+			Self::XfbBuffer(e) => write!(f, "xfb-buffer = {e}"),
+			Self::XfbStride(e) => write!(f, "xfb-stride = {e}"),
+			Self::XfbOffset(e) => write!(f, "xfb-offset = {e}"),
+			Self::Vertices(e) => write!(f, "vertices = {e}"),
+			Self::LineStrip => write!(f, "line-strip"),
+			Self::TriangleStrip => write!(f, "triangle-strip"),
+			Self::MaxVertices(e) => write!(f, "max-vertices = {e}"),
+			Self::Stream(e) => write!(f, "stream = {e}"),
+			Self::DepthAny => write!(f, "depth-any"),
+			Self::DepthGreater => write!(f, "depth-greater"),
+			Self::DepthLess => write!(f, "depth-less"),
+			Self::DepthUnchanged => write!(f, "depth-unchanged"),
+		}
+	}
+}
+
 /// A literal value.
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, PartialEq)]
 pub enum Lit {
 	Bool(bool),
 	Int(i64),
@@ -256,6 +599,18 @@ impl std::fmt::Display for Lit {
 }
 
 impl Lit {
+	pub fn parse(token: &Token) -> Result<Self, ()> {
+		match token {
+			Token::Bool(b) => Ok(Self::Bool(*b)),
+			Token::Num {
+				num: s,
+				suffix,
+				type_,
+			} => Self::parse_num(&s, suffix.as_deref(), *type_),
+			_ => Err(()),
+		}
+	}
+
 	pub fn parse_num(
 		s: &str,
 		suffix: Option<&str>,
@@ -353,7 +708,7 @@ impl Lit {
 /// An identifier.
 ///
 /// This can be a variable name, function name, etc.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct Ident(pub String);
 
 impl std::fmt::Display for Ident {
@@ -363,27 +718,46 @@ impl std::fmt::Display for Ident {
 }
 
 impl Ident {
-	pub fn parse_name(s: &str) -> Result<Self, ()> {
-		// If the string matches a primitive, then it can't be a valid name.
-		match Primitive::parse(s) {
-			Ok(_) => Err(()),
-			Err(_) => Ok(Self(s.to_owned())),
-		}
-	}
+	fn from_expr(expr: &Expr) -> Option<Either<Ident, (Ident, Vec<ArrSize>)>> {
+		match expr {
+			Expr::Ident(i) => Some(Either::Left(i.clone())),
+			Expr::Index { item, i } => {
+				let mut current_item = item;
+				let mut stack = Vec::new();
+				stack.push(i.as_deref());
 
-	pub fn parse_struct(s: &str) -> Result<Self, ()> {
-		if s.len() >= 3 && &s[0..3] == "gl_" {
-			return Err(());
-		}
+				let ident = loop {
+					match current_item.as_ref() {
+						Expr::Ident(i) => {
+							break i.clone();
+						}
+						Expr::Index { item, i } => {
+							stack.push(i.as_deref());
+							current_item = item;
+						}
+						_ => return None,
+					};
+				};
 
-		Ok(Self(s.to_owned()))
+				// In the expression parser, the `[..]` brackets are right-associative, so the outer-most pair is
+				// at the top, and the inner-most is at the bottom. We want to reverse this to be in line with our
+				// intuition, i.e. 2nd dimension first, then 1st dimension.
+				stack.reverse();
+
+				Some(Either::Right((
+					ident,
+					stack.into_iter().map(|i| i.cloned()).collect(),
+				)))
+			}
+			_ => None,
+		}
 	}
 }
 
 /// A fundamental type.
 ///
 /// These are the most fundamental types in the language, on which all other types are composed.
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, PartialEq)]
 pub enum Fundamental {
 	Void,
 	Bool,
@@ -411,7 +785,7 @@ impl std::fmt::Display for Fundamental {
 /// ℹ The reason for the separation of this enum and the [`Fundamental`] enum is that all fundamental types (aside
 /// from `void`) can be either a scalar or an n-dimensional vector. Furthermore, any of the types in this enum can
 /// be on their own or as part of a n-dimensional array.
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, PartialEq)]
 pub enum Primitive {
 	/// A scalar primitive type.
 	Scalar(Fundamental),
@@ -427,6 +801,8 @@ pub enum Primitive {
 	/// - `0` - Column count,
 	/// - `1` - Row count.
 	DMatrix(usize, usize),
+	/// A struct type.
+	Struct(Ident),
 }
 
 impl std::fmt::Display for Primitive {
@@ -436,147 +812,193 @@ impl std::fmt::Display for Primitive {
 			Primitive::Vector(ff, size) => write!(f, "{ff}-vec-{size}"),
 			Primitive::Matrix(i, j) => write!(f, "mat-{i}x{j}"),
 			Primitive::DMatrix(i, j) => write!(f, "double-mat-{i}x{j}"),
+			Primitive::Struct(i) => write!(f, "struct: {i}"),
 		}
 	}
 }
 
 impl Primitive {
-	pub fn parse(s: &str) -> Result<Self, ()> {
-		match s {
-			"void" => Ok(Primitive::Scalar(Fundamental::Void)),
-			"bool" => Ok(Primitive::Scalar(Fundamental::Bool)),
-			"int" => Ok(Primitive::Scalar(Fundamental::Int)),
-			"uint" => Ok(Primitive::Scalar(Fundamental::Uint)),
-			"float" => Ok(Primitive::Scalar(Fundamental::Float)),
-			"double" => Ok(Primitive::Scalar(Fundamental::Double)),
-			"vec2" => Ok(Primitive::Vector(Fundamental::Float, 2)),
-			"vec3" => Ok(Primitive::Vector(Fundamental::Float, 3)),
-			"vec4" => Ok(Primitive::Vector(Fundamental::Float, 4)),
-			"bvec2" => Ok(Primitive::Vector(Fundamental::Bool, 2)),
-			"bvec3" => Ok(Primitive::Vector(Fundamental::Bool, 3)),
-			"bvec4" => Ok(Primitive::Vector(Fundamental::Bool, 4)),
-			"ivec2" => Ok(Primitive::Vector(Fundamental::Int, 2)),
-			"ivec3" => Ok(Primitive::Vector(Fundamental::Int, 3)),
-			"ivec4" => Ok(Primitive::Vector(Fundamental::Int, 4)),
-			"uvec2" => Ok(Primitive::Vector(Fundamental::Uint, 2)),
-			"uvec3" => Ok(Primitive::Vector(Fundamental::Uint, 3)),
-			"uvec4" => Ok(Primitive::Vector(Fundamental::Uint, 4)),
-			"dvec2" => Ok(Primitive::Vector(Fundamental::Double, 2)),
-			"dvec3" => Ok(Primitive::Vector(Fundamental::Double, 3)),
-			"dvec4" => Ok(Primitive::Vector(Fundamental::Double, 4)),
-			"mat2" => Ok(Primitive::Matrix(2, 2)),
-			"mat2x2" => Ok(Primitive::Matrix(2, 2)),
-			"mat2x3" => Ok(Primitive::Matrix(2, 3)),
-			"mat2x4" => Ok(Primitive::Matrix(2, 4)),
-			"mat3x2" => Ok(Primitive::Matrix(3, 2)),
-			"mat3" => Ok(Primitive::Matrix(3, 3)),
-			"mat3x3" => Ok(Primitive::Matrix(3, 3)),
-			"mat3x4" => Ok(Primitive::Matrix(3, 4)),
-			"mat4x2" => Ok(Primitive::Matrix(4, 2)),
-			"mat4x3" => Ok(Primitive::Matrix(4, 3)),
-			"mat4" => Ok(Primitive::Matrix(4, 4)),
-			"mat4x4" => Ok(Primitive::Matrix(4, 4)),
-			"dmat2" => Ok(Primitive::DMatrix(2, 2)),
-			"dmat2x2" => Ok(Primitive::DMatrix(2, 2)),
-			"dmat2x3" => Ok(Primitive::DMatrix(2, 3)),
-			"dmat2x4" => Ok(Primitive::DMatrix(2, 4)),
-			"dmat3x2" => Ok(Primitive::DMatrix(3, 2)),
-			"dmat3" => Ok(Primitive::DMatrix(3, 3)),
-			"dmat3x3" => Ok(Primitive::DMatrix(3, 3)),
-			"dmat3x4" => Ok(Primitive::DMatrix(3, 4)),
-			"dmat4x2" => Ok(Primitive::DMatrix(4, 2)),
-			"dmat4x3" => Ok(Primitive::DMatrix(4, 3)),
-			"dmat4" => Ok(Primitive::DMatrix(4, 4)),
-			"dmat4x4" => Ok(Primitive::DMatrix(4, 4)),
-			_ => Err(()),
+	pub fn parse(ident: &Ident) -> Self {
+		match ident.0.as_ref() {
+			"void" => Primitive::Scalar(Fundamental::Void),
+			"bool" => Primitive::Scalar(Fundamental::Bool),
+			"int" => Primitive::Scalar(Fundamental::Int),
+			"uint" => Primitive::Scalar(Fundamental::Uint),
+			"float" => Primitive::Scalar(Fundamental::Float),
+			"double" => Primitive::Scalar(Fundamental::Double),
+			"vec2" => Primitive::Vector(Fundamental::Float, 2),
+			"vec3" => Primitive::Vector(Fundamental::Float, 3),
+			"vec4" => Primitive::Vector(Fundamental::Float, 4),
+			"bvec2" => Primitive::Vector(Fundamental::Bool, 2),
+			"bvec3" => Primitive::Vector(Fundamental::Bool, 3),
+			"bvec4" => Primitive::Vector(Fundamental::Bool, 4),
+			"ivec2" => Primitive::Vector(Fundamental::Int, 2),
+			"ivec3" => Primitive::Vector(Fundamental::Int, 3),
+			"ivec4" => Primitive::Vector(Fundamental::Int, 4),
+			"uvec2" => Primitive::Vector(Fundamental::Uint, 2),
+			"uvec3" => Primitive::Vector(Fundamental::Uint, 3),
+			"uvec4" => Primitive::Vector(Fundamental::Uint, 4),
+			"dvec2" => Primitive::Vector(Fundamental::Double, 2),
+			"dvec3" => Primitive::Vector(Fundamental::Double, 3),
+			"dvec4" => Primitive::Vector(Fundamental::Double, 4),
+			"mat2" => Primitive::Matrix(2, 2),
+			"mat2x2" => Primitive::Matrix(2, 2),
+			"mat2x3" => Primitive::Matrix(2, 3),
+			"mat2x4" => Primitive::Matrix(2, 4),
+			"mat3x2" => Primitive::Matrix(3, 2),
+			"mat3" => Primitive::Matrix(3, 3),
+			"mat3x3" => Primitive::Matrix(3, 3),
+			"mat3x4" => Primitive::Matrix(3, 4),
+			"mat4x2" => Primitive::Matrix(4, 2),
+			"mat4x3" => Primitive::Matrix(4, 3),
+			"mat4" => Primitive::Matrix(4, 4),
+			"mat4x4" => Primitive::Matrix(4, 4),
+			"dmat2" => Primitive::DMatrix(2, 2),
+			"dmat2x2" => Primitive::DMatrix(2, 2),
+			"dmat2x3" => Primitive::DMatrix(2, 3),
+			"dmat2x4" => Primitive::DMatrix(2, 4),
+			"dmat3x2" => Primitive::DMatrix(3, 2),
+			"dmat3" => Primitive::DMatrix(3, 3),
+			"dmat3x3" => Primitive::DMatrix(3, 3),
+			"dmat3x4" => Primitive::DMatrix(3, 4),
+			"dmat4x2" => Primitive::DMatrix(4, 2),
+			"dmat4x3" => Primitive::DMatrix(4, 3),
+			"dmat4" => Primitive::DMatrix(4, 4),
+			"dmat4x4" => Primitive::DMatrix(4, 4),
+			_ => Primitive::Struct(ident.clone()),
 		}
-	}
-
-	pub fn parse_var(s: &str) -> Result<Self, ()> {
-		if s == "void" {
-			return Err(());
-		}
-
-		Self::parse(s)
 	}
 }
 
+type ArrSize = Option<Expr>;
+
 /// A built-in language type.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub enum Type {
 	/// A type which has only a single value.
-	Basic(Either<Primitive, Ident>),
+	Basic(Primitive),
 	/// An array type which contains zero or more values.
-	Array(Either<Primitive, Ident>, Option<Either<usize, Ident>>),
+	Array(Primitive, ArrSize),
 	/// A 2D array type which contains zero or more values.
 	///
-	/// - `1` - Size of array,
-	/// - `2` - Size of each element in array.
-	Array2D(
-		Either<Primitive, Ident>,
-		Option<Either<usize, Ident>>,
-		Option<Either<usize, Ident>>,
-	),
+	/// - `1` - Size of the outer array,
+	/// - `2` - Size of each inner array.
+	Array2D(Primitive, ArrSize, ArrSize),
 	/// An n-dimensional array type which contains zero or more values.
 	///
-	/// - `1` - Vec containing the sizes of arrays, starting with the top-most array.
-	ArrayND(Either<Primitive, Ident>, Vec<Option<Either<usize, Ident>>>),
+	/// - `1` - Vec containing the sizes of arrays, starting with the outer-most array.
+	ArrayND(Primitive, Vec<ArrSize>),
 }
 
 impl std::fmt::Display for Type {
 	fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-		fn format_ident(ident: &Either<Primitive, Ident>) -> String {
-			match ident {
-				Either::Left(p) => format!("\x1b[91m{p}\x1b[0m"),
-				Either::Right(i) => format!("{i}"),
-			}
-		}
-		fn format_size(size: &Option<Either<usize, Ident>>) -> String {
-			if let Some(inner) = size {
-				match inner {
-					Either::Left(n) => format!("{n}"),
-					Either::Right(i) => format!("{i}"),
-				}
+		fn format_size(i: &Option<Expr>) -> String {
+			if let Some(inner) = i {
+				format!("{inner}")
 			} else {
 				"".to_owned()
 			}
 		}
 		match self {
-			Type::Basic(t) => write!(f, "{}", format_ident(t)),
+			Type::Basic(t) => write!(f, "\x1b[91m{t}\x1b[0m"),
 			Type::Array(t, i) => {
-				write!(f, "{}[{}]", format_ident(t), format_size(i))
+				write!(f, "\x1b[91m{t}\x1b[0m[{}]", format_size(i))
 			}
 			Type::Array2D(t, i, j) => {
 				write!(
 					f,
-					"{}[{}][{}]",
-					format_ident(t),
+					"\x1b[91m{t}\x1b[0m[{}][{}]",
 					format_size(i),
 					format_size(j)
 				)
 			}
-			Type::ArrayND(t, v) => write!(f, "{}[{v:?}]", format_ident(t)),
+			Type::ArrayND(t, v) => {
+				write!(f, "\x1b[91m{t}\x1b[0m")?;
+				for v in v {
+					if let Some(expr) = v {
+						write!(f, "[{expr}]")?;
+					} else {
+						write!(f, "[]")?;
+					}
+				}
+				Ok(())
+			}
 		}
 	}
 }
 
 impl Type {
-	pub fn new(
-		ident: Either<Primitive, Ident>,
-		mut sizes: Vec<Option<Either<usize, Ident>>>,
-	) -> Self {
-		match sizes.len() {
-			0 => Self::Basic(ident),
-			1 => {
-				let i = sizes.remove(0);
-				Self::Array(ident, i)
+	pub fn parse(expr: &Expr) -> Option<Self> {
+		match expr {
+			Expr::Ident(i) => Some(Self::Basic(Primitive::parse(i))),
+			Expr::Index { item, i } => {
+				let mut current_item = item;
+				let mut stack = Vec::new();
+				stack.push(i.as_deref());
+
+				let primitive = loop {
+					match current_item.as_ref() {
+						Expr::Ident(i) => {
+							break Primitive::parse(i);
+						}
+						Expr::Index { item, i } => {
+							stack.push(i.as_deref());
+							current_item = item;
+						}
+						_ => return None,
+					};
+				};
+
+				// In the expression parser, the `[..]` brackets are right-associative, so the outer-most pair is
+				// at the top, and the inner-most is at the bottom. We want to reverse this to be in line with our
+				// intuition, i.e. 2nd dimension first, then 1st dimension.
+				stack.reverse();
+
+				if stack.len() == 1 {
+					Some(Self::Array(primitive, stack[0].cloned()))
+				} else if stack.len() == 2 {
+					Some(Self::Array2D(
+						primitive,
+						stack[0].cloned(),
+						stack[1].cloned(),
+					))
+				} else {
+					Some(Self::ArrayND(
+						primitive,
+						stack.into_iter().map(|i| i.cloned()).collect(),
+					))
+				}
 			}
-			2 => {
-				let i = sizes.remove(0);
-				let j = sizes.remove(0);
-				Self::Array2D(ident, i, j)
+			_ => None,
+		}
+	}
+
+	pub fn add_var_decl_arr_size(self, mut sizes: Vec<ArrSize>) -> Self {
+		let primitive = match self {
+			Self::Basic(p) => p,
+			Self::Array(p, i) => {
+				sizes.push(i);
+				p
 			}
-			_ => Self::ArrayND(ident, sizes),
+			Self::Array2D(p, i, j) => {
+				sizes.push(i);
+				sizes.push(j);
+				p
+			}
+			Self::ArrayND(p, mut v) => {
+				sizes.append(&mut v);
+				p
+			}
+		};
+
+		if sizes.len() == 0 {
+			Self::Basic(primitive)
+		} else if sizes.len() == 1 {
+			Self::Array(primitive, sizes.remove(0))
+		} else if sizes.len() == 2 {
+			Self::Array2D(primitive, sizes.remove(0), sizes.remove(0))
+		} else {
+			Self::ArrayND(primitive, sizes)
 		}
 	}
 }

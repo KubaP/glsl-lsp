@@ -1,8 +1,14 @@
-#![allow(unused)]
-// Note: The `Hash` derives are only needed because of the chumsky parser.
+use crate::{
+	ast::{Expr, Layout},
+	span::{Span, Spanned},
+	Either,
+};
 
-/// Concrete syntax tree tokens.
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+#[cfg(test)]
+use crate::span::span;
+
+/// Lexer tokens.
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Token {
 	Num {
 		num: String,
@@ -18,7 +24,7 @@ pub enum Token {
 		contains_eof: bool,
 	},
 	Invalid(char),
-	// Keywords
+	// General keywords
 	If,
 	Else,
 	For,
@@ -34,26 +40,35 @@ pub enum Token {
 	Struct,
 	Subroutine,
 	Reserved(String),
-	// Qualifiers
+	// Qualifier keywords
+	Const,
 	In,
 	Out,
 	InOut,
+	Attribute,
 	Uniform,
+	Varying,
 	Buffer,
-	Const,
-	Invariant,
-	Interpolation,
-	Precision,
+	Shared,
+	Centroid,
+	Sample,
+	Patch,
 	Layout,
-	Location,
-	Component,
-	FragCoord,
-	FragDepth,
-	Index,
-	FragTest,
+	Flat,
+	Smooth,
+	NoPerspective,
+	HighP,
+	MediumP,
+	LowP,
+	Invariant,
+	Precise,
+	Coherent,
+	Volatile,
+	Restrict,
+	Readonly,
+	Writeonly,
 	// Punctuation
-	Op(OpType),
-	Eq,
+	Op(Op),
 	Comma,
 	Dot,
 	Semi,
@@ -67,8 +82,167 @@ pub enum Token {
 	RBrace,
 }
 
+impl Token {
+	/// Returns whether the current `Token` is a keyword that can start a statement.
+	pub fn starts_statement(&self) -> bool {
+		match self {
+			Self::If
+			| Self::Else
+			| Self::For
+			| Self::Do
+			| Self::While
+			| Self::Continue
+			| Self::Switch
+			| Self::Case
+			| Self::Default
+			| Self::Break
+			| Self::Return
+			| Self::Discard
+			| Self::Struct
+			| Self::Subroutine
+			| Self::Reserved(_)
+			| Self::Const
+			| Self::In
+			| Self::Out
+			| Self::InOut
+			| Self::Attribute
+			| Self::Uniform
+			| Self::Varying
+			| Self::Buffer
+			| Self::Shared
+			| Self::Centroid
+			| Self::Sample
+			| Self::Patch
+			| Self::Layout
+			| Self::Flat
+			| Self::Smooth
+			| Self::NoPerspective
+			| Self::HighP
+			| Self::MediumP
+			| Self::LowP
+			| Self::Invariant
+			| Self::Precise
+			| Self::Coherent
+			| Self::Volatile
+			| Self::Restrict
+			| Self::Readonly
+			| Self::Writeonly => true,
+			_ => false,
+		}
+	}
+
+	/// Returns whether the current `Token` is a qualifier, or in the case of `layout`, whether it starts a
+	/// qualifier (since a layout has a parenthesis group after it).
+	pub fn is_qualifier(&self) -> bool {
+		match self {
+			Self::Const
+			| Self::In
+			| Self::Out
+			| Self::InOut
+			| Self::Attribute
+			| Self::Uniform
+			| Self::Varying
+			| Self::Buffer
+			| Self::Shared
+			| Self::Centroid
+			| Self::Sample
+			| Self::Patch
+			| Self::Layout
+			| Self::Flat
+			| Self::Smooth
+			| Self::NoPerspective
+			| Self::HighP
+			| Self::MediumP
+			| Self::LowP
+			| Self::Invariant
+			| Self::Precise
+			| Self::Coherent
+			| Self::Volatile
+			| Self::Restrict
+			| Self::Readonly
+			| Self::Writeonly => true,
+			_ => false,
+		}
+	}
+
+	/// Tries to convert the current `Token` into a [`Layout`] identifier.
+	/// 
+	/// If the token matches a layout identifier that doesn't take an expression, e.g. `early_fragment_tests`, then
+	/// `Left` is returned with the converted `Layout`. If the token matches a layout identifier that takes an
+	/// expression, e.g. `location = n`, then `Right` is returned with a constructor for the appropriate `Layout`
+	/// (the constructor takes the expression once that has been parsed).
+	/// 
+	/// If `None` is returned, the current token is not a valid layout identifier.
+	pub fn to_layout(&self) -> Option<Either<Layout, fn(Expr) -> Layout>> {
+		match self {
+			// `shared` is a keyword in all circumstances, apart from when it is used as a qualifier, hence it's a
+			// distinct variant rather than a string.
+			Self::Shared => Some(Either::Left(Layout::Shared)),
+			Self::Ident(s) => match s.as_ref() {
+				"packed" => Some(Either::Left(Layout::Packed)),
+				"std140" => Some(Either::Left(Layout::Std140)),
+				"std430" => Some(Either::Left(Layout::Std430)),
+				"row_major" => Some(Either::Left(Layout::RowMajor)),
+				"column_major" => Some(Either::Left(Layout::ColumnMajor)),
+				"binding" => Some(Either::Right(Layout::Binding)),
+				"offset" => Some(Either::Right(Layout::Offset)),
+				"align" => Some(Either::Right(Layout::Align)),
+				"location" => Some(Either::Right(Layout::Location)),
+				"component" => Some(Either::Right(Layout::Component)),
+				"index" => Some(Either::Right(Layout::Index)),
+				"points" => Some(Either::Left(Layout::Points)),
+				"lines" => Some(Either::Left(Layout::Lines)),
+				"isolines" => Some(Either::Left(Layout::Isolines)),
+				"triangles" => Some(Either::Left(Layout::Triangles)),
+				"quads" => Some(Either::Left(Layout::Quads)),
+				"equal_spacing" => Some(Either::Left(Layout::EqualSpacing)),
+				"fractional_even_spacing" => {
+					Some(Either::Left(Layout::FractionalEvenSpacing))
+				}
+				"fractional_odd_spacing" => {
+					Some(Either::Left(Layout::FractionalOddSpacing))
+				}
+				"cw" => Some(Either::Left(Layout::Clockwise)),
+				"ccw" => Some(Either::Left(Layout::CounterClockwise)),
+				"point_mode" => Some(Either::Left(Layout::PointMode)),
+				"line_adjacency" => Some(Either::Left(Layout::LinesAdjacency)),
+				"triangle_adjacency" => {
+					Some(Either::Left(Layout::TrianglesAdjacency))
+				}
+				"invocations" => Some(Either::Right(Layout::Invocations)),
+				"origin_upper_left" => {
+					Some(Either::Left(Layout::OriginUpperLeft))
+				}
+				"pixel_center_integer" => {
+					Some(Either::Left(Layout::PixelCenterInteger))
+				}
+				"early_fragment_tests" => {
+					Some(Either::Left(Layout::EarlyFragmentTests))
+				}
+				"local_size_x" => Some(Either::Right(Layout::LocalSizeX)),
+				"local_size_y" => Some(Either::Right(Layout::LocalSizeY)),
+				"local_size_z" => Some(Either::Right(Layout::LocalSizeZ)),
+				"xfb_buffer" => Some(Either::Right(Layout::XfbBuffer)),
+				"xfb_stride" => Some(Either::Right(Layout::XfbStride)),
+				"xfb_offset" => Some(Either::Right(Layout::XfbOffset)),
+				"vertices" => Some(Either::Right(Layout::Vertices)),
+				"line_strip" => Some(Either::Left(Layout::LineStrip)),
+				"triangle_strip" => Some(Either::Left(Layout::TriangleStrip)),
+				"max_vertices" => Some(Either::Right(Layout::MaxVertices)),
+				"stream" => Some(Either::Right(Layout::Stream)),
+				"depth_any" => Some(Either::Left(Layout::DepthAny)),
+				"depth_greater" => Some(Either::Left(Layout::DepthGreater)),
+				"depth_less" => Some(Either::Left(Layout::DepthLess)),
+				"depth_unchanged" => Some(Either::Left(Layout::DepthUnchanged)),
+				_ => None,
+			},
+			_ => None,
+		}
+	}
+}
+
 /// The different number types/notations.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum NumType {
 	Dec,
 	Oct,
@@ -77,8 +251,8 @@ pub enum NumType {
 }
 
 /// Mathematical and comparison operators.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub enum OpType {
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Op {
 	// Maths
 	Add,
 	Sub,
@@ -90,6 +264,10 @@ pub enum OpType {
 	Xor,
 	LShift,
 	RShift,
+	Flip,
+	Eq,
+	AddAdd,
+	SubSub,
 	AddEq,
 	SubEq,
 	MulEq,
@@ -100,12 +278,11 @@ pub enum OpType {
 	XorEq,
 	LShiftEq,
 	RShiftEq,
-	AddAdd,
-	SubSub,
-	Flip,
+	//
 	// Comparison
 	EqEq,
 	NotEq,
+	Not,
 	Gt,
 	Lt,
 	Ge,
@@ -113,10 +290,45 @@ pub enum OpType {
 	AndAnd,
 	OrOr,
 	XorXor,
-	Not,
+	//
+	// Shunting Yard
+	//
+	// These variants are never constructed by the Lexer. These are constructed when the shunting yard is looking
+	// for prefix/postfix operators and comes across one of the above ambiguous operators. It gets converted into
+	// these variants depending on the state of the yard to make the distinction clear when building the ast.
+	//
+	// The reason these variants are in this type is because the shunting yard stores this type in its stack. It
+	// makes more sense to add these variants to this type rather than to create a new subtype which includes all
+	// of the above plus these variants. Furthermore these operators in the shunting yard stack are later converted
+	// to `ast::Expr` which stores this type.
+	Neg,
+	AddAddPre,
+	AddAddPost,
+	SubSubPre,
+	SubSubPost,
+	/// Parenthesis group.
+	Paren,
+	/// Index operator. `bool` notes whether there is a node within the `[...]` brackets.
+	Index(bool),
+	/// Object access operator.
+	ObjAccess,
+	/// Function call. Consumes the `usize` amount of nodes as arguments for the function call. The first node is
+	/// guaranteed to be an `Expr::Ident` which is the function identifier.
+	FnCall(usize),
+	/// Initializer list. Consumes the `usize` amount of nodes as arguments for the initializer list.
+	Init(usize),
+	/// Array constructor. Consumes the `usize` amount of nodes as arguments for the function call. The first node
+	/// is guaranteed to be a `Expr::Index` which is the array constructor type.
+	ArrInit(usize),
+	/// A list, e.g. `a, b`. Consumes the `usize` amount of nodes as arguments for the list.
+	List(usize),
+	// The following are never present in the final output of the shunting yard; just stored temporarily.
+	BracketStart,
+	FnStart,
+	IndexStart,
+	InitStart,
+	ArrInitStart,
 }
-
-pub type Spanned<T> = (T, std::ops::Range<usize>);
 
 /// A lexer which allows stepping through a string character by character.
 struct Lexer {
@@ -223,6 +435,7 @@ fn is_number_start(c: &char) -> bool {
 }
 
 /// Whether the character is allowed to be part of an octal number.
+#[allow(unused)]
 fn is_octal(c: &char) -> bool {
 	match c {
 		'0' | '1' | '2' | '3' | '4' | '5' | '6' | '7' => true,
@@ -252,31 +465,31 @@ macro_rules! match_op {
 
 /// Matches punctuation.
 fn match_punctuation(lexer: &mut Lexer) -> Token {
-	match_op!(lexer, "<<=", Token::Op(OpType::LShiftEq));
-	match_op!(lexer, ">>=", Token::Op(OpType::RShiftEq));
-	match_op!(lexer, "==", Token::Op(OpType::EqEq));
-	match_op!(lexer, "!=", Token::Op(OpType::NotEq));
-	match_op!(lexer, ">=", Token::Op(OpType::Ge));
-	match_op!(lexer, "<=", Token::Op(OpType::Le));
-	match_op!(lexer, "&&", Token::Op(OpType::AndAnd));
-	match_op!(lexer, "||", Token::Op(OpType::OrOr));
-	match_op!(lexer, "++", Token::Op(OpType::AddAdd));
-	match_op!(lexer, "--", Token::Op(OpType::SubSub));
-	match_op!(lexer, "<<", Token::Op(OpType::LShift));
-	match_op!(lexer, ">>", Token::Op(OpType::RShift));
-	match_op!(lexer, "+=", Token::Op(OpType::AddEq));
-	match_op!(lexer, "-=", Token::Op(OpType::SubEq));
-	match_op!(lexer, "*=", Token::Op(OpType::MulEq));
-	match_op!(lexer, "/=", Token::Op(OpType::DivEq));
-	match_op!(lexer, "%=", Token::Op(OpType::RemEq));
-	match_op!(lexer, "&=", Token::Op(OpType::AndEq));
-	match_op!(lexer, "|=", Token::Op(OpType::OrEq));
-	match_op!(lexer, "^^", Token::Op(OpType::XorXor));
-	match_op!(lexer, "^=", Token::Op(OpType::XorEq));
+	match_op!(lexer, "<<=", Token::Op(Op::LShiftEq));
+	match_op!(lexer, ">>=", Token::Op(Op::RShiftEq));
+	match_op!(lexer, "==", Token::Op(Op::EqEq));
+	match_op!(lexer, "!=", Token::Op(Op::NotEq));
+	match_op!(lexer, ">=", Token::Op(Op::Ge));
+	match_op!(lexer, "<=", Token::Op(Op::Le));
+	match_op!(lexer, "&&", Token::Op(Op::AndAnd));
+	match_op!(lexer, "||", Token::Op(Op::OrOr));
+	match_op!(lexer, "++", Token::Op(Op::AddAdd));
+	match_op!(lexer, "--", Token::Op(Op::SubSub));
+	match_op!(lexer, "<<", Token::Op(Op::LShift));
+	match_op!(lexer, ">>", Token::Op(Op::RShift));
+	match_op!(lexer, "+=", Token::Op(Op::AddEq));
+	match_op!(lexer, "-=", Token::Op(Op::SubEq));
+	match_op!(lexer, "*=", Token::Op(Op::MulEq));
+	match_op!(lexer, "/=", Token::Op(Op::DivEq));
+	match_op!(lexer, "%=", Token::Op(Op::RemEq));
+	match_op!(lexer, "&=", Token::Op(Op::AndEq));
+	match_op!(lexer, "|=", Token::Op(Op::OrEq));
+	match_op!(lexer, "^^", Token::Op(Op::XorXor));
+	match_op!(lexer, "^=", Token::Op(Op::XorEq));
+	match_op!(lexer, "=", Token::Op(Op::Eq));
 	match_op!(lexer, ";", Token::Semi);
 	match_op!(lexer, ".", Token::Dot);
 	match_op!(lexer, ",", Token::Comma);
-	match_op!(lexer, "=", Token::Eq);
 	match_op!(lexer, "(", Token::LParen);
 	match_op!(lexer, ")", Token::RParen);
 	match_op!(lexer, "[", Token::LBracket);
@@ -284,19 +497,19 @@ fn match_punctuation(lexer: &mut Lexer) -> Token {
 	match_op!(lexer, "{", Token::LBrace);
 	match_op!(lexer, "}", Token::RBrace);
 	match_op!(lexer, ":", Token::Colon);
-	match_op!(lexer, "+", Token::Op(OpType::Add));
-	match_op!(lexer, "-", Token::Op(OpType::Sub));
-	match_op!(lexer, "*", Token::Op(OpType::Mul));
-	match_op!(lexer, "/", Token::Op(OpType::Div));
-	match_op!(lexer, ">", Token::Op(OpType::Gt));
-	match_op!(lexer, "<", Token::Op(OpType::Lt));
-	match_op!(lexer, "!", Token::Op(OpType::Not));
-	match_op!(lexer, "~", Token::Op(OpType::Flip));
+	match_op!(lexer, "+", Token::Op(Op::Add));
+	match_op!(lexer, "-", Token::Op(Op::Sub));
+	match_op!(lexer, "*", Token::Op(Op::Mul));
+	match_op!(lexer, "/", Token::Op(Op::Div));
+	match_op!(lexer, ">", Token::Op(Op::Gt));
+	match_op!(lexer, "<", Token::Op(Op::Lt));
+	match_op!(lexer, "!", Token::Op(Op::Not));
+	match_op!(lexer, "~", Token::Op(Op::Flip));
 	match_op!(lexer, "?", Token::Question);
-	match_op!(lexer, "%", Token::Op(OpType::Rem));
-	match_op!(lexer, "&", Token::Op(OpType::And));
-	match_op!(lexer, "|", Token::Op(OpType::Or));
-	match_op!(lexer, "^", Token::Op(OpType::Xor));
+	match_op!(lexer, "%", Token::Op(Op::Rem));
+	match_op!(lexer, "&", Token::Op(Op::And));
+	match_op!(lexer, "|", Token::Op(Op::Or));
+	match_op!(lexer, "^", Token::Op(Op::Xor));
 	unreachable!()
 }
 
@@ -322,30 +535,32 @@ fn match_word(str: String) -> Token {
 		"struct" => Token::Struct,
 		"subroutine" => Token::Subroutine,
 		// Qualifiers
+		"const" => Token::Const,
 		"in" => Token::In,
 		"out" => Token::Out,
 		"inout" => Token::InOut,
+		"attribute" => Token::Attribute,
 		"uniform" => Token::Uniform,
+		"varying" => Token::Varying,
 		"buffer" => Token::Buffer,
-		"const" => Token::Const,
-		"invariant" => Token::Invariant,
-		"highp" => Token::Precision,
-		"mediump" => Token::Precision,
-		"lowp" => Token::Precision,
-		"flat" => Token::Interpolation,
-		"smooth" => Token::Interpolation,
-		"noperspective" => Token::Interpolation,
+		"shared" => Token::Shared,
+		"centroid" => Token::Centroid,
+		"sample" => Token::Sample,
+		"patch" => Token::Patch,
 		"layout" => Token::Layout,
-		"location" => Token::Location,
-		"component" => Token::Component,
-		"origin_upper_left" => Token::FragCoord,
-		"pixel_center_integer" => Token::FragCoord,
-		"depth_any" => Token::FragDepth,
-		"depth_greater" => Token::FragDepth,
-		"depth_less" => Token::FragDepth,
-		"depth_unchanged" => Token::FragDepth,
-		"index" => Token::Index,
-		"early_fragment_test" => Token::FragTest,
+		"flat" => Token::Flat,
+		"smooth" => Token::Smooth,
+		"noperspective" => Token::NoPerspective,
+		"highp" => Token::HighP,
+		"mediump" => Token::MediumP,
+		"lowp" => Token::LowP,
+		"invariant" => Token::Invariant,
+		"precise" => Token::Precise,
+		"coherent" => Token::Coherent,
+		"volatile" => Token::Volatile,
+		"restrict" => Token::Restrict,
+		"readonly" => Token::Readonly,
+		"writeonly" => Token::Writeonly,
 		// Reserved
 		"common" | "partition" | "active" | "asm" | "class" | "union"
 		| "enum" | "typedef" | "template" | "this" | "resource" | "goto"
@@ -421,26 +636,20 @@ fn match_line_continuator(buffer: &mut String, lexer: &mut Lexer) -> bool {
 	}
 }
 
-/// The current state when parsing a number.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum NumState {
-	/// Parsing either an octal or decimal or a floating point number (depending on what follows).
-	Zero,
-	/// Parsing a hexadecimal number.
-	Hex,
-	/// Parsing a decimal number.
-	Dec,
-	/// Parsing a decimal floating point number.
-	Float,
-}
-
 /// Performs lexical analysis of the source string and returns a vector of [`Token`]s.
+///
+/// This lexer uses the "Maximal munch" principle to greedily create Tokens. This means the longest possible valid
+/// token is always produced. Some examples:
+///
+/// ```text
+/// i---7     lexes as (--) (-)
+/// i-----7   lexes as (--) (--) (-)
+/// i-- - --7 lexes as (--) (-) (--)
+/// ```
 pub fn lexer(source: &str) -> Vec<Spanned<Token>> {
 	let mut tokens = Vec::new();
 	let mut lexer = Lexer::new(source);
-	let mut buffer_start: usize = 0;
 	let mut buffer = String::new();
-	let mut current = ' ';
 	let mut can_start_directive = true;
 
 	// Any time we want to test the next character, we first `peek()` to see what it is. If it is valid in whatever
@@ -453,9 +662,9 @@ pub fn lexer(source: &str) -> Vec<Spanned<Token>> {
 	// makes it easy to keep track of when we are allowed to parse a directive, since they must exist at the start
 	// of a line barring any whitespace.
 	while !lexer.is_done() {
-		buffer_start = lexer.position();
+		let buffer_start = lexer.position();
 		// Peek the current character.
-		current = match lexer.peek() {
+		let mut current = match lexer.peek() {
 			Some(c) => c,
 			None => {
 				break;
@@ -475,7 +684,10 @@ pub fn lexer(source: &str) -> Vec<Spanned<Token>> {
 						// We have reached the end of the source string, and therefore the end of the word.
 						tokens.push((
 							match_word(std::mem::take(&mut buffer)),
-							buffer_start..lexer.position(),
+							Span {
+								start: buffer_start,
+								end: lexer.position(),
+							},
 						));
 						break 'word;
 					}
@@ -491,13 +703,30 @@ pub fn lexer(source: &str) -> Vec<Spanned<Token>> {
 					// consuming it.
 					tokens.push((
 						match_word(std::mem::take(&mut buffer)),
-						buffer_start..lexer.position(),
+						Span {
+							start: buffer_start,
+							end: lexer.position(),
+						},
 					));
 					break 'word;
 				}
 			}
 		} else if is_number_start(&current) {
+			/// The current state when parsing a number.
+			#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+			enum NumState {
+				/// Parsing either an octal or decimal or a floating point number (depending on what follows).
+				Zero,
+				/// Parsing a hexadecimal number.
+				Hex,
+				/// Parsing a decimal number.
+				Dec,
+				/// Parsing a decimal floating point number.
+				Float,
+			}
+
 			can_start_directive = false;
+
 			// We don't need to worry about having a word character before this first digit character because if
 			// there was a word character before, this digit character would be getting parsed as part of the
 			// word in the first place, so this branch would not be executing.
@@ -535,15 +764,26 @@ pub fn lexer(source: &str) -> Vec<Spanned<Token>> {
 						// We have a `.` followed by a character that is not a digit, so this must be a punctuation
 						// token. We consume the character because otherwise we'd end up back in this branch again.
 						lexer.advance();
-						tokens
-							.push((Token::Dot, buffer_start..lexer.position()));
+						tokens.push((
+							Token::Dot,
+							Span {
+								start: buffer_start,
+								end: lexer.position(),
+							},
+						));
 						continue;
 					}
 				} else {
 					// We have a `.` followed by the end of the source string, so this must be a punctuation token.
 					// We consume the character because otherwise we'd end up back in this branch again.
 					lexer.advance();
-					tokens.push((Token::Dot, buffer_start..lexer.position()));
+					tokens.push((
+						Token::Dot,
+						Span {
+							start: buffer_start,
+							end: lexer.position(),
+						},
+					));
 					continue;
 				}
 			} else {
@@ -578,7 +818,10 @@ pub fn lexer(source: &str) -> Vec<Spanned<Token>> {
 								suffix: suffix_buffer,
 								type_,
 							},
-							buffer_start..lexer.position(),
+							Span {
+								start: buffer_start,
+								end: lexer.position(),
+							},
 						));
 						break 'number;
 					}
@@ -594,11 +837,17 @@ pub fn lexer(source: &str) -> Vec<Spanned<Token>> {
 							suffix: suffix_buffer,
 							type_: NumType::Hex,
 						},
-						buffer_start..lexer.position(),
+						Span {
+							start: buffer_start,
+							end: lexer.position(),
+						},
 					));
 					tokens.push((
 						Token::Dot,
-						lexer.position()..lexer.position() + 1,
+						Span {
+							start: lexer.position(),
+							end: lexer.position() + 1,
+						},
 					));
 					lexer.advance();
 					break 'number;
@@ -626,11 +875,17 @@ pub fn lexer(source: &str) -> Vec<Spanned<Token>> {
 							suffix: suffix_buffer,
 							type_,
 						},
-						buffer_start..lexer.position(),
+						Span {
+							start: buffer_start,
+							end: lexer.position(),
+						},
 					));
 					tokens.push((
 						Token::Dot,
-						lexer.position()..lexer.position() + 1,
+						Span {
+							start: lexer.position(),
+							end: lexer.position() + 1,
+						},
 					));
 					lexer.advance();
 					break 'number;
@@ -670,11 +925,17 @@ pub fn lexer(source: &str) -> Vec<Spanned<Token>> {
 							suffix: suffix_buffer,
 							type_,
 						},
-						buffer_start..lexer.position(),
+						Span {
+							start: buffer_start,
+							end: lexer.position(),
+						},
 					));
 					tokens.push((
 						Token::Dot,
-						lexer.position()..lexer.position() + 1,
+						Span {
+							start: lexer.position(),
+							end: lexer.position() + 1,
+						},
 					));
 					lexer.advance();
 					break 'number;
@@ -730,7 +991,10 @@ pub fn lexer(source: &str) -> Vec<Spanned<Token>> {
 											suffix: suffix_buffer,
 											type_,
 										},
-										buffer_start..lexer.position(),
+										Span {
+											start: buffer_start,
+											end: lexer.position(),
+										},
 									));
 									break 'number;
 								}
@@ -757,7 +1021,10 @@ pub fn lexer(source: &str) -> Vec<Spanned<Token>> {
 										suffix: suffix_buffer,
 										type_,
 									},
-									buffer_start..lexer.position(),
+									Span {
+										start: buffer_start,
+										end: lexer.position(),
+									},
 								));
 								break 'number;
 							}
@@ -821,7 +1088,10 @@ pub fn lexer(source: &str) -> Vec<Spanned<Token>> {
 							suffix: suffix_buffer,
 							type_,
 						},
-						buffer_start..lexer.position(),
+						Span {
+							start: buffer_start,
+							end: lexer.position(),
+						},
 					));
 					break 'number;
 				}
@@ -841,7 +1111,10 @@ pub fn lexer(source: &str) -> Vec<Spanned<Token>> {
 									str: std::mem::take(&mut buffer),
 									contains_eof: false,
 								},
-								buffer_start..lexer.position(),
+								Span {
+									start: buffer_start,
+									end: lexer.position(),
+								},
 							));
 							break 'line_comment;
 						}
@@ -856,7 +1129,10 @@ pub fn lexer(source: &str) -> Vec<Spanned<Token>> {
 								str: std::mem::take(&mut buffer),
 								contains_eof: false,
 							},
-							buffer_start..lexer.position(),
+							Span {
+								start: buffer_start,
+								end: lexer.position(),
+							},
 						));
 						break 'line_comment;
 					} else {
@@ -875,7 +1151,10 @@ pub fn lexer(source: &str) -> Vec<Spanned<Token>> {
 								str: std::mem::take(&mut buffer),
 								contains_eof: false,
 							},
-							buffer_start..lexer.position(),
+							Span {
+								start: buffer_start,
+								end: lexer.position(),
+							},
 						));
 						break 'comment;
 					}
@@ -891,7 +1170,10 @@ pub fn lexer(source: &str) -> Vec<Spanned<Token>> {
 								str: std::mem::take(&mut buffer),
 								contains_eof: true,
 							},
-							buffer_start..lexer.position(),
+							Span {
+								start: buffer_start,
+								end: lexer.position(),
+							},
 						));
 						break 'comment;
 					}
@@ -899,7 +1181,10 @@ pub fn lexer(source: &str) -> Vec<Spanned<Token>> {
 			} else {
 				tokens.push((
 					match_punctuation(&mut lexer),
-					buffer_start..lexer.position(),
+					Span {
+						start: buffer_start,
+						end: lexer.position(),
+					},
 				));
 			}
 		} else if current.is_whitespace() {
@@ -920,7 +1205,10 @@ pub fn lexer(source: &str) -> Vec<Spanned<Token>> {
 						// We have reached the end of the source string, and therefore the end of the comment.
 						tokens.push((
 							Token::Directive(std::mem::take(&mut buffer)),
-							buffer_start..lexer.position(),
+							Span {
+								start: buffer_start,
+								end: lexer.position(),
+							},
 						));
 						break 'directive;
 					}
@@ -932,7 +1220,10 @@ pub fn lexer(source: &str) -> Vec<Spanned<Token>> {
 					// We have an EOL without a line-continuator, so therefore this is the end of the directive.
 					tokens.push((
 						Token::Directive(std::mem::take(&mut buffer)),
-						buffer_start..lexer.position(),
+						Span {
+							start: buffer_start,
+							end: lexer.position(),
+						},
 					));
 					break 'directive;
 				} else {
@@ -946,7 +1237,10 @@ pub fn lexer(source: &str) -> Vec<Spanned<Token>> {
 			lexer.advance();
 			tokens.push((
 				Token::Invalid(current),
-				buffer_start..lexer.position(),
+				Span {
+					start: buffer_start,
+					end: lexer.position(),
+				},
 			));
 		}
 	}
@@ -958,42 +1252,42 @@ pub fn lexer(source: &str) -> Vec<Spanned<Token>> {
 #[rustfmt::skip]
 fn spans() {
 	// Identifiers/keywords
-	assert_eq!(lexer("return"), vec![(Token::Return, 0..6)]);
-	assert_eq!(lexer("break "), vec![(Token::Break, 0..5)]);
-	assert_eq!(lexer("return break"), vec![(Token::Return, 0..6), (Token::Break, 7..12)]);
+	assert_eq!(lexer("return"), vec![(Token::Return, span(0, 6))]);
+	assert_eq!(lexer("break "), vec![(Token::Break, span(0, 5))]);
+	assert_eq!(lexer("return break"), vec![(Token::Return, span(0, 6)), (Token::Break, span(7, 12))]);
 	// Punctuation
-	assert_eq!(lexer(";"), vec![(Token::Semi, 0..1)]);
-	assert_eq!(lexer(": "), vec![(Token::Colon, 0..1)]);
-	assert_eq!(lexer("; :"), vec![(Token::Semi, 0..1), (Token::Colon, 2..3)]);
+	assert_eq!(lexer(";"), vec![(Token::Semi, span(0, 1))]);
+	assert_eq!(lexer(": "), vec![(Token::Colon, span(0, 1))]);
+	assert_eq!(lexer("; :"), vec![(Token::Semi, span(0, 1)), (Token::Colon, span(2, 3))]);
 	// Comments
-	assert_eq!(lexer("// comment"), vec![(Token::Comment { str: " comment".into(), contains_eof: false }, 0..10)]);
-	assert_eq!(lexer("/* a */"), vec![(Token::Comment { str: " a ".into(), contains_eof: false }, 0..7)]);
-	assert_eq!(lexer("/* a"), vec![(Token::Comment { str: " a".into(), contains_eof: true }, 0..4)]);
+	assert_eq!(lexer("// comment"), vec![(Token::Comment { str: " comment".into(), contains_eof: false }, span(0, 10))]);
+	assert_eq!(lexer("/* a */"), vec![(Token::Comment { str: " a ".into(), contains_eof: false }, span(0, 7))]);
+	assert_eq!(lexer("/* a"), vec![(Token::Comment { str: " a".into(), contains_eof: true }, span(0, 4))]);
 	// Directive
-	assert_eq!(lexer("#dir"), vec![(Token::Directive("dir".into()), 0..4)]);
-	assert_eq!(lexer("#dir a "), vec![(Token::Directive("dir a ".into()), 0..7)]);
+	assert_eq!(lexer("#dir"), vec![(Token::Directive("dir".into()), span(0, 4))]);
+	assert_eq!(lexer("#dir a "), vec![(Token::Directive("dir a ".into()), span(0, 7))]);
 	// Invalid
-	assert_eq!(lexer("@"), vec![(Token::Invalid('@'), 0..1)]);
-	assert_eq!(lexer("¬"), vec![(Token::Invalid('¬'), 0..1)]);
-	assert_eq!(lexer("@  ¬"), vec![(Token::Invalid('@'), 0..1), (Token::Invalid('¬'), 3..4)]);
+	assert_eq!(lexer("@"), vec![(Token::Invalid('@'), span(0, 1))]);
+	assert_eq!(lexer("¬"), vec![(Token::Invalid('¬'), span(0, 1))]);
+	assert_eq!(lexer("@  ¬"), vec![(Token::Invalid('@'), span(0, 1)), (Token::Invalid('¬'), span(3, 4))]);
 	// Numbers
-	assert_eq!(lexer("."), vec![(Token::Dot, 0..1)]);
-	assert_eq!(lexer(". "), vec![(Token::Dot, 0..1)]);
-	assert_eq!(lexer("0xF."), vec![(Token::Num { num: "F".into(), suffix: None, type_: NumType::Hex }, 0..3), (Token::Dot, 3..4)]);
-	assert_eq!(lexer("123u."), vec![(Token::Num { num: "123".into(), suffix: Some("u".into()), type_: NumType::Dec }, 0..4), (Token::Dot, 4..5)]);
-	assert_eq!(lexer("1.2."), vec![(Token::Num { num: "1.2".into(), suffix: None, type_: NumType::Float }, 0..3), (Token::Dot, 3..4)]);
-	assert_eq!(lexer("1.2."), vec![(Token::Num { num: "1.2".into(), suffix: None, type_: NumType::Float }, 0..3), (Token::Dot, 3..4)]);
-	assert_eq!(lexer("1e"), vec![(Token::Num { num: "1".into(), suffix: Some("e".into()), type_: NumType::Dec }, 0..2)]);
-	assert_eq!(lexer("123 "), vec![(Token::Num { num: "123".into(), suffix: None, type_: NumType::Dec }, 0..3)]);
-	assert_eq!(lexer("1e+="), vec![(Token::Num { num: "1".into(), suffix: Some("e".into()), type_: NumType::Dec }, 0..2), (Token::Op(OpType::AddEq), 2..4)]);
-	assert_eq!(lexer("1e+"), vec![(Token::Num { num: "1".into(), suffix: Some("e".into()), type_: NumType::Dec }, 0..2), (Token::Op(OpType::Add), 2..3)]);
+	assert_eq!(lexer("."), vec![(Token::Dot, span(0, 1))]);
+	assert_eq!(lexer(". "), vec![(Token::Dot, span(0, 1))]);
+	assert_eq!(lexer("0xF."), vec![(Token::Num { num: "F".into(), suffix: None, type_: NumType::Hex }, span(0, 3)), (Token::Dot, span(3, 4))]);
+	assert_eq!(lexer("123u."), vec![(Token::Num { num: "123".into(), suffix: Some("u".into()), type_: NumType::Dec }, span(0, 4)), (Token::Dot, span(4, 5))]);
+	assert_eq!(lexer("1.2."), vec![(Token::Num { num: "1.2".into(), suffix: None, type_: NumType::Float }, span(0, 3)), (Token::Dot, span(3, 4))]);
+	assert_eq!(lexer("1.2."), vec![(Token::Num { num: "1.2".into(), suffix: None, type_: NumType::Float }, span(0, 3)), (Token::Dot, span(3, 4))]);
+	assert_eq!(lexer("1e"), vec![(Token::Num { num: "1".into(), suffix: Some("e".into()), type_: NumType::Dec }, span(0, 2))]);
+	assert_eq!(lexer("123 "), vec![(Token::Num { num: "123".into(), suffix: None, type_: NumType::Dec }, span(0, 3))]);
+	assert_eq!(lexer("1e+="), vec![(Token::Num { num: "1".into(), suffix: Some("e".into()), type_: NumType::Dec }, span(0, 2)), (Token::Op(Op::AddEq), span(2, 4))]);
+	assert_eq!(lexer("1e+"), vec![(Token::Num { num: "1".into(), suffix: Some("e".into()), type_: NumType::Dec }, span(0, 2)), (Token::Op(Op::Add), span(2, 3))]);
 }
 
 /// Asserts the token output of the `lexer()` matches the right hand side; ignores the spans.
-#[allow(unused_macros)]
+#[cfg(test)]
 macro_rules! assert_tokens {
     ($src:expr, $($token:expr),*) => {
-		let output = lexer($src).into_iter().map(|(t, s)| t).collect::<Vec<_>>();
+		let output = lexer($src).into_iter().map(|(t, _)| t).collect::<Vec<_>>();
         assert_eq!(output, vec![
             $(
                 $token,
@@ -1028,30 +1322,32 @@ fn keywords() {
 	assert_tokens!("discard", Token::Discard);
 	assert_tokens!("struct", Token::Struct);
 	assert_tokens!("subroutine", Token::Subroutine);
+	assert_tokens!("const", Token::Const);
 	assert_tokens!("in", Token::In);
 	assert_tokens!("out", Token::Out);
 	assert_tokens!("inout", Token::InOut);
+	assert_tokens!("attribute", Token::Attribute);
 	assert_tokens!("uniform", Token::Uniform);
+	assert_tokens!("varying", Token::Varying);
 	assert_tokens!("buffer", Token::Buffer);
-	assert_tokens!("const", Token::Const);
-	assert_tokens!("invariant", Token::Invariant);
-	assert_tokens!("highp", Token::Precision);
-	assert_tokens!("mediump", Token::Precision);
-	assert_tokens!("lowp", Token::Precision);
-	assert_tokens!("flat", Token::Interpolation);
-	assert_tokens!("smooth", Token::Interpolation);
-	assert_tokens!("noperspective", Token::Interpolation);
+	assert_tokens!("shared", Token::Shared);
+	assert_tokens!("centroid", Token::Centroid);
+	assert_tokens!("sample", Token::Sample);
+	assert_tokens!("patch", Token::Patch);
 	assert_tokens!("layout", Token::Layout);
-	assert_tokens!("location", Token::Location);
-	assert_tokens!("component", Token::Component);
-	assert_tokens!("origin_upper_left", Token::FragCoord);
-	assert_tokens!("pixel_center_integer", Token::FragCoord);
-	assert_tokens!("depth_any", Token::FragDepth);
-	assert_tokens!("depth_greater", Token::FragDepth);
-	assert_tokens!("depth_less", Token::FragDepth);
-	assert_tokens!("depth_unchanged", Token::FragDepth);
-	assert_tokens!("index", Token::Index);
-	assert_tokens!("early_fragment_test", Token::FragTest);
+	assert_tokens!("flat", Token::Flat);
+	assert_tokens!("smooth", Token::Smooth);
+	assert_tokens!("noperspective", Token::NoPerspective);
+	assert_tokens!("highp", Token::HighP);
+	assert_tokens!("mediump", Token::MediumP);
+	assert_tokens!("lowp", Token::LowP);
+	assert_tokens!("invariant", Token::Invariant);
+	assert_tokens!("precise", Token::Precise);
+	assert_tokens!("coherent", Token::Coherent);
+	assert_tokens!("volatile", Token::Volatile);
+	assert_tokens!("restrict", Token::Restrict);
+	assert_tokens!("readonly", Token::Readonly);
+	assert_tokens!("writeonly", Token::Writeonly);
 	// Reserved
 	assert_tokens!("common", Token::Reserved("common".into()));
 	assert_tokens!("partition", Token::Reserved("partition".into()));
@@ -1099,7 +1395,6 @@ fn punctuation() {
 	assert_tokens!(";", Token::Semi);
 	assert_tokens!(".", Token::Dot);
 	assert_tokens!(",", Token::Comma);
-	assert_tokens!("=", Token::Eq);
 	assert_tokens!("(", Token::LParen);
 	assert_tokens!(")", Token::RParen);
 	assert_tokens!("[", Token::LBracket);
@@ -1107,40 +1402,41 @@ fn punctuation() {
 	assert_tokens!("{", Token::LBrace);
 	assert_tokens!("}", Token::RBrace);
 	assert_tokens!(":", Token::Colon);
-	assert_tokens!("+", Token::Op(OpType::Add));
-	assert_tokens!("-", Token::Op(OpType::Sub));
-	assert_tokens!("*", Token::Op(OpType::Mul));
-	assert_tokens!("/", Token::Op(OpType::Div));
-	assert_tokens!(">", Token::Op(OpType::Gt));
-	assert_tokens!("<", Token::Op(OpType::Lt));
-	assert_tokens!("!", Token::Op(OpType::Not));
-	assert_tokens!("~", Token::Op(OpType::Flip));
+	assert_tokens!("=", Token::Op(Op::Eq));
+	assert_tokens!("+", Token::Op(Op::Add));
+	assert_tokens!("-", Token::Op(Op::Sub));
+	assert_tokens!("*", Token::Op(Op::Mul));
+	assert_tokens!("/", Token::Op(Op::Div));
+	assert_tokens!(">", Token::Op(Op::Gt));
+	assert_tokens!("<", Token::Op(Op::Lt));
+	assert_tokens!("!", Token::Op(Op::Not));
+	assert_tokens!("~", Token::Op(Op::Flip));
 	assert_tokens!("?", Token::Question);
-	assert_tokens!("%", Token::Op(OpType::Rem));
-	assert_tokens!("&", Token::Op(OpType::And));
-	assert_tokens!("|", Token::Op(OpType::Or));
-	assert_tokens!("^", Token::Op(OpType::Xor));
-	assert_tokens!("==", Token::Op(OpType::EqEq));
-	assert_tokens!("!=", Token::Op(OpType::NotEq));
-	assert_tokens!(">=", Token::Op(OpType::Ge));
-	assert_tokens!("<=", Token::Op(OpType::Le));
-	assert_tokens!("&&", Token::Op(OpType::AndAnd));
-	assert_tokens!("||", Token::Op(OpType::OrOr));
-	assert_tokens!("^^", Token::Op(OpType::XorXor));
-	assert_tokens!("++", Token::Op(OpType::AddAdd));
-	assert_tokens!("--", Token::Op(OpType::SubSub));
-	assert_tokens!("<<", Token::Op(OpType::LShift));
-	assert_tokens!(">>", Token::Op(OpType::RShift));
-	assert_tokens!("+=", Token::Op(OpType::AddEq));
-	assert_tokens!("-=", Token::Op(OpType::SubEq));
-	assert_tokens!("*=", Token::Op(OpType::MulEq));
-	assert_tokens!("/=", Token::Op(OpType::DivEq));
-	assert_tokens!("%=", Token::Op(OpType::RemEq));
-	assert_tokens!("&=", Token::Op(OpType::AndEq));
-	assert_tokens!("|=", Token::Op(OpType::OrEq));
-	assert_tokens!("^=", Token::Op(OpType::XorEq));
-	assert_tokens!("<<=", Token::Op(OpType::LShiftEq));
-	assert_tokens!(">>=", Token::Op(OpType::RShiftEq));
+	assert_tokens!("%", Token::Op(Op::Rem));
+	assert_tokens!("&", Token::Op(Op::And));
+	assert_tokens!("|", Token::Op(Op::Or));
+	assert_tokens!("^", Token::Op(Op::Xor));
+	assert_tokens!("==", Token::Op(Op::EqEq));
+	assert_tokens!("!=", Token::Op(Op::NotEq));
+	assert_tokens!(">=", Token::Op(Op::Ge));
+	assert_tokens!("<=", Token::Op(Op::Le));
+	assert_tokens!("&&", Token::Op(Op::AndAnd));
+	assert_tokens!("||", Token::Op(Op::OrOr));
+	assert_tokens!("^^", Token::Op(Op::XorXor));
+	assert_tokens!("++", Token::Op(Op::AddAdd));
+	assert_tokens!("--", Token::Op(Op::SubSub));
+	assert_tokens!("<<", Token::Op(Op::LShift));
+	assert_tokens!(">>", Token::Op(Op::RShift));
+	assert_tokens!("+=", Token::Op(Op::AddEq));
+	assert_tokens!("-=", Token::Op(Op::SubEq));
+	assert_tokens!("*=", Token::Op(Op::MulEq));
+	assert_tokens!("/=", Token::Op(Op::DivEq));
+	assert_tokens!("%=", Token::Op(Op::RemEq));
+	assert_tokens!("&=", Token::Op(Op::AndEq));
+	assert_tokens!("|=", Token::Op(Op::OrEq));
+	assert_tokens!("^=", Token::Op(Op::XorEq));
+	assert_tokens!("<<=", Token::Op(Op::LShiftEq));
+	assert_tokens!(">>=", Token::Op(Op::RShiftEq));
 }
 
 #[test]

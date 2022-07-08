@@ -6,10 +6,45 @@
 - ~~Comments~~
 - ~~Preprocessor directives~~
 - ~~Illegals~~
+- Properly parse the line continuation character (`\`) everywhere that it's valid
 
 ## Parsing
 ### custom parser
-TODO: Implement
+- Expressions
+    - ~~Literals~~
+    - ~~Identifiers~~
+    - ~~Binary expressions (inc. parenthesis)~~
+    - ~~Prefix/postfix operators~~
+    - ~~Indexing operator~~
+    - ~~Function calls~~
+    - ~~Initializer lists~~
+    - ~~Array constructors~~
+    - ~~Object access (inc. function calls)~~
+    - Ternary
+    - ~~General lists (outside of things like function calls)~~
+- Variables
+    - ~~Definitions~~
+    - ~~Declarations~~
+    - ~~Multiple identifiers in one statement~~
+    - ~~Out-of-order array sizing~~
+    - ~~Qualifiers~~
+- Functions
+    - ~~Definitions~~
+    - Declarations
+    - ~~Named parameters~~
+    - ~~Anonymous parameters~~
+    - ~~Parameter qualifiers~~
+    - ~~Return type qualifiers~~
+- Structs
+    - ~~Declarations~~
+    - Qualifiers
+    - Instance definition
+- Control flow
+    - If statements
+    - Switch statements
+    - For loop
+    - Do loop
+    - Return/Break/Discard
 
 ### chumsky parser
 - ~~Version directive~~

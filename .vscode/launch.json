@@ -5,38 +5,44 @@
     "version": "0.2.0",
     "configurations": [
         {
-            "name": "Debug",
-            "type": "cppvsdbg",
+            "type": "lldb",
             "request": "launch",
+            "name": "Debug executable",
             "program": "${workspaceFolder}\\target\\debug\\glsl-parser.exe",
             "args": [],
             "cwd": "${workspaceFolder}",
-            "preLaunchTask": "Cargo build",
-            "stopAtEntry": false,
-            "environment": [
-                {
-                    "name": "RUST_BACKTRACE",
-                    "value": "1"
-                }
+            "env": {
+                "RUST_BACKTRACE": "1"
+            },
+            "sourceLanguages": [
+                "rust"
             ],
-            "console": "integratedTerminal"
+            "preLaunchTask": "Cargo build"
         },
         {
-            "name": "Debug (Release)",
-            "type": "cppvsdbg",
+            "type": "lldb",
             "request": "launch",
-            "program": "${workspaceFolder}\\target\\release\\glsl-parser.exe",
+            "name": "Debug unit tests",
+            "cargo": {
+                "args": [
+                    "test",
+                    "--no-run",
+                    "--bin=glsl-parser",
+                    "--package=glsl-parser"
+                ],
+                "filter": {
+                    "name": "glsl-parser",
+                    "kind": "bin"
+                }
+            },
             "args": [],
             "cwd": "${workspaceFolder}",
-            "preLaunchTask": "Cargo build release",
-            "stopAtEntry": false,
-            "environment": [
-                {
-                    "name": "RUST_BACKTRACE",
-                    "value": "1"
-                }
-            ],
-            "console": "integratedTerminal"
+            "env": {
+                "RUST_BACKTRACE": "1"
+            },
+            "sourceLanguages": [
+                "rust"
+            ]
         }
     ]
 }

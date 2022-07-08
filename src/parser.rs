@@ -457,18 +457,7 @@ fn parse_fn(
 	} else if *next == Token::LBrace {
 		walker.advance();
 
-		let stmts = parse_scope_contents(walker);
-
-		// Take the closing `}` scope brace.
-		let (next, _) = match walker.peek() {
-			Some(t) => t,
-			None => return None,
-		};
-		if *next == Token::RBrace {
-			walker.advance();
-		} else {
-			return None;
-		}
+		let stmts = parse_scope_contents(walker, BRACE_DELIMITER);
 
 		return Some(Stmt::FnDecl {
 			return_type,
@@ -489,12 +478,52 @@ fn parse_fn(
 	})
 }
 
-/// Parse the contents of a scope other than the top-level scope.
-fn parse_scope_contents(walker: &mut Walker) -> Vec<Stmt> {
+/// A function, which given in the current `walker`, determines whether to end parsing the current scope of
+/// statements, and return back to the caller.
+type EndScope = fn(&mut Walker) -> bool;
+
+const BRACE_DELIMITER: EndScope = |walker| {
+	let current = match walker.peek() {
+		Some((t, _)) => t,
+		None => return true,
+	};
+
+	if *current == Token::RBrace {
+		walker.advance();
+		true
+	} else {
+		false
+	}
+};
+
+const SWITCH_CASE_DELIMITER: EndScope = |walker| {
+	let current = match walker.peek() {
+		Some((t, _)) => t,
+		None => return true,
+	};
+
+	match current {
+		Token::RBrace | Token::Case | Token::Default => true,
+		_ => false,
+	}
+};
+
+/// Parse the statements within a scope, up until the scope exit condition is encountered.
+///
+/// Whether the end delimiter is or is not consumed by the parser depends on the [`EndScope`] function passed in.
+fn parse_scope_contents(
+	walker: &mut Walker,
+	exit_condition: EndScope,
+) -> Vec<Stmt> {
 	let mut stmts = Vec::new();
 
 	'stmt: loop {
-		// First, we look for any qualifiers which are always located first in a statement.
+		// If we have reached a closing delimiter, break out of the loop and return the parsed statements.
+		if exit_condition(walker) {
+			break 'stmt;
+		}
+
+		// First, we look for any qualifiers because they are always located first in a statement.
 		let qualifiers = parse_qualifier_list(walker);
 
 		// Next, we look for any syntax which can be parsed as an expression, e.g. a `int[3]`.
@@ -581,18 +610,8 @@ fn parse_scope_contents(walker: &mut Walker) -> Vec<Stmt> {
 							continue;
 						}
 
-						let body = parse_scope_contents(walker);
-
-						// Consume the opening `}` scope brace.
-						let current = match walker.peek() {
-							Some((t, _)) => t,
-							None => continue,
-						};
-						if *current == Token::RBrace {
-							walker.advance();
-						} else {
-							continue;
-						}
+						let body =
+							parse_scope_contents(walker, BRACE_DELIMITER);
 
 						let mut else_ = None;
 						let mut else_ifs = Vec::new();
@@ -616,18 +635,10 @@ fn parse_scope_contents(walker: &mut Walker) -> Vec<Stmt> {
 								// A final else branch.
 								walker.advance();
 
-								let body = parse_scope_contents(walker);
-
-								// Consume the opening `}` scope brace.
-								let current = match walker.peek() {
-									Some((t, _)) => t,
-									None => continue,
-								};
-								if *current == Token::RBrace {
-									walker.advance();
-								} else {
-									continue;
-								}
+								let body = parse_scope_contents(
+									walker,
+									BRACE_DELIMITER,
+								);
 
 								else_ = Some(body);
 								break 'elseifs;
@@ -673,18 +684,10 @@ fn parse_scope_contents(walker: &mut Walker) -> Vec<Stmt> {
 									continue;
 								}
 
-								let body = parse_scope_contents(walker);
-
-								// Consume the opening `}` scope brace.
-								let current = match walker.peek() {
-									Some((t, _)) => t,
-									None => continue,
-								};
-								if *current == Token::RBrace {
-									walker.advance();
-								} else {
-									continue;
-								}
+								let body = parse_scope_contents(
+									walker,
+									BRACE_DELIMITER,
+								);
 
 								else_ifs.push((cond, body));
 							} else {
@@ -698,6 +701,113 @@ fn parse_scope_contents(walker: &mut Walker) -> Vec<Stmt> {
 							else_ifs,
 							else_,
 						});
+					}
+					Token::Switch => {
+						walker.advance();
+
+						// Consume the opening `(` parenthesis.
+						let current = match walker.peek() {
+							Some((t, _)) => t,
+							None => continue,
+						};
+						if *current == Token::LParen {
+							walker.advance();
+						} else {
+							continue;
+						}
+
+						let expr = match expr_parser(walker, Mode::Default) {
+							Some(e) => e,
+							None => continue,
+						};
+
+						// Consume the closing `)` parenthesis.
+						let current = match walker.peek() {
+							Some((t, _)) => t,
+							None => continue,
+						};
+						if *current == Token::RParen {
+							walker.advance();
+						} else {
+							continue;
+						}
+
+						// Consume the opening `{` scope brace.
+						let current = match walker.peek() {
+							Some((t, _)) => t,
+							None => continue,
+						};
+						if *current == Token::LBrace {
+							walker.advance();
+						} else {
+							continue;
+						}
+
+						let mut cases = Vec::new();
+						'cases: loop {
+							let current = match walker.peek() {
+								Some((t, _)) => t,
+								None => break 'cases,
+							};
+
+							match current {
+								Token::Case => {
+									walker.advance();
+
+									let expr = match expr_parser(
+										walker,
+										Mode::Default,
+									) {
+										Some(e) => e,
+										None => continue,
+									};
+
+									let current = match walker.peek() {
+										Some((t, _)) => t,
+										None => break 'cases,
+									};
+									if *current == Token::Colon {
+										walker.advance();
+									} else {
+										continue;
+									}
+
+									let body = parse_scope_contents(
+										walker,
+										SWITCH_CASE_DELIMITER,
+									);
+
+									cases.push((Some(expr), body));
+								}
+								Token::Default => {
+									walker.advance();
+
+									let current = match walker.peek() {
+										Some((t, _)) => t,
+										None => break 'cases,
+									};
+									if *current == Token::Colon {
+										walker.advance();
+									} else {
+										continue;
+									}
+
+									let body = parse_scope_contents(
+										walker,
+										SWITCH_CASE_DELIMITER,
+									);
+
+									cases.push((None, body));
+								}
+								Token::RBrace => {
+									walker.advance();
+									break 'cases;
+								}
+								_ => continue,
+							}
+						}
+
+						stmts.push(Stmt::Switch { expr, cases });
 					}
 					Token::For => {
 						walker.advance();
@@ -780,18 +890,8 @@ fn parse_scope_contents(walker: &mut Walker) -> Vec<Stmt> {
 							continue;
 						}
 
-						let body = parse_scope_contents(walker);
-
-						// Consume the opening `}` scope brace.
-						let current = match walker.peek() {
-							Some((t, _)) => t,
-							None => continue,
-						};
-						if *current == Token::RBrace {
-							walker.advance();
-						} else {
-							continue;
-						}
+						let body =
+							parse_scope_contents(walker, BRACE_DELIMITER);
 
 						stmts.push(Stmt::For {
 							var,
@@ -841,18 +941,8 @@ fn parse_scope_contents(walker: &mut Walker) -> Vec<Stmt> {
 							continue;
 						}
 
-						let body = parse_scope_contents(walker);
-
-						// Consume the opening `}` scope brace.
-						let current = match walker.peek() {
-							Some((t, _)) => t,
-							None => continue,
-						};
-						if *current == Token::RBrace {
-							walker.advance();
-						} else {
-							continue;
-						}
+						let body =
+							parse_scope_contents(walker, BRACE_DELIMITER);
 
 						stmts.push(Stmt::While { cond, body });
 					}
@@ -870,18 +960,8 @@ fn parse_scope_contents(walker: &mut Walker) -> Vec<Stmt> {
 							continue;
 						}
 
-						let body = parse_scope_contents(walker);
-
-						// Consume the opening `}` scope brace.
-						let current = match walker.peek() {
-							Some((t, _)) => t,
-							None => continue,
-						};
-						if *current == Token::RBrace {
-							walker.advance();
-						} else {
-							continue;
-						}
+						let body =
+							parse_scope_contents(walker, BRACE_DELIMITER);
 
 						// Consume the `while` keyword.
 						let current = match walker.peek() {
@@ -1306,6 +1386,9 @@ fn print_stmt(stmt: &Stmt, indent: usize) {
 				print!("])");
 			}
 		}
+		Stmt::Expr(expr) => {
+			print!("\r\n{:indent$}Expr({expr})", "", indent = indent * 4)
+		}
 		Stmt::FnCall { ident, args } => {
 			print!(
 				"\r\n{:indent$}\x1b[34mCall\x1b[0m(ident: {ident}, args: [",
@@ -1418,6 +1501,24 @@ fn print_stmt(stmt: &Stmt, indent: usize) {
 				);
 			}
 			print!(") {{");
+			for stmt in body {
+				print_stmt(stmt, indent + 1);
+			}
+			print!("\r\n{:indent$}}}", "", indent = indent * 4);
+		}
+		Stmt::While { cond, body } => {
+			print!("\r\n{:indent$}While({cond}) {{", "", indent = indent * 4);
+			for stmt in body {
+				print_stmt(stmt, indent + 1);
+			}
+			print!("\r\n{:indent$}}}", "", indent = indent * 4);
+		}
+		Stmt::DoWhile { cond, body } => {
+			print!(
+				"\r\n{:indent$}Do-While({cond}) {{",
+				"",
+				indent = indent * 4
+			);
 			for stmt in body {
 				print_stmt(stmt, indent + 1);
 			}

@@ -17,8 +17,6 @@
                 "reveal": "silent",
                 "focus": false,
                 "panel": "dedicated",
-                "showReuseMessage": false,
-                "clear": false
             },
             "problemMatcher": [
                 "$rustc"
@@ -40,8 +38,6 @@
                 "reveal": "silent",
                 "focus": false,
                 "panel": "dedicated",
-                "showReuseMessage": false,
-                "clear": false
             },
             "problemMatcher": [
                 "$rustc"
@@ -56,9 +52,7 @@
                 "echo": true,
                 "reveal": "always",
                 "focus": true,
-                "panel": "shared",
-                "showReuseMessage": true,
-                "clear": true
+                "panel": "dedicated",
             },
             "problemMatcher": [
                 "$rustc"
@@ -76,9 +70,7 @@
                 "echo": true,
                 "reveal": "always",
                 "focus": true,
-                "panel": "shared",
-                "showReuseMessage": true,
-                "clear": true
+                "panel": "dedicated",
             },
             "problemMatcher": [
                 "$rustc"
@@ -93,9 +85,7 @@
                 "echo": true,
                 "reveal": "always",
                 "focus": true,
-                "panel": "shared",
-                "showReuseMessage": true,
-                "clear": true
+                "panel": "dedicated",
             },
             "problemMatcher": [
                 "$rustc"

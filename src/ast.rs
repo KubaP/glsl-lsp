@@ -276,6 +276,14 @@ pub enum Stmt {
 	/// - `i = 5 + 1;`
 	/// - `i *= fn();`
 	Expr(Expr),
+	/// General scope, e.g.
+	/// ```glsl
+	/// /* .. */
+	/// {
+	/// 	/* new scope */
+	/// }
+	/// ```
+	Scope(Vec<Stmt>),
 	/// Preprocessor calls.
 	Preproc(Preproc),
 	/// If statement.

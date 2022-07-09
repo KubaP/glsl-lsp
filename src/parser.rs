@@ -523,6 +523,17 @@ fn parse_scope_contents(
 			break 'stmt;
 		}
 
+		// If we immediately encounter an opening `{` brace, that means we have a delimited scope.
+		let (token, _) = walker.peek().unwrap();
+		if *token == Token::LBrace {
+			walker.advance();
+			stmts.push(Stmt::Scope(parse_scope_contents(
+				walker,
+				BRACE_DELIMITER,
+			)));
+			continue 'stmt;
+		}
+
 		// First, we look for any qualifiers because they are always located first in a statement.
 		let qualifiers = parse_qualifier_list(walker);
 
@@ -1399,6 +1410,13 @@ fn print_stmt(stmt: &Stmt, indent: usize) {
 		}
 		Stmt::Expr(expr) => {
 			print!("\r\n{:indent$}{expr}", "", indent = indent * 4);
+		}
+		Stmt::Scope(v) => {
+			print!("\r\n{:indent$}{{", "", indent = indent * 4);
+			for stmt in v {
+				print_stmt(stmt, indent + 1);
+			}
+			print!("\r\n{:indent$}}}", "", indent = indent * 4);
 		}
 		Stmt::Preproc(p) => print!(
 			"\r\n{:indent$}\x1b[4mPreproc({p})\x1b[0m",

@@ -788,6 +788,57 @@ impl std::fmt::Display for Fundamental {
 	}
 }
 
+/// A texture type of a `sampler_` or `image_` type.
+#[derive(Debug, Clone, PartialEq)]
+pub enum TexType {
+	D1,
+	D2,
+	D3,
+	Cube,
+	Rect2D,
+	Array1D,
+	Array2D,
+	CubeArray,
+	Buffer,
+	Multisample2D,
+	MultisampleArray2D,
+
+	ShadowD1,
+	ShadowD2,
+	ShadowD3,
+	ShadowCube,
+	ShadowRect2D,
+	ShadowArray1D,
+	ShadowArray2D,
+	ShadowCubeArray,
+}
+
+impl std::fmt::Display for TexType {
+	fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+		match self {
+			TexType::D1 => write!(f, "1D"),
+			TexType::D2 => write!(f, "2D"),
+			TexType::D3 => write!(f, "3D"),
+			TexType::Cube => write!(f, "Cube"),
+			TexType::Rect2D => write!(f, "2DRect"),
+			TexType::Array1D => write!(f, "1DArray"),
+			TexType::Array2D => write!(f, "2DArray"),
+			TexType::CubeArray => write!(f, "CubeArray"),
+			TexType::Buffer => write!(f, "Buffer"),
+			TexType::Multisample2D => write!(f, "2DMS"),
+			TexType::MultisampleArray2D => write!(f, "2DMSArray"),
+			TexType::ShadowD1 => write!(f, "1DShadow"),
+			TexType::ShadowD2 => write!(f, "2DShadow"),
+			TexType::ShadowD3 => write!(f, "3DShadow"),
+			TexType::ShadowCube => write!(f, "CubeShadow"),
+			TexType::ShadowRect2D => write!(f, "2DRectShadow"),
+			TexType::ShadowArray1D => write!(f, "1DArrayShadow"),
+			TexType::ShadowArray2D => write!(f, "2DArrayShadow"),
+			TexType::ShadowCubeArray => write!(f, "CubeArrayShadow"),
+		}
+	}
+}
+
 /// A primitive language type.
 ///
 /// ℹ The reason for the separation of this enum and the [`Fundamental`] enum is that all fundamental types (aside
@@ -811,6 +862,24 @@ pub enum Primitive {
 	DMatrix(usize, usize),
 	/// A struct type.
 	Struct(Ident),
+	/// A sampler type.
+	///
+	/// - `0` - Data type.
+	/// - `1` - Texture type.
+	///
+	/// # Invariants
+	/// - The data type is guaranteed to be one of `Fundamental::Float|Int|Uint`.
+	Sampler(Fundamental, TexType),
+	/// An image type.
+	///
+	/// - `0` - Data type.
+	/// - `1` - Texture type.
+	///
+	/// # Invariants
+	/// - The data type is guaranteed to be one of `Fundamental::Float|Int|Uint`.
+	/// - The texture type is guaranteed to be none of the `TexType::Shadow*` variants.
+	Image(Fundamental, TexType),
+	Atomic,
 }
 
 impl std::fmt::Display for Primitive {
@@ -821,11 +890,33 @@ impl std::fmt::Display for Primitive {
 			Primitive::Matrix(i, j) => write!(f, "mat-{i}x{j}"),
 			Primitive::DMatrix(i, j) => write!(f, "double-mat-{i}x{j}"),
 			Primitive::Struct(i) => write!(f, "struct: {i}"),
+			Primitive::Sampler(ff, t) => {
+				write!(f, "sampler-")?;
+				match ff {
+					Fundamental::Float => {}
+					Fundamental::Int => write!(f, "int-")?,
+					Fundamental::Uint => write!(f, "uint-")?,
+					_ => unreachable!(),
+				}
+				write!(f, "{t}")
+			}
+			Primitive::Image(ff, t) => {
+				write!(f, "image-")?;
+				match ff {
+					Fundamental::Float => {}
+					Fundamental::Int => write!(f, "int-")?,
+					Fundamental::Uint => write!(f, "uint-")?,
+					_ => unreachable!(),
+				}
+				write!(f, "{t}")
+			}
+			Primitive::Atomic => write!(f, "atomic"),
 		}
 	}
 }
 
 impl Primitive {
+	#[rustfmt::skip]
 	pub fn parse(ident: &Ident) -> Self {
 		match ident.0.as_ref() {
 			"void" => Primitive::Scalar(Fundamental::Void),
@@ -873,6 +964,80 @@ impl Primitive {
 			"dmat4x3" => Primitive::DMatrix(4, 3),
 			"dmat4" => Primitive::DMatrix(4, 4),
 			"dmat4x4" => Primitive::DMatrix(4, 4),
+			"sampler1D" => Primitive::Sampler(Fundamental::Float, TexType::D1),
+			"sampler2D" => Primitive::Sampler(Fundamental::Float, TexType::D2),
+			"sampler3D" => Primitive::Sampler(Fundamental::Float, TexType::D3),
+			"samplerCube" => Primitive::Sampler(Fundamental::Float, TexType::Cube),
+			"sampler2DRect" => Primitive::Sampler(Fundamental::Float, TexType::Rect2D),
+			"sampler1DArray" => Primitive::Sampler(Fundamental::Float, TexType::Array1D),
+			"sampler2DArray" => Primitive::Sampler(Fundamental::Float, TexType::Array2D),
+			"samplerCubeArray" => Primitive::Sampler(Fundamental::Float, TexType::CubeArray),
+			"samplerBuffer" => Primitive::Sampler(Fundamental::Float, TexType::Buffer),
+			"sampler2DMS" => Primitive::Sampler(Fundamental::Float, TexType::Multisample2D),
+			"sampler2DMSArray" => Primitive::Sampler(Fundamental::Float, TexType::MultisampleArray2D),
+			"isampler1D" => Primitive::Sampler(Fundamental::Int, TexType::D1),
+			"isampler2D" => Primitive::Sampler(Fundamental::Int, TexType::D2),
+			"isampler3D" => Primitive::Sampler(Fundamental::Int, TexType::D3),
+			"isamplerCube" => Primitive::Sampler(Fundamental::Int, TexType::Cube),
+			"isampler2DRect" => Primitive::Sampler(Fundamental::Int, TexType::Rect2D),
+			"isampler1DArray" => Primitive::Sampler(Fundamental::Int, TexType::Array1D),
+			"isampler2DArray" => Primitive::Sampler(Fundamental::Int, TexType::Array2D),
+			"isamplerCubeArray" => Primitive::Sampler(Fundamental::Int, TexType::CubeArray),
+			"isamplerBuffer" => Primitive::Sampler(Fundamental::Int, TexType::Buffer),
+			"isampler2DMS" => Primitive::Sampler(Fundamental::Int, TexType::Multisample2D),
+			"isampler2DMSArray" => Primitive::Sampler(Fundamental::Int, TexType::MultisampleArray2D),
+			"usampler1D" => Primitive::Sampler(Fundamental::Uint, TexType::D1),
+			"usampler2D" => Primitive::Sampler(Fundamental::Uint, TexType::D2),
+			"usampler3D" => Primitive::Sampler(Fundamental::Uint, TexType::D3),
+			"usamplerCube" => Primitive::Sampler(Fundamental::Uint, TexType::Cube),
+			"usampler2DRect" => Primitive::Sampler(Fundamental::Uint, TexType::Rect2D),
+			"usampler1DArray" => Primitive::Sampler(Fundamental::Uint, TexType::Array1D),
+			"usampler2DArray" => Primitive::Sampler(Fundamental::Uint, TexType::Array2D),
+			"usamplerCubeArray" => Primitive::Sampler(Fundamental::Uint, TexType::CubeArray),
+			"usamplerBuffer" => Primitive::Sampler(Fundamental::Uint, TexType::Buffer),
+			"usampler2DMS" => Primitive::Sampler(Fundamental::Uint, TexType::Multisample2D),
+			"usampler2DMSArray" => Primitive::Sampler(Fundamental::Uint, TexType::MultisampleArray2D),
+			"sampler1DShadow" => Primitive::Sampler(Fundamental::Float, TexType::ShadowD1),
+			"sampler2DShadow" => Primitive::Sampler(Fundamental::Float, TexType::ShadowD2),
+			"samplerCubeShadow" => Primitive::Sampler(Fundamental::Float, TexType::ShadowCube),
+			"sampler2DRectShadow" => Primitive::Sampler(Fundamental::Float, TexType::ShadowRect2D),
+			"sampler1DArrayShadow" => Primitive::Sampler(Fundamental::Float, TexType::ShadowArray1D),
+			"sampler2DArrayShadow" => Primitive::Sampler(Fundamental::Float, TexType::ShadowArray2D),
+			"samplerCubeArrayShadow" => Primitive::Sampler(Fundamental::Float, TexType::ShadowCubeArray),
+			"image1D" => Primitive::Image(Fundamental::Float, TexType::D1),
+			"image2D" => Primitive::Image(Fundamental::Float, TexType::D2),
+			"image3D" => Primitive::Image(Fundamental::Float, TexType::D3),
+			"imageCube" => Primitive::Image(Fundamental::Float, TexType::Cube),
+			"image2DRect" => Primitive::Image(Fundamental::Float, TexType::Rect2D),
+			"image1DArray" => Primitive::Image(Fundamental::Float, TexType::Array1D),
+			"image2DArray" => Primitive::Image(Fundamental::Float, TexType::Array2D),
+			"imageCubeArray" => Primitive::Image(Fundamental::Float, TexType::CubeArray),
+			"imageBuffer" => Primitive::Image(Fundamental::Float, TexType::Buffer),
+			"image2DMS" => Primitive::Image(Fundamental::Float, TexType::Multisample2D),
+			"image2DMSArray" => Primitive::Image(Fundamental::Float, TexType::MultisampleArray2D),
+			"iimage1D" => Primitive::Image(Fundamental::Int, TexType::D1),
+			"iimage2D" => Primitive::Image(Fundamental::Int, TexType::D2),
+			"iimage3D" => Primitive::Image(Fundamental::Int, TexType::D3),
+			"iimageCube" => Primitive::Image(Fundamental::Int, TexType::Cube),
+			"iimage2DRect" => Primitive::Image(Fundamental::Int, TexType::Rect2D),
+			"iimage1DArray" => Primitive::Image(Fundamental::Int, TexType::Array1D),
+			"iimage2DArray" => Primitive::Image(Fundamental::Int, TexType::Array2D),
+			"iimageCubeArray" => Primitive::Image(Fundamental::Int, TexType::CubeArray),
+			"iimageBuffer" => Primitive::Image(Fundamental::Int, TexType::Buffer),
+			"iimage2DMS" => Primitive::Image(Fundamental::Int, TexType::Multisample2D),
+			"iimage2DMSArray" => Primitive::Image(Fundamental::Int, TexType::MultisampleArray2D),
+			"uimage1D" => Primitive::Image(Fundamental::Uint, TexType::D1),
+			"uimage2D" => Primitive::Image(Fundamental::Uint, TexType::D2),
+			"uimage3D" => Primitive::Image(Fundamental::Uint, TexType::D3),
+			"uimageCube" => Primitive::Image(Fundamental::Uint, TexType::Cube),
+			"uimage2DRect" => Primitive::Image(Fundamental::Uint, TexType::Rect2D),
+			"uimage1DArray" => Primitive::Image(Fundamental::Uint, TexType::Array1D),
+			"uimage2DArray" => Primitive::Image(Fundamental::Uint, TexType::Array2D),
+			"uimageCubeArray" => Primitive::Image(Fundamental::Uint, TexType::CubeArray),
+			"uimageBuffer" => Primitive::Image(Fundamental::Uint, TexType::Buffer),
+			"uimage2DMS" => Primitive::Image(Fundamental::Uint, TexType::Multisample2D),
+			"uimage2DMSArray" => Primitive::Image(Fundamental::Uint, TexType::MultisampleArray2D),
+			"atomic_uint" => Primitive::Atomic,
 			_ => Primitive::Struct(ident.clone()),
 		}
 	}

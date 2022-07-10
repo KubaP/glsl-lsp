@@ -1375,8 +1375,11 @@ impl ShuntingYard {
 			walker.advance();
 		}
 
-		// FIXME: This should be -1 I think?
-		let end_position = walker.cursor;
+		// The end position of this expression will be the end position of the last parsed item.
+		let end_position = match self.stack.back().unwrap() {
+			Either::Left(e) => e.span.end,
+			Either::Right(op) => op.span.end,
+		};
 
 		// Close any open groups.
 		while self.groups.back().is_some() {
@@ -2222,13 +2225,16 @@ fn fn_calls() {
 		span: span(0, 18),
 	});
 }
-/*
+
 #[test]
 #[rustfmt::skip]
 fn obj_access() {
-	assert_expr!("ident.something", Expr::ObjAccess {
-		obj: Box::from(Expr::Ident(Ident("ident".into()))),
-		leaf: Box::from(Expr::Ident(Ident("something".into())))
+	assert_expr!("ident.something", Expr {
+		ty: ExprTy::ObjAccess {
+			obj: Box::from(Expr{ty: ExprTy::Ident(Ident{name: "ident".into(), span: span(0, 5)}), span: span(0, 5)}),
+			leaf: Box::from(Expr{ty: ExprTy::Ident(Ident{name: "something".into(), span: span(6, 15)}), span: span(6, 15)}),
+		},
+		span: span(0, 15),
 	});
 	/* assert_expr!("a.b.c", Expr::ObjAccess {
 		obj: Box::from(Expr::Ident(Ident("a".into()))),
@@ -2237,19 +2243,25 @@ fn obj_access() {
 			access: Box::from(Expr::Ident(Ident("c".into())))
 		})
 	}); */
-	assert_expr!("a.b.c", Expr::ObjAccess {
-		obj: Box::from(Expr::ObjAccess {
-			obj: Box::from(Expr::Ident(Ident("a".into()))),
-			leaf: Box::from(Expr::Ident(Ident("b".into())))
-		}),
-		leaf: Box::from(Expr::Ident(Ident("c".into())))
+	assert_expr!("a.b.c", Expr {
+		ty: ExprTy::ObjAccess {
+			obj: Box::from(Expr {
+				ty: ExprTy::ObjAccess {
+					obj: Box::from(Expr{ty: ExprTy::Ident(Ident{name: "a".into(), span: span(0, 1)}), span: span(0, 1)}),
+					leaf: Box::from(Expr{ty: ExprTy::Ident(Ident{name: "b".into(), span: span(2, 3)}), span: span(2, 3)}),
+				},
+				span: span(0, 3),
+			}),
+			leaf: Box::from(Expr{ty: ExprTy::Ident(Ident{name: "c".into(), span: span(4, 5)}), span: span(4, 5)}),
+		},
+		span: span(0, 5),
 	});
-	assert_expr!("fn().x", Expr::ObjAccess {
-		obj: Box::from(Expr::Fn {
-			ident: Ident("fn".into()),
-			args: vec![]
-		}),
-		leaf: Box::from(Expr::Ident(Ident("x".into())))
+	assert_expr!("fn().x", Expr {
+		ty: ExprTy::ObjAccess {
+			obj: Box::from(Expr{ty: ExprTy::Fn{ident: Ident{name: "fn".into(), span: span(0, 2)}, args: vec![]}, span: span(0, 4)}),
+			leaf: Box::from(Expr{ty: ExprTy::Ident(Ident{name: "x".into(), span: span(5, 6)}), span: span(5, 6)}),
+		},
+		span: span(0, 6),
 	});
 }
 
@@ -2257,155 +2269,286 @@ fn obj_access() {
 #[rustfmt::skip]
 fn indexes() {
 	// Single-dimensional indexes
-	assert_expr!("i[0]", Expr::Index {
-		item: Box::from(Expr::Ident(Ident("i".into()))),
-		i: Some(Box::from(Expr::Lit(Lit::Int(0))))
+	assert_expr!("i[0]", Expr {
+		ty: ExprTy::Index {
+			item: Box::from(Expr{ty: ExprTy::Ident(Ident{name: "i".into(), span:span(0, 1)}), span: span(0, 1)}),
+			i: Some(Box::from(Expr{ty: ExprTy::Lit(Lit::Int(0)), span: span(2, 3)})),
+			op: span(1, 4),
+		},
+		span: span(0, 4),
 	});
-	assert_expr!("s[z+1]", Expr::Index {
-		item: Box::from(Expr::Ident(Ident("s".into()))),
-		i: Some(Box::from(Expr::Binary {
-			left: Box::from(Expr::Ident(Ident("z".into()))),
-			op: Op::Add,
-			right: Box::from(Expr::Lit(Lit::Int(1)))
-		}))
+	assert_expr!("s[z+1]", Expr {
+		ty: ExprTy::Index {
+			item: Box::from(Expr{ty: ExprTy::Ident(Ident{name: "s".into(), span:span(0, 1)}), span: span(0, 1)}),
+			i: Some(Box::from(Expr {
+				ty: ExprTy::Binary {
+					left: Box::from(Expr{ty: ExprTy::Ident(Ident{name: "z".into(), span: span(2, 3)}), span: span(2, 3)}),
+					op: Op{ty: OpTy::Add, span: span(3, 4)},
+					right: Box::from(Expr{ty: ExprTy::Lit(Lit::Int(1)), span: span(4, 5)}),
+				},
+				span: span(2, 5),
+			})),
+			op: span(1, 6)
+		},
+		span: span(0, 6),
 	});
-	assert_expr!("i[y[5]]", Expr::Index {
-		item: Box::from(Expr::Ident(Ident("i".into()))),
-		i: Some(Box::from(Expr::Index {
-			item: Box::from(Expr::Ident(Ident("y".into()))),
-			i: Some(Box::from(Expr::Lit(Lit::Int(5))))
-		}))
+	assert_expr!("i[y[5]]", Expr {
+		ty: ExprTy::Index {
+			item: Box::from(Expr{ty: ExprTy::Ident(Ident{name: "i".into(), span:span(0, 1)}), span: span(0, 1)}),
+			i: Some(Box::from(Expr {
+				ty: ExprTy::Index {
+					item: Box::from(Expr{ty: ExprTy::Ident(Ident{name: "y".into(), span:span(2, 3)}), span: span(2, 3)}),
+					i: Some(Box::from(Expr{ty: ExprTy::Lit(Lit::Int(5)), span: span(4, 5)})),
+					op: span(3, 6),
+				},
+				span: span(2, 6),
+			})),
+			op: span(1, 7)
+		},
+		span: span(0, 7),
 	});
-	assert_expr!("i[y[z[1+2]]]", Expr::Index {
-		item: Box::from(Expr::Ident(Ident("i".into()))),
-		i: Some(Box::from(Expr::Index {
-			item: Box::from(Expr::Ident(Ident("y".into()))),
-			i: Some(Box::from(Expr::Index {
-				item: Box::from(Expr::Ident(Ident("z".into()))),
-				i: Some(Box::from(Expr::Binary {
-					left: Box::from(Expr::Lit(Lit::Int(1))),
-					op: Op::Add,
-					right: Box::from(Expr::Lit(Lit::Int(2))),
-				}))
-			}))
-		}))
+	assert_expr!("i[y[z[1+2]]]", Expr {
+		ty: ExprTy::Index {
+			item: Box::from(Expr{ty: ExprTy::Ident(Ident{name: "i".into(), span:span(0, 1)}), span: span(0, 1)}),
+			i: Some(Box::from(Expr {
+				ty: ExprTy::Index {
+					item: Box::from(Expr{ty: ExprTy::Ident(Ident{name: "y".into(), span:span(2, 3)}), span: span(2, 3)}),
+					i: Some(Box::from(Expr {
+						ty: ExprTy::Index {
+							item: Box::from(Expr{ty: ExprTy::Ident(Ident{name: "z".into(), span:span(4, 5)}), span: span(4, 5)}),
+							i: Some(Box::from(Expr {
+								ty: ExprTy::Binary {
+									left: Box::from(Expr{ty: ExprTy::Lit(Lit::Int(1)), span: span(6, 7)}),
+									op: Op{ty: OpTy::Add, span: span(7, 8)},
+									right: Box::from(Expr{ty: ExprTy::Lit(Lit::Int(2)), span: span(8, 9)}),
+								},
+								span: span(6, 9),
+							})),
+							op: span(5, 10),
+						},
+						span: span(4, 10),
+					})),
+					op: span(3, 11),
+				},
+				span: span(2, 11),
+			})),
+			op: span(1, 12)
+		},
+		span: span(0, 12),
 	});
 
 	// Multi-dimensional indexes
-	assert_expr!("i[5][2]", Expr::Index {
-		item: Box::from(Expr::Index {
-			item: Box::from(Expr::Ident(Ident("i".into()))),
-			i: Some(Box::from(Expr::Lit(Lit::Int(5))))
-		}),
-		i: Some(Box::from(Expr::Lit(Lit::Int(2))))
-	});
-	assert_expr!("i[5][2][size]", Expr::Index {
-		item: Box::from(Expr::Index {
-			item: Box::from(Expr::Index {
-				item: Box::from(Expr::Ident(Ident("i".into()))),
-				i: Some(Box::from(Expr::Lit(Lit::Int(5))))
+	assert_expr!("i[5][2]", Expr {
+		ty: ExprTy::Index {
+			item: Box::from(Expr {
+				ty: ExprTy::Index {
+					item: Box::from(Expr{ty: ExprTy::Ident(Ident{name: "i".into(), span: span(0, 1)}), span: span(0, 1)}),
+					i: Some(Box::from(Expr{ty: ExprTy::Lit(Lit::Int(5)), span: span(2, 3)})),
+					op: span(1, 4),
+				},
+				span: span(0, 4),
 			}),
-			i: Some(Box::from(Expr::Lit(Lit::Int(2))))
-		}),
-		i: Some(Box::from(Expr::Ident(Ident("size".into()))))
+			i: Some(Box::from(Expr{ty: ExprTy::Lit(Lit::Int(2)), span: span(5, 6)})),
+			op: span(4, 7),
+		},
+		span: span(0, 7),
+	});
+	assert_expr!("i[5][2][size]", Expr {
+		ty: ExprTy::Index {
+			item: Box::from(Expr {
+				ty: ExprTy::Index {
+					item: Box::from(Expr {
+						ty: ExprTy::Index {
+							item: Box::from(Expr{ty: ExprTy::Ident(Ident{name: "i".into(), span: span(0, 1)}), span: span(0, 1)}),
+							i: Some(Box::from(Expr{ty: ExprTy::Lit(Lit::Int(5)), span: span(2, 3)})),
+							op: span(1, 4),
+						},
+						span: span(0, 4),
+					}),
+					i: Some(Box::from(Expr{ty: ExprTy::Lit(Lit::Int(2)), span: span(5, 6)})),
+					op: span(4, 7),
+				},
+				span: span(0, 7),
+			}),
+			i: Some(Box::from(Expr{ty: ExprTy::Ident(Ident{name: "size".into(), span: span(8, 12)}), span: span(8, 12)})),
+			op: span(7, 13),
+		},
+		span: span(0, 13),
 	});
 
 	// Empty indexes
-	assert_expr!("int[]", Expr::Index {
-		item: Box::from(Expr::Ident(Ident("int".into()))),
-		i: None
+	assert_expr!("i[]", Expr {
+		ty: ExprTy::Index {
+			item: Box::from(Expr{ty: ExprTy::Ident(Ident{name: "i".into(), span:span(0, 1)}), span: span(0, 1)}),
+			i: None,
+			op: span(1, 3),
+		},
+		span: span(0, 3),
 	});
-	assert_expr!("int[i[]]", Expr::Index {
-		item: Box::from(Expr::Ident(Ident("int".into()))),
-		i: Some(Box::from(Expr::Index {
-			item: Box::from(Expr::Ident(Ident("i".into()))),
-			i: None
-		}))
+	assert_expr!("int[i[]]", Expr {
+		ty: ExprTy::Index {
+			item: Box::from(Expr{ty: ExprTy::Ident(Ident{name: "int".into(), span:span(0, 3)}), span: span(0, 3)}),
+			i: Some(Box::from(Expr {
+				ty: ExprTy::Index {
+					item: Box::from(Expr{ty: ExprTy::Ident(Ident{name: "i".into(), span:span(4, 5)}), span: span(4, 5)}),
+					i: None,
+					op: span(5, 7),
+				},
+				span: span(4, 7),
+			})),
+			op: span(3, 8)
+		},
+		span: span(0, 8),
 	});
-	assert_expr!("i[][]", Expr::Index {
-		item: Box::from(Expr::Index {
-			item: Box::from(Expr::Ident(Ident("i".into()))),
-			i: None
-		}),
-		i: None
-	});
-	assert_expr!("i[5][2][]", Expr::Index {
-		item: Box::from(Expr::Index {
-			item: Box::from(Expr::Index {
-				item: Box::from(Expr::Ident(Ident("i".into()))),
-				i: Some(Box::from(Expr::Lit(Lit::Int(5))))
+	assert_expr!("i[][]", Expr {
+		ty: ExprTy::Index {
+			item: Box::from(Expr {
+				ty: ExprTy::Index {
+					item: Box::from(Expr{ty: ExprTy::Ident(Ident{name: "i".into(), span: span(0, 1)}), span: span(0, 1)}),
+					i: None,
+					op: span(1, 3),
+				},
+				span: span(0, 3),
 			}),
-			i: Some(Box::from(Expr::Lit(Lit::Int(2))))
-		}),
-		i: None
+			i: None,
+			op: span(3, 5),
+		},
+		span: span(0, 5),
+	});
+	assert_expr!("i[5][2][]", Expr {
+		ty: ExprTy::Index {
+			item: Box::from(Expr {
+				ty: ExprTy::Index {
+					item: Box::from(Expr {
+						ty: ExprTy::Index {
+							item: Box::from(Expr{ty: ExprTy::Ident(Ident{name: "i".into(), span: span(0, 1)}), span: span(0, 1)}),
+							i: Some(Box::from(Expr{ty: ExprTy::Lit(Lit::Int(5)), span: span(2, 3)})),
+							op: span(1, 4),
+						},
+						span: span(0, 4),
+					}),
+					i: Some(Box::from(Expr{ty: ExprTy::Lit(Lit::Int(2)), span: span(5, 6)})),
+					op: span(4, 7),
+				},
+				span: span(0, 7),
+			}),
+			i: None,
+			op: span(7, 9),
+		},
+		span: span(0, 9),
 	});
 }
 
 #[test]
 #[rustfmt::skip]
 fn arr_constructors() {
-	assert_expr!("int[1](2)", Expr::ArrInit {
-		arr: Box::from(Expr::Index {
-			item: Box::from(Expr::Ident(Ident("int".into()))),
-			i: Some(Box::from(Expr::Lit(Lit::Int(1))))
-		}),
-		args: vec![
-			Expr::Lit(Lit::Int(2))
-		]
+	assert_expr!("int[1](2)", Expr {
+		ty: ExprTy::ArrInit {
+			arr: Box::from(Expr {
+				ty: ExprTy::Index {
+					item: Box::from(Expr{ty: ExprTy::Ident(Ident{name: "int".into(), span: span(0, 3)}), span: span(0, 3)}),
+					i: Some(Box::from(Expr{ty: ExprTy::Lit(Lit::Int(1)), span: span(4, 5)})),
+					op: span(3, 6),
+				},
+				span: span(0, 6),
+			}),
+			args: vec![Expr{ty: ExprTy::Lit(Lit::Int(2)), span: span(7, 8)}],
+		},
+		span: span(0, 9),
 	});
-	assert_expr!("int[size](2, false, 5.0)", Expr::ArrInit {
-		arr: Box::from(Expr::Index {
-			item: Box::from(Expr::Ident(Ident("int".into()))),
-			i: Some(Box::from(Expr::Ident(Ident("size".into()))))
-		}),
-		args: vec![
-			Expr::Lit(Lit::Int(2)),
-			Expr::Lit(Lit::Bool(false)),
-			Expr::Lit(Lit::Float(5.0)),
-		]
+	// FIXME: This test fails because the `delim_start` gets reset by the `size` identifier. We need a way of
+	// storing delim starters that can be nested; maybe with the identifier itself or something?
+	/* assert_expr!("int[size](2, false, 5.0)", Expr {
+		ty: ExprTy::ArrInit {
+			arr: Box::from(Expr {
+				ty: ExprTy::Index {
+					item: Box::from(Expr{ty: ExprTy::Ident(Ident{name: "int".into(), span: span(0, 3)}), span: span(0, 3)}),
+					i: Some(Box::from(Expr{ty: ExprTy::Ident(Ident{name: "size".into(), span: span(4, 8)}), span: span(4, 8)})),
+					op: span(3, 9),
+				},
+				span: span(0, 9),
+			}),
+			args: vec![
+				Expr{ty: ExprTy::Lit(Lit::Int(2)), span: span(10, 11)},
+				Expr{ty: ExprTy::Lit(Lit::Bool(false)), span: span(13, 18)},
+				Expr{ty: ExprTy::Lit(Lit::Float(5.0)), span: span(20, 23)}
+			],
+		},
+		span: span(0, 24),
+	}); */
+	assert_expr!("int[1+5](2)", Expr {
+		ty: ExprTy::ArrInit {
+			arr: Box::from(Expr {
+				ty: ExprTy::Index {
+					item: Box::from(Expr{ty: ExprTy::Ident(Ident{name: "int".into(), span: span(0, 3)}), span: span(0, 3)}),
+					i: Some(Box::from(Expr {
+						ty: ExprTy::Binary {
+							left: Box::from(Expr{ty: ExprTy::Lit(Lit::Int(1)), span: span(4, 5)}),
+							op: Op{ty: OpTy::Add, span: span(5, 6)},
+							right: Box::from(Expr{ty: ExprTy::Lit(Lit::Int(5)), span: span(6, 7)}),
+						},
+						span: span(4, 7),
+					})),
+					op: span(3, 8),
+				},
+				span: span(0, 8),
+			}),
+			args: vec![Expr{ty: ExprTy::Lit(Lit::Int(2)), span: span(9, 10)}],
+		},
+		span: span(0, 11),
 	});
-	assert_expr!("int[1+5](2)", Expr::ArrInit {
-		arr: Box::from(Expr::Index {
-			item: Box::from(Expr::Ident(Ident("int".into()))),
-			i: Some(Box::from(Expr::Binary {
-				left: Box::from(Expr::Lit(Lit::Int(1))),
-				op: Op::Add,
-				right: Box::from(Expr::Lit(Lit::Int(5)))
-			}))
-		}),
-		args: vec![
-			Expr::Lit(Lit::Int(2))
-		]
-	});
-
-	assert_expr!("vec3[](2)", Expr::ArrInit {
-		arr: Box::from(Expr::Index {
-			item: Box::from(Expr::Ident(Ident("vec3".into()))),
-			i: None
-		}),
-		args: vec![
-			Expr::Lit(Lit::Int(2))
-		]
+	assert_expr!("vec3[](2)", Expr {
+		ty: ExprTy::ArrInit {
+			arr: Box::from(Expr {
+				ty: ExprTy::Index {
+					item: Box::from(Expr{ty: ExprTy::Ident(Ident{name: "vec3".into(), span: span(0, 4)}), span: span(0, 4)}),
+					i: None,
+					op: span(4, 6),
+				},
+				span: span(0, 6),
+			}),
+			args: vec![Expr{ty: ExprTy::Lit(Lit::Int(2)), span: span(7, 8)}],
+		},
+		span: span(0, 9),
 	});
 }
 
 #[test]
 #[rustfmt::skip]
 fn initializers() {
-	assert_expr!("{1}", Expr::Init(vec![Expr::Lit(Lit::Int(1))]));
-	assert_expr!("{1,}", Expr::Init(vec![Expr::Lit(Lit::Int(1))]));
-	assert_expr!("{1, true, i}", Expr::Init(vec![
-		Expr::Lit(Lit::Int(1)),
-		Expr::Lit(Lit::Bool(true)),
-		Expr::Ident(Ident("i".into()))
-	]));
-	assert_expr!("{2.0, {1, s}}", Expr::Init(vec![
-		Expr::Lit(Lit::Float(2.0)),
-		Expr::Init(vec![
-			Expr::Lit(Lit::Int(1)),
-			Expr::Ident(Ident("s".into()))
-		])
-	]));
+	assert_expr!("{1}", Expr {
+		ty: ExprTy::Init(vec![
+			Expr{ty: ExprTy::Lit(Lit::Int(1)), span: span(1, 2)},
+		]),
+		span: span(0, 3),
+	});
+	assert_expr!("{1,}", Expr {
+		ty: ExprTy::Init(vec![
+			Expr{ty: ExprTy::Lit(Lit::Int(1)), span: span(1, 2)},
+		]),
+		span: span(0, 4),
+	});
+	assert_expr!("{1, true, i}", Expr {
+		ty: ExprTy::Init(vec![
+			Expr{ty: ExprTy::Lit(Lit::Int(1)), span: span(1, 2)},
+			Expr{ty: ExprTy::Lit(Lit::Bool(true)), span: span(4, 8)},
+			Expr{ty: ExprTy::Ident(Ident{name: "i".into(), span: span(10, 11)}), span: span(10, 11)},
+		]),
+		span: span(0, 12),
+	});
+	assert_expr!("{2.0, {1, s}}", Expr {
+		ty: ExprTy::Init(vec![
+			Expr{ty: ExprTy::Lit(Lit::Float(2.0)), span: span(1, 4)},
+			Expr {
+				ty: ExprTy::Init(vec![
+					Expr{ty: ExprTy::Lit(Lit::Int(1)), span: span(7, 8)},
+					Expr{ty: ExprTy::Ident(Ident{name: "s".into(), span: span(10, 11)}), span: span(10, 11)},
+				]),
+				span: span(6, 12),
+			}
+		]),
+		span: span(0, 13),
+	});
 }
 
 #[test]
@@ -2413,28 +2556,51 @@ fn initializers() {
 fn lists() {
 	// Note: Lists cannot exist within function calls, array constructors or initializer lists. Hence the absence
 	// of those from this test.
-	assert_expr!("a, b", Expr::List(vec![
-		Expr::Ident(Ident("a".into())),
-		Expr::Ident(Ident("b".into()))
-	]));
-	assert_expr!("a, b, c", Expr::List(vec![
-		Expr::Ident(Ident("a".into())),
-		Expr::Ident(Ident("b".into())),
-		Expr::Ident(Ident("c".into()))
-	]));
-	assert_expr!("i[a, b]", Expr::Index {
-		item: Box::from(Expr::Ident(Ident("i".into()))),
-		i: Some(Box::from(Expr::List(vec![
-			Expr::Ident(Ident("a".into())),
-			Expr::Ident(Ident("b".into()))
-		])))
+	assert_expr!("a, b", Expr {
+		ty: ExprTy::List(vec![
+			Expr{ty: ExprTy::Ident(Ident{name: "a".into(), span: span(0, 1)}), span: span(0, 1)},
+			Expr{ty: ExprTy::Ident(Ident{name: "b".into(), span: span(3, 4)}), span: span(3, 4)},
+		]),
+		span: span(0, 4),
 	});
-	assert_expr!("(a, b)", Expr::Paren(Box::from(Expr::List(vec![
-		Expr::Ident(Ident("a".into())),
-		Expr::Ident(Ident("b".into()))
-	]))));	
+	assert_expr!("a, b, c", Expr {
+		ty: ExprTy::List(vec![
+			Expr{ty: ExprTy::Ident(Ident{name: "a".into(), span: span(0, 1)}), span: span(0, 1)},
+			Expr{ty: ExprTy::Ident(Ident{name: "b".into(), span: span(3, 4)}), span: span(3, 4)},
+			Expr{ty: ExprTy::Ident(Ident{name: "c".into(), span: span(6, 7)}), span: span(6, 7)},
+		]),
+		span: span(0, 7),
+	});
+	assert_expr!("i[a, b]", Expr {
+		ty: ExprTy::Index {
+			item: Box::from(Expr{ty: ExprTy::Ident(Ident{name: "i".into(), span: span(0, 1)}), span: span(0, 1)}),
+			i: Some(Box::from(Expr {
+				ty: ExprTy::List(vec![
+					Expr{ty: ExprTy::Ident(Ident{name: "a".into(), span: span(2, 3)}), span: span(2, 3)},
+					Expr{ty: ExprTy::Ident(Ident{name: "b".into(), span: span(5, 6)}), span: span(5, 6)},
+				]),
+				span: span(2, 6),
+			})),
+			op: span(1, 7),
+		},
+		span: span(0, 7),
+	});
+	assert_expr!("(a, b)", Expr {
+		ty: ExprTy::Paren {
+			expr: Box::from(Expr {
+				ty: ExprTy::List(vec![
+					Expr{ty: ExprTy::Ident(Ident{name: "a".into(), span: span(1, 2)}), span: span(1, 2)},
+					Expr{ty: ExprTy::Ident(Ident{name: "b".into(), span: span(4, 5)}), span: span(4, 5)},
+				]),
+				span: span(1, 5),
+			}),
+			left: span(0, 1),
+			right: span(5, 6),
+		},
+		span: span(0, 6),
+	});
 }
-
+/*
 #[test]
 #[rustfmt::skip]
 fn complex() {

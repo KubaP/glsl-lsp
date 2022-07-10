@@ -169,7 +169,7 @@ pub enum ExprTy {
 	/// Object access.
 	ObjAccess { obj: Box<Expr>, leaf: Box<Expr> },
 	/// Function call.
-	Fn { ident: Box<Expr>, args: Vec<Expr> },
+	Fn { ident: Ident, args: Vec<Expr> },
 	/// Initializer list.
 	Init(Vec<Expr>),
 	/// Array constructor.

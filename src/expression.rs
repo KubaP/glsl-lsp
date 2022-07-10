@@ -2600,82 +2600,146 @@ fn lists() {
 		span: span(0, 6),
 	});
 }
-/*
+
 #[test]
 #[rustfmt::skip]
 fn complex() {
-	assert_expr!("func(i[9], foo-- -6)", Expr::Fn {
-		ident: Ident("func".into()),
-		args: vec![
-			Expr::Index {
-				item: Box::from(Expr::Ident(Ident("i".into()))),
-				i: Some(Box::from(Expr::Lit(Lit::Int(9)))),
-			},
-			Expr::Binary {
-				left: Box::from(
-					Expr::Postfix(Box::from(Expr::Ident(Ident("foo".into()))), Op::Sub)
-				),
-				op: Op::Sub,
-				right: Box::from(Expr::Lit(Lit::Int(6)))
-			}
-		]
-	});
-	assert_expr!("true << i[func((1 + 1) * 5.0)]", Expr::Binary {
-		left: Box::from(Expr::Lit(Lit::Bool(true))),
-		op: Op::LShift,
-		right: Box::from(Expr::Index {
-			item: Box::from(Expr::Ident(Ident("i".into()))),
-			i: Some(Box::from(Expr::Fn {
-				ident: Ident("func".into()),
-				args: vec![
-					Expr::Binary {
-						left: Box::from(Expr::Paren(Box::from(Expr::Binary {
-							left: Box::from(Expr::Lit(Lit::Int(1))),
-							op: Op::Add,
-							right: Box::from(Expr::Lit(Lit::Int(1))),
-						}))),
-						op: Op::Mul,
-						right: Box::from(Expr::Lit(Lit::Float(5.0)))
-					}
-				]
-			}))
-		})
-	});
-	assert_expr!("{1.0, true, func(i[0], 100u)}", Expr::Init(vec![
-		Expr::Lit(Lit::Float(1.0)),
-		Expr::Lit(Lit::Bool(true)),
-		Expr::Fn {
-			ident: Ident("func".into()),
+	assert_expr!("func(i[9], foo-- -6)", Expr {
+		ty: ExprTy::Fn {
+			ident: Ident{name: "func".into(), span: span(0, 4)},
 			args: vec![
-				Expr::Index {
-					item: Box::from(Expr::Ident(Ident("i".into()))),
-					i: Some(Box::from(Expr::Lit(Lit::Int(0))))
+				Expr {
+					ty: ExprTy::Index {
+						item: Box::from(Expr{ty: ExprTy::Ident(Ident{name: "i".into(), span: span(5, 6)}), span: span(5, 6)}),
+						i: Some(Box::from(Expr{ty: ExprTy::Lit(Lit::Int(9)), span: span(7, 8)})),
+						op: span(6, 9),
+					},
+					span: span(5, 9),
 				},
-				Expr::Lit(Lit::UInt(100))
+				Expr {
+					ty: ExprTy::Binary {
+						left: Box::from(Expr {
+							ty: ExprTy::Postfix {
+								expr: Box::from(Expr{ty: ExprTy::Ident(Ident{name: "foo".into(), span: span(11, 14)}), span: span(11, 14)}),
+								op: Op{ty: OpTy::Sub, span: span(14, 16)},
+							},
+							span: span(11, 16),
+						}),
+						op: Op{ty: OpTy::Sub, span: span(17, 18)},
+						right: Box::from(Expr{ty: ExprTy::Lit(Lit::Int(6)), span: span(18, 19)}),
+					},
+					span: span(11, 19),
+				}
+				
 			]
-		}
-	]));
-	assert_expr!("mat2[]({vec2(1, 2), vec2(3, 4)})", Expr::ArrInit {
-		arr: Box::from(Expr::Index {
-			item: Box::from(Expr::Ident(Ident("mat2".into()))),
-			i: None
-		}),
-		args: vec![Expr::Init(vec![
-			Expr::Fn {
-				ident: Ident("vec2".into()),
-				args: vec![
-					Expr::Lit(Lit::Int(1)),
-					Expr::Lit(Lit::Int(2)),
-				]
-			},
-			Expr::Fn {
-				ident: Ident("vec2".into()),
-				args: vec![
-					Expr::Lit(Lit::Int(3)),
-					Expr::Lit(Lit::Int(4)),
-				]
+		},
+		span: span(0, 20),
+	});
+	assert_expr!("true << i[func((1 + 2) * 5.0)]", Expr {
+		ty: ExprTy::Binary {
+			left: Box::from(Expr{ty: ExprTy::Lit(Lit::Bool(true)), span: span(0, 4)}),
+			op: Op{ty: OpTy::LShift, span: span(5, 7)},
+			right: Box::from(Expr {
+				ty: ExprTy::Index {
+					item: Box::from(Expr{ty: ExprTy::Ident(Ident{name: "i".into(), span: span(8, 9)}), span: span(8, 9)}),
+					i: Some(Box::from(Expr {
+						ty: ExprTy::Fn {
+							ident: Ident{name: "func".into(), span: span(10, 14)},
+							args: vec![
+								Expr {
+									ty: ExprTy::Binary {
+										left: Box::from(Expr {
+											ty: ExprTy::Paren {
+												expr: Box::from(Expr {
+													ty: ExprTy::Binary {
+														left: Box::from(Expr{ty: ExprTy::Lit(Lit::Int(1)), span: span(16, 17)}),
+														op: Op{ty: OpTy::Add, span: span(18, 19)},
+														right: Box::from(Expr{ty: ExprTy::Lit(Lit::Int(2)), span: span(20, 21)}),
+													},
+													span: span(16, 21),
+												}),
+												left: span(15, 16),
+												right: span(21, 22),
+											},
+											span: span(15, 22),
+										}),
+										op: Op{ty: OpTy::Mul, span: span(23, 24)},
+										right: Box::from(Expr{ty: ExprTy::Lit(Lit::Float(5.0)), span: span(25, 28)}),
+									},
+									span: span(15, 28),
+								}
+							],
+						},
+						span: span(10, 29),
+					})),
+					op: span(9, 30),
+				},
+				span: span(8, 30),
+			}),
+		},
+		span: span(0, 30),
+	});
+	assert_expr!("{1.0, true, func(i[0], 100u)}", Expr {
+		ty: ExprTy::Init(vec![
+			Expr{ty: ExprTy::Lit(Lit::Float(1.0)), span: span(1, 4)},
+			Expr{ty: ExprTy::Lit(Lit::Bool(true)), span: span(6, 10)},
+			Expr {
+				ty: ExprTy::Fn {
+					ident: Ident{name: "func".into(), span: span(12, 16)},
+					args: vec![
+						Expr {
+							ty: ExprTy::Index {
+								item: Box::from(Expr{ty: ExprTy::Ident(Ident{name: "i".into(), span: span(17, 18)}), span: span(17, 18)}),
+								i: Some(Box::from(Expr{ty: ExprTy::Lit(Lit::Int(0)), span: span(19, 20)})),
+								op: span(18, 21),
+							},
+							span: span(17, 21),
+						},
+						Expr{ty: ExprTy::Lit(Lit::UInt(100)), span: span(23, 27)},
+					]
+				},
+				span: span(12, 28),
 			}
-		])]
+		]),
+		span: span(0, 29),
+	});
+	assert_expr!("mat2[]({vec2(1, 2), vec2(3, 4)})", Expr {
+		ty: ExprTy::ArrInit {
+			arr: Box::from(Expr {
+				ty: ExprTy::Index {
+					item: Box::from(Expr{ty: ExprTy::Ident(Ident{name: "mat2".into(), span: span(0, 4)}), span: span(0, 4)}),
+					i: None,
+					op: span(4, 6),
+				},
+				span: span(0, 6),
+			}),
+			args: vec![Expr {
+				ty: ExprTy::Init(vec![
+					Expr {
+						ty: ExprTy::Fn {
+							ident: Ident{name: "vec2".into(), span: span(8, 12)},
+							args: vec![
+								Expr{ty: ExprTy::Lit(Lit::Int(1)), span: span(13, 14)},
+								Expr{ty: ExprTy::Lit(Lit::Int(2)), span: span(16, 17)},
+							],
+						},
+						span: span(8, 18),
+					},
+					Expr {
+						ty: ExprTy::Fn {
+							ident: Ident{name: "vec2".into(), span: span(20, 24)},
+							args: vec![
+								Expr{ty: ExprTy::Lit(Lit::Int(3)), span: span(25, 26)},
+								Expr{ty: ExprTy::Lit(Lit::Int(4)), span: span(28, 29)},
+							],
+						},
+						span: span(20, 30),
+					},
+				]),
+				span: span(7, 31),
+			}],
+		},
+		span: span(0, 32),
 	});
 }
 
@@ -2687,44 +2751,79 @@ fn incomplete() {
 		op: Op::Add,
 		right: Box::from(Expr::Lit(Lit::Int(5)))
 	}); */
-	assert_expr!("i[(5+1]", Expr::Index {
-		item: Box::from(Expr::Ident(Ident("i".into()))),
-		i: Some(Box::from(Expr::Incomplete))
+	assert_expr!("i[(5+1]", Expr {
+		ty: ExprTy::Index {
+			item: Box::from(Expr{ty: ExprTy::Ident(Ident{name: "i".into(), span: span(0, 1)}), span: span(0, 1)}),
+			i: Some(Box::from(Expr{ty: ExprTy::Incomplete, span: span(2, 6)})),
+			op: span(1, 7),
+		},
+		span: span(0, 7),
 	});
-	assert_expr!("i[fn((5+1]", Expr::Index {
-		item: Box::from(Expr::Ident(Ident("i".into()))),
-		i: Some(Box::from(Expr::Incomplete))
+	assert_expr!("i[fn((5+1]", Expr {
+		ty: ExprTy::Index {
+			item: Box::from(Expr{ty: ExprTy::Ident(Ident{name: "i".into(), span: span(0, 1)}), span: span(0, 1)}),
+			i: Some(Box::from(Expr{ty: ExprTy::Incomplete, span: span(2, 9)})),
+			op: span(1, 10),
+		},
+		span: span(0, 10),
 	});
-	assert_expr!("(i+5])", Expr::Paren(Box::from(Expr::Incomplete)));
-	assert_expr!("fn(1])", Expr::Fn {
-		ident: Ident("fn".into()),
-		args: vec![Expr::Incomplete]
+	assert_expr!("(i+5])", Expr {
+		ty: ExprTy::Paren {
+			expr: Box::from(Expr{ty: ExprTy::Incomplete, span: span(1, 5)}),
+			left: span(0, 1),
+			right: span(5, 6),
+		},
+		span: span(0, 6),
 	});
-	assert_expr!("int[3](i])", Expr::ArrInit {
-		arr: Box::from(Expr::Index {
-			item: Box::from(Expr::Ident(Ident("int".into()))),
-			i: Some(Box::from(Expr::Lit(Lit::Int(3))))
-		}),
-		args: vec![Expr::Incomplete]
+	assert_expr!("fn(1])", Expr {
+		ty: ExprTy::Fn {
+			ident: Ident{name: "fn".into(), span: span(0, 2)},
+			args: vec![Expr{ty: ExprTy::Incomplete, span: span(3, 5)}]
+		},
+		span: span(0, 6),
 	});
-	
+	assert_expr!("int[3](i])", Expr {
+		ty: ExprTy::ArrInit {
+			arr: Box::from(Expr {
+				ty: ExprTy::Index {
+					item: Box::from(Expr{ty: ExprTy::Ident(Ident{name: "int".into(), span: span(0, 3)}), span: span(0, 3)}),
+					i: Some(Box::from(Expr{ty: ExprTy::Lit(Lit::Int(3)), span: span(4, 5)})),
+					op: span(3, 6),
+				},
+				span: span(0, 6),
+			}),
+			args: vec![Expr{ty: ExprTy::Incomplete, span: span(7, 9)}],
+		},
+		span: span(0, 10),
+	});
+
 	// Outer unclosed delimiters.
-	assert_expr!("(i+x", Expr::Paren(Box::from(Expr::Binary {
-		left: Box::from(Expr::Ident(Ident("i".into()))),
-		op: Op::Add,
-		right: Box::from(Expr::Ident(Ident("x".into())))
-	})));
-	assert_expr!("i[5+1", Expr::Index {
-		item: Box::from(Expr::Ident(Ident("i".into()))),
-		i: Some(Box::from(Expr::Incomplete))
+	// FIXME: The `right` span should be 4, 4 but it is 4,3 because the `create_ast()` method gets the last char. I
+	// guess the paren operator should hold this information.
+	/* assert_expr!("(i+x", Expr {
+		ty: ExprTy::Paren {
+			expr: Box::from(Expr {
+				ty: ExprTy::Binary {
+					left: Box::from(Expr{ty: ExprTy::Ident(Ident{name: "i".into(), span: span(1, 2)}), span: span(1, 2)}),
+					op: Op{ty: OpTy::Add, span: span(2, 3)},
+					right: Box::from(Expr{ty: ExprTy::Ident(Ident{name: "x".into(), span: span(3, 4)}), span: span(3, 4)}),
+				},
+				span: span(1, 4),
+			}),
+			left: span(0, 1),
+			right: span(4, 4),
+		},
+		span: span(0, 4),
+	}); */
+	assert_expr!("i[5+1", Expr {
+		ty: ExprTy::Index {
+			item: Box::from(Expr{ty: ExprTy::Ident(Ident{name: "i".into(), span: span(0, 1)}), span: span(0, 1)}),
+			i: Some(Box::from(Expr{ty: ExprTy::Incomplete, span: span(1, 5)})),
+			op: span(1, 5),
+		},
+		span: span(0, 5),
 	});
-	assert_expr!("fn(5+1", Expr::Incomplete);
-	assert_expr!("{5, 1", Expr::Incomplete);
-	assert_expr!("int[5](1, 2", Expr::Incomplete);
-	assert_expr!("a, b, c", Expr::List(vec![
-		Expr::Ident(Ident("a".into())),
-		Expr::Ident(Ident("b".into())),
-		Expr::Ident(Ident("c".into()))
-	]));
+	assert_expr!("fn(5+1", Expr{ty: ExprTy::Incomplete, span: span(0, 6)});
+	assert_expr!("{5, 1", Expr{ty: ExprTy::Incomplete, span: span(0, 5)});
+	assert_expr!("int[5](1, 2", Expr{ty: ExprTy::Incomplete, span: span(0, 11)});
 }
-*/

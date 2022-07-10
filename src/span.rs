@@ -48,6 +48,22 @@ impl Span {
 			end: new_end,
 		}
 	}
+
+	/// Returns a new `Span` which spans the first character.
+	pub fn first_char(self) -> Self {
+		Self {
+			start: self.start,
+			end: usize::min(self.start + 1, self.end),
+		}
+	}
+
+	/// Returns a new `Span` which spans the last character.
+	pub fn last_char(self) -> Self {
+		Self {
+			start: usize::max(self.end - 1, self.start),
+			end: self.end,
+		}
+	}
 }
 
 /// Constructs a new [`Span`] from a start and end position.

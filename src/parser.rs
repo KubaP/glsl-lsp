@@ -1,7 +1,7 @@
 use crate::{
-	ast::{Expr, Ident, Qualifier, Stmt, Type},
+	ast::{ExprTy, Ident, Qualifier, Stmt, Type},
 	expression::{expr_parser, Mode},
-	lexer::{lexer, Op, Token},
+	lexer::{lexer, OpTy, Token},
 	span::Spanned,
 	Either,
 };
@@ -241,7 +241,7 @@ fn parse_qualifier_list(walker: &mut Walker) -> Vec<Qualifier> {
 										Some((t, _)) => t,
 										None => break 'outer,
 									};
-									if *current == Token::Op(Op::Eq) {
+									if *current == Token::Op(OpTy::Eq) {
 										walker.advance();
 									} else {
 										break 'outer;
@@ -283,11 +283,14 @@ fn parse_type_start(
 ) -> Option<Stmt> {
 	// Check whether we have a function definition/declaration.
 	match walker.peek() {
-		Some((t, _)) => match t {
+		Some((t, t_span)) => match t {
 			Token::Ident(i) => match walker.lookahead_1() {
 				Some((t2, _)) => match t2 {
 					Token::LParen => {
-						let ident = Ident(i.clone());
+						let ident = Ident {
+							name: i.clone(),
+							span: *t_span,
+						};
 						walker.advance();
 						walker.advance();
 						return parse_fn(walker, type_, ident, qualifiers);
@@ -339,7 +342,7 @@ fn parse_type_start(
 			}
 			_ => Some(Stmt::VarDefs(typenames, qualifiers)),
 		};
-	} else if *next == Token::Op(Op::Eq) {
+	} else if *next == Token::Op(OpTy::Eq) {
 		walker.advance();
 		// We have a variable declaration.
 		let value = match expr_parser(walker, Mode::Default) {
@@ -410,7 +413,7 @@ fn parse_fn(
 			}
 		};
 
-		let type_ = match Type::parse(&expr) {
+		let type_ = match Type::parse(&expr.ty) {
 			Some(t) => t,
 			None => return None,
 		};
@@ -1114,8 +1117,8 @@ fn parse_struct(
 	qualifiers: Vec<Qualifier>,
 ) -> Option<Stmt> {
 	let ident = match expr_parser(walker, Mode::Default) {
-		Some(e) => match e {
-			Expr::Ident(i) => i,
+		Some(e) => match e.ty {
+			ExprTy::Ident(i) => i,
 			_ => return None,
 		},
 		None => return None,
@@ -1201,8 +1204,8 @@ fn parse_struct(
 	}
 
 	let instance = match expr_parser(walker, Mode::Default) {
-		Some(e) => match e {
-			Expr::Ident(i) => Some(i),
+		Some(e) => match e.ty {
+			ExprTy::Ident(i) => Some(i),
 			_ => return None,
 		},
 		None => None,
@@ -1557,13 +1560,15 @@ macro_rules! assert_stmt {
         ])
     };
 }
-
+/*
 #[cfg(test)]
 use crate::ast::{Fundamental, Lit, Primitive};
 
 #[test]
 #[rustfmt::skip]
 fn var_def_decl() {
+	use crate::ast::{Storage, Layout, Interpolation, Memory};
+
 	// Variable definitions.
 	assert_stmt!("int i;", Stmt::VarDef {
 		type_: Type::Basic(Primitive::Scalar(Fundamental::Int)),
@@ -1571,20 +1576,20 @@ fn var_def_decl() {
 		qualifiers: vec![]
 	});
 	assert_stmt!("bool[2] b;", Stmt::VarDef {
-		type_: Type::Array(Primitive::Scalar(Fundamental::Bool), Some(Expr::Lit(Lit::Int(2)))),
+		type_: Type::Array(Primitive::Scalar(Fundamental::Bool), Some(ExprTy::Lit(Lit::Int(2)))),
 		ident: Ident("b".into()),
 		qualifiers: vec![]
 	});
 	assert_stmt!("mat4 m[2][6];", Stmt::VarDef {
-		type_: Type::Array2D(Primitive::Matrix(4, 4), Some(Expr::Lit(Lit::Int(2))), Some(Expr::Lit(Lit::Int(6)))),
+		type_: Type::Array2D(Primitive::Matrix(4, 4), Some(ExprTy::Lit(Lit::Int(2))), Some(ExprTy::Lit(Lit::Int(6)))),
 		ident: Ident("m".into()),
 		qualifiers: vec![]
 	});
 	assert_stmt!("double[6] d[2];", Stmt::VarDef {
 		type_: Type::Array2D(
 			Primitive::Scalar(Fundamental::Double),
-			Some(Expr::Lit(Lit::Int(2))),
-			Some(Expr::Lit(Lit::Int(6)))
+			Some(ExprTy::Lit(Lit::Int(2))),
+			Some(ExprTy::Lit(Lit::Int(6)))
 		),
 		ident: Ident("d".into()),
 		qualifiers: vec![]
@@ -1596,17 +1601,17 @@ fn var_def_decl() {
 	assert_stmt!("vec3[7][9] a[1], b[3];", Stmt::VarDefs(vec![
 		(
 			Type::ArrayND(Primitive::Vector(Fundamental::Float, 3), vec![
-				Some(Expr::Lit(Lit::Int(1))),
-				Some(Expr::Lit(Lit::Int(7))),
-				Some(Expr::Lit(Lit::Int(9))),
+				Some(ExprTy::Lit(Lit::Int(1))),
+				Some(ExprTy::Lit(Lit::Int(7))),
+				Some(ExprTy::Lit(Lit::Int(9))),
 				]),
 			Ident("a".into())
 		),
 		(
 			Type::ArrayND(Primitive::Vector(Fundamental::Float, 3), vec![
-				Some(Expr::Lit(Lit::Int(3))),
-				Some(Expr::Lit(Lit::Int(7))),
-				Some(Expr::Lit(Lit::Int(9))),
+				Some(ExprTy::Lit(Lit::Int(3))),
+				Some(ExprTy::Lit(Lit::Int(7))),
+				Some(ExprTy::Lit(Lit::Int(9))),
 				]),
 			Ident("b".into())
 		)
@@ -1616,29 +1621,29 @@ fn var_def_decl() {
 	assert_stmt!("uint u = 5;", Stmt::VarDecl {
 		type_: Type::Basic(Primitive::Scalar(Fundamental::Uint)),
 		ident: Ident("u".into()),
-		value: Expr::Lit(Lit::Int(5)),
+		value: ExprTy::Lit(Lit::Int(5)),
 		qualifiers: vec![]
 	});
 	assert_stmt!("int[3] a[1] = {{4, 5, 6}};", Stmt::VarDecl {
 		type_: Type::Array2D(
 			Primitive::Scalar(Fundamental::Int),
-			Some(Expr::Lit(Lit::Int(1))),
-			Some(Expr::Lit(Lit::Int(3)))
+			Some(ExprTy::Lit(Lit::Int(1))),
+			Some(ExprTy::Lit(Lit::Int(3)))
 		),
 		ident: Ident("a".into()),
-		value: Expr::Init(vec![Expr::Init(vec![
-			Expr::Lit(Lit::Int(4)),
-			Expr::Lit(Lit::Int(5)),
-			Expr::Lit(Lit::Int(6))
+		value: ExprTy::Init(vec![ExprTy::Init(vec![
+			ExprTy::Lit(Lit::Int(4)),
+			ExprTy::Lit(Lit::Int(5)),
+			ExprTy::Lit(Lit::Int(6))
 		])]),
 		qualifiers: vec![]
 	});
 	assert_stmt!("double[] d = {1.0LF, 2.0LF};", Stmt::VarDecl {
 		type_: Type::Array(Primitive::Scalar(Fundamental::Double), None),
 		ident: Ident("d".into()),
-		value: Expr::Init(vec![
-			Expr::Lit(Lit::Double(1.0)),
-			Expr::Lit(Lit::Double(2.0))
+		value: ExprTy::Init(vec![
+			ExprTy::Lit(Lit::Double(1.0)),
+			ExprTy::Lit(Lit::Double(2.0))
 		]),
 		qualifiers: vec![]
 	});
@@ -1647,37 +1652,78 @@ fn var_def_decl() {
 			(Type::Basic(Primitive::Vector(Fundamental::Float, 2)), Ident("a".into())),
 			(Type::Basic(Primitive::Vector(Fundamental::Float, 2)), Ident("b".into())),
 		],
-		value: Expr::Fn {
+		value: ExprTy::Fn {
 			ident: Ident("vec2".into()),
 			args: vec![
-				Expr::Lit(Lit::Int(1)),
-				Expr::Lit(Lit::Int(2)),
+				ExprTy::Lit(Lit::Int(1)),
+				ExprTy::Lit(Lit::Int(2)),
 			]
 		},
 		qualifiers: vec![]
 	});
 	assert_stmt!("float[2] a, b = float[](5, 6);", Stmt::VarDecls {
 		vars: vec![
-			(Type::Array(Primitive::Scalar(Fundamental::Float), Some(Expr::Lit(Lit::Int(2)))), Ident("a".into())),
-			(Type::Array(Primitive::Scalar(Fundamental::Float), Some(Expr::Lit(Lit::Int(2)))), Ident("b".into()))
+			(Type::Array(Primitive::Scalar(Fundamental::Float), Some(ExprTy::Lit(Lit::Int(2)))), Ident("a".into())),
+			(Type::Array(Primitive::Scalar(Fundamental::Float), Some(ExprTy::Lit(Lit::Int(2)))), Ident("b".into()))
 		],
-		value: Expr::ArrInit {
-			arr: Box::from(Expr::Index {
-				item: Box::from(Expr::Ident(Ident("float".into()))),
+		value: ExprTy::ArrInit {
+			arr: Box::from(ExprTy::Index {
+				item: Box::from(ExprTy::Ident(Ident("float".into()))),
 				i: None
 			}),
 			args: vec![
-				Expr::Lit(Lit::Int(5)),
-				Expr::Lit(Lit::Int(6))
+				ExprTy::Lit(Lit::Int(5)),
+				ExprTy::Lit(Lit::Int(6))
 			]
 		},
 		qualifiers: vec![]
+	});
+
+	// With qualifiers.
+	assert_stmt!("const int i;", Stmt::VarDef {
+		type_: Type::Basic(Primitive::Scalar(Fundamental::Int)),
+		ident: Ident("i".into()),
+		qualifiers: vec![
+			Qualifier::Storage(Storage::Const)
+		]
+	});
+	assert_stmt!("highp float i;", Stmt::VarDef {
+		type_: Type::Basic(Primitive::Scalar(Fundamental::Float)),
+		ident: Ident("i".into()),
+		qualifiers: vec![
+			Qualifier::Precision
+		]
+	});
+	assert_stmt!("layout(location = 0) in int i;", Stmt::VarDef {
+		type_: Type::Basic(Primitive::Scalar(Fundamental::Int)),
+		ident: Ident("i".into()),
+		qualifiers: vec![
+			Qualifier::Layout(vec![Layout::Location(ExprTy::Lit(Lit::Int(0)))]),
+			Qualifier::Storage(Storage::In)
+		]
+	});
+	assert_stmt!("flat uniform vec3 v;", Stmt::VarDef {
+		type_: Type::Basic(Primitive::Vector(Fundamental::Float, 3)),
+		ident: Ident("v".into()),
+		qualifiers: vec![
+			Qualifier::Interpolation(Interpolation::Flat),
+			Qualifier::Storage(Storage::Uniform)
+		]
+	});
+	assert_stmt!("readonly mat4[1] m;", Stmt::VarDef {
+		type_: Type::Array(Primitive::Matrix(4, 4), Some(ExprTy::Lit(Lit::Int(1)))),
+		ident: Ident("m".into()),
+		qualifiers: vec![
+			Qualifier::Memory(Memory::Readonly)
+		]
 	});
 }
 
 #[test]
 #[rustfmt::skip]
 fn struct_def_decl() {
+	use crate::ast::Memory;
+
 	// Single-member structs.
 	assert_stmt!("struct S;", Stmt::StructDef { ident: Ident("S".into()), qualifiers: vec![] });
 	assert_stmt!("struct S { int i; };", Stmt::StructDecl {
@@ -1693,7 +1739,7 @@ fn struct_def_decl() {
 	assert_stmt!("struct S { bool[2] b; };", Stmt::StructDecl {
 		ident: Ident("S".into()),
 		members: vec![Stmt::VarDef {
-			type_: Type::Array(Primitive::Scalar(Fundamental::Bool), Some(Expr::Lit(Lit::Int(2)))),
+			type_: Type::Array(Primitive::Scalar(Fundamental::Bool), Some(ExprTy::Lit(Lit::Int(2)))),
 			ident: Ident("b".into()),
 			qualifiers: vec![]
 		}],
@@ -1703,7 +1749,7 @@ fn struct_def_decl() {
 	assert_stmt!("struct S { mat4 m[2][6]; };", Stmt::StructDecl {
 		ident: Ident("S".into()),
 		members: vec![Stmt::VarDef {
-			type_: Type::Array2D(Primitive::Matrix(4, 4), Some(Expr::Lit(Lit::Int(2))), Some(Expr::Lit(Lit::Int(6)))),
+			type_: Type::Array2D(Primitive::Matrix(4, 4), Some(ExprTy::Lit(Lit::Int(2))), Some(ExprTy::Lit(Lit::Int(6)))),
 			ident: Ident("m".into()),
 			qualifiers: vec![]
 		}],
@@ -1715,17 +1761,17 @@ fn struct_def_decl() {
 		members: vec![Stmt::VarDefs(vec![
 			(
 				Type::ArrayND(Primitive::Vector(Fundamental::Float, 3), vec![
-					Some(Expr::Lit(Lit::Int(1))),
-					Some(Expr::Lit(Lit::Int(7))),
-					Some(Expr::Lit(Lit::Int(9))),
+					Some(ExprTy::Lit(Lit::Int(1))),
+					Some(ExprTy::Lit(Lit::Int(7))),
+					Some(ExprTy::Lit(Lit::Int(9))),
 					]),
 				Ident("a".into())
 			),
 			(
 				Type::ArrayND(Primitive::Vector(Fundamental::Float, 3), vec![
-					Some(Expr::Lit(Lit::Int(3))),
-					Some(Expr::Lit(Lit::Int(7))),
-					Some(Expr::Lit(Lit::Int(9))),
+					Some(ExprTy::Lit(Lit::Int(3))),
+					Some(ExprTy::Lit(Lit::Int(7))),
+					Some(ExprTy::Lit(Lit::Int(9))),
 					]),
 				Ident("b".into())
 			)
@@ -1761,8 +1807,8 @@ fn struct_def_decl() {
 			Stmt::VarDef {
 				type_: Type::Array2D(
 					Primitive::Vector(Fundamental::Double, 2),
-					Some(Expr::Lit(Lit::Int(2))),
-					Some(Expr::Lit(Lit::Int(1)))
+					Some(ExprTy::Lit(Lit::Int(2))),
+					Some(ExprTy::Lit(Lit::Int(1)))
 				),
 				ident: Ident("d".into()),
 				qualifiers: vec![]
@@ -1771,4 +1817,22 @@ fn struct_def_decl() {
 		qualifiers: vec![],
 		instance: None,
 	});
+
+	// Struct with member with qualifiers.
+	assert_stmt!("struct S { precise writeonly int i; };", Stmt::StructDecl {
+		ident: Ident("S".into()),
+		members: vec![
+			Stmt::VarDef {
+				type_: Type::Basic(Primitive::Scalar(Fundamental::Int)),
+				ident: Ident("i".into()),
+				qualifiers: vec![
+					Qualifier::Precise,
+					Qualifier::Memory(Memory::Writeonly)
+				]
+			}
+		],
+		qualifiers: vec![],
+		instance: None,
+	});
 }
+*/

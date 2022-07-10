@@ -1,11 +1,90 @@
 use crate::{
-	lexer::{NumType, Op, Token},
+	lexer::{NumType, Token, OpTy},
+	span::Span,
 	Either,
 };
 
+#[derive(Debug, Clone, PartialEq)]
+pub struct Expr {
+	pub ty: ExprTy,
+	pub span: Span,
+}
+
+impl std::fmt::Display for Expr {
+	fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+		match &self.ty {
+			ExprTy::Incomplete => write!(f, "\x1b[31;4mINCOMPLETE\x1b[0m"),
+			ExprTy::Invalid => write!(f, "\x1b[31;4mINVALID\x1b[0m"),
+			ExprTy::Lit(l) => write!(f, "{l}"),
+			ExprTy::Ident(i) => write!(f, "{i}"),
+			ExprTy::Prefix { expr, op } => {
+				write!(f, "\x1b[36mPre\x1b[0m({expr} \x1b[36m{op}\x1b[0m)")
+			}
+			ExprTy::Postfix { expr, op } => {
+				write!(f, "\x1b[36mPost\x1b[0m({expr} \x1b[36m{op}\x1b[0m)")
+			}
+			ExprTy::Binary { left, op, right } => {
+				write!(f, "({left} \x1b[36m{op}\x1b[0m {right})")
+			}
+			ExprTy::Ternary {
+				cond,
+				true_,
+				false_,
+			} => write!(f, "IF({cond}) {{ {true_} }} ELSE {{ {false_} }}"),
+			ExprTy::Paren {
+				expr,
+				left: _,
+				right: _,
+			} => write!(f, "({expr})"),
+			ExprTy::Index { item, i, op: _ } => {
+				write!(
+					f,
+					"\x1b[36mIndex\x1b[0m({item}, i: {})",
+					if let Some(e) = i {
+						format!("{e}")
+					} else {
+						format!("_")
+					}
+				)
+			}
+			ExprTy::ObjAccess { obj, leaf } => {
+				write!(f, "\x1b[36mAccess\x1b[0m({obj} -> {leaf})")
+			}
+			ExprTy::Fn { ident, args } => {
+				write!(f, "\x1b[34mCall\x1b[0m(ident: {ident}, args: [")?;
+				for arg in args {
+					write!(f, "{arg}, ")?;
+				}
+				write!(f, "])")
+			}
+			ExprTy::Init(args) => {
+				write!(f, "\x1b[34mInit\x1b[0m{{")?;
+				for arg in args {
+					write!(f, "{arg}, ")?;
+				}
+				write!(f, "}}")
+			}
+			ExprTy::ArrInit { arr, args } => {
+				write!(f, "\x1b[34mArr\x1b[0m(arr: {arr} args: [")?;
+				for arg in args {
+					write!(f, "{arg}, ")?;
+				}
+				write!(f, "])")
+			}
+			ExprTy::List(exprs) => {
+				write!(f, "{{")?;
+				for expr in exprs {
+					write!(f, "{expr}, ")?;
+				}
+				write!(f, "}}")
+			}
+		}
+	}
+}
+
 /// An expression which will be part of an encompassing statement. Expressions cannot exist on their own.
 #[derive(Debug, Clone, PartialEq)]
-pub enum Expr {
+pub enum ExprTy {
 	/// An expression which is incomplete, e.g. `3+5-`.
 	///
 	/// This token exists to allow the analyzer to gracefully deal with expression errors without affecting the
@@ -60,15 +139,9 @@ pub enum Expr {
 	/// An identifier; could be a variable name, function name, type name, etc.
 	Ident(Ident),
 	/// A prefix.
-	Prefix(Box<Expr>, Op),
+	Prefix { expr: Box<Expr>, op: Op },
 	/// A postfix.
-	Postfix(Box<Expr>, Op),
-	/// A negation.
-	Neg(Box<Expr>),
-	/// A bitflip.
-	Flip(Box<Expr>),
-	/// A not.
-	Not(Box<Expr>),
+	Postfix { expr: Box<Expr>, op: Op },
 	/// Binary expression with a left and right hand-side.
 	Binary {
 		left: Box<Expr>,
@@ -82,16 +155,21 @@ pub enum Expr {
 		false_: Box<Expr>,
 	},
 	/// A parenthesis group. *Note:* currently this has no real use.
-	Paren(Box<Expr>),
+	Paren {
+		expr: Box<Expr>,
+		left: Span,
+		right: Span,
+	},
 	/// Index operator, e.g. `item[i]`.
 	Index {
 		item: Box<Expr>,
 		i: Option<Box<Expr>>,
+		op: Span,
 	},
 	/// Object access.
 	ObjAccess { obj: Box<Expr>, leaf: Box<Expr> },
 	/// Function call.
-	Fn { ident: Ident, args: Vec<Expr> },
+	Fn { ident: Box<Expr>, args: Vec<Expr> },
 	/// Initializer list.
 	Init(Vec<Expr>),
 	/// Array constructor.
@@ -105,81 +183,10 @@ pub enum Expr {
 	List(Vec<Expr>),
 }
 
-impl std::fmt::Display for Expr {
-	fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-		match self {
-			Expr::Incomplete => write!(f, "\x1b[31;4mINCOMPLETE\x1b[0m"),
-			Expr::Invalid => write!(f, "\x1b[31;4mINVALID\x1b[0m"),
-			Expr::Lit(l) => write!(f, "{l}"),
-			Expr::Ident(i) => write!(f, "{i}"),
-			Expr::Prefix(expr, op) => {
-				write!(f, "\x1b[36mPre\x1b[0m({expr} \x1b[36m{op:?}\x1b[0m)")
-			}
-			Expr::Postfix(expr, op) => {
-				write!(f, "\x1b[36mPost\x1b[0m({expr} \x1b[36m{op:?}\x1b[0m)")
-			}
-			Expr::Neg(expr) => write!(f, "\x1b[36mNeg\x1b[0m({expr})"),
-			Expr::Flip(expr) => write!(f, "\x1b[36mFlip\x1b[0m({expr})"),
-			Expr::Not(expr) => write!(f, "\x1b[36mNot\x1b[0m({expr})"),
-			Expr::Binary { left, op, right } => {
-				write!(f, "({left} \x1b[36m{op:?}\x1b[0m {right})")
-			}
-			Expr::Ternary {
-				cond,
-				true_,
-				false_,
-			} => write!(f, "IF({cond}) {{ {true_} }} ELSE {{ {false_} }}"),
-			Expr::Paren(expr) => write!(f, "({expr})"),
-			Expr::Index { item, i } => {
-				write!(
-					f,
-					"\x1b[36mIndex\x1b[0m({item}, i: {})",
-					if let Some(e) = i {
-						format!("{e}")
-					} else {
-						format!("_")
-					}
-				)
-			}
-			Expr::ObjAccess { obj, leaf } => {
-				write!(f, "\x1b[36mAccess\x1b[0m({obj} -> {leaf})")
-			}
-			Expr::Fn { ident, args } => {
-				write!(f, "\x1b[34mCall\x1b[0m(ident: {ident}, args: [")?;
-				for arg in args {
-					write!(f, "{arg}, ")?;
-				}
-				write!(f, "])")
-			}
-			Expr::Init(args) => {
-				write!(f, "\x1b[34mInit\x1b[0m{{")?;
-				for arg in args {
-					write!(f, "{arg}, ")?;
-				}
-				write!(f, "}}")
-			}
-			Expr::ArrInit { arr, args } => {
-				write!(f, "\x1b[34mArr\x1b[0m(arr: {arr} args: [")?;
-				for arg in args {
-					write!(f, "{arg}, ")?;
-				}
-				write!(f, "])")
-			}
-			Expr::List(exprs) => {
-				write!(f, "{{")?;
-				for expr in exprs {
-					write!(f, "{expr}, ")?;
-				}
-				write!(f, "}}")
-			}
-		}
-	}
-}
-
 impl Expr {
 	/// Tries to convert this `Expr` to a [`Type`], e.g. `int` or `MyStruct` or `float[3][2]`.
 	pub fn to_type(&self) -> Option<Type> {
-		Type::parse(self)
+		Type::parse(&self.ty)
 	}
 
 	/// Tries to convert this `Expr` to variable definition/declaration identifiers, e.g. `my_num` or `a, b` or
@@ -192,16 +199,16 @@ impl Expr {
 	) -> Vec<Either<Ident, (Ident, Vec<ArrSize>)>> {
 		let mut idents = Vec::new();
 
-		match self {
-			Self::List(v) => {
+		match &self.ty {
+			ExprTy::List(v) => {
 				for expr in v {
-					match Ident::from_expr(expr) {
+					match Ident::from_expr(&expr.ty) {
 						Some(result) => idents.push(result),
 						None => {}
 					}
 				}
 			}
-			_ => match Ident::from_expr(self) {
+			_ => match Ident::from_expr(&self.ty) {
 				Some(result) => idents.push(result),
 				None => {}
 			},
@@ -209,6 +216,12 @@ impl Expr {
 
 		idents
 	}
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Op {
+	pub ty: OpTy,
+	pub span: Span,
 }
 
 type Param = (Type, Option<Ident>, Vec<Qualifier>);
@@ -270,7 +283,7 @@ pub enum Stmt {
 		instance: Option<Ident>,
 	},
 	/// General expression, e.g.
-	/// 
+	///
 	/// - `i + 5;`
 	/// - `fn();`
 	/// - `i = 5 + 1;`
@@ -717,29 +730,34 @@ impl Lit {
 ///
 /// This can be a variable name, function name, etc.
 #[derive(Debug, Clone, PartialEq)]
-pub struct Ident(pub String);
+pub struct Ident {
+	pub name: String,
+	pub span: Span,
+}
 
 impl std::fmt::Display for Ident {
 	fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-		write!(f, "\x1b[33m{}\x1b[0m", self.0)
+		write!(f, "\x1b[33m{}\x1b[0m", self.name)
 	}
 }
 
 impl Ident {
-	fn from_expr(expr: &Expr) -> Option<Either<Ident, (Ident, Vec<ArrSize>)>> {
+	fn from_expr(
+		expr: &ExprTy,
+	) -> Option<Either<Ident, (Ident, Vec<ArrSize>)>> {
 		match expr {
-			Expr::Ident(i) => Some(Either::Left(i.clone())),
-			Expr::Index { item, i } => {
+			ExprTy::Ident(i) => Some(Either::Left(i.clone())),
+			ExprTy::Index { item, i, op: _ } => {
 				let mut current_item = item;
 				let mut stack = Vec::new();
 				stack.push(i.as_deref());
 
 				let ident = loop {
-					match current_item.as_ref() {
-						Expr::Ident(i) => {
+					match &current_item.ty {
+						ExprTy::Ident(i) => {
 							break i.clone();
 						}
-						Expr::Index { item, i } => {
+						ExprTy::Index { item, i, op: _ } => {
 							stack.push(i.as_deref());
 							current_item = item;
 						}
@@ -918,7 +936,7 @@ impl std::fmt::Display for Primitive {
 impl Primitive {
 	#[rustfmt::skip]
 	pub fn parse(ident: &Ident) -> Self {
-		match ident.0.as_ref() {
+		match ident.name.as_ref() {
 			"void" => Primitive::Scalar(Fundamental::Void),
 			"bool" => Primitive::Scalar(Fundamental::Bool),
 			"int" => Primitive::Scalar(Fundamental::Int),
@@ -1101,20 +1119,20 @@ impl std::fmt::Display for Type {
 }
 
 impl Type {
-	pub fn parse(expr: &Expr) -> Option<Self> {
+	pub fn parse(expr: &ExprTy) -> Option<Self> {
 		match expr {
-			Expr::Ident(i) => Some(Self::Basic(Primitive::parse(i))),
-			Expr::Index { item, i } => {
+			ExprTy::Ident(i) => Some(Self::Basic(Primitive::parse(i))),
+			ExprTy::Index { item, i, op: _ } => {
 				let mut current_item = item;
 				let mut stack = Vec::new();
 				stack.push(i.as_deref());
 
 				let primitive = loop {
-					match current_item.as_ref() {
-						Expr::Ident(i) => {
+					match &current_item.ty {
+						ExprTy::Ident(i) => {
 							break Primitive::parse(i);
 						}
-						Expr::Index { item, i } => {
+						ExprTy::Index { item, i, op: _ } => {
 							stack.push(i.as_deref());
 							current_item = item;
 						}

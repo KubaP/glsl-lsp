@@ -155,7 +155,7 @@ impl ShuntingYard {
 				if op.ty == OpTy::BracketStart {
 					self.stack.push_back(Either::Right(Op {
 						ty: OpTy::Paren,
-						span: span(op.span.start, span_end),
+						span: span(group_start, span_end),
 					}));
 					break;
 				} else {
@@ -200,7 +200,7 @@ impl ShuntingYard {
 					// hence the `count + 1`.
 					self.stack.push_back(Either::Right(Op {
 						ty: OpTy::FnCall(count + 1),
-						span: span(op.span.start, span_end),
+						span: span(group_start, span_end),
 					}));
 					break;
 				} else {
@@ -243,7 +243,7 @@ impl ShuntingYard {
 				if op.ty == OpTy::IndexStart {
 					self.stack.push_back(Either::Right(Op {
 						ty: OpTy::Index(contains_i),
-						span: span(op.span.start, span_end),
+						span: span(group_start, span_end),
 					}));
 					break;
 				} else {
@@ -284,7 +284,7 @@ impl ShuntingYard {
 				if op.ty == OpTy::InitStart {
 					self.stack.push_back(Either::Right(Op {
 						ty: OpTy::Init(count),
-						span: span(op.span.start, span_end),
+						span: span(group_start, span_end),
 					}));
 					break;
 				} else {
@@ -327,7 +327,7 @@ impl ShuntingYard {
 					// array index, hence the `count + 1`.
 					self.stack.push_back(Either::Right(Op {
 						ty: OpTy::ArrInit(count + 1),
-						span: span(op.span.start, span_end),
+						span: span(group_start, span_end),
 					}));
 					break;
 				} else {
@@ -370,7 +370,7 @@ impl ShuntingYard {
 				// Since lists cannnot exist within a `Group::Fn|Init|ArrInit`, we don't check for those start
 				// delimiters.
 				if op.ty == OpTy::BracketStart || op.ty == OpTy::IndexStart {
-					start_span = op.span.start;
+					start_span = op.span.end;
 					break;
 				} else {
 					// Any other operators get moved, since we are moving everything until we hit the start
@@ -1578,14 +1578,13 @@ impl ShuntingYard {
 							args.push_front(stack.pop_back().unwrap());
 						}
 						// Get the identifier (which is the first expression).
-						let ident = args.pop_front().unwrap();
-						match ident.ty {
-							ExprTy::Ident(_) => {}
+						let ident = match args.pop_front().unwrap().ty {
+							ExprTy::Ident(i) => i,
 							_ => panic!("The first expression of a function call operator is not an identifier!")
-						}
+						};
 						stack.push_back(Expr {
 							ty: ExprTy::Fn {
-								ident: Box::from(ident),
+								ident,
 								args: args.into(),
 							},
 							span: op.span,
@@ -1948,143 +1947,282 @@ fn binaries() {
 		span: span(0, 17)
 	});
 }
-/*/
+
 #[test]
 #[rustfmt::skip]
 fn brackets() {
-	assert_expr!("(5 + 1) * 8",
-		Expr::Binary {
-			left: Box::from(Expr::Paren(Box::from(Expr::Binary {
-				left: Box::from(Expr::Lit(Lit::Int(5))),
-				op: Op::Add,
-				right: Box::from(Expr::Lit(Lit::Int(1))),
-			}))),
-			op: Op::Mul,
-			right: Box::from(Expr::Lit(Lit::Int(8)))
-		}
-	);
-	assert_expr!("((5 + 1) < 100) * 8",
-		Expr::Binary {
-			left: Box::from(Expr::Paren(Box::from(Expr::Binary {
-				left: Box::from(Expr::Paren(Box::from(Expr::Binary {
-					left: Box::from(Expr::Lit(Lit::Int(5))),
-					op: Op::Add,
-					right: Box::from(Expr::Lit(Lit::Int(1))),
-				}))),
-				op: Op::Lt,
-				right: Box::from(Expr::Lit(Lit::Int(100))),
-			}))),
-			op: Op::Mul,
-			right: Box::from(Expr::Lit(Lit::Int(8)))
-		}
-	);
+	assert_expr!("(5 + 1) * 8", Expr {
+		ty: ExprTy::Binary {
+			left: Box::from(Expr{
+				ty: ExprTy::Paren {
+					expr: Box::from(Expr{
+						ty: ExprTy::Binary {
+							left: Box::from(Expr{ty: ExprTy::Lit(Lit::Int(5)), span: span(1, 2)}),
+							op: Op{ty: OpTy::Add, span: span(3, 4)},
+							right: Box::from(Expr{ty: ExprTy::Lit(Lit::Int(1)), span: span(5, 6)}),
+						},
+						span: span(1, 6),
+					}),
+					left: span(0, 1),
+					right: span(6, 7),
+				},
+				span: span(0, 7),
+			}),
+			op: Op{ty: OpTy::Mul, span: span(8, 9)},
+			right: Box::from(Expr{ty: ExprTy::Lit(Lit::Int(8)), span: span(10, 11)})
+		},
+		span: span(0, 11),
+	});
+	assert_expr!("((5 + 1) < 100) * 8", Expr {
+		ty: ExprTy::Binary {
+			left: Box::from(Expr {
+				ty: ExprTy::Paren {
+					expr: Box::from(Expr {
+						ty: ExprTy::Binary {
+							left: Box::from(Expr {
+								ty: ExprTy::Paren {
+									expr: Box::from(Expr {
+										ty: ExprTy::Binary {
+											left: Box::from(Expr{ty: ExprTy::Lit(Lit::Int(5)), span: span(2, 3)}),
+											op: Op{ty: OpTy::Add, span: span(4, 5)},
+											right: Box::from(Expr{ty: ExprTy::Lit(Lit::Int(1)), span: span(6, 7)}),
+										},
+										span: span(2, 7),
+									}),
+									left: span(1, 2),
+									right: span(7, 8),
+								},
+								span: span(1, 8),
+							}),
+							op: Op{ty: OpTy::Lt, span: span(9, 10)},
+							right: Box::from(Expr{ty: ExprTy::Lit(Lit::Int(100)), span: span(11, 14)}),
+						},
+						span: span(1, 14),
+					}),
+					left: span(0, 1),
+					right: span(14, 15),
+				},
+				span: span(0, 15),
+			}),
+			op: Op{ty: OpTy::Mul, span: span(16, 17)},
+			right: Box::from(Expr{ty: ExprTy::Lit(Lit::Int(8)), span: span(18, 19)})
+		},
+		span: span(0, 19),
+	});
 }
 
 #[test]
 #[rustfmt::skip]
 fn unaries() {
 	// Single operator
-	assert_expr!("-5", Expr::Neg(Box::from(Expr::Lit(Lit::Int(5)))));
-	assert_expr!("~5", Expr::Flip(Box::from(Expr::Lit(Lit::Int(5)))));
-	assert_expr!("!5", Expr::Not(Box::from(Expr::Lit(Lit::Int(5)))));
-	assert_expr!("++5", Expr::Prefix(Box::from(Expr::Lit(Lit::Int(5))), Op::Add));
-	assert_expr!("--5", Expr::Prefix(Box::from(Expr::Lit(Lit::Int(5))), Op::Sub));
-	assert_expr!("5++", Expr::Postfix(Box::from(Expr::Lit(Lit::Int(5))), Op::Add));
-	assert_expr!("5--", Expr::Postfix(Box::from(Expr::Lit(Lit::Int(5))), Op::Sub));
-	
+	assert_expr!("-5", Expr {
+		ty: ExprTy::Prefix {
+			expr: Box::from(Expr{ty: ExprTy::Lit(Lit::Int(5)), span: span(1, 2)}),
+			op: Op{ty: OpTy::Neg, span: span(0, 1)},
+		},
+		span: span(0, 2),
+	});
+	assert_expr!("~5", Expr {
+		ty: ExprTy::Prefix {
+			expr: Box::from(Expr{ty: ExprTy::Lit(Lit::Int(5)), span: span(1, 2)}),
+			op: Op{ty: OpTy::Flip, span: span(0, 1)},
+		},
+		span: span(0, 2),
+	});
+	assert_expr!("!5", Expr {
+		ty: ExprTy::Prefix {
+			expr: Box::from(Expr{ty: ExprTy::Lit(Lit::Int(5)), span: span(1, 2)}),
+			op: Op{ty: OpTy::Not, span: span(0, 1)},
+		},
+		span: span(0, 2),
+	});
+	assert_expr!("++5", Expr {
+		ty: ExprTy::Prefix {
+			expr: Box::from(Expr{ty: ExprTy::Lit(Lit::Int(5)), span: span(2, 3)}),
+			op: Op{ty: OpTy::Add, span: span(0, 2)},
+		},
+		span: span(0, 3),
+	});
+	assert_expr!("--5", Expr {
+		ty: ExprTy::Prefix {
+			expr: Box::from(Expr{ty: ExprTy::Lit(Lit::Int(5)), span: span(2, 3)}),
+			op: Op{ty: OpTy::Sub, span: span(0, 2)},
+		},
+		span: span(0, 3),
+	});
+	assert_expr!("5++", Expr {
+		ty: ExprTy::Postfix {
+			expr: Box::from(Expr{ty: ExprTy::Lit(Lit::Int(5)), span: span(0, 1)}),
+			op: Op{ty: OpTy::Add, span: span(1, 3)},
+		},
+		span: span(0, 3),
+	});
+	assert_expr!("5--", Expr {
+		ty: ExprTy::Postfix {
+			expr: Box::from(Expr{ty: ExprTy::Lit(Lit::Int(5)), span: span(0, 1)}),
+			op: Op{ty: OpTy::Sub, span: span(1, 3)},
+		},
+		span: span(0, 3),
+	});
+
 	// Multiple operators
-	assert_expr!("- -5",
-		Expr::Neg(Box::from(
-			Expr::Neg(Box::from(Expr::Lit(Lit::Int(5))))
-		))
-	);
-	assert_expr!("- - -5",
-		Expr::Neg(Box::from(
-			Expr::Neg(Box::from(
-				Expr::Neg(Box::from(Expr::Lit(Lit::Int(5))))
-			))
-		))
-	);
-	assert_expr!("!!5",
-		Expr::Not(Box::from(
-			Expr::Not(Box::from(Expr::Lit(Lit::Int(5))))
-		))
-	);
-	assert_expr!("++++5",
-		Expr::Prefix(
-			Box::from(
-				Expr::Prefix(
-					Box::from(Expr::Lit(Lit::Int(5))),
-					Op::Add
-				)
-			),
-			Op::Add
-		)
-	);
-	assert_expr!("--5++",
-		Expr::Prefix(
-			Box::from(Expr::Postfix(
-				Box::from(Expr::Lit(Lit::Int(5))),
-				Op::Add
-			)),
-			Op::Sub
-		)
-	);
+	assert_expr!("- -5", Expr {
+		ty: ExprTy::Prefix {
+			expr: Box::from(Expr{
+				ty: ExprTy::Prefix {
+					expr: Box::from(Expr{ty:ExprTy::Lit(Lit::Int(5)), span: span(3, 4)}),
+					op: Op{ty: OpTy::Neg, span: span(2, 3)},
+				},
+				span: span(2, 4),
+			}),
+			op: Op{ty: OpTy::Neg, span: span(0, 1)},
+		},
+		span: span(0, 4),
+	});
+	assert_expr!("- - -5", Expr {
+		ty: ExprTy::Prefix {
+			expr: Box::from(Expr{
+				ty: ExprTy::Prefix {
+					expr: Box::from(Expr {
+						ty: ExprTy::Prefix {
+							expr: Box::from(Expr{ty: ExprTy::Lit(Lit::Int(5)), span: span(5, 6)}),
+							op: Op{ty: OpTy::Neg, span: span(4, 5)},
+						},
+						span: span(4, 6),
+					}),
+					op: Op{ty: OpTy::Neg, span: span(2, 3)},
+				},
+				span: span(2, 6),
+			}),
+			op: Op{ty: OpTy::Neg, span: span(0, 1)},
+		},
+		span: span(0, 6),
+	});
+	assert_expr!("!!5", Expr {
+		ty: ExprTy::Prefix {
+			expr: Box::from(Expr{
+				ty: ExprTy::Prefix {
+					expr: Box::from(Expr{ty:ExprTy::Lit(Lit::Int(5)), span: span(2, 3)}),
+					op: Op{ty: OpTy::Not, span: span(1, 2)},
+				},
+				span: span(1, 3),
+			}),
+			op: Op{ty: OpTy::Not, span: span(0, 1)},
+		},
+		span: span(0, 3),
+	});
+	assert_expr!("++++5", Expr {
+		ty: ExprTy::Prefix {
+			expr: Box::from(Expr {
+				ty: ExprTy::Prefix {
+					expr: Box::from(Expr{ty: ExprTy::Lit(Lit::Int(5)), span: span(4, 5)}),
+					op: Op{ty: OpTy::Add, span: span(2, 4)},
+				},
+				span: span(2, 5),
+			}),
+			op: Op{ty: OpTy::Add, span: span(0, 2)},
+		},
+		span: span(0, 5),
+	});
+	assert_expr!("++5--", Expr {
+		ty: ExprTy::Prefix {
+			expr: Box::from(Expr {
+				ty: ExprTy::Postfix {
+					expr: Box::from(Expr{ty: ExprTy::Lit(Lit::Int(5)), span: span(2, 3)}),
+					op: Op{ty: OpTy::Sub, span: span(3, 5)},
+				},
+				span: span(2, 5),
+			}),
+			op: Op{ty: OpTy::Add, span: span(0, 2)},
+		},
+		span: span(0, 5),
+	});
 }
 
 #[test]
 #[rustfmt::skip]
 fn fn_calls() {
-	assert_expr!("fn()",
-		Expr::Fn { ident: Ident("fn".into()), args: vec![] }
-	);
-	assert_expr!("fu_nc(1)",
-		Expr::Fn { ident: Ident("fu_nc".into()), args: vec![Expr::Lit(Lit::Int(1))] }
-	);
-	assert_expr!("fn(5 + 1, i << 6)",
-		Expr::Fn { ident: Ident("fn".into()), args: vec![
-			Expr::Binary {
-				left: Box::from(Expr::Lit(Lit::Int(5))),
-				op: Op::Add,
-				right: Box::from(Expr::Lit(Lit::Int(1))),
-			},
-			Expr::Binary {
-				left: Box::from(Expr::Ident(Ident("i".into()))),
-				op: Op::LShift,
-				right: Box::from(Expr::Lit(Lit::Int(6))),
-			},
-		]}
-	);
-	assert_expr!("fn(fn())",
-		Expr::Fn { ident: Ident("fn".into()), args: vec![
-			Expr::Fn { ident: Ident("fn".into()), args: vec![] }
-		]}
-	);
-	assert_expr!("fn1(5, fn2(0))", Expr::Fn {
-		ident: Ident("fn1".into()),
-		args: vec![
-			Expr::Lit(Lit::Int(5)),
-			Expr::Fn {
-				ident: Ident("fn2".into()),
-				args: vec![Expr::Lit(Lit::Int(0))]
-			}
-		]
+	assert_expr!("fn()", Expr {
+		ty: ExprTy::Fn{ident: Ident{name: "fn".into(), span: span(0, 2)}, args: vec![]},
+		span: span(0, 4),
 	});
-	assert_expr!("fn1(5, fn2(fn3()))", Expr::Fn {
-		ident: Ident("fn1".into()),
-		args: vec![
-			Expr::Lit(Lit::Int(5)),
-			Expr::Fn {
-				ident: Ident("fn2".into()),
-				args: vec![Expr::Fn {
-					ident: Ident("fn3".into()),
-					args: vec![]
-				}]
-			}
-		]
+	assert_expr!("fu_nc(1)", Expr {
+		ty: ExprTy::Fn{ident: Ident{name: "fu_nc".into(), span: span(0, 5)}, args: vec![
+			Expr{ty: ExprTy::Lit(Lit::Int(1)), span: span(6, 7)},
+		]},
+		span: span(0, 8),
+	});
+	assert_expr!("fn(5 + 1, i << 6)", Expr {
+		ty: ExprTy::Fn {
+			ident: Ident{name: "fn".into(), span: span(0, 2)},
+			args: vec![
+				Expr {
+					ty: ExprTy::Binary {
+						left: Box::from(Expr{ty: ExprTy::Lit(Lit::Int(5)), span: span(3, 4)}),
+						right: Box::from(Expr{ty: ExprTy::Lit(Lit::Int(1)), span: span(7, 8)}),
+						op: Op{ty: OpTy::Add, span: span(5, 6)},
+					},
+					span: span(3, 8),
+				},
+				Expr {
+					ty: ExprTy::Binary {
+						left: Box::from(Expr{ty: ExprTy::Ident(Ident{name: "i".into(), span: span(10, 11)}), span: span(10, 11)}),
+						right: Box::from(Expr{ty: ExprTy::Lit(Lit::Int(6)), span: span(15, 16)}),
+						op: Op{ty: OpTy::LShift, span: span(12, 14)},
+					},
+					span: span(10, 16),
+				}
+			]
+		},
+		span: span(0, 17),
+	});
+	assert_expr!("fn(fn())", Expr {
+		ty: ExprTy::Fn{ident: Ident{name: "fn".into(), span: span(0, 2)}, args: vec![Expr {
+			ty: ExprTy::Fn{ident: Ident{name: "fn".into(), span: span(3, 5)}, args: vec![]},
+			span: span(3, 7),
+		}]},
+		span: span(0, 8),
+	});
+	assert_expr!("fn1(5, fn2(0))", Expr {
+		ty: ExprTy::Fn {
+			ident: Ident{name: "fn1".into(), span: span(0, 3)},
+			args: vec![
+				Expr {
+					ty: ExprTy::Lit(Lit::Int(5)),
+					span: span(4, 5),
+				},
+				Expr {
+					ty: ExprTy::Fn{ident: Ident{name: "fn2".into(), span: span(7, 10)}, args: vec![Expr {
+						ty: ExprTy::Lit(Lit::Int(0)),
+						span: span(11, 12),
+					}]},
+					span: span(7, 13),
+				}
+			]
+		},
+		span: span(0, 14),
+	});
+	assert_expr!("fn1(5, fn2(fn3()))", Expr {
+		ty: ExprTy::Fn {
+			ident: Ident{name: "fn1".into(), span: span(0, 3)},
+			args: vec![
+				Expr {
+					ty: ExprTy::Lit(Lit::Int(5)),
+					span: span(4, 5),
+				},
+				Expr {
+					ty: ExprTy::Fn{ident: Ident{name: "fn2".into(), span: span(7, 10)}, args: vec![Expr {
+						ty: ExprTy::Fn{ident: Ident{name: "fn3".into(), span: span(11, 14)}, args: vec![]},
+						span: span(11, 16),
+					}]},
+					span: span(7, 17),
+				}
+			]
+		},
+		span: span(0, 18),
 	});
 }
-
+/*
 #[test]
 #[rustfmt::skip]
 fn obj_access() {

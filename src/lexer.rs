@@ -307,7 +307,16 @@ pub enum OpTy {
 	SubSubPre,
 	SubSubPost,
 	/// Parenthesis group.
-	Paren,
+	/// 
+	/// The `Span`s represent the spans for the left and right parenthesis. The reason this group has this but
+	/// other groups don't is for the following:
+	/// 
+	/// `Paren` groups may be closed as valid even if missing the closing `)`, hence when we collapse a parenthesis
+	/// group and emit this token onto the shunting yard stack, we need to figure out these spans there and then,
+	/// because afterwards this information gets lost. The only other group which can be collapsed at the end of
+	/// the parse is the `List` group, but that doesn't have any delimiters. All other groups get invalidated if
+	/// they're open so there's no need for extra tracking.
+	Paren(Span, Span),
 	/// Index operator. `bool` notes whether there is a node within the `[...]` brackets.
 	Index(bool),
 	/// Object access operator.

@@ -133,8 +133,9 @@ impl ShuntingYard {
 	/// # Invariants
 	/// Assumes that `self.group.back()` is of type [`Group::Bracket`].
 	///
-	/// `span_end` is the position which marks the end of this parenthesis group.
-	fn collapse_bracket(&mut self, span_end: usize, invalidate: bool) {
+	/// `end_span` is the span which marks the end of this parenthesis group. It may be a span covering the `)`, or
+	/// it may be a zero-width span if this group is collapsed without a closing delimiter.
+	fn collapse_bracket(&mut self, end_span: Span, invalidate: bool) {
 		let (group, group_start, _) = self.groups.pop_back().unwrap();
 
 		if let Group::Paren = group {
@@ -154,8 +155,8 @@ impl ShuntingYard {
 
 				if op.ty == OpTy::BracketStart {
 					self.stack.push_back(Either::Right(Op {
-						ty: OpTy::Paren,
-						span: span(group_start, span_end),
+						ty: OpTy::Paren(op.span, end_span),
+						span: span(group_start, end_span.end),
 					}));
 					break;
 				} else {
@@ -166,7 +167,7 @@ impl ShuntingYard {
 			}
 
 			if invalidate {
-				self.invalidate_range(group_start, span_end, false);
+				self.invalidate_range(group_start, end_span.end, false);
 			}
 		} else {
 			unreachable!()
@@ -559,7 +560,7 @@ impl ShuntingYard {
 		}
 
 		match self.groups.back().unwrap().0 {
-			Group::Paren => self.collapse_bracket(end_span.end, false),
+			Group::Paren => self.collapse_bracket(end_span, false),
 			Group::Fn(_) => self.collapse_fn(end_span.end, false),
 			Group::ArrInit(_) => self.collapse_arr_init(end_span.end, false),
 			// Either the inner-most group is already a parenthesis-delimited group, or we've closed all inner
@@ -611,7 +612,10 @@ impl ShuntingYard {
 						Group::Paren => {
 							println!("Unclosed `)` parenthesis found!");
 							self.collapse_bracket(
-								end_span.end_at_previous().end,
+								span(
+									end_span.end_at_previous().end,
+									end_span.end_at_previous().end,
+								),
 								true,
 							);
 						}
@@ -730,7 +734,10 @@ impl ShuntingYard {
 						Group::Paren => {
 							println!("Unclosed `)` parenthesis found!");
 							self.collapse_bracket(
-								end_span.end_at_previous().end,
+								span(
+									end_span.end_at_previous().end,
+									end_span.end_at_previous().end,
+								),
 								true,
 							);
 						}
@@ -1397,7 +1404,8 @@ impl ShuntingYard {
 			// ArrInit - same as above.
 			// List - a perfectly valid top-level grouping structure.
 			match group {
-				Group::Paren => self.collapse_bracket(end_position, false),
+				Group::Paren => self
+					.collapse_bracket(span(end_position, end_position), false),
 				Group::Index(_) => self.collapse_index(end_position, true),
 				Group::Fn(_) => self.collapse_fn(end_position, true),
 				Group::Init(_) => self.collapse_init(end_position, true),
@@ -1529,11 +1537,9 @@ impl ShuntingYard {
 							span,
 						});
 					}
-					OpTy::Paren => {
+					OpTy::Paren(l_span, r_span) => {
 						// Note: the span for `Op::Paren` is from the start of the `(` to the end of the `)`.
 						let expr = stack.pop_back().unwrap();
-						let l_span = op.span.first_char();
-						let r_span = op.span.last_char();
 						stack.push_back(Expr {
 							ty: ExprTy::Paren {
 								expr: Box::from(expr),
@@ -1735,7 +1741,7 @@ impl OpTy {
 			Self::AddAdd | Self::SubSub => panic!("OpType::AddAdd | OpType::SubSub do not have precedence values because they should never be passed into this function. Something has gone wrong!"),
 			// These are never directly checked for precedence, but rather have special branches.
 			Self::BracketStart
-			| Self::Paren 
+			| Self::Paren(_, _)
 			| Self::FnStart 
 			| Self::FnCall(_) 
 			| Self::IndexStart 
@@ -1818,7 +1824,7 @@ impl std::fmt::Display for Op {
 			| OpTy::ArrInitStart => {
 				write!(f, "")
 			}
-			OpTy::Paren => write!(f, ""),
+			OpTy::Paren(_, _) => write!(f, ""),
 			OpTy::Index(true) => write!(f, "index"),
 			OpTy::Index(false) => write!(f, "empty_index"),
 			OpTy::ObjAccess => write!(f, "access"),
@@ -2798,9 +2804,7 @@ fn incomplete() {
 	});
 
 	// Outer unclosed delimiters.
-	// FIXME: The `right` span should be 4, 4 but it is 4,3 because the `create_ast()` method gets the last char. I
-	// guess the paren operator should hold this information.
-	/* assert_expr!("(i+x", Expr {
+	assert_expr!("(i+x", Expr {
 		ty: ExprTy::Paren {
 			expr: Box::from(Expr {
 				ty: ExprTy::Binary {
@@ -2814,7 +2818,7 @@ fn incomplete() {
 			right: span(4, 4),
 		},
 		span: span(0, 4),
-	}); */
+	});
 	assert_expr!("i[5+1", Expr {
 		ty: ExprTy::Index {
 			item: Box::from(Expr{ty: ExprTy::Ident(Ident{name: "i".into(), span: span(0, 1)}), span: span(0, 1)}),

@@ -59,7 +59,10 @@ enum Group {
 	/// never be removed.
 	Paren,
 	/// An index operator `[...]`. `bool` notes whether there is an item within the `[...]` brackets.
-	Index(bool),
+	///
+	/// If the preceding item was an `Expr::Ident`, then `Option<usize>` holds the start of that token. This
+	/// starting position is later used if we encounter an array constructor to define the start of that group.
+	Index(bool, Option<usize>),
 	/// A function call `fn(...)`.
 	Fn(usize),
 	/// An initializer list `{...}`.
@@ -226,7 +229,7 @@ impl ShuntingYard {
 	fn collapse_index(&mut self, span_end: usize, invalidate: bool) {
 		let (group, group_start, _) = self.groups.pop_back().unwrap();
 
-		if let Group::Index(contains_i) = group {
+		if let Group::Index(contains_i, _) = group {
 			while self.operators.back().is_some() {
 				let op = self.operators.pop_back().unwrap();
 
@@ -501,7 +504,7 @@ impl ShuntingYard {
 									true,
 								);
 							}
-							Group::Index(_) => {
+							Group::Index(_, _) => {
 								println!("Unclosed `]` index operator found!");
 								self.collapse_index(
 									end_span.end_at_previous().end,
@@ -574,7 +577,7 @@ impl ShuntingYard {
 	/// reached.
 	///
 	/// `end_span` is a span which ends at the end of this index operator. (The start value is irrelevant).
-	fn end_index(&mut self, end_span: Span) -> Result<(), ()> {
+	fn end_index(&mut self, end_span: Span) -> Result<Option<usize>, ()> {
 		let (current_group, _, current_group_inner_start) =
 			match self.groups.back() {
 				Some(t) => t,
@@ -587,12 +590,12 @@ impl ShuntingYard {
 			};
 
 		if std::mem::discriminant(current_group)
-			!= std::mem::discriminant(&Group::Index(false))
+			!= std::mem::discriminant(&Group::Index(false, None))
 		{
 			// The current group is not an index group, so we need to check whether there is one at all.
 			let mut exists_index = false;
 			for (group, _, _) in self.groups.iter() {
-				if let Group::Index(_) = group {
+				if let Group::Index(_, _) = group {
 					exists_index = true;
 					break;
 				}
@@ -644,7 +647,7 @@ impl ShuntingYard {
 							end_span.end_at_previous().end,
 							false,
 						),
-						Group::Index(_) => break 'inner,
+						Group::Index(_, _) => break 'inner,
 					}
 				}
 			} else {
@@ -686,12 +689,21 @@ impl ShuntingYard {
 					ty: ExprTy::Incomplete,
 					span: span(*current_group_inner_start, end_span.end),
 				}));
-				return Ok(());
+				return Ok(None);
 			}
 		}
 
+		// If this `Index` can start an array constructor, return the start of the identifier token, i.e.
+		//
+		//   ident[...]
+		//  ^
+		let can_start_arr_init = match self.groups.back().unwrap().0 {
+			Group::Index(_, possible_start) => possible_start,
+			_ => unreachable!(),
+		};
+
 		self.collapse_index(end_span.end, false);
-		Ok(())
+		Ok(can_start_arr_init)
 	}
 
 	/// Registers the end of an initializer list group, popping any operators until the start of the group is
@@ -741,7 +753,7 @@ impl ShuntingYard {
 								true,
 							);
 						}
-						Group::Index(_) => {
+						Group::Index(_, _) => {
 							println!("Unclosed `]` index operator found!");
 							self.collapse_index(
 								end_span.end_at_previous().end,
@@ -853,7 +865,7 @@ impl ShuntingYard {
 						self.stack.push_back(Either::Right(moved));
 					}
 				}
-				Group::Paren | Group::Index(_) => {
+				Group::Paren | Group::Index(_, _) => {
 					// Same as the branch above, but we do push a new list group. Since list groups don't have a
 					// start delimiter, we can only do it now that we've encountered a comma within these two
 					// groups.
@@ -959,8 +971,10 @@ impl ShuntingYard {
 		enum Start {
 			/// Nothing.
 			None,
-			/// We have found an `ident`; we can start a function call assuming we find `(` next.
-			Fn,
+			/// We have found an `ident`; we can start a function call assuming we find `(` next. If we encounter a
+			/// `[` next, we want to store the `possible_delim_start` value with the `Index` group, in case we have
+			/// an array constructor after the index.
+			FnOrArr,
 			/// We have found an `Expr::Index`; we can start an array constructor assuming we find `(` next.
 			ArrInit,
 			/// We have found a `[`. If the next token is a `]` we have an empty index operator.
@@ -1021,7 +1035,7 @@ impl ShuntingYard {
 					state = State::AfterOperand;
 
 					// After an identifier, we may start a function call.
-					can_start = Start::Fn;
+					can_start = Start::FnOrArr;
 					possible_delim_start = span.start;
 
 					if increase_arity {
@@ -1136,7 +1150,7 @@ impl ShuntingYard {
 					can_start = Start::None;
 				}
 				Token::LParen if state == State::AfterOperand => {
-					if can_start == Start::Fn {
+					if can_start == Start::FnOrArr {
 						// We have `ident(` which makes this a function call.
 						self.operators.push_back(Op {
 							ty: OpTy::FnStart,
@@ -1158,7 +1172,7 @@ impl ShuntingYard {
 
 						increase_arity = true;
 					} else if can_start == Start::ArrInit {
-						// We have `something[something](` which makes this an array constructor.
+						// We have `ident[...](` which makes this an array constructor.
 						self.operators.push_back(Op {
 							ty: OpTy::ArrInitStart,
 							span: *span,
@@ -1222,11 +1236,23 @@ impl ShuntingYard {
 						ty: OpTy::IndexStart,
 						span: *span,
 					});
-					self.groups.push_back((
-						Group::Index(true),
-						span.start,
-						span.end,
-					));
+					if can_start == Start::FnOrArr {
+						// Since we just had an `Expr::Ident` before, this `Index` may be part of a greater array
+						// constructor, so we want to store the starting position in case it is needed later.
+						self.groups.push_back((
+							Group::Index(true, Some(possible_delim_start)),
+							span.start,
+							span.end,
+						));
+					} else {
+						// We had something other than an `Expr::Ident` beforehand, so don't bother storing the
+						// position.
+						self.groups.push_back((
+							Group::Index(true, None),
+							span.start,
+							span.end,
+						));
+					}
 					state = State::Operand;
 
 					can_start = Start::EmptyIndex;
@@ -1240,12 +1266,17 @@ impl ShuntingYard {
 					// We don't switch state since after a `]`, we are expecting an operator, i.e.
 					// `..] + 5` instead of `..] 5`.
 					match self.end_index(*span) {
-						Ok(_) => {}
+						Ok(can_start_arr_init) => {
+							if let Some(delim_start) = can_start_arr_init {
+								// After an index `ident[..]` we may have an array constructor.
+								can_start = Start::ArrInit;
+								// We want to set the possible start value to the one provided by the index, so
+								// that if we encounter a `(`, we create an `ArrInit` with the correct span.
+								possible_delim_start = delim_start;
+							}
+						}
 						Err(_) => break 'main,
 					}
-
-					// After an index `]` we may have an array constructor.
-					can_start = Start::ArrInit;
 				}
 				Token::RBracket if state == State::Operand => {
 					if can_start == Start::EmptyIndex {
@@ -1254,20 +1285,27 @@ impl ShuntingYard {
 
 						match self.groups.back_mut() {
 							Some((g, _, _)) => match g {
-								Group::Index(contains_i) => *contains_i = false,
+								Group::Index(contains_i, _) => {
+									*contains_i = false
+								}
 								_ => unreachable!(),
 							},
 							None => unreachable!(),
 						}
 
 						match self.end_index(*span) {
-							Ok(_) => {}
+							Ok(can_start_arr_init) => {
+								if let Some(delim_start) = can_start_arr_init {
+									// After an index `ident[]` we may have an array constructor.
+									can_start = Start::ArrInit;
+									// We want to set the possible start value to the one provided by the index, so
+									// that if we encounter a `(`, we create an `ArrInit` with the correct span.
+									possible_delim_start = delim_start;
+								}
+							}
 							Err(_) => break 'main,
 						}
 						state = State::AfterOperand;
-
-						// After an index `]` we may have an array constructor.
-						can_start = Start::ArrInit;
 					} else {
 						// This is an error, e.g. `..+ ]` instead of `..+ 1]`.
 						println!("Expected an atom or a prefix operator, found `]` instead!");
@@ -1406,7 +1444,7 @@ impl ShuntingYard {
 			match group {
 				Group::Paren => self
 					.collapse_bracket(span(end_position, end_position), false),
-				Group::Index(_) => self.collapse_index(end_position, true),
+				Group::Index(_, _) => self.collapse_index(end_position, true),
 				Group::Fn(_) => self.collapse_fn(end_position, true),
 				Group::Init(_) => self.collapse_init(end_position, true),
 				Group::ArrInit(_) => self.collapse_arr_init(end_position, true),
@@ -2462,9 +2500,7 @@ fn arr_constructors() {
 		},
 		span: span(0, 9),
 	});
-	// FIXME: This test fails because the `delim_start` gets reset by the `size` identifier. We need a way of
-	// storing delim starters that can be nested; maybe with the identifier itself or something?
-	/* assert_expr!("int[size](2, false, 5.0)", Expr {
+	assert_expr!("int[size](2, false, 5.0)", Expr {
 		ty: ExprTy::ArrInit {
 			arr: Box::from(Expr {
 				ty: ExprTy::Index {
@@ -2481,7 +2517,7 @@ fn arr_constructors() {
 			],
 		},
 		span: span(0, 24),
-	}); */
+	});
 	assert_expr!("int[1+5](2)", Expr {
 		ty: ExprTy::ArrInit {
 			arr: Box::from(Expr {

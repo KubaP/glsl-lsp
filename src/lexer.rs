@@ -391,27 +391,61 @@ impl Lexer {
 		}
 	}
 
-	/// Tries to match a pattern starting at the current character under the cursor. If the match is successful,
-	/// `true` is returned and the cursor is advanced to consume the pattern. If the match is unsuccessful, `false`
-	/// is returned and the cursor stays in place.
+	/// Tries to match a pattern starting at the current character under the cursor.
+	///
+	/// If the match is successful, `true` is returned and the cursor is advanced to consume the pattern. If the
+	/// match is unsuccessful, `false` is returned and the cursor stays in place. This method correctly deals with
+	/// potential line-continuation characters within the source string that may exist within the pattern.
 	fn take_pat(&mut self, pat: &str) -> bool {
-		let len = pat.len();
+		let pat = pat.chars().collect::<Vec<_>>();
+		let pat_len = pat.len();
+		let mut pat_count = 0;
 
-		// If the pattern fits within the remaining length of the character string, compare.
-		if self.chars.len() >= self.cursor + len {
-			let res = self.chars[self.cursor..self.cursor + len]
-				.iter()
-				.zip(pat.chars())
-				.all(|(c, p)| *c == p);
+		// Store the current position before we check the pattern, so that we can rollback to this position if the
+		// match fails.
+		let starting_position = self.cursor;
 
-			// If the match was successful, advance the cursor.
-			if res {
-				self.cursor += len;
+		// If the pattern fits within the remaining length of the string, compare.
+		if self.chars.len() >= self.cursor + pat_len {
+			while self.peek().is_some() {
+				// If we have consumed the entire pattern, that means the pattern has matched and we can break out
+				// of the loop.
+				if pat_count == pat_len {
+					break;
+				}
+
+				if let Ok(is_valid) = match_line_continuator(self) {
+					match is_valid {
+						// We have encountered a line-continuator whilst checking this pattern and skip over it.
+						true => continue,
+						// We have encountered an illegal escape sequence. That means this pattern has not matched.
+						false => {
+							self.cursor = starting_position;
+							return false;
+						}
+					}
+				}
+
+				// Check that the characters match.
+				if self.peek().unwrap() != pat[pat_count] {
+					self.cursor = starting_position;
+					return false;
+				}
+
+				// The reason we have to `advance()` is because the `match_line_continuator()` function calls
+				// `peek()`, who's return value depends on `self.cursor`. That's why we can't just keep local track
+				// of the cursor offset like we can with the pattern offset; because the line continuator would be
+				// looking at the original cursor position rather than the local "current" position. This is also
+				// why we then have to rollback the cursor if the match fails.
+				self.advance();
+				pat_count += 1;
 			}
 
-			return res;
+			// The match was successful.
+			return true;
 		}
 
+		self.cursor = starting_position;
 		false
 	}
 
@@ -452,9 +486,10 @@ fn is_octal(c: &char) -> bool {
 	}
 }
 
-/// Whether the character is allowed to start a punctuation.
+/// Whether the character is allowed to start a punctuation token.
 ///
-/// Note: The `.` is also caught by the `is_number_start()` function which may execute first.
+/// *Note:* Whilst the `.` is a punctuation token, it gets caught by the `is_number_start()` branch since that
+/// executes first.
 fn is_punctuation_start(c: &char) -> bool {
 	match c {
 		'=' | ',' | '.' | ';' | '(' | ')' | '[' | ']' | '{' | '}' | ':'
@@ -519,7 +554,7 @@ fn match_punctuation(lexer: &mut Lexer) -> Token {
 	match_op!(lexer, "&", Token::Op(OpTy::And));
 	match_op!(lexer, "|", Token::Op(OpTy::Or));
 	match_op!(lexer, "^", Token::Op(OpTy::Xor));
-	unreachable!()
+	unreachable!("[lexer::match_punctuation] Exhausted all of the patterns without matching anything");
 }
 
 /// Matches a word to either the `true`/`false` literal, a keyword or an identifier; in that order of precedence.
@@ -585,63 +620,65 @@ fn match_word(str: String) -> Token {
 	}
 }
 
-/// Matches a line-continuator at the end of a line.
-fn match_line_continuator(buffer: &mut String, lexer: &mut Lexer) -> bool {
-	let current = lexer.peek().unwrap();
+/// Matches a line-continuator character.
+///
+/// If this matches a line-continuator, it returns `Ok(true)`. If this matches an invalid escape sequence beginning
+/// with `\`, it returns `Ok(false)`. If this doesn't match at all, it returns `Err(())`.
+///
+/// # Invariants
+/// Assumes that the `Lexer` hasn't reached the end of the source string.
+fn match_line_continuator(lexer: &mut Lexer) -> Result<bool, ()> {
+	let current = lexer.peek().expect(
+		"[lexer::match_line_continuator] `lexer.peek()` returned `None`",
+	);
 
-	// Line-continuators begin with `\`.
+	// Line-continuators need to begin with `\`.
 	if current != '\\' {
-		return false;
+		return Err(());
 	}
 
 	if let Some(lookahead) = lexer.lookahead_1() {
 		if lookahead == '\n' {
 			// We have a `\<\n>`.
-			buffer.push('\n');
 			lexer.advance();
 			lexer.advance();
-			return true;
+			return Ok(true);
 		} else if lookahead == '\r' {
 			if let Some(lookahead_2) = lexer.lookahead_2() {
 				if lookahead_2 == '\n' {
 					// We have a `\<\r><\n>`.
-					buffer.push('\r');
-					buffer.push('\n');
 					lexer.advance();
 					lexer.advance();
 					lexer.advance();
-					return true;
+					return Ok(true);
 				} else {
-					// We have a `\<\r><something else>`
-					buffer.push('\r');
+					// We have a `\<\r><something>`, where `<something>` is on the next line.
 					lexer.advance();
 					lexer.advance();
-					return true;
+					return Ok(true);
 				}
 			} else {
-				// We have a `\<\r><eof>`, so this is a defacto line-continuator.
-				buffer.push('\r');
+				// We have a `\<\r><eof>`.
 				lexer.advance();
 				lexer.advance();
-				return true;
+				return Ok(true);
 			}
 		} else if lookahead == '\\' {
-			// We have `\\` which escapes the `\`. Technically this isn't a line-continuator, but
-			// the escaping of a `\` happens in pairs so it makes sense to treat this condition as
-			// true and push to the buffer here.
-			buffer.push('\\');
-			buffer.push('\\');
+			// We have `\\`; this is a syntax error.
+			// TODO: Syntax error
 			lexer.advance();
 			lexer.advance();
-			return true;
+			return Ok(false);
 		} else {
-			// We have a `\` followed by another character, so this isn't a line-continuator.
-			return false;
+			// We have a `\` followed by a non-eol character; this is a syntax error.
+			// TODO: Syntax error.
+			lexer.advance();
+			return Ok(false);
 		}
 	} else {
-		// We have a `\<eof>`, so this is a defacto line-continuator.
+		// We have a `\<eof>`, so we might as well treat this is a line continuator.
 		lexer.advance();
-		return true;
+		return Ok(true);
 	}
 }
 
@@ -651,9 +688,9 @@ fn match_line_continuator(buffer: &mut String, lexer: &mut Lexer) -> bool {
 /// token is always produced. Some examples:
 ///
 /// ```text
-/// i---7     lexes as (--) (-)
-/// i-----7   lexes as (--) (--) (-)
-/// i-- - --7 lexes as (--) (-) (--)
+/// i---7      becomes (i) (--) (-) (7)
+/// i-----7    becomes (i) (--) (--) (-) (7)
+/// i-- - --7  becomes (i) (--) (-) (--) (7)
 /// ```
 pub fn lexer(source: &str) -> Vec<Spanned<Token>> {
 	let mut tokens = Vec::new();
@@ -701,6 +738,14 @@ pub fn lexer(source: &str) -> Vec<Spanned<Token>> {
 						break 'word;
 					}
 				};
+
+				// Check for a line continuator.
+				if let Ok(is_valid) = match_line_continuator(&mut lexer) {
+					match is_valid {
+						true => continue 'word,
+						false => break 'word,
+					}
+				}
 
 				// Check if it can be part of a word.
 				if is_word(&current) {
@@ -1107,6 +1152,7 @@ pub fn lexer(source: &str) -> Vec<Spanned<Token>> {
 			}
 		} else if is_punctuation_start(&current) {
 			can_start_directive = false;
+
 			if lexer.take_pat("//") {
 				// If we have a `//`, that means this is a comment until the EOL.
 				'line_comment: loop {
@@ -1129,8 +1175,12 @@ pub fn lexer(source: &str) -> Vec<Spanned<Token>> {
 						}
 					};
 
-					if match_line_continuator(&mut buffer, &mut lexer) {
-						continue 'line_comment;
+					// Check for a line continuator.
+					if let Ok(is_valid) = match_line_continuator(&mut lexer) {
+						match is_valid {
+							true => continue 'line_comment,
+							false => break 'line_comment,
+						}
 					} else if current == '\r' || current == '\n' {
 						// We have an EOL without a line-continuator, so therefore this is the end of the directive.
 						tokens.push((
@@ -1223,8 +1273,12 @@ pub fn lexer(source: &str) -> Vec<Spanned<Token>> {
 					}
 				};
 
-				if match_line_continuator(&mut buffer, &mut lexer) {
-					continue 'directive;
+				// Check for a line continuator.
+				if let Ok(is_valid) = match_line_continuator(&mut lexer) {
+					match is_valid {
+						true => continue 'directive,
+						false => break 'directive,
+					}
 				} else if current == '\r' || current == '\n' {
 					// We have an EOL without a line-continuator, so therefore this is the end of the directive.
 					tokens.push((
@@ -1242,15 +1296,21 @@ pub fn lexer(source: &str) -> Vec<Spanned<Token>> {
 				}
 			}
 		} else {
-			// This character isn't valid to start any token.
-			lexer.advance();
-			tokens.push((
-				Token::Invalid(current),
-				Span {
-					start: buffer_start,
-					end: lexer.position(),
-				},
-			));
+			if let Ok(_) = match_line_continuator(&mut lexer) {
+				// We've come across a line continuation character that exists on its own, so we can just skip over
+				// it. We don't set the `can_start_directive` to `true` since directives can only be at the start
+				// of a line and a continuation invalidates said line start.
+			} else {
+				// This character isn't valid to start any token.
+				lexer.advance();
+				tokens.push((
+					Token::Invalid(current),
+					Span {
+						start: buffer_start,
+						end: lexer.position(),
+					},
+				));
+			}
 		}
 	}
 

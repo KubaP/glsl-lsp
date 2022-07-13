@@ -1315,6 +1315,10 @@ fn identifiers() {
 	assert_tokens!("gl_something", Token::Ident("gl_something".into()));
 	assert_tokens!("id_145", Token::Ident("id_145".into()));
 	assert_tokens!("_9ga", Token::Ident("_9ga".into()));
+
+	// Broken by line continuator
+	assert_tokens!("my_\\\r\nident", Token::Ident("my_ident".into()));
+	assert_tokens!("_\\\n9ga", Token::Ident("_9ga".into()));
 }
 
 #[test]
@@ -1401,6 +1405,11 @@ fn keywords() {
 	assert_tokens!("cast", Token::Reserved("cast".into()));
 	assert_tokens!("namespace", Token::Reserved("namespace".into()));
 	assert_tokens!("using", Token::Reserved("using".into()));
+
+	// Broken by line continuator
+	assert_tokens!("tr\\\rue", Token::Bool(true));
+	assert_tokens!("dis\\\ncard", Token::Discard);
+	assert_tokens!("sub\\\r\nroutine", Token::Subroutine);
 }
 
 #[test]
@@ -1450,6 +1459,12 @@ fn punctuation() {
 	assert_tokens!("^=", Token::Op(OpTy::XorEq));
 	assert_tokens!("<<=", Token::Op(OpTy::LShiftEq));
 	assert_tokens!(">>=", Token::Op(OpTy::RShiftEq));
+
+	// Broken by line continuator
+	assert_tokens!("!\\\n=", Token::Op(OpTy::NotEq));
+	assert_tokens!("+\\\r=", Token::Op(OpTy::AddEq));
+	assert_tokens!("=\\\n=", Token::Op(OpTy::EqEq));
+	assert_tokens!(">>\\\r\n=", Token::Op(OpTy::RShiftEq));
 }
 
 #[test]
@@ -1458,17 +1473,24 @@ fn comments() {
 	// Line comments
 	assert_tokens!("// a comment", Token::Comment{str: " a comment".into(), contains_eof: false});
 	assert_tokens!("//a comment", Token::Comment{str: "a comment".into(), contains_eof: false});
-	assert_tokens!("//a comment \\", Token::Comment{str: "a comment ".into(), contains_eof: false});
-	assert_tokens!("//a comment \\\\", Token::Comment{str: "a comment \\\\".into(), contains_eof: false});
-	assert_tokens!("//a comment \\n", Token::Comment{str: "a comment \\n".into(), contains_eof: false});
-	assert_tokens!("//a comment \\\r\n continuation", Token::Comment{str: "a comment \r\n continuation".into(), contains_eof: false});
-	assert_tokens!("// a comment \\\r continuation", Token::Comment{str: " a comment \r continuation".into(), contains_eof: false});
-	assert_tokens!("//a comment\\\ncontinuation", Token::Comment{str: "a comment\ncontinuation".into(), contains_eof: false});
+
+	// Broken by line continuator
+	assert_tokens!("// a comment \\\rcontinuation", Token::Comment{ str: " a comment continuation".into(), contains_eof: false});
+	assert_tokens!("//a comment\\\ncontinuation", Token::Comment{ str: "a commentcontinuation".into(), contains_eof: false});
+	assert_tokens!("//a comment \\\r\ncontinuation", Token::Comment{ str: "a comment continuation".into(), contains_eof: false});
+	assert_tokens!("/\\\r/ a comment", Token::Comment{ str: " a comment".into(), contains_eof: false});
+	assert_tokens!("/\\\r\n/ a comment", Token::Comment{ str: " a comment".into(), contains_eof: false});
+	assert_tokens!("//\\\n a comment", Token::Comment{ str: " a comment".into(), contains_eof: false});
+
 	// Multi-line comments
 	assert_tokens!("/* a comment */", Token::Comment{ str: " a comment ".into(), contains_eof: false});
 	assert_tokens!("/*a comment*/", Token::Comment{ str: "a comment".into(), contains_eof: false});
 	assert_tokens!("/* <Ll#,;#l,_!\"^$!6 */", Token::Comment{ str: " <Ll#,;#l,_!\"^$!6 ".into(), contains_eof: false});
 	assert_tokens!("/* open-ended comment", Token::Comment{ str: " open-ended comment".into(), contains_eof: true});
+
+	// Broken by line continuator
+	assert_tokens!("/\\\r* a comment */", Token::Comment{ str: " a comment ".into(), contains_eof: false});
+	assert_tokens!("/\\\n*a comment*\\\r\n/", Token::Comment{ str: "a comment".into(), contains_eof: false});
 }
 
 #[test]
@@ -1502,6 +1524,14 @@ fn integers(){
 	assert_tokens!("0xu", Token::Num{num: "".into(), suffix: Some("u".into()), type_: NumType::Hex});
 	assert_tokens!("0x91fau", Token::Num{num: "91fa".into(), suffix: Some("u".into()),  type_: NumType::Hex});
 	assert_tokens!("0x00Fu", Token::Num{num: "00F".into(), suffix: Some("u".into()),  type_: NumType::Hex});
+	
+	// Broken by line continuator
+	assert_tokens!("123\\\r456", Token::Num{num: "123456".into(), suffix: None, type_: NumType::Dec});
+	assert_tokens!("12\\\n3456u", Token::Num{num: "123456".into(), suffix: Some("u".into()), type_: NumType::Dec});
+	assert_tokens!("0171\\\n5", Token::Num{num: "1715".into(), suffix: None,  type_: NumType::Oct});
+	assert_tokens!("0x91\\\r\nfa", Token::Num{num: "91fa".into(), suffix: None,  type_: NumType::Hex});
+	assert_tokens!("0x\\\r91fau", Token::Num{num: "91fa".into(), suffix: Some("u".into()),  type_: NumType::Hex});
+	assert_tokens!("0x\\\nu", Token::Num{num: "".into(), suffix: Some("u".into()), type_: NumType::Hex});
 }
 
 #[test]
@@ -1583,6 +1613,17 @@ fn floats() {
 	assert_tokens!(".1e7lf", Token::Num{num: ".1e7".into(), suffix: Some("lf".into()), type_: NumType::Float});
 	assert_tokens!(".1e+7lf", Token::Num{num: ".1e+7".into(), suffix: Some("lf".into()), type_: NumType::Float});
 	assert_tokens!(".1e-7lf", Token::Num{num: ".1e-7".into(), suffix: Some("lf".into()), type_: NumType::Float});
+	
+	// Broken by line continuator
+	assert_tokens!("0.\\\r0", Token::Num{num: "0.0".into(), suffix: None, type_: NumType::Float});
+	assert_tokens!(".\\\n0", Token::Num{num: ".0".into(), suffix: None, type_: NumType::Float});
+	assert_tokens!(".0\\\nlf", Token::Num{num: ".0".into(), suffix: Some("lf".into()), type_: NumType::Float});
+	assert_tokens!("0.\\\r\nlf", Token::Num{num: "0.".into(), suffix: Some("lf".into()), type_: NumType::Float});
+	assert_tokens!("0e\\\r7", Token::Num{num: "0e7".into(), suffix: None, type_: NumType::Float});
+	assert_tokens!("0e\\\r\n-7", Token::Num{num: "0e-7".into(), suffix: None, type_: NumType::Float});
+	assert_tokens!(".0\\\r\ne+7", Token::Num{num: ".0e+7".into(), suffix: None, type_: NumType::Float});
+	assert_tokens!("1.0e-\\\n7lf", Token::Num{num: "1.0e-7".into(), suffix: Some("lf".into()), type_: NumType::Float});
+	assert_tokens!(".1\\\re-7lf", Token::Num{num: ".1e-7".into(), suffix: Some("lf".into()), type_: NumType::Float});
 }
 
 #[test]
@@ -1593,14 +1634,13 @@ fn directives(){
 	assert_tokens!("#directive args", Token::Directive("directive args".into()));
 	assert_tokens!("  #directive", Token::Directive("directive".into()));
 	assert_tokens!("\t#directive", Token::Directive("directive".into()));
-	assert_tokens!("#directive\\", Token::Directive("directive".into()));
-	assert_tokens!("#directive \\\\", Token::Directive("directive \\\\".into()));
-	assert_tokens!("#directive \\n", Token::Directive("directive \\n".into()));
-	assert_tokens!("#directive \\\r\n args", Token::Directive("directive \r\n args".into()));
-	assert_tokens!("#  directive \\\r args", Token::Directive("  directive \r args".into()));
-	assert_tokens!("#directive\\\nargs", Token::Directive("directive\nargs".into()));
 	assert_tokens!("#", Token::Directive("".into()));
 	assert_tokens!("   #", Token::Directive("".into()));
+
+	// Broken by line continuator
+	assert_tokens!("#dir \\\n args", Token::Directive("dir  args".into()));
+	assert_tokens!("\t#dir \\\rargs", Token::Directive("dir args".into()));
+	assert_tokens!(" #dir\\\r\nargs", Token::Directive("dirargs".into()));
 }
 
 #[test]

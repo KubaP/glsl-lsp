@@ -350,6 +350,7 @@ struct Lexer {
 impl Lexer {
 	/// Constructs a new `Lexer` from the given source string.
 	fn new(source: &str) -> Self {
+		// TODO: Deal with a line continuator character if it's the first thing in the source file.
 		Self {
 			chars: source.chars().collect(),
 			cursor: 0,
@@ -361,34 +362,37 @@ impl Lexer {
 		self.chars.get(self.cursor).map(|c| *c)
 	}
 
-	/// Peeks the next character without advancing the cursor; (returns the character under `cursor + 1`).
+	/// Peeks the next character without advancing the cursor; (returns the character under `cursor + 1`, taking
+	/// into account a possible line continuator).
 	fn lookahead_1(&self) -> Option<char> {
-		self.chars.get(self.cursor + 1).map(|c| *c)
+		let pos = self.cursor + 1 + self.take_line_continuator(self.cursor + 1);
+		self.chars.get(pos).map(|c| *c)
 	}
 
 	/// Peeks the character after the next one without advancing the cursor; (returns the character under `cursor +
-	/// 2`).
+	/// 2`, taking into account possible line continuators).
 	fn lookahead_2(&self) -> Option<char> {
-		self.chars.get(self.cursor + 2).map(|c| *c)
+		let pos = self.cursor + 1 + self.take_line_continuator(self.cursor + 1);
+		let pos = pos + 1 + self.take_line_continuator(pos + 1);
+		self.chars.get(pos).map(|c| *c)
 	}
 
 	/// Advances the cursor by one.
 	fn advance(&mut self) {
 		self.cursor += 1;
+		self.cursor += self.take_line_continuator(self.cursor);
 	}
 
 	/// Returns the current character under the cursor and advances the cursor by one.
 	///
 	/// Equivalent to [`peek()`](Self::peek) followed by [`advance()`](Self::advance).
 	fn next(&mut self) -> Option<char> {
+		let c = self.peek();
 		// If we are successful in getting the character, advance the cursor.
-		match self.chars.get(self.cursor) {
-			Some(c) => {
-				self.cursor += 1;
-				Some(*c)
-			}
-			None => None,
+		if c.is_some() {
+			self.advance();
 		}
+		c
 	}
 
 	/// Tries to match a pattern starting at the current character under the cursor.
@@ -414,38 +418,19 @@ impl Lexer {
 					break;
 				}
 
-				if let Ok(is_valid) = match_line_continuator(self) {
-					match is_valid {
-						// We have encountered a line-continuator whilst checking this pattern and skip over it.
-						true => continue,
-						// We have encountered an illegal escape sequence. That means this pattern has not matched.
-						false => {
-							self.cursor = starting_position;
-							return false;
-						}
-					}
-				}
-
 				// Check that the characters match.
 				if self.peek().unwrap() != pat[pat_count] {
 					self.cursor = starting_position;
 					return false;
 				}
 
-				// The reason we have to `advance()` is because the `match_line_continuator()` function calls
-				// `peek()`, who's return value depends on `self.cursor`. That's why we can't just keep local track
-				// of the cursor offset like we can with the pattern offset; because the line continuator would be
-				// looking at the original cursor position rather than the local "current" position. This is also
-				// why we then have to rollback the cursor if the match fails.
 				self.advance();
 				pat_count += 1;
 			}
 
-			// The match was successful.
 			return true;
 		}
 
-		self.cursor = starting_position;
 		false
 	}
 
@@ -459,6 +444,53 @@ impl Lexer {
 		// We check that the cursor is equal to the length, because that means we have gone past the last character
 		// of the string, and hence, we are done.
 		self.cursor == self.chars.len()
+	}
+
+	/// Returns the cursor advancement value necessary to consume a line continuator, if one is present.
+	/// 
+	/// *Note:* Takes a cursor position as `idx`. The reason a separate parameter is needed is because in the
+	/// `lookahead_*()` methods the cursor can't move, hence `self.cursor` would return the old value.
+	fn take_line_continuator(&self, idx: usize) -> usize {
+		let current = match self.chars.get(idx) {
+			Some(c) => *c,
+			None => return 0,
+		};
+
+		// Line-continuators need to begin with `\`.
+		if current != '\\' {
+			return 0;
+		}
+
+		if let Some(lookahead) = self.chars.get(idx + 1) {
+			if *lookahead == '\n' {
+				// We have a `\<\n>`.
+				2
+			} else if *lookahead == '\r' {
+				if let Some(lookahead_2) = self.chars.get(idx + 2) {
+					if *lookahead_2 == '\n' {
+						// We have a `\<\r><\n>`.
+						3
+					} else {
+						// We have a `\<\r><something>`, where `<something>` is on the next line.
+						2
+					}
+				} else {
+					// We have a `\<\r><eof>`.
+					2
+				}
+			} else if *lookahead == '\\' {
+				// We have `\\`; this is a syntax error.
+				// TODO: Syntax error
+				2
+			} else {
+				// We have a `\` followed by a non-eol character; this is a syntax error.
+				// TODO: Syntax error.
+				1
+			}
+		} else {
+			// We have a `\<eof>`, so we might as well treat this is a line continuator.
+			1
+		}
 	}
 }
 
@@ -620,68 +652,6 @@ fn match_word(str: String) -> Token {
 	}
 }
 
-/// Matches a line-continuator character.
-///
-/// If this matches a line-continuator, it returns `Ok(true)`. If this matches an invalid escape sequence beginning
-/// with `\`, it returns `Ok(false)`. If this doesn't match at all, it returns `Err(())`.
-///
-/// # Invariants
-/// Assumes that the `Lexer` hasn't reached the end of the source string.
-fn match_line_continuator(lexer: &mut Lexer) -> Result<bool, ()> {
-	let current = lexer.peek().expect(
-		"[lexer::match_line_continuator] `lexer.peek()` returned `None`",
-	);
-
-	// Line-continuators need to begin with `\`.
-	if current != '\\' {
-		return Err(());
-	}
-
-	if let Some(lookahead) = lexer.lookahead_1() {
-		if lookahead == '\n' {
-			// We have a `\<\n>`.
-			lexer.advance();
-			lexer.advance();
-			return Ok(true);
-		} else if lookahead == '\r' {
-			if let Some(lookahead_2) = lexer.lookahead_2() {
-				if lookahead_2 == '\n' {
-					// We have a `\<\r><\n>`.
-					lexer.advance();
-					lexer.advance();
-					lexer.advance();
-					return Ok(true);
-				} else {
-					// We have a `\<\r><something>`, where `<something>` is on the next line.
-					lexer.advance();
-					lexer.advance();
-					return Ok(true);
-				}
-			} else {
-				// We have a `\<\r><eof>`.
-				lexer.advance();
-				lexer.advance();
-				return Ok(true);
-			}
-		} else if lookahead == '\\' {
-			// We have `\\`; this is a syntax error.
-			// TODO: Syntax error
-			lexer.advance();
-			lexer.advance();
-			return Ok(false);
-		} else {
-			// We have a `\` followed by a non-eol character; this is a syntax error.
-			// TODO: Syntax error.
-			lexer.advance();
-			return Ok(false);
-		}
-	} else {
-		// We have a `\<eof>`, so we might as well treat this is a line continuator.
-		lexer.advance();
-		return Ok(true);
-	}
-}
-
 /// Performs lexical analysis of the source string and returns a vector of [`Token`]s.
 ///
 /// This lexer uses the "Maximal munch" principle to greedily create Tokens. This means the longest possible valid
@@ -738,14 +708,6 @@ pub fn lexer(source: &str) -> Vec<Spanned<Token>> {
 						break 'word;
 					}
 				};
-
-				// Check for a line continuator.
-				if let Ok(is_valid) = match_line_continuator(&mut lexer) {
-					match is_valid {
-						true => continue 'word,
-						false => break 'word,
-					}
-				}
 
 				// Check if it can be part of a word.
 				if is_word(&current) {
@@ -1175,13 +1137,7 @@ pub fn lexer(source: &str) -> Vec<Spanned<Token>> {
 						}
 					};
 
-					// Check for a line continuator.
-					if let Ok(is_valid) = match_line_continuator(&mut lexer) {
-						match is_valid {
-							true => continue 'line_comment,
-							false => break 'line_comment,
-						}
-					} else if current == '\r' || current == '\n' {
+					if current == '\r' || current == '\n' {
 						// We have an EOL without a line-continuator, so therefore this is the end of the directive.
 						tokens.push((
 							Token::Comment {
@@ -1273,13 +1229,7 @@ pub fn lexer(source: &str) -> Vec<Spanned<Token>> {
 					}
 				};
 
-				// Check for a line continuator.
-				if let Ok(is_valid) = match_line_continuator(&mut lexer) {
-					match is_valid {
-						true => continue 'directive,
-						false => break 'directive,
-					}
-				} else if current == '\r' || current == '\n' {
+				if current == '\r' || current == '\n' {
 					// We have an EOL without a line-continuator, so therefore this is the end of the directive.
 					tokens.push((
 						Token::Directive(std::mem::take(&mut buffer)),
@@ -1296,21 +1246,15 @@ pub fn lexer(source: &str) -> Vec<Spanned<Token>> {
 				}
 			}
 		} else {
-			if let Ok(_) = match_line_continuator(&mut lexer) {
-				// We've come across a line continuation character that exists on its own, so we can just skip over
-				// it. We don't set the `can_start_directive` to `true` since directives can only be at the start
-				// of a line and a continuation invalidates said line start.
-			} else {
-				// This character isn't valid to start any token.
-				lexer.advance();
-				tokens.push((
-					Token::Invalid(current),
-					Span {
-						start: buffer_start,
-						end: lexer.position(),
-					},
-				));
-			}
+			// This character isn't valid to start any token.
+			lexer.advance();
+			tokens.push((
+				Token::Invalid(current),
+				Span {
+					start: buffer_start,
+					end: lexer.position(),
+				},
+			));
 		}
 	}
 

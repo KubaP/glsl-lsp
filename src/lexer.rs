@@ -4,9 +4,6 @@ use crate::{
 	Either,
 };
 
-#[cfg(test)]
-use crate::span::span;
-
 /// Lexer tokens.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Token {
@@ -20,7 +17,7 @@ pub enum Token {
 	Directive(String),
 	Comment {
 		str: String,
-		/// Only `true` is this is a `/*...` comment at the end of the file without an ending delimiter.
+		/// Only `true` if this is a `/*...` multi-line comment without a closing delimiter.
 		contains_eof: bool,
 	},
 	Invalid(char),
@@ -166,12 +163,12 @@ impl Token {
 	}
 
 	/// Tries to convert the current `Token` into a [`Layout`] identifier.
-	/// 
+	///
 	/// If the token matches a layout identifier that doesn't take an expression, e.g. `early_fragment_tests`, then
 	/// `Left` is returned with the converted `Layout`. If the token matches a layout identifier that takes an
 	/// expression, e.g. `location = n`, then `Right` is returned with a constructor for the appropriate `Layout`
 	/// (the constructor takes the expression once that has been parsed).
-	/// 
+	///
 	/// If `None` is returned, the current token is not a valid layout identifier.
 	pub fn to_layout(&self) -> Option<Either<Layout, fn(Expr) -> Layout>> {
 		match self {
@@ -294,30 +291,29 @@ pub enum OpTy {
 	//
 	// Shunting Yard
 	//
-	// These variants are never constructed by the Lexer. These are constructed when the shunting yard is looking
-	// for prefix/postfix operators and comes across one of the above ambiguous operators. It gets converted into
-	// these variants depending on the state of the yard to make the distinction clear when building the ast.
+	// The variants below are never constructed by the Lexer. They are constructed during the operation of the
+	// shunting yard and converted into either the operators above or to different `Expr` types when the shunting
+	// yard creates the AST.
 	//
 	// The reason these variants are in this type is because the shunting yard stores this type in its stack. It
 	// makes more sense to add these variants to this type rather than to create a new subtype which includes all
-	// of the above plus these variants. Furthermore these operators in the shunting yard stack are later converted
-	// to `ast::Expr` which stores this type.
+	// of the above plus these variants.
 	AddAddPre,
 	AddAddPost,
 	SubSubPre,
 	SubSubPost,
 	/// Parenthesis group.
-	/// 
+	///
 	/// The `Span`s represent the spans for the left and right parenthesis. The reason this group has this but
 	/// other groups don't is for the following:
-	/// 
+	///
 	/// `Paren` groups may be closed as valid even if missing the closing `)`, hence when we collapse a parenthesis
 	/// group and emit this token onto the shunting yard stack, we need to figure out these spans there and then,
 	/// because afterwards this information gets lost. The only other group which can be collapsed at the end of
 	/// the parse is the `List` group, but that doesn't have any delimiters. All other groups get invalidated if
 	/// they're open so there's no need for extra tracking.
 	Paren(Span, Span),
-	/// Index operator. `bool` notes whether there is a node within the `[...]` brackets.
+	/// Index operator. `bool` denotes whether there is a node within the `[...]` brackets.
 	Index(bool),
 	/// Object access operator.
 	ObjAccess,
@@ -331,10 +327,11 @@ pub enum OpTy {
 	ArrInit(usize),
 	/// A list, e.g. `a, b`. Consumes the `usize` amount of nodes as arguments for the list.
 	List(usize),
-	// The following are never present in the final output of the shunting yard; just stored temporarily.
-	BracketStart,
-	FnStart,
+	// The following are never present in the intermediate output of the shunting yard; they are just stored
+	// temporarily on the stack.
+	ParenStart,
 	IndexStart,
+	FnStart,
 	InitStart,
 	ArrInitStart,
 }
@@ -447,7 +444,7 @@ impl Lexer {
 	}
 
 	/// Returns the cursor advancement value necessary to consume a line continuator, if one is present.
-	/// 
+	///
 	/// *Note:* Takes a cursor position as `idx`. The reason a separate parameter is needed is because in the
 	/// `lookahead_*()` methods the cursor can't move, hence `self.cursor` would return the old value.
 	fn take_line_continuator(&self, idx: usize) -> usize {
@@ -671,7 +668,7 @@ pub fn lexer(source: &str) -> Vec<Spanned<Token>> {
 	// Any time we want to test the next character, we first `peek()` to see what it is. If it is valid in whatever
 	// branch we are in, we can `advance()` the lexer to the next character and repeat the process. If it is
 	// invalid (and hence we want to finish this branch and try another one), we don't `advance()` the lexer
-	// because we don't want to consume this character; we want to test it against other branches.
+	// because we don't want to consume this character; we want to test it against the other branches.
 	//
 	// `can_start_directive` is a flag as to whether we can start parsing a directive if we encounter a `#` symbol.
 	// After an EOL this is set to `true`. Any branch other than the whitespace branch sets this to `false`. This
@@ -1260,6 +1257,9 @@ pub fn lexer(source: &str) -> Vec<Spanned<Token>> {
 
 	tokens
 }
+
+#[cfg(test)]
+use crate::span::span;
 
 #[test]
 #[rustfmt::skip]

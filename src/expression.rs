@@ -7,10 +7,16 @@ use crate::{
 };
 use std::collections::VecDeque;
 
+/// Defines the behaviour of the expression parser.
 #[derive(Debug, PartialEq, Eq)]
 pub enum Mode {
+	/// The default behaviour, which can be used to parse expressions that form statements, such as `i = 5`.
 	Default,
+	/// Disallows top-level lists, i.e. upon encountering the first comma (`,`) outside of a group, the parser will
+	/// return.
 	DisallowTopLevelList,
+	/// Disallows treating assignments as a valid expression, i.e. upon encountering the first equals-sign (`=`),
+	/// the parser will return.
 	BreakAtEq,
 }
 
@@ -20,6 +26,7 @@ pub fn expr_parser(walker: &mut Walker, mode: Mode) -> Option<Expr> {
 		Some((_, span)) => span.start,
 		None => return None,
 	};
+
 	let mut parser = ShuntingYard {
 		stack: VecDeque::new(),
 		operators: VecDeque::new(),
@@ -27,6 +34,7 @@ pub fn expr_parser(walker: &mut Walker, mode: Mode) -> Option<Expr> {
 		start_position,
 		mode,
 	};
+
 	parser.parse(walker);
 	parser.create_ast()
 }
@@ -105,7 +113,7 @@ impl ShuntingYard {
 		while self.operators.back().is_some() {
 			let back = self.operators.back().unwrap();
 
-			if back.ty == OpTy::BracketStart
+			if back.ty == OpTy::ParenStart
 				|| back.ty == OpTy::IndexStart
 				|| back.ty == OpTy::FnStart
 				|| back.ty == OpTy::InitStart
@@ -114,6 +122,7 @@ impl ShuntingYard {
 				// further.
 				break;
 			}
+
 			// This is done to make `ObjAccess` right-associative.
 			if op.ty == OpTy::ObjAccess && back.ty == OpTy::ObjAccess {
 				let moved = self.operators.pop_back().unwrap();
@@ -137,7 +146,7 @@ impl ShuntingYard {
 	/// Assumes that `self.group.back()` is of type [`Group::Bracket`].
 	///
 	/// `end_span` is the span which marks the end of this parenthesis group. It may be a span covering the `)`, or
-	/// it may be a zero-width span if this group is collapsed without a closing delimiter.
+	/// it may be a zero-width span if this group is collapsed without a matching closing delimiter.
 	fn collapse_bracket(&mut self, end_span: Span, invalidate: bool) {
 		let (group, group_start, _) = self.groups.pop_back().unwrap();
 
@@ -156,7 +165,7 @@ impl ShuntingYard {
 					}
 				}
 
-				if op.ty == OpTy::BracketStart {
+				if op.ty == OpTy::ParenStart {
 					self.stack.push_back(Either::Right(Op {
 						ty: OpTy::Paren(op.span, end_span),
 						span: span(group_start, end_span.end),
@@ -191,7 +200,7 @@ impl ShuntingYard {
 				#[cfg(debug_assertions)]
 				{
 					match op.ty {
-						OpTy::BracketStart => println!("Mismatch between operator stack (Op::BracketStart) and group stack (Group::Fn)!"),
+						OpTy::ParenStart => println!("Mismatch between operator stack (Op::BracketStart) and group stack (Group::Fn)!"),
 						OpTy::IndexStart => println!("Mismatch between operator stack (Op::IndexStart) and group stack (Group::Fn)!"),
 						OpTy::InitStart => println!("Mismatch between operator stack (Op::InitStart) and group stack (Group::Fn)!"),
 						OpTy::ArrInitStart => println!("Mismatch between operator stack (Op::ArrInitStart) and group stack (Group::Fn)!"),
@@ -236,7 +245,7 @@ impl ShuntingYard {
 				#[cfg(debug_assertions)]
 				{
 					match op .ty{
-						OpTy::BracketStart => println!("Mismatch between operator stack (Op::BracketStart) and group stack (Group::Index)!"),
+						OpTy::ParenStart => println!("Mismatch between operator stack (Op::BracketStart) and group stack (Group::Index)!"),
 						OpTy::FnStart => println!("Mismatch between operator stack (Op::FnStart) and group stack (Group::Index)!"),
 						OpTy::InitStart => println!("Mismatch between operator stack (Op::InitStart) and group stack (Group::Index)!"),
 						OpTy::ArrInitStart => println!("Mismatch between operator stack (Op::ArrInitStart) and group stack (Group::Index)!"),
@@ -277,7 +286,7 @@ impl ShuntingYard {
 				#[cfg(debug_assertions)]
 				{
 					match op.ty {
-						OpTy::BracketStart => println!("Mismatch between operator stack (Op::BracketStart) and group stack (Group::Init)!"),
+						OpTy::ParenStart => println!("Mismatch between operator stack (Op::BracketStart) and group stack (Group::Init)!"),
 						OpTy::IndexStart => println!("Mismatch between operator stack (Op::IndexStart) and group stack (Group::Init)!"),
 						OpTy::FnStart => println!("Mismatch between operator stack (Op::FnStart) and group stack (Group::Init)!"),
 						OpTy::ArrInitStart => println!("Mismatch between operator stack (Op::ArrInitStart) and group stack (Group::Init)!"),
@@ -318,7 +327,7 @@ impl ShuntingYard {
 				#[cfg(debug_assertions)]
 				{
 					match op.ty {
-						OpTy::BracketStart => println!("Mismatch between operator stack (Op::BracketStart) and group stack (Group::ArrInit)!"),
+						OpTy::ParenStart => println!("Mismatch between operator stack (Op::BracketStart) and group stack (Group::ArrInit)!"),
 						OpTy::IndexStart => println!("Mismatch between operator stack (Op::IndexStart) and group stack (Group::ArrInit)!"),
 						OpTy::FnStart => println!("Mismatch between operator stack (Op::FnStart) and group stack (Group::ArrInit)!"),
 						OpTy::InitStart => println!("Mismatch between operator stack (Op::InitStart) and group stack (Group::ArrInit)!"),
@@ -373,7 +382,7 @@ impl ShuntingYard {
 				// delimiter (and if there are none, we just end up consuming the rest of the operator stack).
 				// Since lists cannnot exist within a `Group::Fn|Init|ArrInit`, we don't check for those start
 				// delimiters.
-				if op.ty == OpTy::BracketStart || op.ty == OpTy::IndexStart {
+				if op.ty == OpTy::ParenStart || op.ty == OpTy::IndexStart {
 					start_span = op.span.end;
 					break;
 				} else {
@@ -398,6 +407,9 @@ impl ShuntingYard {
 	}
 
 	/// Invalidates the stack between the given start and end positions.
+	///
+	/// `invalidating_index` should be `true` if the item, encompassing the range, being invalidated is
+	/// `Group::Index`.
 	fn invalidate_range(
 		&mut self,
 		start_pos: usize,
@@ -525,8 +537,8 @@ impl ShuntingYard {
 					// lonely `)`. This makes the entire expression up to the previous group start delimiter
 					// incomplete.
 					println!(
-					"Found a `)` delimiter without a starting `(` delimiter!"
-				);
+						"Found a `)` delimiter without a starting `(` delimiter!"
+					);
 
 					// We remove operators until we hit a start delimiter.
 					'invalidate: while self.operators.back().is_some() {
@@ -661,7 +673,7 @@ impl ShuntingYard {
 				'invalidate: while self.operators.back().is_some() {
 					let op = self.operators.back().unwrap();
 
-					if op.ty == OpTy::BracketStart
+					if op.ty == OpTy::ParenStart
 						|| op.ty == OpTy::FnStart
 						|| op.ty == OpTy::InitStart
 						|| op.ty == OpTy::ArrInitStart
@@ -790,7 +802,7 @@ impl ShuntingYard {
 				'invalidate: while self.operators.back().is_some() {
 					let op = self.operators.back().unwrap();
 
-					if op.ty == OpTy::BracketStart
+					if op.ty == OpTy::ParenStart
 						|| op.ty == OpTy::FnStart
 						|| op.ty == OpTy::IndexStart
 						|| op.ty == OpTy::ArrInitStart
@@ -855,7 +867,7 @@ impl ShuntingYard {
 					// list group, and it accepts a variable amount of arguments.
 					while self.operators.back().is_some() {
 						let back = self.operators.back().unwrap();
-						if back.ty == OpTy::BracketStart
+						if back.ty == OpTy::ParenStart
 							|| back.ty == OpTy::IndexStart
 						{
 							break;
@@ -871,7 +883,7 @@ impl ShuntingYard {
 					// groups.
 					while self.operators.back().is_some() {
 						let back = self.operators.back().unwrap();
-						if back.ty == OpTy::BracketStart
+						if back.ty == OpTy::ParenStart
 							|| back.ty == OpTy::IndexStart
 						{
 							break;
@@ -1103,8 +1115,8 @@ impl ShuntingYard {
 							println!("Expected a postfix, index or binary operator, found a prefix operator instead!");
 							return;
 						}
-						// These operators are postfix operators. We don't switch state since after a postfix operator,
-						// we are still looking for a binary operator or the end of expression, i.e.
+						// These operators are postfix operators. We don't switch state since after a postfix
+						// operator, we are still looking for a binary operator or the end of expression, i.e.
 						// `..i++ - i` rather than `..i++ i`.
 						OpTy::AddAdd => {
 							self.push_operator(Op {
@@ -1118,8 +1130,8 @@ impl ShuntingYard {
 								span: *span,
 							});
 						}
-						// Any other operators can be part of a binary expression. We switch state since after a binary
-						// operator we are expecting an operand.
+						// Any other operators can be part of a binary expression. We switch state since after a
+						// binary operator we are expecting an operand.
 						_ => {
 							self.push_operator(Op {
 								ty: *op,
@@ -1142,7 +1154,7 @@ impl ShuntingYard {
 					}
 
 					self.operators.push_back(Op {
-						ty: OpTy::BracketStart,
+						ty: OpTy::ParenStart,
 						span: *span,
 					});
 					self.groups.push_back((Group::Paren, span.start, span.end));
@@ -1471,7 +1483,7 @@ impl ShuntingYard {
 		}
 
 		// Consume the stack from the front. If we have an expression, we move it to the back of a temporary stack.
-		// If we have an operator, we take the x-most expressions from the back of the temporary stack, process
+		// If we have an operator, we take the n-most expressions from the back of the temporary stack, process
 		// them in accordance to the operator type, and then push the result onto the back of the temporary stack.
 		while let Some(item) = self.stack.pop_front() {
 			match item {
@@ -1778,7 +1790,7 @@ impl OpTy {
 			// These two should always be converted to the *Pre or *Post versions in the shunting yard.
 			Self::AddAdd | Self::SubSub => panic!("OpType::AddAdd | OpType::SubSub do not have precedence values because they should never be passed into this function. Something has gone wrong!"),
 			// These are never directly checked for precedence, but rather have special branches.
-			Self::BracketStart
+			Self::ParenStart
 			| Self::Paren(_, _)
 			| Self::FnStart 
 			| Self::FnCall(_) 
@@ -1855,7 +1867,7 @@ impl std::fmt::Display for Op {
 			OpTy::AddAddPost => write!(f, "++post"),
 			OpTy::SubSubPre => write!(f, "--pre"),
 			OpTy::SubSubPost => write!(f, "--post"),
-			OpTy::BracketStart
+			OpTy::ParenStart
 			| OpTy::FnStart
 			| OpTy::IndexStart
 			| OpTy::InitStart

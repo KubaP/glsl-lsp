@@ -1,9 +1,10 @@
 use crate::{
-	lexer::{NumType, Token, OpTy},
+	lexer::{NumType, OpTy, Token},
 	span::Span,
 	Either,
 };
 
+/// An expression, which is part of a larger statement.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Expr {
 	pub ty: ExprTy,
@@ -82,7 +83,41 @@ impl std::fmt::Display for Expr {
 	}
 }
 
-/// An expression which will be part of an encompassing statement. Expressions cannot exist on their own.
+impl Expr {
+	/// Tries to convert this `Expr` to a [`Type`], e.g. `int` or `MyStruct` or `float[3][2]`.
+	pub fn to_type(&self) -> Option<Type> {
+		Type::parse(&self.ty)
+	}
+
+	/// Tries to convert this `Expr` to variable definition/declaration identifiers, e.g. `my_num` or `a, b` or
+	/// `c[1], p[3]`.
+	///
+	/// Each entry is either just an [`Ident`] if the expression is something like `my_num`, or it is an `Ident`
+	/// plus one or more [`ArrSize`] if the expression is something like `a[1]` or `b[][3]`.
+	pub fn to_var_def_decl_or_fn_ident(
+		&self,
+	) -> Vec<Either<Ident, (Ident, Vec<ArrSize>)>> {
+		let mut idents = Vec::new();
+
+		match &self.ty {
+			ExprTy::List(v) => {
+				for expr in v {
+					match Ident::from_expr(&expr.ty) {
+						Some(result) => idents.push(result),
+						None => {}
+					}
+				}
+			}
+			_ => match Ident::from_expr(&self.ty) {
+				Some(result) => idents.push(result),
+				None => {}
+			},
+		}
+
+		idents
+	}
+}
+
 #[derive(Debug, Clone, PartialEq)]
 pub enum ExprTy {
 	/// An expression which is incomplete, e.g. `3+5-`.
@@ -132,35 +167,35 @@ pub enum ExprTy {
 	Incomplete,
 	/// An expression which is invalid when converted from a token, e.g.
 	///
-	/// - A token number `1.0B` cannot be converted to a valid `Lit` because `B` is not a valid suffix,.
+	/// - A token number `1.0B` cannot be converted to a valid `Lit` because `B` is not a valid numerical suffix,.
 	Invalid,
 	/// A literal value; either a number or a boolean.
 	Lit(Lit),
 	/// An identifier; could be a variable name, function name, type name, etc.
 	Ident(Ident),
-	/// A prefix.
+	/// A prefix operation.
 	Prefix { expr: Box<Expr>, op: Op },
-	/// A postfix.
+	/// A postfix operation.
 	Postfix { expr: Box<Expr>, op: Op },
-	/// Binary expression with a left and right hand-side.
+	/// A binary expression with a left and right hand-side.
 	Binary {
 		left: Box<Expr>,
 		op: Op,
 		right: Box<Expr>,
 	},
-	/// Ternary condition.
+	/// A ternary condition.
 	Ternary {
 		cond: Box<Expr>,
 		true_: Box<Expr>,
 		false_: Box<Expr>,
 	},
-	/// A parenthesis group. *Note:* currently this has no real use.
+	/// A parenthesis group.
 	Paren {
 		expr: Box<Expr>,
 		left: Span,
 		right: Span,
 	},
-	/// Index operator, e.g. `item[i]`.
+	/// An index operator, e.g. `item[i]`.
 	Index {
 		item: Box<Expr>,
 		i: Option<Box<Expr>>,
@@ -168,11 +203,11 @@ pub enum ExprTy {
 	},
 	/// Object access.
 	ObjAccess { obj: Box<Expr>, leaf: Box<Expr> },
-	/// Function call.
+	/// A function call.
 	Fn { ident: Ident, args: Vec<Expr> },
-	/// Initializer list.
+	/// An initializer list.
 	Init(Vec<Expr>),
-	/// Array constructor.
+	/// An array constructor.
 	ArrInit {
 		/// Contains the first part of an array constructor, e.g. `int[3]`.
 		arr: Box<Expr>,
@@ -183,41 +218,7 @@ pub enum ExprTy {
 	List(Vec<Expr>),
 }
 
-impl Expr {
-	/// Tries to convert this `Expr` to a [`Type`], e.g. `int` or `MyStruct` or `float[3][2]`.
-	pub fn to_type(&self) -> Option<Type> {
-		Type::parse(&self.ty)
-	}
-
-	/// Tries to convert this `Expr` to variable definition/declaration identifiers, e.g. `my_num` or `a, b` or
-	/// `c[1], p[3]`.
-	///
-	/// Each entry is either just an [`Ident`] if the expression is something like `my_num`, or it is an `Ident`
-	/// plus one or more [`ArrSize`] if the expression is something like `a[1]` or `b[][3]`.
-	pub fn to_var_def_decl_or_fn_ident(
-		&self,
-	) -> Vec<Either<Ident, (Ident, Vec<ArrSize>)>> {
-		let mut idents = Vec::new();
-
-		match &self.ty {
-			ExprTy::List(v) => {
-				for expr in v {
-					match Ident::from_expr(&expr.ty) {
-						Some(result) => idents.push(result),
-						None => {}
-					}
-				}
-			}
-			_ => match Ident::from_expr(&self.ty) {
-				Some(result) => idents.push(result),
-				None => {}
-			},
-		}
-
-		idents
-	}
-}
-
+/// An operator, which is part of an expression.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Op {
 	pub ty: OpTy,
@@ -226,13 +227,13 @@ pub struct Op {
 
 type Param = (Type, Option<Ident>, Vec<Qualifier>);
 
-/// A top-level statement. Some of these statements are only valid at the file top-level. Others are only valid
-/// inside of functions.
+/// A top-level statement. Some of these statements are only valid at the file top-level, whilst others are only
+/// valid inside of functions.
 #[derive(Debug, Clone, PartialEq)]
 pub enum Stmt {
 	/// An empty statement, i.e. just a `;`.
 	Empty,
-	/// Variable definition, e.g. `int a;`.
+	/// A variable definition, e.g. `int a;`.
 	VarDef {
 		type_: Type,
 		ident: Ident,
@@ -240,7 +241,7 @@ pub enum Stmt {
 	},
 	/// Multiple variable definitions, e.g. `int a, b;`.
 	VarDefs(Vec<(Type, Ident)>, Vec<Qualifier>),
-	/// Variable declaration, e.g. `int a = <EXPR>;`.
+	/// A variable declaration, e.g. `int a = <EXPR>;`.
 	VarDecl {
 		type_: Type,
 		ident: Ident,
@@ -253,14 +254,14 @@ pub enum Stmt {
 		value: Expr,
 		qualifiers: Vec<Qualifier>,
 	},
-	/// Function definition.
+	/// A function definition.
 	FnDef {
 		return_type: Type,
 		ident: Ident,
 		params: Vec<Param>,
 		qualifiers: Vec<Qualifier>,
 	},
-	/// Function declaration.
+	/// A function declaration.
 	FnDecl {
 		return_type: Type,
 		ident: Ident,
@@ -268,12 +269,12 @@ pub enum Stmt {
 		body: Vec<Stmt>,
 		qualifiers: Vec<Qualifier>,
 	},
-	/// Struct definition. *Note:* This is invalid glsl grammar.
+	/// A struct definition. *Note:* This is invalid glsl grammar.
 	StructDef {
 		ident: Ident,
 		qualifiers: Vec<Qualifier>,
 	},
-	/// Struct declaration.
+	/// A struct declaration.
 	StructDecl {
 		ident: Ident,
 		/// # Invariants
@@ -282,14 +283,14 @@ pub enum Stmt {
 		qualifiers: Vec<Qualifier>,
 		instance: Option<Ident>,
 	},
-	/// General expression, e.g.
+	/// A general expression, e.g.
 	///
 	/// - `i + 5;`
 	/// - `fn();`
 	/// - `i = 5 + 1;`
 	/// - `i *= fn();`
 	Expr(Expr),
-	/// General scope, e.g.
+	/// A standalone scope, e.g.
 	/// ```glsl
 	/// /* .. */
 	/// {
@@ -297,39 +298,39 @@ pub enum Stmt {
 	/// }
 	/// ```
 	Scope(Vec<Stmt>),
-	/// Preprocessor calls.
+	/// A preprocessor call.
 	Preproc(Preproc),
-	/// If statement.
+	/// An if statement.
 	If {
 		cond: Expr,
 		body: Vec<Stmt>,
 		else_ifs: Vec<(Expr, Vec<Stmt>)>,
 		else_: Option<Vec<Stmt>>,
 	},
-	/// Switch statement.
+	/// A switch statement.
 	Switch {
 		expr: Expr,
 		/// `0` - If `None`, then this is a *default* case.
 		cases: Vec<(Option<Expr>, Vec<Stmt>)>,
 	},
-	/// For statement.
+	/// A for-loop statement.
 	For {
 		var: Option<Box<Stmt>>,
 		cond: Option<Expr>,
 		inc: Option<Expr>,
 		body: Vec<Stmt>,
 	},
-	/// While loop, i.e. `while ( /*..*/ ) { /*..*/ }`.
+	/// A while-loop, i.e. `while ( /*..*/ ) { /*..*/ }`.
 	While { cond: Expr, body: Vec<Stmt> },
-	/// Do-While loop, i.e. `do { /*..*/ } while ( /*..*/ );`.
+	/// A do-while loop, i.e. `do { /*..*/ } while ( /*..*/ );`.
 	DoWhile { cond: Expr, body: Vec<Stmt> },
-	/// Return statement.
+	/// A return statement.
 	Return(Option<Expr>),
-	/// Break keyword.
+	/// A break statement.
 	Break,
-	/// Continue keyword.
+	/// A continue statement.
 	Continue,
-	/// Discard keyword.
+	/// A discard statement.
 	Discard,
 }
 
@@ -390,7 +391,7 @@ impl std::fmt::Display for Preproc {
 	}
 }
 
-/// The valid options for the behaviour setting in a `#extension` directive.
+/// The possible behaviours in an `#extension` directive.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum ExtBehaviour {
 	Enable,
@@ -728,7 +729,7 @@ impl Lit {
 
 /// An identifier.
 ///
-/// This can be a variable name, function name, etc.
+/// This can be a variable name, function name, struct name, etc.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Ident {
 	pub name: String,
@@ -806,7 +807,7 @@ impl std::fmt::Display for Fundamental {
 	}
 }
 
-/// A texture type of a `sampler_` or `image_` type.
+/// A texture type of a `sampler_` or `image_` primitive type.
 #[derive(Debug, Clone, PartialEq)]
 pub enum TexType {
 	D1,
@@ -897,6 +898,7 @@ pub enum Primitive {
 	/// - The data type is guaranteed to be one of `Fundamental::Float|Int|Uint`.
 	/// - The texture type is guaranteed to be none of the `TexType::Shadow*` variants.
 	Image(Fundamental, TexType),
+	/// An atomic counter type.
 	Atomic,
 }
 
@@ -1063,7 +1065,7 @@ impl Primitive {
 
 type ArrSize = Option<Expr>;
 
-/// A built-in language type.
+/// A language type.
 #[derive(Debug, Clone, PartialEq)]
 pub enum Type {
 	/// A type which has only a single value.

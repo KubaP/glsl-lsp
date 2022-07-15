@@ -7,36 +7,36 @@
         {
             "type": "lldb",
             "request": "launch",
-            "name": "Debug executable",
-            "program": "${workspaceFolder}\\target\\debug\\glsl-parser.exe",
+            "name": "Debug playground",
+            "program": "${workspaceFolder}\\playground\\target\\debug\\playground.exe",
             "args": [],
-            "cwd": "${workspaceFolder}",
+            "cwd": "${workspaceFolder}\\playground",
             "env": {
                 "RUST_BACKTRACE": "1"
             },
             "sourceLanguages": [
                 "rust"
             ],
-            "preLaunchTask": "Cargo build"
+            "preLaunchTask": "Cargo build playground"
         },
         {
             "type": "lldb",
             "request": "launch",
-            "name": "Debug unit tests",
+            "name": "Debug lib tests",
             "cargo": {
                 "args": [
                     "test",
                     "--no-run",
-                    "--bin=glsl-parser",
+                    "--lib",
                     "--package=glsl-parser"
                 ],
                 "filter": {
                     "name": "glsl-parser",
-                    "kind": "bin"
+                    "kind": "lib"
                 }
             },
             "args": [],
-            "cwd": "${workspaceFolder}",
+            "cwd": "${workspaceFolder}\\glsl-parser",
             "env": {
                 "RUST_BACKTRACE": "1"
             },

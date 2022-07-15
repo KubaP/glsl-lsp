@@ -1,7 +1,7 @@
 # Build output
-/target
+target
 
-# Testing files
-test.vert
-test.frag
-test.parse
+# Playground testing/experimenting files
+playground/test.vert
+playground/test.frag
+playground/test.parse

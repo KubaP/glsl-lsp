@@ -9,19 +9,14 @@ use std::{
 	thread,
 };
 
-pub mod ast;
-pub mod error;
-pub mod expression;
-pub mod lexer;
-pub mod parser;
-pub mod shader;
-pub mod span;
+mod shader;
 
-/// Holds either one or the other value.
-#[derive(Debug, Clone, PartialEq)]
-pub enum Either<L, R> {
-	Left(L),
-	Right(R),
+pub fn parse_file(source: &str) {
+	let stmts = glsl_parser::parser::parse(source);
+	for stmt in stmts {
+		glsl_parser::parser::print_stmt(&stmt, 0);
+	}
+	print!("\r\n");
 }
 
 #[allow(unused_assignments)]
@@ -99,7 +94,7 @@ fn main() {
 	// Print at the start.
 	parse_source = fs::read_to_string("./test.parse").unwrap();
 	println!("\r\n");
-	parser::parse(&parse_source);
+	parse_file(&parse_source);
 
 	v_source = fs::read_to_string("./test.vert").unwrap();
 	f_source = fs::read_to_string("./test.frag").unwrap();
@@ -133,7 +128,7 @@ fn main() {
 								fs::read_to_string("./test.parse").unwrap();
 
 							println!("\r\n");
-							parser::parse_file(&parse_source);
+							parse_file(&parse_source);
 
 							has_reparsed = true;
 						}

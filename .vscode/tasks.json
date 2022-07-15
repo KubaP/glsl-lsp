@@ -1,52 +1,15 @@
 {
+    // See https://go.microsoft.com/fwlink/?LinkId=733558
+    // for the documentation about the tasks.json format
     "version": "2.0.0",
     "tasks": [
         {
-            "label": "Cargo run",
-            "type": "cargo",
-            "command": "run",
-            "env": {
-                "RUST_BACKTRACE": "1"
-            },
-            "group": {
-                "kind": "build",
-                "isDefault": true
-            },
-            "presentation": {
-                "echo": true,
-                "reveal": "silent",
-                "focus": false,
-                "panel": "dedicated",
-            },
-            "problemMatcher": [
-                "$rustc"
-            ],
-        },
-        {
-            "label": "Cargo run release",
-            "type": "cargo",
-            "command": "run",
-            "args": [
-                "--release"
-            ],
-            "env": {
-                "RUST_BACKTRACE": "1"
-            },
-            "group": "build",
-            "presentation": {
-                "echo": true,
-                "reveal": "silent",
-                "focus": false,
-                "panel": "dedicated",
-            },
-            "problemMatcher": [
-                "$rustc"
-            ]
-        },
-        {
-            "label": "Cargo build",
+            "label": "Cargo build lib",
             "type": "cargo",
             "command": "build",
+            "options": {
+                "cwd": "${workspaceFolder}/glsl-parser"
+            },
             "group": "build",
             "presentation": {
                 "echo": true,
@@ -59,12 +22,15 @@
             ]
         },
         {
-            "label": "Cargo build release",
+            "label": "Cargo build lib release",
             "type": "cargo",
             "command": "build",
             "args": [
                 "--release"
             ],
+            "options": {
+                "cwd": "${workspaceFolder}/glsl-parser"
+            },
             "group": "build",
             "presentation": {
                 "echo": true,
@@ -74,12 +40,54 @@
             },
             "problemMatcher": [
                 "$rustc"
+            ]
+        },
+        {
+            "label": "Cargo build playground",
+            "type": "cargo",
+            "command": "build",
+            "options": {
+                "cwd": "${workspaceFolder}/playground"
+            },
+            "group": "build",
+            "presentation": {
+                "echo": true,
+                "reveal": "always",
+                "focus": true,
+                "panel": "dedicated",
+            },
+            "problemMatcher": [
+                "$rustc"
+            ]
+        },
+        {
+            "label": "Cargo run playground",
+            "type": "cargo",
+            "command": "run",
+            "options": {
+                "cwd": "${workspaceFolder}/playground",
+            },
+            "env": {
+                "RUST_BACKTRACE": "1"
+            },
+            "group": "build",
+            "presentation": {
+                "echo": true,
+                "reveal": "silent",
+                "focus": false,
+                "panel": "dedicated",
+            },
+            "problemMatcher": [
+                "$rustc"
             ],
         },
         {
-            "label": "Cargo check",
+            "label": "Cargo check lib",
             "type": "cargo",
             "command": "check",
+            "options": {
+                "cwd": "${workspaceFolder}/glsl-parser"
+            },
             "group": "test",
             "presentation": {
                 "echo": true,
@@ -92,9 +100,12 @@
             ]
         },
         {
-            "label": "Cargo test",
+            "label": "Cargo test lib",
             "type": "cargo",
             "command": "test",
+            "options": {
+                "cwd": "${workspaceFolder}/glsl-parser"
+            },
             "group": {
                 "kind": "test",
                 "isDefault": true
@@ -110,13 +121,15 @@
             ]
         },
         {
-            "label": "Cargo docs",
+            "label": "Cargo docs lib",
             "type": "cargo",
             "command": "doc",
+            "options": {
+                "cwd": "${workspaceFolder}/glsl-parser"
+            },
             "args": [
-                // This flag is necessary in order to document any non pub modules.
-                // Technically this flag is passed by default but for some reason it needs manuall passing
-                // to take effect.
+                // This flag is necessary in order to document any non pub modules. Technically this flag is passed
+                // by default for a binary crate but for some reason it still needs manual passing to take effect.
                 "--document-private-items"
             ],
             "presentation": {
@@ -132,11 +145,11 @@
             ],
         },
         {
-            "label": "Open documentation",
+            "label": "Open lib documentation",
             "type": "process",
             "command": "C:/Program Files/Mozilla Firefox/firefox.exe",
             "args": [
-                "file://${workspaceFolder}/target/doc/glsl_parser/index.html"
+                "file://${workspaceFolder}/glsl-parser/target/doc/glsl_parser/index.html"
             ],
             "presentation": {
                 "echo": false,

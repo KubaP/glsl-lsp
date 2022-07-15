@@ -49,14 +49,6 @@ impl Walker {
 	}
 }
 
-pub fn parse_file(source: &str) {
-	let stmts = parse(source);
-	for stmt in stmts {
-		print_stmt(&stmt, 0);
-	}
-	print!("\r\n");
-}
-
 /// Parse all of the top-level statements in the file.
 pub fn parse(source: &str) -> Vec<Stmt> {
 	let cst = lexer(source);
@@ -783,8 +775,8 @@ fn parse_scope_contents(
 										walker,
 										Mode::Default,
 									) {
-										(Some(e),_) => e,
-										(None,_) => continue,
+										(Some(e), _) => e,
+										(None, _) => continue,
 									};
 
 									let current = match walker.peek() {
@@ -849,7 +841,7 @@ fn parse_scope_contents(
 						}
 
 						let var = match expr_parser(walker, Mode::Default) {
-							(Some(expr),_) => {
+							(Some(expr), _) => {
 								if let Some(type_) = expr.to_type() {
 									match parse_type_start(
 										walker,
@@ -863,7 +855,7 @@ fn parse_scope_contents(
 									Some(Box::from(Stmt::Expr(expr)))
 								}
 							}
-							(None,_) => None,
+							(None, _) => None,
 						};
 
 						// Consume the seperator `;` semicolon.
@@ -878,7 +870,7 @@ fn parse_scope_contents(
 							//continue;
 						}
 
-						let (cond,_) = expr_parser(walker, Mode::Default);
+						let (cond, _) = expr_parser(walker, Mode::Default);
 
 						// Consume the seperator `;` semicolon.
 						let current = match walker.peek() {
@@ -891,7 +883,7 @@ fn parse_scope_contents(
 							continue;
 						}
 
-						let (inc,_) = expr_parser(walker, Mode::Default);
+						let (inc, _) = expr_parser(walker, Mode::Default);
 
 						// Consume the closing `)` parenthesis.
 						let current = match walker.peek() {
@@ -940,8 +932,8 @@ fn parse_scope_contents(
 						}
 
 						let cond = match expr_parser(walker, Mode::Default) {
-							(Some(e),_) => e,
-							(None,_) => continue,
+							(Some(e), _) => e,
+							(None, _) => continue,
 						};
 
 						// Consume the closing `)` parenthesis.
@@ -1011,8 +1003,8 @@ fn parse_scope_contents(
 						}
 
 						let cond = match expr_parser(walker, Mode::Default) {
-							(Some(e),_) => e,
-							(None,_) => continue,
+							(Some(e), _) => e,
+							(None, _) => continue,
 						};
 
 						// Consume the closing `)` parenthesis.
@@ -1043,7 +1035,8 @@ fn parse_scope_contents(
 						walker.advance();
 
 						// Look for the optional return value expression.
-						let (return_expr,_) = expr_parser(walker, Mode::Default);
+						let (return_expr, _) =
+							expr_parser(walker, Mode::Default);
 
 						let current = match walker.peek() {
 							Some((t, _)) => t,
@@ -1117,11 +1110,11 @@ fn parse_struct(
 	qualifiers: Vec<Qualifier>,
 ) -> Option<Stmt> {
 	let ident = match expr_parser(walker, Mode::Default) {
-		(Some(e),_) => match e.ty {
+		(Some(e), _) => match e.ty {
 			ExprTy::Ident(i) => i,
 			_ => return None,
 		},
-		(None,_) => return None,
+		(None, _) => return None,
 	};
 
 	let (next, _) = match walker.peek() {
@@ -1142,11 +1135,11 @@ fn parse_struct(
 		let qualifiers = parse_qualifier_list(walker);
 
 		match expr_parser(walker, Mode::Default) {
-			(Some(expr),_) => {
+			(Some(expr), _) => {
 				if let Some(type_) = expr.to_type() {
 					let next = match expr_parser(walker, Mode::Default) {
-						(Some(e),_) => e,
-						(None,_) => return None,
+						(Some(e), _) => e,
+						(None, _) => return None,
 					};
 
 					let idents = next.to_var_def_decl_or_fn_ident();
@@ -1189,7 +1182,7 @@ fn parse_struct(
 					return None;
 				}
 			}
-			(None,_) => break 'members,
+			(None, _) => break 'members,
 		}
 	}
 
@@ -1204,11 +1197,11 @@ fn parse_struct(
 	}
 
 	let instance = match expr_parser(walker, Mode::Default) {
-		(Some(e),_) => match e.ty {
+		(Some(e), _) => match e.ty {
 			ExprTy::Ident(i) => Some(i),
 			_ => return None,
 		},
-		(None,_) => None,
+		(None, _) => None,
 	};
 
 	let (next, _) = match walker.peek() {
@@ -1229,7 +1222,7 @@ fn parse_struct(
 	})
 }
 
-fn print_stmt(stmt: &Stmt, indent: usize) {
+pub fn print_stmt(stmt: &Stmt, indent: usize) {
 	match stmt {
 		Stmt::Empty => print!(
 			"\r\n{:indent$}\x1b[9m(Empty)\x1b[0m",

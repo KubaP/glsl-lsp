@@ -1,48 +1,53 @@
 {
-    // Use IntelliSense to learn about possible attributes.
-    // Hover to view descriptions of existing attributes.
-    // For more information, visit: https://go.microsoft.com/fwlink/?linkid=830387
-    "version": "0.2.0",
-    "configurations": [
-        {
-            "type": "lldb",
-            "request": "launch",
-            "name": "Debug playground",
-            "program": "${workspaceFolder}\\playground\\target\\debug\\playground.exe",
-            "args": [],
-            "cwd": "${workspaceFolder}\\playground",
-            "env": {
-                "RUST_BACKTRACE": "1"
-            },
-            "sourceLanguages": [
-                "rust"
-            ],
-            "preLaunchTask": "Cargo build playground"
-        },
-        {
-            "type": "lldb",
-            "request": "launch",
-            "name": "Debug lib tests",
-            "cargo": {
-                "args": [
-                    "test",
-                    "--no-run",
-                    "--lib",
-                    "--package=glsl-parser"
-                ],
-                "filter": {
-                    "name": "glsl-parser",
-                    "kind": "lib"
-                }
-            },
-            "args": [],
-            "cwd": "${workspaceFolder}\\glsl-parser",
-            "env": {
-                "RUST_BACKTRACE": "1"
-            },
-            "sourceLanguages": [
-                "rust"
-            ]
-        }
-    ]
+	// Use IntelliSense to learn about possible attributes.
+	// Hover to view descriptions of existing attributes.
+	// For more information, visit: https://go.microsoft.com/fwlink/?linkid=830387
+	"version": "0.2.0",
+	"configurations": [
+		{
+			"name": "Extension",
+			"type": "extensionHost",
+			"request": "launch",
+			"args": ["--extensionDevelopmentPath=${workspaceFolder}"],
+			"env": {
+				"RUST_BACKTRACE": "1",
+				"__GLSL_DEBUG_SERVER_PATH": "${workspaceFolder}/server/target/debug/server.exe"
+			},
+			"sourceMaps": true,
+			"smartStep": true,
+			"outFiles": ["${workspaceFolder}/client/out/**/*.js"],
+			"preLaunchTask": "npm build client"
+		},
+		{
+			"type": "lldb",
+			"request": "launch",
+			"name": "Playground",
+			"program": "${workspaceFolder}\\playground\\target\\debug\\playground.exe",
+			"args": [],
+			"cwd": "${workspaceFolder}\\playground",
+			"env": {
+				"RUST_BACKTRACE": "1"
+			},
+			"sourceLanguages": ["rust"],
+			"preLaunchTask": "Cargo build playground"
+		},
+		{
+			"type": "lldb",
+			"request": "launch",
+			"name": "Lib tests",
+			"cargo": {
+				"args": ["test", "--no-run", "--lib", "--package=glsl-parser"],
+				"filter": {
+					"name": "glsl-parser",
+					"kind": "lib"
+				}
+			},
+			"args": [],
+			"cwd": "${workspaceFolder}\\glsl-parser",
+			"env": {
+				"RUST_BACKTRACE": "1"
+			},
+			"sourceLanguages": ["rust"]
+		}
+	]
 }

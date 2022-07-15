@@ -1,5 +1,9 @@
 # Build output
 target
+/client/out
+
+# Npm dependencies
+/client/node_modules
 
 # Playground testing/experimenting files
 playground/test.vert

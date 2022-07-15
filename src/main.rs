@@ -10,6 +10,7 @@ use std::{
 };
 
 pub mod ast;
+pub mod error;
 pub mod expression;
 pub mod lexer;
 pub mod parser;

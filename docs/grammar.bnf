@@ -1,17 +1,17 @@
 # LEXER GRAMMAR
 
-## Identifiers/Keywords/Built-in types/Structs
-word ::= ident_start ident_char*
+## Identifiers/Built-in types/Structs
+IDENT ::= ident_start ident_char*
 
 ident_start ::= [a-z] | [A-Z] | "_"
 ident_char ::= [a-z] | [A-Z] | "_" | digit
 
 
 ## Literals
-lit ::= "true" | "false" | number
+LIT ::= "true" | "false" | number
 number ::= uint | int | f64 | f32
 
-# Floating points
+### Floating points
 f64 ::= float "lf" | float "LF"
 f32 ::= float "f" | float "F" | float
 
@@ -26,7 +26,7 @@ float_3 ::= digit+ "." digit+
 float_2 ::= digit+ "."
 float_1 ::= "." digit+
 
-# Integers
+### Integers
 uint ::= hex u_suffix | oct u_suffix | dec u_suffix
 u_suffix ::= "u" | "U"
 int ::= hex | oct | dec

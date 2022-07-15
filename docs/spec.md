@@ -37,9 +37,11 @@ Matrices (where `n` is the number of columns and `m` is the number of rows, and 
 An alternative `mati` and `dmati` notation, (where `i` is a number that satisfies `2 <= i <= 4`), defines a square matrix, i.e. it is equivalent to `(d)matixi`.
 
 ### Opaque Types
-These are types which act as a reference to some external object. A clear analogy would be, like pointers are fundamentally integers but they have special meaning, the same thing is with opaque types. Opaque types can only be part of a `uniform` global variable.
+These are types which act as a reference to some external object. A clear analogy would be, like pointers are fundamentally integers but they have special meaning, opaque types are also integer primitives but they point to somewhere else in gpu memory. Opaque types can only be declared as `uniform`-qualified variables, or as function parameters.
 
-- Samplers - TODO,
+Opaque types are a form of constant variables; they cannot be assigned to, and hence cannot be qualified with the `out` or `inout` parameter qualifiers.
+
+- Samplers - TODO
 - Images - TODO,
 - Atomic counters - TODO.
 
@@ -294,6 +296,9 @@ Data d = {5, 1.0};
 // Provided 4 expressions, but there are only 3 members
 Data d = {5, 1.0, mat2(0.0), 7};
 ```
+
+### Opaque Types
+Opaque types do not support initialization at all; any attempt to do so is illegal.
 
 ### Note about Initializer Lists
 Child initializer lists can only be used if the parent composite-type also uses an initializer list:
@@ -583,6 +588,18 @@ The parameter names are optional in both the declaration and definition, so the 
 void func(int i, float, mat4 m);
 ```
 
+A function that takes no parameters can have an optional `void` parameter specified. If this is the case, it must be the only parameter, and it must be anonymous
+```glsl
+int func(void);
+// Equivalent to:
+int func();
+
+// The following are all invalid:
+int func(void, void);
+int func(void, int);
+int func(void v);
+```
+
 ### Qualifiers
 #### Passing
 There are multiple ways that arguments are passed into a function:
@@ -638,23 +655,23 @@ There are multiple ways that arguments are passed into a function call:
 
 ```glsl
 // Standard passing of arguments in
-fn(in int i) {
-    // Reads from `i` and does something...
+fn(in int p) {
+    // Reads from `p` and does something...
 }
 int i = 5;
 fn(i);
 
 // Passing parameters out
-fn2(out int i) {
-    i = 5;
+fn2(out int p) {
+    p = 5;
 }
 int i;
 fn2(i);
 // `i` is now 5
 
 // Both
-fn3(inout int i) {
-    i += i;
+fn3(inout int p) {
+    p += p;
 }
 int i = 5;
 fn3(i);
@@ -664,7 +681,7 @@ Note that an argument is expected after a comma, i.e. this is invalid:
 ```glsl
 // Invalid
 vec2(1, 2, )
-//       ^ expected argument here
+//        ^ expected argument here
 
 // Valid
 vec2(1, 2)
@@ -755,7 +772,7 @@ while (COND_EXPR) {
 ```glsl
 do {
     /*...*/
-} while (COND_EXPR)
+} while (COND_EXPR);
 ```
 `COND_EXPR` is an expression which evaluates to `bool`.
 
@@ -1058,6 +1075,39 @@ This is a special input for fragment shaders (awkward because in this example th
 layout(early_fragment_tests) in;
 ```
 
+# Line-Continuation Character
+The line-continuation character makes the lexer ignore itself and the end-of-line characters that follow, and continue lexing from the first character of the next line as if there was no break.
+```glsl
+<ANYTHING>\<EOL>
+```
+`<ANYTHING>` is anything other than `\`. `<EOL>` is either `\n` or `\r\n`. Two slashes (`\\`) are illegal.
+```glsl
+i +\
+= 5;
+// Would be lexed as:
+i += 5;
+
+i +\\
+= 5;
+// Would be lexed as:
+i +<ERROR>=5;
+```
+Note that this allows keywords to be split up.
+```glsl
+str\
+uct I;
+
+// Would be lexed as:
+struct I;
+
+str\
+    uct I;
+
+// Would be lexed as:
+str uct I;
+// because preceding whitespace on the next line is not removed
+```
+
 # Comments
 Comment syntax:
 ```glsl
@@ -1073,10 +1123,10 @@ Delimited comments cannot be nested, i.e. the following produces an error:
 */ (<- Unmatched delimiter/punctuation)
 ```
 
-Single line comments can continue with the *line-continuation character* `\`, in which case the comment extends to the EOL of the next line. So the following is one single comment:
+Single line comments can continue with the [Line-Continuation Character](#line-continuation-character) `\`, in which case the comment extends to the EOL of the next line. So the following is one single comment:
 ```glsl
 // First comment... \
-int i = 5; // This is still part of the first comment
+int i = 5; * This is still part of the first comment *
 ```
 
 Open-ended multiline comments containing the EOF produce an error:
@@ -1087,20 +1137,6 @@ Open-ended multiline comments containing the EOF produce an error:
 <EOF>
 ```
 Note that single-line comments, even with the `\` continuation character, can never produce this error even if they also are at the end of the file.
-
-### Line-continuation character
-```glsl
-<anything but \>\<EOL>
-
-// Valid:
-keyword\
-190\
-ident_\
-+\
-
-// Invalid:
-anything\\ // The first \ escapes the second \
-```
 
 # Preprocessor
 

@@ -8,15 +8,16 @@ use crate::{
 };
 use std::collections::VecDeque;
 
-/// Defines the behaviour of the expression parser.
+/// Sets the behaviour of the expression parser.
 #[derive(Debug, PartialEq, Eq)]
 pub enum Mode {
-	/// The default behaviour, which can be used to parse expressions that form statements, such as `i = 5`.
+	/// The default behaviour, which can be used to parse any valid expressions, including those that can form
+	/// entire statements, such as `i = 5`.
 	Default,
 	/// Disallows top-level lists, i.e. upon encountering the first comma (`,`) outside of a group, the parser will
-	/// return.
+	/// return. E.g. `a, b` would return but `(a, b)` wouldn't.
 	DisallowTopLevelList,
-	/// Disallows treating assignments as a valid expression, i.e. upon encountering the first equals-sign (`=`),
+	/// Disallows treating assignments as a valid expression, i.e. upon encountering the first `Token::Eq` (`=`),
 	/// the parser will return.
 	BreakAtEq,
 }
@@ -28,6 +29,7 @@ pub fn expr_parser(
 ) -> (Option<Expr>, Vec<SyntaxErr>) {
 	let start_position = match walker.peek() {
 		Some((_, span)) => span.start,
+		// If we are at the end of the token stream, we can return early with nothing.
 		None => return (None, vec![]),
 	};
 
@@ -533,9 +535,8 @@ impl ShuntingYard {
 						}
 					}
 				} else {
-					// Since we don't have an bracket/function/array constructor group at all, that means we have a
-					// lonely `)`. This makes the entire expression up to the previous group start delimiter
-					// incomplete.
+					// Since we don't have a parenthesis/function/array constructor group at all, that means we
+					// have a lonely `)`. This means we want to stop parsing further tokens.
 					println!("Found a `)` delimiter without a starting `(` delimiter!");
 					return Err(SyntaxErr::FoundUnmatchedClosingDelim(
 						end_span, false,
@@ -631,8 +632,8 @@ impl ShuntingYard {
 					}
 				}
 			} else {
-				// Since we don't have an index group at all, that means we have a lonely `]`. This makes the
-				// entire expression up to the previous group start delimiter incomplete.
+				// Since we don't have an index group at all, that means we have a lonely `]`. This means we want
+				// to stop parsing further tokens.
 				println!(
 					"Found a `]` delimiter without a starting `[` delimiter!"
 				);
@@ -724,8 +725,8 @@ impl ShuntingYard {
 					}
 				}
 			} else {
-				// Since we don't have an initializer group at all, that means we have a lonely `}`. This makes the
-				// entire expression up to the previous group start delimiter incomplete.
+				// Since we don't have an initializer group at all, that means we have a lonely `}`. This means we
+				// want to stop parsing further tokens.
 				println!(
 					"Found a `}}` delimiter without a starting `{{` delimiter!"
 				);
@@ -830,7 +831,7 @@ impl ShuntingYard {
 		println!("Found an incomplete function call, initializer list, array constructor or general list expression!");
 	}
 
-	/// Returns whether we have just started to parse a function, i.e. `..fn(`
+	/// Returns whether we have just started to parse a function, i.e. `..fn(<HERE>`
 	fn just_started_fn(&self) -> bool {
 		if let Some((current_group, _, _)) = self.groups.back() {
 			match current_group {
@@ -842,7 +843,7 @@ impl ShuntingYard {
 		}
 	}
 
-	/// Returns whether we have just started to parse an initializer list, i.e. `..{`
+	/// Returns whether we have just started to parse an initializer list, i.e. `..{<HERE>`
 	fn just_started_init(&self) -> bool {
 		if let Some((current_group, _, _)) = self.groups.back() {
 			match current_group {
@@ -854,7 +855,7 @@ impl ShuntingYard {
 		}
 	}
 
-	/// Returns whether we are currently in an initializer list parsing group.
+	/// Returns whether we are currently in an initializer list parsing group, i.e. `{..<HERE>`
 	fn is_in_init(&self) -> bool {
 		if let Some((current_group, _, _)) = self.groups.back() {
 			match current_group {
@@ -887,7 +888,7 @@ impl ShuntingYard {
 		false
 	}
 
-	/// Returns whether an initializer list group exists.
+	/// Returns whether an open initializer list group exists.
 	fn exists_init_group(&self) -> bool {
 		for (group, _, _) in self.groups.iter() {
 			if let Group::Init(_) = group {
@@ -2034,7 +2035,7 @@ impl std::fmt::Display for Op {
 #[cfg(test)]
 use crate::lexer::lexer;
 
-/// Asserts the expression output of the `expr_parser()` matches the right hand side; ignores spans.
+/// Asserts whether the expression output of the `expr_parser()` matches the right hand side.
 #[cfg(test)]
 macro_rules! assert_expr {
 	($source:expr, $rest:expr) => {

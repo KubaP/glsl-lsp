@@ -1296,7 +1296,7 @@ fn spans() {
 	assert_eq!(lexer("1e+"), vec![(Token::Num { num: "1".into(), suffix: Some("e".into()), type_: NumType::Dec }, span(0, 2)), (Token::Op(OpTy::Add), span(2, 3))]);
 }
 
-/// Asserts the token output of the `lexer()` matches the right hand side; ignores the spans.
+/// Asserts whether the token output of the `lexer()` matches the right hand side; ignores the spans.
 #[cfg(test)]
 macro_rules! assert_tokens {
     ($src:expr, $($token:expr),*) => {

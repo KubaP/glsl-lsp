@@ -17,9 +17,24 @@ pub struct Span {
 }
 
 impl Span {
-	/// Constructs a span which starts and ends at `0`. This should only be used as a temporary placeholder.
+	/// Constructs a new span.
+	pub fn new(start:usize, end:usize) -> Self {
+		Self {start, end}
+	}
+
+	/// Constructs a zero-width span at `0`.
+	/// 
+	/// *Note:* This should only be used as a temporary placeholder for debugging purposes.
 	pub fn empty() -> Self {
 		Self { start: 0, end: 0 }
+	}
+
+	/// Constructs a zero-width span from a position.
+	pub fn from_zero_width(position: usize) -> Self {
+		Self {
+			start: position,
+			end: position,
+		}
 	}
 
 	/// Returns whether this span is located after the other span.

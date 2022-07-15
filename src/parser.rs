@@ -73,7 +73,7 @@ pub fn parse(source: &str) -> Vec<Stmt> {
 		match expr_parser(&mut walker, Mode::Default) {
 			// We tried to parse an expression and succeeded. We have an expression consisting of at least one
 			// token.
-			Some(expr) => {
+			(Some(expr), _) => {
 				// Check if the expression can be parsed as a typename. If so, then we try to parse the following
 				// tokens as statements which can start with a typename, i.e. variable or function defs/decls.
 				if let Some(type_) = expr.to_type() {
@@ -103,7 +103,7 @@ pub fn parse(source: &str) -> Vec<Stmt> {
 			}
 			// We tried to parse an expression but that immediately failed. This means the current token is one
 			// which cannot start an expression.
-			None => {
+			(None, _) => {
 				let (token, _) = walker.peek().unwrap();
 
 				match token {
@@ -251,8 +251,8 @@ fn parse_qualifier_list(walker: &mut Walker) -> Vec<Qualifier> {
 										walker,
 										Mode::DisallowTopLevelList,
 									) {
-										Some(e) => e,
-										None => break 'outer,
+										(Some(e), _) => e,
+										(None, _) => break 'outer,
 									};
 									layouts.push(constructor(expr));
 								}
@@ -305,8 +305,8 @@ fn parse_type_start(
 	};
 
 	let next = match expr_parser(walker, Mode::BreakAtEq) {
-		Some(e) => e,
-		None => return None,
+		(Some(e), _) => e,
+		(None, _) => return None,
 	};
 
 	let idents = next.to_var_def_decl_or_fn_ident();
@@ -346,8 +346,8 @@ fn parse_type_start(
 		walker.advance();
 		// We have a variable declaration.
 		let value = match expr_parser(walker, Mode::Default) {
-			Some(e) => e,
-			None => return None,
+			(Some(e), _) => e,
+			(None, _) => return None,
 		};
 
 		let (next, _) = match walker.peek() {
@@ -394,8 +394,8 @@ fn parse_fn(
 		let qualifiers = parse_qualifier_list(walker);
 
 		let expr = match expr_parser(walker, Mode::DisallowTopLevelList) {
-			Some(e) => e,
-			None => {
+			(Some(e), _) => e,
+			(None, _) => {
 				let (current, _) = match walker.peek() {
 					Some(t) => t,
 					None => return None,
@@ -419,8 +419,8 @@ fn parse_fn(
 		};
 
 		let expr_2 = match expr_parser(walker, Mode::DisallowTopLevelList) {
-			Some(e) => e,
-			None => {
+			(Some(e), _) => e,
+			(None, _) => {
 				let (current, _) = match walker.peek() {
 					Some(t) => t,
 					None => return None,
@@ -544,7 +544,7 @@ fn parse_scope_contents(
 		match expr_parser(walker, Mode::Default) {
 			// We tried to parse an expression and succeeded. We have an expression consisting of at least one
 			// token.
-			Some(expr) => {
+			(Some(expr), _) => {
 				// Check if the expression can be parsed as a typename. If so, then we try to parse the following
 				// tokens as statements which can start with a typename, i.e. variable or function defs/decls.
 				// FIXME: Cannot have a function within a function?
@@ -586,7 +586,7 @@ fn parse_scope_contents(
 			}
 			// We tried to parse an expression but that immediately failed. This means the current token is one
 			// which cannot start an expression.
-			None => {
+			(None, _) => {
 				let (token, _) = walker.peek().unwrap();
 
 				match token {
@@ -609,8 +609,8 @@ fn parse_scope_contents(
 						}
 
 						let cond = match expr_parser(walker, Mode::Default) {
-							Some(e) => e,
-							None => continue,
+							(Some(e), _) => e,
+							(None, _) => continue,
 						};
 
 						// Consume the closing `)` parenthesis.
@@ -683,8 +683,8 @@ fn parse_scope_contents(
 
 								let cond =
 									match expr_parser(walker, Mode::Default) {
-										Some(e) => e,
-										None => continue,
+										(Some(e), _) => e,
+										(None, _) => continue,
 									};
 
 								// Consume the closing `)` parenthesis.
@@ -742,8 +742,8 @@ fn parse_scope_contents(
 						}
 
 						let expr = match expr_parser(walker, Mode::Default) {
-							Some(e) => e,
-							None => continue,
+							(Some(e), _) => e,
+							(None, _) => continue,
 						};
 
 						// Consume the closing `)` parenthesis.
@@ -783,8 +783,8 @@ fn parse_scope_contents(
 										walker,
 										Mode::Default,
 									) {
-										Some(e) => e,
-										None => continue,
+										(Some(e),_) => e,
+										(None,_) => continue,
 									};
 
 									let current = match walker.peek() {
@@ -849,7 +849,7 @@ fn parse_scope_contents(
 						}
 
 						let var = match expr_parser(walker, Mode::Default) {
-							Some(expr) => {
+							(Some(expr),_) => {
 								if let Some(type_) = expr.to_type() {
 									match parse_type_start(
 										walker,
@@ -863,7 +863,7 @@ fn parse_scope_contents(
 									Some(Box::from(Stmt::Expr(expr)))
 								}
 							}
-							None => None,
+							(None,_) => None,
 						};
 
 						// Consume the seperator `;` semicolon.
@@ -878,7 +878,7 @@ fn parse_scope_contents(
 							//continue;
 						}
 
-						let cond = expr_parser(walker, Mode::Default);
+						let (cond,_) = expr_parser(walker, Mode::Default);
 
 						// Consume the seperator `;` semicolon.
 						let current = match walker.peek() {
@@ -891,7 +891,7 @@ fn parse_scope_contents(
 							continue;
 						}
 
-						let inc = expr_parser(walker, Mode::Default);
+						let (inc,_) = expr_parser(walker, Mode::Default);
 
 						// Consume the closing `)` parenthesis.
 						let current = match walker.peek() {
@@ -940,8 +940,8 @@ fn parse_scope_contents(
 						}
 
 						let cond = match expr_parser(walker, Mode::Default) {
-							Some(e) => e,
-							None => continue,
+							(Some(e),_) => e,
+							(None,_) => continue,
 						};
 
 						// Consume the closing `)` parenthesis.
@@ -1011,8 +1011,8 @@ fn parse_scope_contents(
 						}
 
 						let cond = match expr_parser(walker, Mode::Default) {
-							Some(e) => e,
-							None => continue,
+							(Some(e),_) => e,
+							(None,_) => continue,
 						};
 
 						// Consume the closing `)` parenthesis.
@@ -1043,7 +1043,7 @@ fn parse_scope_contents(
 						walker.advance();
 
 						// Look for the optional return value expression.
-						let return_expr = expr_parser(walker, Mode::Default);
+						let (return_expr,_) = expr_parser(walker, Mode::Default);
 
 						let current = match walker.peek() {
 							Some((t, _)) => t,
@@ -1117,11 +1117,11 @@ fn parse_struct(
 	qualifiers: Vec<Qualifier>,
 ) -> Option<Stmt> {
 	let ident = match expr_parser(walker, Mode::Default) {
-		Some(e) => match e.ty {
+		(Some(e),_) => match e.ty {
 			ExprTy::Ident(i) => i,
 			_ => return None,
 		},
-		None => return None,
+		(None,_) => return None,
 	};
 
 	let (next, _) = match walker.peek() {
@@ -1142,11 +1142,11 @@ fn parse_struct(
 		let qualifiers = parse_qualifier_list(walker);
 
 		match expr_parser(walker, Mode::Default) {
-			Some(expr) => {
+			(Some(expr),_) => {
 				if let Some(type_) = expr.to_type() {
 					let next = match expr_parser(walker, Mode::Default) {
-						Some(e) => e,
-						None => return None,
+						(Some(e),_) => e,
+						(None,_) => return None,
 					};
 
 					let idents = next.to_var_def_decl_or_fn_ident();
@@ -1189,7 +1189,7 @@ fn parse_struct(
 					return None;
 				}
 			}
-			None => break 'members,
+			(None,_) => break 'members,
 		}
 	}
 
@@ -1204,11 +1204,11 @@ fn parse_struct(
 	}
 
 	let instance = match expr_parser(walker, Mode::Default) {
-		Some(e) => match e.ty {
+		(Some(e),_) => match e.ty {
 			ExprTy::Ident(i) => Some(i),
 			_ => return None,
 		},
-		None => None,
+		(None,_) => None,
 	};
 
 	let (next, _) = match walker.peek() {

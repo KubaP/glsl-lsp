@@ -1641,7 +1641,7 @@ impl ShuntingYard {
 					*group_delim_end,
 				);
 				// The span for the ending of the group is zero-width since there is no end delimiter character.
-				let group_end = Span::from_zero_width(end_position.end);
+				let group_end = Span::new_zero_width(end_position.end);
 
 				// Reasoning about what gets invalidated and what doesn't: will it potentially produce semantic errors
 				//

@@ -10,18 +10,25 @@
 /// ^   ^   ^   ^   ^   ^   ^
 /// 0   1   2   3   4   5   6
 /// ```
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Clone, Copy, PartialEq, Eq)]
 pub struct Span {
 	pub start: usize,
 	pub end: usize,
 }
 
 impl Span {
-	/// Constructs a new `Span`.
+	/// Constructs a new `Span` between the positions.
 	pub fn new(start: usize, end: usize) -> Self {
 		Self { start, end }
 	}
 
+	/// Constructs a new `Span` between the two spans.
+	pub fn new_between(a: Span, b: Span) -> Self {
+		Self {
+			start: a.end,
+			end: b.start,
+		}
+	}
 	/// Constructs a zero-width `Span` at `0`.
 	///
 	/// *Note:* This should only be used as a temporary placeholder for debugging purposes.
@@ -30,7 +37,7 @@ impl Span {
 	}
 
 	/// Constructs a zero-width `Span` from a position.
-	pub fn from_zero_width(position: usize) -> Self {
+	pub fn new_zero_width(position: usize) -> Self {
 		Self {
 			start: position,
 			end: position,
@@ -47,7 +54,7 @@ impl Span {
 		self.start >= position
 	}
 
-	/// Returns a new `Span` which ends at the previous position.
+	/// Returns a new `Span` which ends at a previous position, i.e. `end: span.end - 1`.
 	pub fn end_at_previous(self) -> Self {
 		// FIXME: Make this saturating to prevent overflow panic.
 		let new_end = self.end - 1;
@@ -97,6 +104,18 @@ impl Span {
 			start: self.end,
 			end: self.end,
 		}
+	}
+}
+
+impl std::fmt::Debug for Span {
+	fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+		write!(f, "{}-{}", self.start, self.end)
+	}
+}
+
+impl std::fmt::Display for Span {
+	fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+		write!(f, "{}-{}", self.start, self.end)
 	}
 }
 

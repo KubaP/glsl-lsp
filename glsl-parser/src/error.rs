@@ -2,7 +2,9 @@ use crate::span::Span;
 
 /// A syntactical/gramatical error.
 #[derive(Debug)]
+#[non_exhaustive]
 pub enum SyntaxErr {
+	/* EXPRESSIONS */
 	/// In the position that either a binary or postfix operator, or the end-of-expression, was expected to occur,
 	/// found an operand. E.g. in `...1 1`, we are missing an operator such as `...1 + 1`.
 	///
@@ -107,4 +109,67 @@ pub enum SyntaxErr {
 	/// - `0` - the span of the opening `(`,
 	/// - `1` - the zero-width span at the end of the expression.
 	UnclosedArrayConstructor(Span, Span),
+
+	/* LAYOUT QUALIFIER */
+	/// Did not find an opening parenthesis (`(`) after the `layout` keyword. E.g. in `layout int`, we are missing
+	/// the parenthesis like so `layout(... int`
+	///
+	/// - `0` - the span where the opening parenthesis should be.
+	ExpectedParenAfterLayout(Span),
+	/// Did not find a closing parenthesis (`)`) after the layout contents. E.g. in `layout(location = 0`, we are
+	/// missing the closing parenthesis like so `layout(location = 0)`.
+	///
+	/// - `0` - the span of the opening parenthesis,
+	/// - `1` - the span where the closing parenthesis should be.
+	ExpectedParenAtEndOfLayout(Span, Span),
+	/// Found a token which is not a valid layout identifier. E.g. `my_ident` is not a valid layout identifier.
+	///
+	/// - `0` - the span of the token.
+	InvalidLayoutIdentifier(Span),
+	/// Did not find an equals sign (`=`) after a layout identifier which takes a value expression. E.g. in
+	/// `location`, we are missing the equals sign like so `location =`.
+	///
+	/// - `0` - the span where the equals sign should be.
+	ExpectedEqAfterLayoutIdent(Span),
+	/// Did not find an expression after a layout identifier which takes a value expression. E.g. in
+	/// `location = `, we are missing the value like so `location = 5`.
+	///
+	/// - `0` - the span where the expression should be.
+	ExpectedValExprAfterLayoutIdent(Span),
+
+	/* GENERAL */
+	/// Did not find a token which is a valid type identifier. E.g. in `fn(if,`, the `if` is not a valid type.
+	///
+	/// - `0` - the span of the token/expression which is not a type identifier.
+	ExpectedType(Span),
+	/// Did not find a token which is a valid identifier. E.g. in `fn(int if)`, the `if` is not a valid identifier.
+	///
+	/// - `0` - the span of the token/expression which is not an identifier.
+	ExpectedIdent(Span),
+
+	/* FUNCTION DEF/DECL */
+	/// Did not find a closing parenthesis (`)`) at the end of the parameter list. E.g. in `fn(void`, we are
+	/// missing closing parenthesis like so `fn(void)`.
+	///
+	/// - `0` - the span of the opening parenthesis,
+	/// - `1` - the span where the closing parenthesis should be (i.e. between the last token of the parameter list
+	///   and the `;` or `{`, or `EOF`).
+	ExpectedParenAtEndOfParamList(Span, Span),
+	/// Did not find a comma after a parameter definition. E.g. in `int v int...`, we are missing a comma like so
+	/// `int v, int...`.
+	///
+	/// - `0` - the span where the comma should be.
+	ExpectedCommaAfterParamInParamList(Span),
+	/// Found a token signifying the end of a parameter without encountering a type identifier.
+	/// E.g. in `int,)`, we are missing a type like so `int, float)`. Or in `, in)`, we are missing a type like so
+	/// `, in float)`. Or in `int, in;`, we are missing a type like so `int, in float);`.
+	///
+	/// - `0` - the span where the type should be (i.e. between the previous token and the current token).
+	MissingTypeInParamList(Span),
+	/// Did not find either a semi-colon (`;`) or the beginning of the function body (`{`) after the parameter
+	/// list. E.g. in `fn(...)`, we are missing a semi-colon like so `fn(...);`.
+	///
+	/// - `0` - the span where the semi-colon or opening brace should be (i.e. between the parameter list `)` and
+	/// the token which is not what we expected).
+	ExpectedSemiOrScopeAfterParamList(Span),
 }

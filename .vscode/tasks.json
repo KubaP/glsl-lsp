@@ -62,7 +62,7 @@
 			"group": "build",
 			"presentation": {
 				"echo": true,
-				"reveal": "always",
+				"reveal": "silent",
 				"focus": true,
 				"panel": "dedicated"
 			},
@@ -79,7 +79,7 @@
 			"group": "build",
 			"presentation": {
 				"echo": true,
-				"reveal": "always",
+				"reveal": "silent",
 				"focus": true,
 				"panel": "dedicated"
 			},

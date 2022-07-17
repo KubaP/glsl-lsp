@@ -1,6 +1,10 @@
+use diag::to_diagnostic;
+use glsl_parser::span::Span;
 use tower_lsp::jsonrpc::Result;
 use tower_lsp::lsp_types::*;
 use tower_lsp::{Client, LanguageServer, LspService, Server};
+
+pub mod diag;
 
 #[derive(Debug)]
 struct MyServer {
@@ -23,7 +27,7 @@ impl LanguageServer for MyServer {
 		Ok(InitializeResult {
 			server_info: None,
 			capabilities: ServerCapabilities {
-				// Sync the full text content on any change.
+				// Sync the full text contents upon any change.
 				text_document_sync: Some(TextDocumentSyncCapability::Kind(
 					TextDocumentSyncKind::FULL,
 				)),
@@ -63,12 +67,18 @@ impl LanguageServer for MyServer {
 		self.client
 			.log_message(
 				MessageType::INFO,
-				"Client-Server connection initialized.",
+				"Server received 'initialized' message.",
 			)
 			.await;
 	}
 
 	async fn shutdown(&self) -> Result<()> {
+		self.client
+			.log_message(
+				MessageType::INFO,
+				"Server received 'shutdown' message.",
+			)
+			.await;
 		Ok(())
 	}
 
@@ -76,15 +86,11 @@ impl LanguageServer for MyServer {
 		self.client
 			.log_message(MessageType::INFO, "Server received 'did_open' event.")
 			.await;
-		self.client
-			.log_message(MessageType::LOG, format!("{params:?}"))
-			.await;
-		self.on_open(TextDocumentItem {
-			uri: params.text_document.uri,
-			text: params.text_document.text,
-			version: params.text_document.version,
-			language_id: "glsl".into(),
-		})
+		self.on_change(
+			params.text_document.uri,
+			params.text_document.version,
+			params.text_document.text,
+		)
 		.await;
 	}
 
@@ -95,15 +101,11 @@ impl LanguageServer for MyServer {
 				"Server received 'did_change' event.",
 			)
 			.await;
-		self.client
-			.log_message(MessageType::LOG, format!("{params:?}"))
-			.await;
-		self.on_change(TextDocumentItem {
-			uri: params.text_document.uri,
-			text: std::mem::take(&mut params.content_changes[0].text),
-			version: params.text_document.version,
-			language_id: "glsl".into(),
-		})
+		self.on_change(
+			params.text_document.uri,
+			params.text_document.version,
+			params.content_changes.remove(0).text,
+		)
 		.await;
 	}
 
@@ -124,9 +126,19 @@ impl LanguageServer for MyServer {
 }
 
 impl MyServer {
-	async fn on_open(&self, params: TextDocumentItem) {}
+	async fn on_open(&self, document: TextDocumentItem) {}
 
-	async fn on_change(&self, params: TextDocumentItem) {}
+	async fn on_change(&self, uri: Url, version: i32, contents: String) {
+		let file = File::new(uri, contents);
+		let (_stmts, errors) = glsl_parser::parser::parse(&file.contents);
+		let diags = errors
+			.into_iter()
+			.map(|err| to_diagnostic(err, &file))
+			.collect::<Vec<_>>();
+		self.client
+			.publish_diagnostics(file.uri, diags, Some(version))
+			.await;
+	}
 }
 
 #[tokio::main]
@@ -138,4 +150,105 @@ async fn main() {
 		LspService::build(|client| MyServer { client }).finish();
 
 	Server::new(stdin, stdout, socket).serve(service).await;
+}
+
+/// A source file.
+pub struct File {
+	uri: Url,
+	contents: String,
+	/// A character index to line conversion table.
+	/// - `0` - line number,
+	/// - `1` - character index which starts at the line number.
+	lines: Vec<(usize, usize)>,
+}
+
+impl File {
+	/// Constructs a new `File` with the source string.
+	pub fn new(uri: Url, contents: String) -> Self {
+		let mut lines = Vec::new();
+		lines.push((0, 0));
+
+		let mut line = 1;
+		let mut i = 0;
+		let mut chars = contents.chars();
+		loop {
+			let c = match chars.next() {
+				Some(c) => c,
+				None => break,
+			};
+
+			if c == '\n' {
+				// Push a new line at the position of the character after `\n`.
+				i += 1;
+				lines.push((line, i));
+				line += 1;
+			} else if c == '\r' {
+				i += 1;
+
+				let next = match chars.next() {
+					Some(c) => c,
+					None => {
+						// Push a line at the position of the character after `\r`.
+						lines.push((line, i));
+						line += 1;
+						break;
+					}
+				};
+
+				// Push a new line at the position of the character after `\r\n`.
+				if next == '\n' {
+					i += 1;
+					lines.push((line, i));
+					line += 1;
+				} else {
+					// Push a line at the position of the character after `\r`.
+					lines.push((line, i));
+					line += 1;
+				}
+			} else {
+				i += 1;
+			}
+		}
+		// Add a final zero-sized line at the very end. This effectively treats the previous line that was just
+		// added in the loop to extend from it's starting index to infinity.
+		//
+		// Note: We do this because in the `span_to_range()` method, we iterate over the lines in pairs, and
+		// without this "final" line, we wouldn't be able to correctly translate a span on the very last line. The
+		// reason why we iterate over in pairs is because that reduces copies; the alternative would be to keep
+		// `previous_*` counters outside of the loop and write to them, but that has unnecessary overhead.
+		lines.push((line, usize::MAX));
+
+		Self {
+			uri,
+			contents,
+			lines,
+		}
+	}
+
+	/// Converts a [`Span`] to an LSP `Range` type.
+	fn span_to_range(&self, span: Span) -> Range {
+		let mut start = (0, 0);
+		let mut end = (0, 0);
+
+		for (a, b) in self.lines.iter().zip(self.lines.iter().skip(1)) {
+			if a.1 <= span.start && span.start < b.1 {
+				start = (a.0, span.start - a.1);
+			}
+			if a.1 <= span.end && span.end < b.1 {
+				end = (a.0, span.end - a.1);
+				break;
+			}
+		}
+
+		#[cfg(debug_assertions)]
+		assert!(
+			end.0 >= start.0,
+			"[File::span_to_range] The `end` is on a line number earlier than the `start`."
+		);
+
+		Range {
+			start: Position::new(start.0 as u32, start.1 as u32),
+			end: Position::new(end.0 as u32, end.1 as u32),
+		}
+	}
 }

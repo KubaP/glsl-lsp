@@ -34,8 +34,9 @@ import {
 let client: LanguageClient;
 
 export async function activate(context: ExtensionContext) {
-	// Create a output channel for logging information from the client.
-	const outputChannel = window.createOutputChannel("GLSL Client");
+	// Create a output channel for logging information from the client, and for LSP tracing if `glsl.trace.server`
+	// is set to `true`.
+	const output = window.createOutputChannel("GLSL Client");
 
 	// TODO: Decide on the path for the final distribution.
 	// For debugging/development purposes, the environment variable `__GLSL_DEBUG_SERVER_PATH` specifies the path
@@ -63,12 +64,19 @@ export async function activate(context: ExtensionContext) {
 			// Notify the server about file changes to '.clientrc files contained in the workspace.
 			fileEvents: workspace.createFileSystemWatcher("**/.clientrc"),
 		},
-		traceOutputChannel: outputChannel,
+		traceOutputChannel: output,
+		// Note: We don't specify an `outputChannel` for the following reason. Messages from the server are
+		// automatically sent to the `outputChannel` no matter what, hence we've called the `outputChannel` `GLSL
+		// Language Server`. Meanwhile, messages from the client are instead sent to the `traceOutputChannel` in
+		// order to separate them. We could log client messages to the `outputChannel`, but then we wouldn't have a
+		// separation of messages and I think that's more important than technicalities. By default the trace
+		// logging is disabled anyway, so the `traceOutputChannel` is effectively just for client message logging.
 	};
 
 	// Create the language client and start it. This also specifies the name of the output channel for messages
 	// from the server.
-	client = new LanguageClient("glsl-language-client", "GLSL Language Server", serverOptions, clientOptions);
+	// Note: `glsl` must match the name of the extension in order for the trace logging configuration to work.
+	client = new LanguageClient("glsl", "GLSL Language Server", serverOptions, clientOptions);
 	client.start();
 }
 

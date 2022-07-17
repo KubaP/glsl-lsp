@@ -20,12 +20,38 @@ pub enum Mode {
 	/// Disallows treating assignments as a valid expression, i.e. upon encountering the first `Token::Eq` (`=`),
 	/// the parser will return.
 	BreakAtEq,
+	/// Stops parsing after taking one unit, without producing a lot of the syntax errors that are normally
+	/// produced. This mode is mostly useful to take single "expressions", for example, taking a single unit as a
+	/// parameter type, and then another single unit as the parameter identifier.
+	///
+	/// This mode stops parsing at the following:
+	/// - missing binary operators, e.g. `int i` or `int (` or `int {`,
+	/// - commas in a top-level list, e.g. `int, i` but not `int[a, b]`,
+	/// - unmatched closing delimiters, e.g. `int[])` or `int }`,
+	/// - equals sign binary operator, e.g. `i = 5`.
+	///
+	/// In this mode, none of those scenarios generate a syntax error.
+	///
+	/// E.g. in `int[3],` the parser would break after the end of the index operator.
+	///
+	/// E.g. in `(float) f`, the parser would break after the end of the parenthesis.
+	///
+	/// E.g. in `i + 5, b`, the parser would break after the 5.
+	///
+	/// E.g. in `i = 5`, the parser would break after i.
+	///
+	/// E.g. in `{1} 2`, the parser would break after the end of the initializer list.
+	///
+	/// Note that this mode still composes with `end_tokens`, so if that, for example, contains `[Token::LBrace]`,
+	/// then `{1} 2` would immediately break and return no expression.
+	TakeOneUnit,
 }
 
 /// Tries to parse an expression beginning at the current position.
 pub fn expr_parser(
 	walker: &mut Walker,
 	mode: Mode,
+	end_tokens: &[Token],
 ) -> (Option<Expr>, Vec<SyntaxErr>) {
 	let start_position = match walker.peek() {
 		Some((_, span)) => span.start,
@@ -42,7 +68,7 @@ pub fn expr_parser(
 		errors: Vec::new(),
 	};
 
-	parser.parse(walker);
+	parser.parse(walker, end_tokens);
 	(parser.create_ast(), parser.errors)
 }
 
@@ -921,7 +947,7 @@ impl ShuntingYard {
 	}
 
 	/// Parses a list of tokens. Populates the internal `stack` with a RPN output.
-	fn parse(&mut self, walker: &mut Walker) {
+	fn parse(&mut self, walker: &mut Walker, end_tokens: &[Token]) {
 		#[derive(PartialEq)]
 		enum State {
 			/// We are looking for either a) a prefix operator, b) an atom, c) bracket group start, d) function
@@ -963,6 +989,11 @@ impl ShuntingYard {
 				// Return if we reach the end of the token list.
 				None => break 'main,
 			};
+
+			// If the current token is one which signifies the end of the current expression, we stop parsing.
+			if end_tokens.contains(token) {
+				break 'main;
+			}
 
 			match token {
 				Token::Num { .. } | Token::Bool(_)
@@ -1013,22 +1044,28 @@ impl ShuntingYard {
 				Token::Num { .. } | Token::Bool(_) | Token::Ident(_)
 					if state == State::AfterOperand =>
 				{
-					// This is an error, e.g. `..1 1` instead of `..1 + 1`.
-					println!("Expected a postfix, index or binary operator, or the end of expression, found an atom instead!");
+					if self.mode != Mode::TakeOneUnit {
+						// This is an error, e.g. `..1 1` instead of `..1 + 1`.
+						println!("Expected a postfix, index or binary operator, or the end of expression, found an atom instead!");
 
-					// Panic: Since the state starts with `State::Operand` and we are in now `State::AfterOperand`,
-					// we can be certain at least one item is on the stack.
-					let prev_operand_span = self.get_previous_span().unwrap();
-					self.errors.push(SyntaxErr::FoundOperandAfterOperand(
-						prev_operand_span,
-						*span,
-					));
+						// Panic: Since the state starts with `State::Operand` and we are in now
+						// `State::AfterOperand`, we can be certain at least one item is on the stack.
+						let prev_operand_span =
+							self.get_previous_span().unwrap();
+						self.errors.push(SyntaxErr::FoundOperandAfterOperand(
+							prev_operand_span,
+							*span,
+						));
+					}
 					break 'main;
 				}
 				Token::Op(op) if state == State::Operand => {
 					// If the parser is set to break at an `=`, do so.
-					if self.mode == Mode::BreakAtEq && *op == OpTy::Eq {
-						self.errors.push(SyntaxErr::FoundEq(*span));
+					if (self.mode == Mode::BreakAtEq
+						|| self.mode == Mode::TakeOneUnit)
+						&& *op == OpTy::Eq
+					{
+						// self.errors.push(SyntaxErr::FoundEq(*span));
 						break 'main;
 					}
 
@@ -1073,8 +1110,11 @@ impl ShuntingYard {
 				}
 				Token::Op(op) if state == State::AfterOperand => {
 					// If the parser is set to break at an `=`, do so.
-					if self.mode == Mode::BreakAtEq && *op == OpTy::Eq {
-						self.errors.push(SyntaxErr::FoundEq(*span));
+					if (self.mode == Mode::BreakAtEq
+						|| self.mode == Mode::TakeOneUnit)
+						&& *op == OpTy::Eq
+					{
+						//self.errors.push(SyntaxErr::FoundEq(*span));
 						break 'main;
 					}
 
@@ -1176,17 +1216,21 @@ impl ShuntingYard {
 
 						increase_arity = true;
 					} else {
-						// This is an error. e.g. `..1 (` instead of `..1 + (`.
-						println!("Expected an operator or the end of expression, found `(` instead!");
+						if self.mode != Mode::TakeOneUnit {
+							// This is an error. e.g. `..1 (` instead of `..1 + (`.
+							println!("Expected an operator or the end of expression, found `(` instead!");
 
-						// Panic: Since the state starts with `State::Operand` and we are in now `State::AfterOperand`,
-						// we can be certain at least one item is on the stack.
-						let prev_operand_span =
-							self.get_previous_span().unwrap();
-						self.errors.push(SyntaxErr::FoundOperandAfterOperand(
-							prev_operand_span,
-							*span,
-						));
+							// Panic: Since the state starts with `State::Operand` and we are in now `State::AfterOperand`,
+							// we can be certain at least one item is on the stack.
+							let prev_operand_span =
+								self.get_previous_span().unwrap();
+							self.errors.push(
+								SyntaxErr::FoundOperandAfterOperand(
+									prev_operand_span,
+									*span,
+								),
+							);
+						}
 						break 'main;
 					}
 				}
@@ -1196,7 +1240,9 @@ impl ShuntingYard {
 					match self.end_bracket_fn(*span) {
 						Ok(_) => {}
 						Err(e) => {
-							self.errors.push(e);
+							if self.mode != Mode::TakeOneUnit {
+								self.errors.push(e);
+							}
 							break 'main;
 						}
 					}
@@ -1209,7 +1255,9 @@ impl ShuntingYard {
 						match self.end_bracket_fn(*span) {
 							Ok(_) => {}
 							Err(e) => {
-								self.errors.push(e);
+								if self.mode != Mode::TakeOneUnit {
+									self.errors.push(e);
+								}
 								break 'main;
 							}
 						}
@@ -1235,6 +1283,17 @@ impl ShuntingYard {
 										),
 									);
 								} else {
+									if self.mode != Mode::TakeOneUnit {
+										self.errors.push(
+											SyntaxErr::FoundUnmatchedClosingDelim(
+												*span, false,
+											),
+										);
+									}
+								}
+							}
+							None => {
+								if self.mode != Mode::TakeOneUnit {
 									self.errors.push(
 										SyntaxErr::FoundUnmatchedClosingDelim(
 											*span, false,
@@ -1242,11 +1301,6 @@ impl ShuntingYard {
 									);
 								}
 							}
-							None => self.errors.push(
-								SyntaxErr::FoundUnmatchedClosingDelim(
-									*span, false,
-								),
-							),
 						}
 						break 'main;
 					}
@@ -1280,18 +1334,20 @@ impl ShuntingYard {
 					can_start = Start::EmptyIndex;
 				}
 				Token::LBracket if state == State::Operand => {
-					// This is an error, e.g. `..+ [` instead of `..+ i[`.
-					println!("Expected an atom or a prefix operator, found `[` instead!");
-					match self.get_previous_span() {
-						Some(prev_op_span) => self.errors.push(
-							SyntaxErr::FoundOperatorInsteadOfOperand(
-								prev_op_span,
-								*span,
+					if self.mode != Mode::TakeOneUnit {
+						// This is an error, e.g. `..+ [` instead of `..+ i[`.
+						println!("Expected an atom or a prefix operator, found `[` instead!");
+						match self.get_previous_span() {
+							Some(prev_op_span) => self.errors.push(
+								SyntaxErr::FoundOperatorInsteadOfOperand(
+									prev_op_span,
+									*span,
+								),
 							),
-						),
-						None => self
-							.errors
-							.push(SyntaxErr::FoundOperatorFirstThing(*span)),
+							None => self.errors.push(
+								SyntaxErr::FoundOperatorFirstThing(*span),
+							),
+						}
 					}
 					break 'main;
 				}
@@ -1309,7 +1365,9 @@ impl ShuntingYard {
 							}
 						}
 						Err(e) => {
-							self.errors.push(e);
+							if self.mode != Mode::TakeOneUnit {
+								self.errors.push(e);
+							}
 							break 'main;
 						}
 					}
@@ -1340,7 +1398,9 @@ impl ShuntingYard {
 								}
 							}
 							Err(e) => {
-								self.errors.push(e);
+								if self.mode != Mode::TakeOneUnit {
+									self.errors.push(e);
+								}
 								break 'main;
 							}
 						}
@@ -1358,6 +1418,17 @@ impl ShuntingYard {
 										),
 									);
 								} else {
+									if self.mode != Mode::TakeOneUnit {
+										self.errors.push(
+											SyntaxErr::FoundUnmatchedClosingDelim(
+												*span, false,
+											),
+										);
+									}
+								}
+							}
+							None => {
+								if self.mode != Mode::TakeOneUnit {
 									self.errors.push(
 										SyntaxErr::FoundUnmatchedClosingDelim(
 											*span, false,
@@ -1365,11 +1436,6 @@ impl ShuntingYard {
 									);
 								}
 							}
-							None => self.errors.push(
-								SyntaxErr::FoundUnmatchedClosingDelim(
-									*span, false,
-								),
-							),
 						}
 						break 'main;
 					}
@@ -1398,16 +1464,19 @@ impl ShuntingYard {
 					can_start = Start::None;
 				}
 				Token::LBrace if state == State::AfterOperand => {
-					// This is an error, e.g. `.. {` instead of `.. + {`.
-					println!("Expected an operator or the end of expression, found `{{` instead!");
+					if self.mode != Mode::TakeOneUnit {
+						// This is an error, e.g. `.. {` instead of `.. + {`.
+						println!("Expected an operator or the end of expression, found `{{` instead!");
 
-					// Panic: Since the state starts with `State::Operand` and we are in now `State::AfterOperand`,
-					// we can be certain at least one item is on the stack.
-					let prev_operand_span = self.get_previous_span().unwrap();
-					self.errors.push(SyntaxErr::FoundOperandAfterOperand(
-						prev_operand_span,
-						*span,
-					));
+						// Panic: Since the state starts with `State::Operand` and we are in now `State::AfterOperand`,
+						// we can be certain at least one item is on the stack.
+						let prev_operand_span =
+							self.get_previous_span().unwrap();
+						self.errors.push(SyntaxErr::FoundOperandAfterOperand(
+							prev_operand_span,
+							*span,
+						));
+					}
 					break 'main;
 				}
 				Token::RBrace if state == State::AfterOperand => {
@@ -1416,7 +1485,9 @@ impl ShuntingYard {
 					match self.end_init(*span) {
 						Ok(_) => {}
 						Err(e) => {
-							self.errors.push(e);
+							if self.mode != Mode::TakeOneUnit {
+								self.errors.push(e);
+							}
 							break 'main;
 						}
 					}
@@ -1429,7 +1500,9 @@ impl ShuntingYard {
 						match self.end_init(*span) {
 							Ok(_) => {}
 							Err(e) => {
-								self.errors.push(e);
+								if self.mode != Mode::TakeOneUnit {
+									self.errors.push(e);
+								}
 								break 'main;
 							}
 						}
@@ -1454,6 +1527,17 @@ impl ShuntingYard {
 										),
 									);
 								} else {
+									if self.mode != Mode::TakeOneUnit {
+										self.errors.push(
+											SyntaxErr::FoundUnmatchedClosingDelim(
+												*span, true,
+											),
+										);
+									}
+								}
+							}
+							None => {
+								if self.mode != Mode::TakeOneUnit {
 									self.errors.push(
 										SyntaxErr::FoundUnmatchedClosingDelim(
 											*span, true,
@@ -1461,22 +1545,18 @@ impl ShuntingYard {
 									);
 								}
 							}
-							None => self.errors.push(
-								SyntaxErr::FoundUnmatchedClosingDelim(
-									*span, true,
-								),
-							),
 						}
 						break 'main;
 					}
 				}
 				Token::Comma if state == State::AfterOperand => {
-					if self.mode == Mode::DisallowTopLevelList
+					if (self.mode == Mode::DisallowTopLevelList
+						|| self.mode == Mode::TakeOneUnit)
 						&& self.groups.is_empty()
 					{
 						println!("Found a `,` outside of a group, with `Mode::DisallowTopLevelList`!");
-						self.errors
-							.push(SyntaxErr::FoundCommaAtTopLevel(*span));
+						//self.errors
+						//	.push(SyntaxErr::FoundCommaAtTopLevel(*span));
 						break 'main;
 					}
 
@@ -1544,69 +1624,73 @@ impl ShuntingYard {
 			walker.advance();
 		}
 
-		// The end position of this expression will be the end position of the last parsed item.
-		let end_position = self.get_previous_span().unwrap();
+		if !self.groups.is_empty() {
+			// The end position of this expression will be the end position of the last parsed item.
+			let end_position = self.get_previous_span().unwrap();
 
-		// Close any open groups.
-		while self.groups.back().is_some() {
-			let (group, _, group_delim_end) = self.groups.back().unwrap();
-			println!("Found an unclosed: {group:?}");
+			// Close any open groups.
+			while self.groups.back().is_some() {
+				let (group, _, group_delim_end) = self.groups.back().unwrap();
+				println!("Found an unclosed: {group:?}");
 
-			// Construct a span of the last character in the group start delimiter, e.g. the `[`, or the `(` in
-			// `fn(`, or the `(` in `int[](`. Note that in the case of a top-level list which starts at the
-			// beginning, we don't want to underflow.
-			let group_start =
-				Span::new(group_delim_end.saturating_sub(1), *group_delim_end);
-			// The span for the ending of the group is zero-width since there is no end delimiter character.
-			let group_end = Span::from_zero_width(end_position.end);
+				// Construct a span of the last character in the group start delimiter, e.g. the `[`, or the `(` in
+				// `fn(`, or the `(` in `int[](`. Note that in the case of a top-level list which starts at the
+				// beginning, we don't want to underflow.
+				let group_start = Span::new(
+					group_delim_end.saturating_sub(1),
+					*group_delim_end,
+				);
+				// The span for the ending of the group is zero-width since there is no end delimiter character.
+				let group_end = Span::from_zero_width(end_position.end);
 
-			// Reasoning about what gets invalidated and what doesn't: will it potentially produce semantic errors
-			//
-			// Brackets - no matter where the closing parenthesis is located, it won't change whether the
-			// 	 expression type checks or not.
-			// Index - depending on where the closing bracket is placed, it can change whether the expression
-			// 	 type checks or not.
-			// Fn - depending on where the closing parenthesis is, it can change the number of arguments.
-			// Init - same as above.
-			// ArrInit - same as above.
-			// List - a perfectly valid top-level grouping structure.
-			match group {
-				Group::Paren => {
-					self.errors.push(SyntaxErr::UnclosedParenthesis(
-						group_start,
-						group_end,
-					));
-					self.collapse_bracket(group_end, false);
+				// Reasoning about what gets invalidated and what doesn't: will it potentially produce semantic errors
+				//
+				// Brackets - no matter where the closing parenthesis is located, it won't change whether the
+				// 	 expression type checks or not.
+				// Index - depending on where the closing bracket is placed, it can change whether the expression
+				// 	 type checks or not.
+				// Fn - depending on where the closing parenthesis is, it can change the number of arguments.
+				// Init - same as above.
+				// ArrInit - same as above.
+				// List - a perfectly valid top-level grouping structure.
+				match group {
+					Group::Paren => {
+						self.errors.push(SyntaxErr::UnclosedParenthesis(
+							group_start,
+							group_end,
+						));
+						self.collapse_bracket(group_end, false);
+					}
+					Group::Index(_, _) => {
+						self.errors.push(SyntaxErr::UnclosedIndexOperator(
+							group_start,
+							group_end,
+						));
+						self.collapse_index(group_end.end, true)
+					}
+					Group::Fn(_) => {
+						self.errors.push(SyntaxErr::UnclosedFunctionCall(
+							group_start,
+							group_end,
+						));
+						self.collapse_fn(group_end.end, true)
+					}
+					Group::Init(_) => {
+						self.errors.push(SyntaxErr::UnclosedInitializerList(
+							group_start,
+							group_end,
+						));
+						self.collapse_init(group_end.end, true)
+					}
+					Group::ArrInit(_) => {
+						self.errors.push(SyntaxErr::UnclosedArrayConstructor(
+							group_start,
+							group_end,
+						));
+						self.collapse_arr_init(group_end.end, true)
+					}
+					Group::List(_) => self.collapse_list(group_end.end, false),
 				}
-				Group::Index(_, _) => {
-					self.errors.push(SyntaxErr::UnclosedIndexOperator(
-						group_start,
-						group_end,
-					));
-					self.collapse_index(group_end.end, true)
-				}
-				Group::Fn(_) => {
-					self.errors.push(SyntaxErr::UnclosedFunctionCall(
-						group_start,
-						group_end,
-					));
-					self.collapse_fn(group_end.end, true)
-				}
-				Group::Init(_) => {
-					self.errors.push(SyntaxErr::UnclosedInitializerList(
-						group_start,
-						group_end,
-					));
-					self.collapse_init(group_end.end, true)
-				}
-				Group::ArrInit(_) => {
-					self.errors.push(SyntaxErr::UnclosedArrayConstructor(
-						group_start,
-						group_end,
-					));
-					self.collapse_arr_init(group_end.end, true)
-				}
-				Group::List(_) => self.collapse_list(group_end.end, false),
 			}
 		}
 
@@ -2043,7 +2127,10 @@ macro_rules! assert_expr {
 			cst: lexer($source),
 			cursor: 0,
 		};
-		assert_eq!(expr_parser(&mut walker, Mode::Default).0.unwrap(), $rest);
+		assert_eq!(
+			expr_parser(&mut walker, Mode::Default, &[]).0.unwrap(),
+			$rest
+		);
 	};
 }
 

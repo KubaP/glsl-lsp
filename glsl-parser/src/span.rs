@@ -82,6 +82,22 @@ impl Span {
 			end: self.end,
 		}
 	}
+
+	/// Returns a new zero-width `Span` located at the start of this span.
+	pub fn start_zero_width(self) -> Self {
+		Self {
+			start: self.start,
+			end: self.start,
+		}
+	}
+
+	/// Returns a new zero-width `Span` located at the end of this span.
+	pub fn end_zero_width(self) -> Self {
+		Self {
+			start: self.end,
+			end: self.end,
+		}
+	}
 }
 
 /// Constructs a new [`Span`] from a start and end position.

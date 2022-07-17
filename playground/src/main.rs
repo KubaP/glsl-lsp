@@ -12,11 +12,14 @@ use std::{
 mod shader;
 
 pub fn parse_file(source: &str) {
-	let stmts = glsl_parser::parser::parse(source);
+	let (stmts, errs) = glsl_parser::parser::parse(source);
 	for stmt in stmts {
 		glsl_parser::parser::print_stmt(&stmt, 0);
 	}
 	print!("\r\n");
+	for err in errs {
+		println!("{err:?}");
+	}
 }
 
 #[allow(unused_assignments)]

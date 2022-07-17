@@ -3,6 +3,7 @@ use crate::{
 	error::SyntaxErr,
 	expression::{expr_parser, Mode},
 	lexer::{lexer, OpTy, Token},
+	log,
 	span::{Span, Spanned},
 	Either,
 };
@@ -58,7 +59,7 @@ impl Walker {
 /// Parse all of the top-level statements in the file.
 pub fn parse(source: &str) -> (Vec<Stmt>, Vec<SyntaxErr>) {
 	let cst = lexer(source);
-	println!("{cst:?}");
+	log!("{cst:?}");
 
 	let mut walker = Walker { cst, cursor: 0 };
 	let mut stmts = Vec::new();

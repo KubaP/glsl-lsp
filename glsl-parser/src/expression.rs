@@ -2,6 +2,7 @@ use crate::{
 	ast::{Expr, ExprTy, Ident, Lit, Op},
 	error::SyntaxErr,
 	lexer::{OpTy, Token},
+	log,
 	parser::Walker,
 	span::{span, Span},
 	Either,
@@ -193,10 +194,10 @@ impl ShuntingYard {
 				#[cfg(debug_assertions)]
 				{
 					match op.ty {
-						OpTy::FnStart => println!("Mismatch between operator stack (Op::FnStart) and group stack (Group::Bracket)!"),
-						OpTy::IndexStart => println!("Mismatch between operator stack (Op::IndexStart) and group stack (Group::Bracket)!"),
-						OpTy::InitStart => println!("Mismatch between operator stack (Op::InitStart) and group stack (Group::Bracket)!"),
-						OpTy::ArrInitStart => println!("Mismatch between operator stack (Op::ArrInitStart) and group stack (Group::Bracket)!"),
+						OpTy::FnStart => log!("Mismatch between operator stack (Op::FnStart) and group stack (Group::Bracket)!"),
+						OpTy::IndexStart => log!("Mismatch between operator stack (Op::IndexStart) and group stack (Group::Bracket)!"),
+						OpTy::InitStart => log!("Mismatch between operator stack (Op::InitStart) and group stack (Group::Bracket)!"),
+						OpTy::ArrInitStart => log!("Mismatch between operator stack (Op::ArrInitStart) and group stack (Group::Bracket)!"),
 						_ => {}
 					}
 				}
@@ -236,10 +237,10 @@ impl ShuntingYard {
 				#[cfg(debug_assertions)]
 				{
 					match op.ty {
-						OpTy::ParenStart => println!("Mismatch between operator stack (Op::BracketStart) and group stack (Group::Fn)!"),
-						OpTy::IndexStart => println!("Mismatch between operator stack (Op::IndexStart) and group stack (Group::Fn)!"),
-						OpTy::InitStart => println!("Mismatch between operator stack (Op::InitStart) and group stack (Group::Fn)!"),
-						OpTy::ArrInitStart => println!("Mismatch between operator stack (Op::ArrInitStart) and group stack (Group::Fn)!"),
+						OpTy::ParenStart => log!("Mismatch between operator stack (Op::BracketStart) and group stack (Group::Fn)!"),
+						OpTy::IndexStart => log!("Mismatch between operator stack (Op::IndexStart) and group stack (Group::Fn)!"),
+						OpTy::InitStart => log!("Mismatch between operator stack (Op::InitStart) and group stack (Group::Fn)!"),
+						OpTy::ArrInitStart => log!("Mismatch between operator stack (Op::ArrInitStart) and group stack (Group::Fn)!"),
 						_ => {}
 					}
 				}
@@ -281,10 +282,10 @@ impl ShuntingYard {
 				#[cfg(debug_assertions)]
 				{
 					match op .ty{
-						OpTy::ParenStart => println!("Mismatch between operator stack (Op::BracketStart) and group stack (Group::Index)!"),
-						OpTy::FnStart => println!("Mismatch between operator stack (Op::FnStart) and group stack (Group::Index)!"),
-						OpTy::InitStart => println!("Mismatch between operator stack (Op::InitStart) and group stack (Group::Index)!"),
-						OpTy::ArrInitStart => println!("Mismatch between operator stack (Op::ArrInitStart) and group stack (Group::Index)!"),
+						OpTy::ParenStart => log!("Mismatch between operator stack (Op::BracketStart) and group stack (Group::Index)!"),
+						OpTy::FnStart => log!("Mismatch between operator stack (Op::FnStart) and group stack (Group::Index)!"),
+						OpTy::InitStart => log!("Mismatch between operator stack (Op::InitStart) and group stack (Group::Index)!"),
+						OpTy::ArrInitStart => log!("Mismatch between operator stack (Op::ArrInitStart) and group stack (Group::Index)!"),
 						_ => {}
 					}
 				}
@@ -322,10 +323,10 @@ impl ShuntingYard {
 				#[cfg(debug_assertions)]
 				{
 					match op.ty {
-						OpTy::ParenStart => println!("Mismatch between operator stack (Op::BracketStart) and group stack (Group::Init)!"),
-						OpTy::IndexStart => println!("Mismatch between operator stack (Op::IndexStart) and group stack (Group::Init)!"),
-						OpTy::FnStart => println!("Mismatch between operator stack (Op::FnStart) and group stack (Group::Init)!"),
-						OpTy::ArrInitStart => println!("Mismatch between operator stack (Op::ArrInitStart) and group stack (Group::Init)!"),
+						OpTy::ParenStart => log!("Mismatch between operator stack (Op::BracketStart) and group stack (Group::Init)!"),
+						OpTy::IndexStart => log!("Mismatch between operator stack (Op::IndexStart) and group stack (Group::Init)!"),
+						OpTy::FnStart => log!("Mismatch between operator stack (Op::FnStart) and group stack (Group::Init)!"),
+						OpTy::ArrInitStart => log!("Mismatch between operator stack (Op::ArrInitStart) and group stack (Group::Init)!"),
 						_ => {}
 					}
 				}
@@ -363,10 +364,10 @@ impl ShuntingYard {
 				#[cfg(debug_assertions)]
 				{
 					match op.ty {
-						OpTy::ParenStart => println!("Mismatch between operator stack (Op::BracketStart) and group stack (Group::ArrInit)!"),
-						OpTy::IndexStart => println!("Mismatch between operator stack (Op::IndexStart) and group stack (Group::ArrInit)!"),
-						OpTy::FnStart => println!("Mismatch between operator stack (Op::FnStart) and group stack (Group::ArrInit)!"),
-						OpTy::InitStart => println!("Mismatch between operator stack (Op::InitStart) and group stack (Group::ArrInit)!"),
+						OpTy::ParenStart => log!("Mismatch between operator stack (Op::BracketStart) and group stack (Group::ArrInit)!"),
+						OpTy::IndexStart => log!("Mismatch between operator stack (Op::IndexStart) and group stack (Group::ArrInit)!"),
+						OpTy::FnStart => log!("Mismatch between operator stack (Op::FnStart) and group stack (Group::ArrInit)!"),
+						OpTy::InitStart => log!("Mismatch between operator stack (Op::InitStart) and group stack (Group::ArrInit)!"),
 						_ => {}
 					}
 				}
@@ -407,9 +408,9 @@ impl ShuntingYard {
 				#[cfg(debug_assertions)]
 				{
 					match op.ty {
-						OpTy::FnStart => println!("Mismatch between operator stack (Op::FnStart) and group stack (Group::List)!"),
-						OpTy::InitStart => println!("Mismatch between operator stack (Op::InitStart) and group stack (Group::List)!"),
-						OpTy::ArrInitStart => println!("Mismatch between operator stack (Op::ArrInitStart) and group stack (Group::List)!"),
+						OpTy::FnStart => log!("Mismatch between operator stack (Op::FnStart) and group stack (Group::List)!"),
+						OpTy::InitStart => log!("Mismatch between operator stack (Op::InitStart) and group stack (Group::List)!"),
+						OpTy::ArrInitStart => log!("Mismatch between operator stack (Op::ArrInitStart) and group stack (Group::List)!"),
 						_ => {}
 					}
 				}
@@ -504,18 +505,17 @@ impl ShuntingYard {
 	/// Registers the end of a bracket, function call or array constructor group, popping any operators until the
 	/// start of the group is reached.
 	fn end_bracket_fn(&mut self, end_span: Span) -> Result<(), SyntaxErr> {
-		let (current_group, _, _) =
-			match self.groups.back() {
-				Some(t) => t,
-				None => {
-					// Since we have no groups, that means we have a lonely `)`. This means we want to stop parsing
-					// further tokens.
-					println!("Found a `)` delimiter without a starting `(` delimiter!");
-					return Err(SyntaxErr::FoundUnmatchedClosingDelim(
-						end_span, false,
-					));
-				}
-			};
+		let (current_group, _, _) = match self.groups.back() {
+			Some(t) => t,
+			None => {
+				// Since we have no groups, that means we have a lonely `)`. This means we want to stop parsing
+				// further tokens.
+				log!("Found a `)` delimiter without a starting `(` delimiter!");
+				return Err(SyntaxErr::FoundUnmatchedClosingDelim(
+					end_span, false,
+				));
+			}
+		};
 
 		match current_group {
 			Group::Paren | Group::Fn(_) | Group::ArrInit(_) => {}
@@ -536,16 +536,14 @@ impl ShuntingYard {
 
 						match current_group {
 							Group::Init(_) => {
-								println!(
-									"Unclosed `}}` initializer list found!"
-								);
+								log!("Unclosed `}}` initializer list found!");
 								self.collapse_init(
 									end_span.end_at_previous().end,
 									true,
 								);
 							}
 							Group::Index(_, _) => {
-								println!("Unclosed `]` index operator found!");
+								log!("Unclosed `]` index operator found!");
 								self.collapse_index(
 									end_span.end_at_previous().end,
 									true,
@@ -563,7 +561,7 @@ impl ShuntingYard {
 				} else {
 					// Since we don't have a parenthesis/function/array constructor group at all, that means we
 					// have a lonely `)`. This means we want to stop parsing further tokens.
-					println!("Found a `)` delimiter without a starting `(` delimiter!");
+					log!("Found a `)` delimiter without a starting `(` delimiter!");
 					return Err(SyntaxErr::FoundUnmatchedClosingDelim(
 						end_span, false,
 					));
@@ -590,18 +588,17 @@ impl ShuntingYard {
 		&mut self,
 		end_span: Span,
 	) -> Result<Option<usize>, SyntaxErr> {
-		let (current_group, _, _) =
-			match self.groups.back() {
-				Some(t) => t,
-				None => {
-					// Since we have no groups, that means we have a lonely `]`. This means we want to stop parsing
-					// further tokens.
-					println!("Found a `]` delimiter without a starting `[` delimiter!");
-					return Err(SyntaxErr::FoundUnmatchedClosingDelim(
-						end_span, false,
-					));
-				}
-			};
+		let (current_group, _, _) = match self.groups.back() {
+			Some(t) => t,
+			None => {
+				// Since we have no groups, that means we have a lonely `]`. This means we want to stop parsing
+				// further tokens.
+				log!("Found a `]` delimiter without a starting `[` delimiter!");
+				return Err(SyntaxErr::FoundUnmatchedClosingDelim(
+					end_span, false,
+				));
+			}
+		};
 
 		if std::mem::discriminant(current_group)
 			!= std::mem::discriminant(&Group::Index(false, None))
@@ -620,7 +617,7 @@ impl ShuntingYard {
 
 					match current_group {
 						Group::Paren => {
-							println!("Unclosed `)` parenthesis found!");
+							log!("Unclosed `)` parenthesis found!");
 							self.collapse_bracket(
 								span(
 									end_span.end_at_previous().end,
@@ -630,21 +627,21 @@ impl ShuntingYard {
 							);
 						}
 						Group::Fn(_) => {
-							println!("Unclosed `)` function call found!");
+							log!("Unclosed `)` function call found!");
 							self.collapse_fn(
 								end_span.end_at_previous().end,
 								true,
 							);
 						}
 						Group::Init(_) => {
-							println!("Unclosed `}}` initializer list found!");
+							log!("Unclosed `}}` initializer list found!");
 							self.collapse_init(
 								end_span.end_at_previous().end,
 								true,
 							);
 						}
 						Group::ArrInit(_) => {
-							println!("Unclosed `)` array constructor found!");
+							log!("Unclosed `)` array constructor found!");
 							self.collapse_arr_init(
 								end_span.end_at_previous().end,
 								true,
@@ -660,9 +657,7 @@ impl ShuntingYard {
 			} else {
 				// Since we don't have an index group at all, that means we have a lonely `]`. This means we want
 				// to stop parsing further tokens.
-				println!(
-					"Found a `]` delimiter without a starting `[` delimiter!"
-				);
+				log!("Found a `]` delimiter without a starting `[` delimiter!");
 				return Err(SyntaxErr::FoundUnmatchedClosingDelim(
 					end_span, false,
 				));
@@ -691,7 +686,7 @@ impl ShuntingYard {
 				None => {
 					// Since we have no groups, that means we have a lonely `}`. This means we want to stop parsing
 					// further tokens.
-					println!("Found a `}}` delimiter without a starting `{{` delimiter!");
+					log!("Found a `}}` delimiter without a starting `{{` delimiter!");
 					return Err(SyntaxErr::FoundUnmatchedClosingDelim(
 						end_span, true,
 					));
@@ -715,7 +710,7 @@ impl ShuntingYard {
 
 					match current_group {
 						Group::Paren => {
-							println!("Unclosed `)` parenthesis found!");
+							log!("Unclosed `)` parenthesis found!");
 							self.collapse_bracket(
 								span(
 									end_span.end_at_previous().end,
@@ -725,21 +720,21 @@ impl ShuntingYard {
 							);
 						}
 						Group::Index(_, _) => {
-							println!("Unclosed `]` index operator found!");
+							log!("Unclosed `]` index operator found!");
 							self.collapse_index(
 								end_span.end_at_previous().end,
 								true,
 							);
 						}
 						Group::Fn(_) => {
-							println!("Unclosed `)` function call found!");
+							log!("Unclosed `)` function call found!");
 							self.collapse_fn(
 								end_span.end_at_previous().end,
 								true,
 							);
 						}
 						Group::ArrInit(_) => {
-							println!("Unclosed `)` array constructor found!");
+							log!("Unclosed `)` array constructor found!");
 							self.collapse_arr_init(
 								end_span.end_at_previous().end,
 								true,
@@ -753,7 +748,7 @@ impl ShuntingYard {
 			} else {
 				// Since we don't have an initializer group at all, that means we have a lonely `}`. This means we
 				// want to stop parsing further tokens.
-				println!(
+				log!(
 					"Found a `}}` delimiter without a starting `{{` delimiter!"
 				);
 				return Err(SyntaxErr::FoundUnmatchedClosingDelim(
@@ -854,7 +849,7 @@ impl ShuntingYard {
 			}
 		}
 		// TODO: Should this be unreachable?
-		println!("Found an incomplete function call, initializer list, array constructor or general list expression!");
+		log!("Found an incomplete function call, initializer list, array constructor or general list expression!");
 	}
 
 	/// Returns whether we have just started to parse a function, i.e. `..fn(<HERE>`
@@ -1046,7 +1041,7 @@ impl ShuntingYard {
 				{
 					if self.mode != Mode::TakeOneUnit {
 						// This is an error, e.g. `..1 1` instead of `..1 + 1`.
-						println!("Expected a postfix, index or binary operator, or the end of expression, found an atom instead!");
+						log!("Expected a postfix, index or binary operator, or the end of expression, found an atom instead!");
 
 						// Panic: Since the state starts with `State::Operand` and we are in now
 						// `State::AfterOperand`, we can be certain at least one item is on the stack.
@@ -1094,7 +1089,7 @@ impl ShuntingYard {
 						}),
 						_ => {
 							// This is an error, e.g. `..*1` instead of `..-1`.
-							println!("Expected an atom or a prefix operator, found a non-prefix operator instead!");
+							log!("Expected an atom or a prefix operator, found a non-prefix operator instead!");
 							self.errors
 								.push(SyntaxErr::InvalidPrefixOperator(*span));
 							break 'main;
@@ -1121,7 +1116,7 @@ impl ShuntingYard {
 					match op {
 						OpTy::Flip | OpTy::Not => {
 							// These operators cannot be directly after an atom, because they are prefix operators.
-							println!("Expected a postfix, index or binary operator, found a prefix operator instead!");
+							log!("Expected a postfix, index or binary operator, found a prefix operator instead!");
 							self.errors.push(
 								SyntaxErr::FoundPrefixInsteadOfPostfix(*span),
 							);
@@ -1218,7 +1213,7 @@ impl ShuntingYard {
 					} else {
 						if self.mode != Mode::TakeOneUnit {
 							// This is an error. e.g. `..1 (` instead of `..1 + (`.
-							println!("Expected an operator or the end of expression, found `(` instead!");
+							log!("Expected an operator or the end of expression, found `(` instead!");
 
 							// Panic: Since the state starts with `State::Operand` and we are in now `State::AfterOperand`,
 							// we can be certain at least one item is on the stack.
@@ -1272,7 +1267,7 @@ impl ShuntingYard {
 					} else {
 						// This is an error, e.g. `..+ )` instead of `..+ 1)`,
 						// or `fn(..,)` instead of `fn(.., 1)`.
-						println!("Expected an atom or a prefix operator, found `)` instead!");
+						log!("Expected an atom or a prefix operator, found `)` instead!");
 						match self.get_previous_span() {
 							Some(prev_op_span) => {
 								if self.exists_paren_fn_group() {
@@ -1336,7 +1331,7 @@ impl ShuntingYard {
 				Token::LBracket if state == State::Operand => {
 					if self.mode != Mode::TakeOneUnit {
 						// This is an error, e.g. `..+ [` instead of `..+ i[`.
-						println!("Expected an atom or a prefix operator, found `[` instead!");
+						log!("Expected an atom or a prefix operator, found `[` instead!");
 						match self.get_previous_span() {
 							Some(prev_op_span) => self.errors.push(
 								SyntaxErr::FoundOperatorInsteadOfOperand(
@@ -1407,7 +1402,7 @@ impl ShuntingYard {
 						state = State::AfterOperand;
 					} else {
 						// This is an error, e.g. `..+ ]` instead of `..+ 1]`.
-						println!("Expected an atom or a prefix operator, found `]` instead!");
+						log!("Expected an atom or a prefix operator, found `]` instead!");
 						match self.get_previous_span() {
 							Some(prev_op_span) => {
 								if self.exists_index_group() {
@@ -1466,7 +1461,7 @@ impl ShuntingYard {
 				Token::LBrace if state == State::AfterOperand => {
 					if self.mode != Mode::TakeOneUnit {
 						// This is an error, e.g. `.. {` instead of `.. + {`.
-						println!("Expected an operator or the end of expression, found `{{` instead!");
+						log!("Expected an operator or the end of expression, found `{{` instead!");
 
 						// Panic: Since the state starts with `State::Operand` and we are in now `State::AfterOperand`,
 						// we can be certain at least one item is on the stack.
@@ -1516,7 +1511,7 @@ impl ShuntingYard {
 						can_start = Start::None;
 					} else {
 						// This is an error, e.g. `..+ }` instead of `..+ 1}`.
-						println!("Expected an atom or a prefix operator, found `}}` instead!");
+						log!("Expected an atom or a prefix operator, found `}}` instead!");
 						match self.get_previous_span() {
 							Some(prev_op_span) => {
 								if self.exists_init_group() {
@@ -1554,7 +1549,7 @@ impl ShuntingYard {
 						|| self.mode == Mode::TakeOneUnit)
 						&& self.groups.is_empty()
 					{
-						println!("Found a `,` outside of a group, with `Mode::DisallowTopLevelList`!");
+						log!("Found a `,` outside of a group, with `Mode::DisallowTopLevelList`!");
 						//self.errors
 						//	.push(SyntaxErr::FoundCommaAtTopLevel(*span));
 						break 'main;
@@ -1572,7 +1567,7 @@ impl ShuntingYard {
 				}
 				Token::Comma if state == State::Operand => {
 					// This is an error, e.g. `..+ ,` instead of `..+ 1,`.
-					println!("Expected an atom or a prefix operator, found `,` instead!");
+					log!("Expected an atom or a prefix operator, found `,` instead!");
 					match self.get_previous_span() {
 						Some(prev_op_span) => self.errors.push(
 							SyntaxErr::FoundCommaInsteadOfOperand(
@@ -1599,7 +1594,7 @@ impl ShuntingYard {
 				}
 				Token::Dot if state == State::Operand => {
 					// This is an error, e.g. `ident.+` instead of `ident.something`.
-					println!("Expected an atom or a prefix operator, found `.` instead!");
+					log!("Expected an atom or a prefix operator, found `.` instead!");
 					match self.get_previous_span() {
 						Some(prev_op_span) => self.errors.push(
 							SyntaxErr::FoundDotInsteadOfOperand(
@@ -1615,7 +1610,7 @@ impl ShuntingYard {
 				}
 				_ => {
 					// We have a token that's not allowed to be part of an expression.
-					println!("Unexpected token found: {token:?}");
+					log!("Unexpected token found: {token:?}");
 					self.errors.push(SyntaxErr::FoundInvalidToken(*span));
 					break 'main;
 				}
@@ -1631,7 +1626,7 @@ impl ShuntingYard {
 			// Close any open groups.
 			while self.groups.back().is_some() {
 				let (group, _, group_delim_end) = self.groups.back().unwrap();
-				println!("Found an unclosed: {group:?}");
+				log!("Found an unclosed: {group:?}");
 
 				// Construct a span of the last character in the group start delimiter, e.g. the `[`, or the `(` in
 				// `fn(`, or the `(` in `int[](`. Note that in the case of a top-level list which starts at the

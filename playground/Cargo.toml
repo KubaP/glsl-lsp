@@ -9,4 +9,4 @@ edition = "2021"
 gl = "0.14.0"
 glutin = "0.28.0"
 notify = "4.0.17"
-glsl-parser = { path = "../glsl-parser" }
+glsl-parser = { path = "../glsl-parser", features = ["logging"] }

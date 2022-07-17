@@ -1,8 +1,9 @@
 use crate::{
 	ast::{ExprTy, Ident, Qualifier, Stmt, Type},
+	error::SyntaxErr,
 	expression::{expr_parser, Mode},
 	lexer::{lexer, OpTy, Token},
-	span::Spanned,
+	span::{Span, Spanned},
 	Either,
 };
 
@@ -47,22 +48,30 @@ impl Walker {
 		// of the string, and hence, we are done.
 		self.cursor == self.cst.len()
 	}
+
+	/// Returns the [`Span`] of the last `Token`.
+	pub fn get_last_span(&self) -> Span {
+		self.cst.last().unwrap().1
+	}
 }
 
 /// Parse all of the top-level statements in the file.
-pub fn parse(source: &str) -> Vec<Stmt> {
+pub fn parse(source: &str) -> (Vec<Stmt>, Vec<SyntaxErr>) {
 	let cst = lexer(source);
 	println!("{cst:?}");
 
 	let mut walker = Walker { cst, cursor: 0 };
 	let mut stmts = Vec::new();
+	let mut errors = Vec::new();
 
 	'parser: while !walker.is_done() {
 		// First, we look for any qualifiers which are always located first in a statement.
-		let qualifiers = parse_qualifier_list(&mut walker);
+		let (qualifiers, mut qualifier_errs) =
+			parse_qualifier_list(&mut walker);
+		errors.append(&mut qualifier_errs);
 
 		// Next, we look for any syntax which can be parsed as an expression, e.g. a `int[3]`.
-		match expr_parser(&mut walker, Mode::Default) {
+		match expr_parser(&mut walker, Mode::Default, &[]) {
 			// We tried to parse an expression and succeeded. We have an expression consisting of at least one
 			// token.
 			(Some(expr), _) => {
@@ -70,26 +79,33 @@ pub fn parse(source: &str) -> Vec<Stmt> {
 				// tokens as statements which can start with a typename, i.e. variable or function defs/decls.
 				if let Some(type_) = expr.to_type() {
 					match parse_type_start(&mut walker, type_, qualifiers) {
-						Some(s) => stmts.push(s),
-						None => 'till_next: loop {
-							// We did not successfully parse a statement.
-							let (next, _) = match walker.peek() {
-								Some(t) => t,
-								None => break 'parser,
-							};
+						(Some(s), mut errs) => {
+							errors.append(&mut errs);
+							stmts.push(s);
+						}
+						(None, mut errs) => {
+							errors.append(&mut errs);
 
-							if *next == Token::Semi {
-								walker.advance();
-								break 'till_next;
-							} else if next.starts_statement() {
-								// We don't advance because we are currently at a token which begins a new statement, so we
-								// don't want to consume it before we rerun the main loop.
-								break 'till_next;
-							} else {
-								walker.advance();
-								continue 'till_next;
+							'till_next: loop {
+								// We did not successfully parse a statement.
+								let (next, _) = match walker.peek() {
+									Some(t) => t,
+									None => break 'parser,
+								};
+
+								if *next == Token::Semi {
+									walker.advance();
+									break 'till_next;
+								} else if next.starts_statement() {
+									// We don't advance because we are currently at a token which begins a new statement, so we
+									// don't want to consume it before we rerun the main loop.
+									break 'till_next;
+								} else {
+									walker.advance();
+									continue 'till_next;
+								}
 							}
-						},
+						}
 					};
 				}
 			}
@@ -113,19 +129,23 @@ pub fn parse(source: &str) -> Vec<Stmt> {
 		}
 	}
 
-	stmts
+	(stmts, errors)
 }
 
 /// Parse a list of qualifiers if there are any, e.g.
 /// - `const in ...`
 /// - `flat uniform ...`
 /// - `layout(location = 1) ...`.
-fn parse_qualifier_list(walker: &mut Walker) -> Vec<Qualifier> {
-	// Take tokens until we've run out of qualifiers.
+fn parse_qualifier_list(
+	walker: &mut Walker,
+) -> (Vec<Qualifier>, Vec<SyntaxErr>) {
+	let mut errors = Vec::new();
+
 	let mut qualifiers = Vec::new();
+	// Consume tokens until we've run out of qualifiers.
 	'outer: loop {
-		let current = match walker.peek() {
-			Some((t, _)) => t,
+		let (current, current_span) = match walker.peek() {
+			Some(t) => t,
 			None => break 'outer,
 		};
 
@@ -187,38 +207,62 @@ fn parse_qualifier_list(walker: &mut Walker) -> Vec<Qualifier> {
 				qualifiers.push(Qualifier::Memory(Memory::Writeonly))
 			}
 			Token::Layout => {
+				let kw_span = *current_span;
 				walker.advance();
 
 				// Consume the opening `(` parenthesis.
-				let current = match walker.peek() {
-					Some((t, _)) => t,
-					None => break,
+				let (current, current_span) = match walker.peek() {
+					Some(t) => t,
+					None => {
+						errors.push(SyntaxErr::ExpectedParenAfterLayout(
+							kw_span.end_zero_width(),
+						));
+						break 'outer;
+					}
 				};
+
+				let l_paren_span;
 				if *current == Token::LParen {
+					l_paren_span = *current_span;
 					walker.advance();
 				} else {
+					errors.push(SyntaxErr::ExpectedParenAfterLayout(
+						kw_span.end_zero_width(),
+					));
 					break 'outer;
-				}
+				};
 
-				// Take layout identifiers until we reach the closing `)` parenthesis.
 				let mut layouts = Vec::new();
+				// Consume layout identifiers until we reach the closing `)` parenthesis.
 				'identifiers: loop {
-					let current = match walker.peek() {
-						Some((t, _)) => t,
-						None => break 'outer,
+					let (current, current_span) = match walker.peek() {
+						Some(t) => t,
+						None => {
+							// Since we are still in this loop, that means we haven't found the closing `)`
+							// parenthesis yet, but we've now reached the end of the token stream.
+							errors.push(SyntaxErr::ExpectedParenAtEndOfLayout(
+								l_paren_span,
+								walker.get_last_span().end_zero_width(),
+							));
+							break 'outer;
+						}
 					};
 
 					match current {
+						// Consume the `,` separator and continue looking for a layout identifier.
 						Token::Comma => {
 							walker.advance();
 							continue 'identifiers;
 						}
-						// We don't consume the token because we perform that at the end of the 'outer loop.
+						// Consume the closing `)` parenthesis and stop parsing this `layout`. We don't consume the
+						// token because we perform that at the end of the 'outer loop.
 						Token::RParen => break 'identifiers,
 						Token::Semi => break 'outer,
 						_ => {}
 					}
 
+					let ident_span = *current_span;
+					// We are expecting a token which is a valid layout identifier.
 					match current.to_layout() {
 						Some(e) => {
 							walker.advance();
@@ -229,28 +273,53 @@ fn parse_qualifier_list(walker: &mut Walker) -> Vec<Qualifier> {
 								}
 								Either::Right(constructor) => {
 									// Consume the `=` in `ident = expression`.
-									let current = match walker.peek() {
-										Some((t, _)) => t,
-										None => break 'outer,
-									};
+									let (current, current_span) =
+										match walker.peek() {
+											Some(t) => t,
+											None => {
+												errors.push(SyntaxErr::ExpectedEqAfterLayoutIdent(
+													walker.get_last_span().end_zero_width()
+												));
+												break 'outer;
+											}
+										};
 									if *current == Token::Op(OpTy::Eq) {
 										walker.advance();
 									} else {
+										errors.push(SyntaxErr::ExpectedEqAfterLayoutIdent(
+											*current_span
+										));
 										break 'outer;
 									}
 
+									// Consume the next `expression` in `ident = expression`.
 									let expr = match expr_parser(
 										walker,
 										Mode::DisallowTopLevelList,
+										&[Token::Comma, Token::RParen],
 									) {
-										(Some(e), _) => e,
-										(None, _) => break 'outer,
+										(Some(e), mut err) => {
+											errors.append(&mut err);
+											e
+										}
+										(None, _) => {
+											errors.push(SyntaxErr::ExpectedValExprAfterLayoutIdent(
+												ident_span.end_zero_width()
+											));
+											break 'outer;
+										}
 									};
 									layouts.push(constructor(expr));
 								}
 							}
 						}
-						None => break 'outer,
+						None => {
+							// We found a token which can not be a valid layout identifier.
+							errors.push(SyntaxErr::InvalidLayoutIdentifier(
+								*current_span,
+							));
+							break 'outer;
+						}
 					}
 				}
 
@@ -264,7 +333,7 @@ fn parse_qualifier_list(walker: &mut Walker) -> Vec<Qualifier> {
 		walker.advance();
 	}
 
-	qualifiers
+	(qualifiers, errors)
 }
 
 /// Parse statements which begin with a type.
@@ -272,38 +341,45 @@ fn parse_type_start(
 	walker: &mut Walker,
 	type_: Type,
 	qualifiers: Vec<Qualifier>,
-) -> Option<Stmt> {
+) -> (Option<Stmt>, Vec<SyntaxErr>) {
 	// Check whether we have a function definition/declaration.
 	match walker.peek() {
 		Some((t, t_span)) => match t {
 			Token::Ident(i) => match walker.lookahead_1() {
-				Some((t2, _)) => match t2 {
+				Some((t2, paren_span)) => match t2 {
 					Token::LParen => {
 						let ident = Ident {
 							name: i.clone(),
 							span: *t_span,
 						};
+						let l_paren_span = *paren_span;
 						walker.advance();
 						walker.advance();
-						return parse_fn(walker, type_, ident, qualifiers);
+						return parse_fn(
+							walker,
+							type_,
+							ident,
+							qualifiers,
+							l_paren_span,
+						);
 					}
 					_ => {}
 				},
-				None => return None,
+				None => return (None, vec![]),
 			},
 			_ => {}
 		},
-		None => return None,
+		None => return (None, vec![]),
 	};
 
-	let next = match expr_parser(walker, Mode::BreakAtEq) {
+	let next = match expr_parser(walker, Mode::BreakAtEq, &[]) {
 		(Some(e), _) => e,
-		(None, _) => return None,
+		(None, _) => return (None, vec![]),
 	};
 
 	let idents = next.to_var_def_decl_or_fn_ident();
 	if idents.is_empty() {
-		return None;
+		return (None, vec![]);
 	}
 	let mut typenames = idents
 		.into_iter()
@@ -317,7 +393,7 @@ fn parse_type_start(
 
 	let (next, _) = match walker.peek() {
 		Some(t) => t,
-		None => return None,
+		None => return (None, vec![]),
 	};
 
 	if *next == Token::Semi {
@@ -326,50 +402,59 @@ fn parse_type_start(
 		return match typenames.len() {
 			1 => {
 				let (type_, ident) = typenames.remove(0);
-				Some(Stmt::VarDef {
-					type_,
-					ident,
-					qualifiers,
-				})
+				(
+					Some(Stmt::VarDef {
+						type_,
+						ident,
+						qualifiers,
+					}),
+					vec![],
+				)
 			}
-			_ => Some(Stmt::VarDefs(typenames, qualifiers)),
+			_ => (Some(Stmt::VarDefs(typenames, qualifiers)), vec![]),
 		};
 	} else if *next == Token::Op(OpTy::Eq) {
 		walker.advance();
 		// We have a variable declaration.
-		let value = match expr_parser(walker, Mode::Default) {
+		let value = match expr_parser(walker, Mode::Default, &[Token::Semi]) {
 			(Some(e), _) => e,
-			(None, _) => return None,
+			(None, _) => return (None, vec![]),
 		};
 
 		let (next, _) = match walker.peek() {
 			Some(t) => t,
-			None => return None,
+			None => return (None, vec![]),
 		};
 		if *next == Token::Semi {
 			walker.advance();
 		} else {
-			return None;
+			return (None, vec![]);
 		}
 
 		return match typenames.len() {
 			1 => {
 				let (type_, ident) = typenames.remove(0);
-				Some(Stmt::VarDecl {
-					type_,
-					ident,
+				(
+					Some(Stmt::VarDecl {
+						type_,
+						ident,
+						value,
+						qualifiers,
+					}),
+					vec![],
+				)
+			}
+			_ => (
+				Some(Stmt::VarDecls {
+					vars: typenames,
 					value,
 					qualifiers,
-				})
-			}
-			_ => Some(Stmt::VarDecls {
-				vars: typenames,
-				value,
-				qualifiers,
-			}),
+				}),
+				vec![],
+			),
 		};
 	} else {
-		None
+		(None, vec![])
 	}
 }
 
@@ -379,98 +464,293 @@ fn parse_fn(
 	return_type: Type,
 	ident: Ident,
 	qualifiers: Vec<Qualifier>,
-) -> Option<Stmt> {
+	l_paren_span: Span,
+) -> (Option<Stmt>, Vec<SyntaxErr>) {
+	let mut errors = Vec::new();
+
 	let mut params = Vec::new();
 
-	loop {
-		let qualifiers = parse_qualifier_list(walker);
+	// If this is set to `true`, that means we have just started parsing the contents after the opening `(`.
+	let mut just_started = true;
+	// If this is set to `true`, that means we are expecting either a `,` or a `)`.
+	let mut just_finished_param = false;
 
-		let expr = match expr_parser(walker, Mode::DisallowTopLevelList) {
-			(Some(e), _) => e,
-			(None, _) => {
-				let (current, _) = match walker.peek() {
+	// Consume tokens until we've reached the closing `)` parenthesis.
+	'param: loop {
+		let (current, current_span) = match walker.peek() {
+			Some((t, s)) => (t, *s),
+			None => {
+				// Since we are still in this loop, that means we haven't found the closing `)` parenthesis yet,
+				// but we've now reached the end of the token stream.
+				errors.push(SyntaxErr::ExpectedParenAtEndOfParamList(
+					l_paren_span,
+					walker.get_last_span().end_zero_width(),
+				));
+				return (None, errors);
+			}
+		};
+
+		match current {
+			// Consume the `,` separator and continue looking for a parameter.
+			Token::Comma => {
+				if !just_finished_param {
+					// We have a `,` without a parameter before it, e.g. `int i,,`.
+					errors.push(SyntaxErr::MissingTypeInParamList(
+						current_span.start_zero_width(),
+					));
+				}
+				just_finished_param = false;
+				walker.advance();
+				continue 'param;
+			}
+			// Consume the closing `)` parenthesis and stop looking for parameters.
+			Token::RParen => {
+				if !just_started && !just_finished_param {
+					// We have a `,)`, i.e. are missing a parameter between the comma and parenthesis.
+					errors.push(SyntaxErr::MissingTypeInParamList(
+						current_span.start_zero_width(),
+					));
+				}
+				walker.advance();
+				break 'param;
+			}
+			// Even though we are missing a necessary token to make this a valid function definition, it still
+			// makes sense to just treat this as a "valid" function definition for analysis/goto/etc purposes. For
+			// the purposes of this, we assume that the current parameters are all the parameters this function
+			// will take. We do produce an error though about the missing token.
+			Token::Semi => {
+				errors.push(SyntaxErr::ExpectedParenAtEndOfParamList(
+					l_paren_span,
+					current_span.start_zero_width(),
+				));
+				return (
+					Some(Stmt::FnDef {
+						return_type,
+						ident,
+						params,
+						qualifiers,
+					}),
+					errors,
+				);
+			}
+			// Even though we are missing a necessary token to make this a valid function definition, it still
+			// makes sense to just treat this is a potentially "valid" function declaration for analysis/goto/etc
+			// purposes. For the purposes of this, we assume that the current parameters are all the parameters
+			// this function will take. We do produce an error though about the missing token.
+			Token::LBrace => {
+				errors.push(SyntaxErr::ExpectedParenAtEndOfParamList(
+					l_paren_span,
+					current_span.start_zero_width(),
+				));
+				break 'param;
+			}
+			_ => {
+				if just_finished_param {
+					// We have just finished a parameter and we have neither a `,` nor a `)` nor one of the other
+					// parameter-list ending tokens, and we have encountered what may be the next parameter, this
+					// an error, e.g. `int i float`.
+					errors.push(SyntaxErr::ExpectedCommaAfterParamInParamList(
+						current_span.start_zero_width(),
+					));
+				}
+			}
+		}
+
+		just_started = false;
+
+		// Look for any optional qualifiers.
+		let (qualifiers, mut qualifier_errs) = parse_qualifier_list(walker);
+		errors.append(&mut qualifier_errs);
+
+		// Look for a type.
+		let type_ = match expr_parser(
+			walker,
+			Mode::TakeOneUnit,
+			&[Token::Semi, Token::LBrace],
+		) {
+			// We found an expression, so we try to parse it as a type.
+			(Some(e), errs) => {
+				for err in errs {
+					match err {
+						SyntaxErr::FoundOperandAfterOperand(_, _) => {}
+						_ => errors.push(err),
+					}
+				}
+
+				match Type::parse(&e.ty) {
 					Some(t) => t,
-					None => return None,
+					None => {
+						errors.push(SyntaxErr::ExpectedType(e.span));
+						just_finished_param = true;
+						continue 'param;
+					}
+				}
+			}
+			// We failed to parse any expression, so this means the current token is one which cannot start an
+			// expression.
+			(None, _) => {
+				just_finished_param = true;
+				// Note: We need to `peek()` again because we may have found qualifiers.
+				match walker.peek() {
+					Some((current, current_span)) => {
+						match current {
+							// The check at the beginning of the 'param loop will produce the relevant error about
+							// the missing type identifier.
+							Token::Comma => continue 'param,
+							Token::RParen => {
+								// Since we are here, that means we have at least one parameter separated by a
+								// comma and we've now come across the closing `)` parenthesis, i.e. `int,)`.
+								errors.push(SyntaxErr::MissingTypeInParamList(
+									current_span.start_zero_width(),
+								));
+								walker.advance();
+								break 'param;
+							}
+							Token::Semi | Token::LBrace => {
+								errors.push(SyntaxErr::MissingTypeInParamList(
+									current_span.start_zero_width(),
+								));
+								continue 'param;
+							}
+							_ => {
+								// We have something like a keyword which is illegal.
+								errors.push(SyntaxErr::ExpectedType(
+									*current_span,
+								));
+								walker.advance();
+								continue 'param;
+							}
+						}
+					}
+					// The first check in the 'param loop deals with reaching the end-of-file.
+					None => continue 'param,
 				};
+			}
+		};
 
-				if *current == Token::RParen {
-					walker.advance();
-					break;
-				} else if *current == Token::Comma {
-					walker.advance();
-					continue;
-				} else {
-					return None;
+		// Look for an identifier.
+		let expr = match expr_parser(
+			walker,
+			Mode::TakeOneUnit,
+			&[Token::LBrace, Token::Semi],
+		) {
+			(Some(e), mut errs) => {
+				// TODO: Check if this can be a valid identifier.
+				errors.append(&mut errs);
+				e
+			}
+			// Identifiers are optional, so if we haven't found one, we move onto the next parameter.
+			(None, _) => {
+				just_finished_param = true;
+				// Note: We need to `peek()` again because we may have found qualifiers.
+				match walker.peek() {
+					Some((current, current_span)) => {
+						params.push((type_, None, qualifiers));
+
+						match current {
+							Token::Comma => continue 'param,
+							Token::RParen => {
+								walker.advance();
+								break 'param;
+							}
+							Token::Semi | Token::LBrace => {
+								continue 'param;
+							}
+							_ => {
+								// We have something like a keyword which is illegal.
+								errors.push(SyntaxErr::ExpectedIdent(
+									*current_span,
+								));
+								walker.advance();
+								continue 'param;
+							}
+						}
+					}
+					// The first check in the 'param loop deals with reaching the end-of-file.
+					None => continue 'param,
 				}
 			}
 		};
 
-		let type_ = match Type::parse(&expr.ty) {
-			Some(t) => t,
-			None => return None,
-		};
-
-		let expr_2 = match expr_parser(walker, Mode::DisallowTopLevelList) {
-			(Some(e), _) => e,
-			(None, _) => {
-				let (current, _) = match walker.peek() {
-					Some(t) => t,
-					None => return None,
-				};
-
-				if *current == Token::Comma {
-					walker.advance();
-					params.push((type_, None, qualifiers));
-					continue;
-				} else if *current == Token::RParen {
-					walker.advance();
-					params.push((type_, None, qualifiers));
-					break;
-				} else {
-					return None;
-				}
+		// Since a type-identifier definition may be split up, e.g. `int i[3]`, we now convert the two "items"
+		// into the actual type and identifier.
+		let (type_, ident) = match expr.to_var_def_decl_or_fn_ident().remove(0)
+		{
+			Either::Left(ident) => (type_.clone(), ident),
+			Either::Right((ident, v)) => {
+				(type_.clone().add_var_decl_arr_size(v), ident)
 			}
 		};
-
-		let (type_, ident) =
-			match expr_2.to_var_def_decl_or_fn_ident().remove(0) {
-				Either::Left(ident) => (type_.clone(), ident),
-				Either::Right((ident, v)) => {
-					(type_.clone().add_var_decl_arr_size(v), ident)
-				}
-			};
 
 		params.push((type_, Some(ident), qualifiers));
+		just_finished_param = true;
 	}
 
-	let (next, _) = match walker.peek() {
+	// Consume either the `;` for a function definition, or a `{` for a function declaration.
+	let (current, current_span) = match walker.peek() {
 		Some(t) => t,
-		None => return None,
+		None => {
+			// Even though we are missing a necessary token to make the syntax valid, it still makes sense to just
+			// treat this as a "valid" function definition for analysis/goto/etc purposes. We do produce an error
+			// though about the missing token.
+			errors.push(SyntaxErr::ExpectedSemiOrScopeAfterParamList(
+				walker.get_last_span().start_zero_width(),
+			));
+			return (
+				Some(Stmt::FnDef {
+					return_type,
+					ident,
+					params,
+					qualifiers,
+				}),
+				errors,
+			);
+		}
 	};
-	if *next == Token::Semi {
+	if *current == Token::Semi {
 		walker.advance();
-	} else if *next == Token::LBrace {
+		(
+			Some(Stmt::FnDef {
+				return_type,
+				ident,
+				params,
+				qualifiers,
+			}),
+			errors,
+		)
+	} else if *current == Token::LBrace {
 		walker.advance();
 
+		// Parse the function body, including the closing `}` brace.
 		let stmts = parse_scope_contents(walker, BRACE_DELIMITER);
 
-		return Some(Stmt::FnDecl {
-			return_type,
-			ident,
-			params,
-			body: stmts,
-			qualifiers,
-		});
+		(
+			Some(Stmt::FnDecl {
+				return_type,
+				ident,
+				params,
+				body: stmts,
+				qualifiers,
+			}),
+			errors,
+		)
 	} else {
-		return None;
+		// Even though we are missing a necessary token to make the syntax valid, it still makes sense to just
+		// treat this as a "valid" function definition for analysis/goto/etc purposes. We do produce an error
+		// though about the missing token.
+		errors.push(SyntaxErr::ExpectedSemiOrScopeAfterParamList(
+			current_span.start_zero_width(),
+		));
+		(
+			Some(Stmt::FnDef {
+				return_type,
+				ident,
+				params,
+				qualifiers,
+			}),
+			errors,
+		)
 	}
-
-	Some(Stmt::FnDef {
-		return_type,
-		ident,
-		params,
-		qualifiers,
-	})
 }
 
 /// A function, which given in the current `walker`, determines whether to end parsing the current scope of
@@ -530,10 +810,10 @@ fn parse_scope_contents(
 		}
 
 		// First, we look for any qualifiers because they are always located first in a statement.
-		let qualifiers = parse_qualifier_list(walker);
+		let (qualifiers, _qualifier_errs) = parse_qualifier_list(walker);
 
 		// Next, we look for any syntax which can be parsed as an expression, e.g. a `int[3]`.
-		match expr_parser(walker, Mode::Default) {
+		match expr_parser(walker, Mode::Default, &[Token::Semi]) {
 			// We tried to parse an expression and succeeded. We have an expression consisting of at least one
 			// token.
 			(Some(expr), _) => {
@@ -542,8 +822,8 @@ fn parse_scope_contents(
 				// FIXME: Cannot have a function within a function?
 				if let Some(type_) = expr.to_type() {
 					match parse_type_start(walker, type_, qualifiers) {
-						Some(s) => stmts.push(s),
-						None => 'till_next: loop {
+						(Some(s), _errs) => stmts.push(s),
+						(None, _) => 'till_next: loop {
 							// We did not successfully parse a statement.
 							let (next, _) = match walker.peek() {
 								Some(t) => t,
@@ -600,7 +880,11 @@ fn parse_scope_contents(
 							continue;
 						}
 
-						let cond = match expr_parser(walker, Mode::Default) {
+						let cond = match expr_parser(
+							walker,
+							Mode::Default,
+							&[Token::RParen],
+						) {
 							(Some(e), _) => e,
 							(None, _) => continue,
 						};
@@ -673,11 +957,14 @@ fn parse_scope_contents(
 									continue;
 								}
 
-								let cond =
-									match expr_parser(walker, Mode::Default) {
-										(Some(e), _) => e,
-										(None, _) => continue,
-									};
+								let cond = match expr_parser(
+									walker,
+									Mode::Default,
+									&[Token::RParen],
+								) {
+									(Some(e), _) => e,
+									(None, _) => continue,
+								};
 
 								// Consume the closing `)` parenthesis.
 								let current = match walker.peek() {
@@ -733,7 +1020,11 @@ fn parse_scope_contents(
 							continue;
 						}
 
-						let expr = match expr_parser(walker, Mode::Default) {
+						let expr = match expr_parser(
+							walker,
+							Mode::Default,
+							&[Token::RParen],
+						) {
 							(Some(e), _) => e,
 							(None, _) => continue,
 						};
@@ -774,6 +1065,7 @@ fn parse_scope_contents(
 									let expr = match expr_parser(
 										walker,
 										Mode::Default,
+										&[Token::Colon],
 									) {
 										(Some(e), _) => e,
 										(None, _) => continue,
@@ -840,7 +1132,11 @@ fn parse_scope_contents(
 							continue;
 						}
 
-						let var = match expr_parser(walker, Mode::Default) {
+						let var = match expr_parser(
+							walker,
+							Mode::Default,
+							&[Token::Semi],
+						) {
 							(Some(expr), _) => {
 								if let Some(type_) = expr.to_type() {
 									match parse_type_start(
@@ -848,8 +1144,8 @@ fn parse_scope_contents(
 										type_,
 										vec![],
 									) {
-										Some(s) => Some(Box::from(s)),
-										None => None,
+										(Some(s), _errs) => Some(Box::from(s)),
+										(None, _) => None,
 									}
 								} else {
 									Some(Box::from(Stmt::Expr(expr)))
@@ -870,7 +1166,8 @@ fn parse_scope_contents(
 							//continue;
 						}
 
-						let (cond, _) = expr_parser(walker, Mode::Default);
+						let (cond, _) =
+							expr_parser(walker, Mode::Default, &[Token::Semi]);
 
 						// Consume the seperator `;` semicolon.
 						let current = match walker.peek() {
@@ -883,7 +1180,11 @@ fn parse_scope_contents(
 							continue;
 						}
 
-						let (inc, _) = expr_parser(walker, Mode::Default);
+						let (inc, _) = expr_parser(
+							walker,
+							Mode::Default,
+							&[Token::RParen],
+						);
 
 						// Consume the closing `)` parenthesis.
 						let current = match walker.peek() {
@@ -931,7 +1232,11 @@ fn parse_scope_contents(
 							continue;
 						}
 
-						let cond = match expr_parser(walker, Mode::Default) {
+						let cond = match expr_parser(
+							walker,
+							Mode::Default,
+							&[Token::RParen],
+						) {
 							(Some(e), _) => e,
 							(None, _) => continue,
 						};
@@ -1002,7 +1307,11 @@ fn parse_scope_contents(
 							continue;
 						}
 
-						let cond = match expr_parser(walker, Mode::Default) {
+						let cond = match expr_parser(
+							walker,
+							Mode::Default,
+							&[Token::RParen],
+						) {
 							(Some(e), _) => e,
 							(None, _) => continue,
 						};
@@ -1036,7 +1345,7 @@ fn parse_scope_contents(
 
 						// Look for the optional return value expression.
 						let (return_expr, _) =
-							expr_parser(walker, Mode::Default);
+							expr_parser(walker, Mode::Default, &[Token::Semi]);
 
 						let current = match walker.peek() {
 							Some((t, _)) => t,
@@ -1109,7 +1418,7 @@ fn parse_struct(
 	walker: &mut Walker,
 	qualifiers: Vec<Qualifier>,
 ) -> Option<Stmt> {
-	let ident = match expr_parser(walker, Mode::Default) {
+	let ident = match expr_parser(walker, Mode::Default, &[Token::LBrace]) {
 		(Some(e), _) => match e.ty {
 			ExprTy::Ident(i) => i,
 			_ => return None,
@@ -1132,12 +1441,16 @@ fn parse_struct(
 
 	let mut members = Vec::new();
 	'members: loop {
-		let qualifiers = parse_qualifier_list(walker);
+		let (qualifiers, _qualifier_errs) = parse_qualifier_list(walker);
 
-		match expr_parser(walker, Mode::Default) {
+		match expr_parser(walker, Mode::Default, &[]) {
 			(Some(expr), _) => {
 				if let Some(type_) = expr.to_type() {
-					let next = match expr_parser(walker, Mode::Default) {
+					let next = match expr_parser(
+						walker,
+						Mode::Default,
+						&[Token::Semi],
+					) {
 						(Some(e), _) => e,
 						(None, _) => return None,
 					};
@@ -1196,7 +1509,7 @@ fn parse_struct(
 		return None;
 	}
 
-	let instance = match expr_parser(walker, Mode::Default) {
+	let instance = match expr_parser(walker, Mode::Default, &[Token::Semi]) {
 		(Some(e), _) => match e.ty {
 			ExprTy::Ident(i) => Some(i),
 			_ => return None,
@@ -1546,7 +1859,7 @@ pub fn print_stmt(stmt: &Stmt, indent: usize) {
 #[cfg(test)]
 macro_rules! assert_stmt {
     ($src:expr, $($stmt:expr),*) => {
-        assert_eq!(parse($src), vec![
+        assert_eq!(parse($src).0, vec![
             $(
                 $stmt,
             )*

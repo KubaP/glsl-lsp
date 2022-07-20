@@ -1,11 +1,14 @@
 use crate::File;
-use glsl_parser::{error::SyntaxErr::{self, *}, span::Span};
+use glsl_parser::{
+	error::SyntaxErr::{self, *},
+	span::Span,
+};
 use tower_lsp::lsp_types::{
 	Diagnostic, DiagnosticRelatedInformation, DiagnosticSeverity, Location,
 };
 
 /// Converts a [`SyntaxErr`] to an LSP `Diagnostic` type.
-pub fn to_diagnostic(err: SyntaxErr, file: &File) -> Diagnostic {
+pub fn to_diagnostic(err: SyntaxErr, file: &File, diags: &mut Vec<Diagnostic>) {
 	let (message, span, related) = match err {
 		/* EXPRESSION */
         FoundOperandAfterOperand(prev, current) => (
@@ -69,44 +72,28 @@ pub fn to_diagnostic(err: SyntaxErr, file: &File) -> Diagnostic {
 		UnclosedParenthesis(opening, expected) => (
             "Syntax error: expected a closing delimiter `)`",
             expected,
-            Some(vec![DiagnosticRelatedInformation{
-                location: Location { uri: file.uri.clone(), range: file.span_to_range(opening) },
-                message: "opening delimiter here".into()
-            }])
+            Some(("opening delimiter here", opening)),
         ),
 		UnclosedIndexOperator(opening, expected) => (
             "Syntax error: expected a closing delimiter `]`",
             expected,
-            Some(vec![DiagnosticRelatedInformation{
-                location: Location { uri: file.uri.clone(), range: file.span_to_range(opening) },
-                message: "opening delimiter here".into()
-            }])
+            Some(("opening delimiter here", opening)),
         ),
 		UnclosedFunctionCall(opening, expected) => (
             "Syntax error: expected a closing delimiter `)`",
             expected,
-            Some(vec![DiagnosticRelatedInformation{
-                location: Location { uri: file.uri.clone(), range: file.span_to_range(opening) },
-                message: "opening delimiter here".into()
-            }])
+            Some(("opening delimiter here", opening)),
         ),
 		UnclosedInitializerList(opening, expected) => (
             "Syntax error: expected a closing delimiter `}`",
             expected,
-            Some(vec![DiagnosticRelatedInformation{
-                location: Location { uri: file.uri.clone(), range: file.span_to_range(opening) },
-                message: "opening delimiter here".into()
-            }])
+            Some(("opening delimiter here", opening)),
         ),
 		UnclosedArrayConstructor(opening, expected) => (
             "Syntax error: expected a closing delimiter `)`",
             expected,
-            Some(vec![DiagnosticRelatedInformation{
-                location: Location { uri: file.uri.clone(), range: file.span_to_range(opening) },
-                message: "opening delimiter here".into()
-            }])
+            Some(("opening delimiter here", opening)),
         ),
-        
         /* LAYOUT QUALIFIER */
 		ExpectedParenAfterLayout(pos) => (
             "Syntax error: expected an opening delimiter `(`",
@@ -116,13 +103,7 @@ pub fn to_diagnostic(err: SyntaxErr, file: &File) -> Diagnostic {
 		ExpectedParenAtEndOfLayout(opening, expected) => (
             "Syntax error: expected a closing delimiter `)`",
             expected,
-            Some(vec![DiagnosticRelatedInformation{
-                location: Location{
-                    uri: file.uri.clone(),
-                    range: file.span_to_range(opening)
-                },
-                message: "opening delimiter here".into(),
-            }])
+            Some(("opening delimiter here", opening)),
         ),
 		InvalidLayoutIdentifier(token) => (
             "Syntax error: invalid layout identifier",
@@ -139,7 +120,6 @@ pub fn to_diagnostic(err: SyntaxErr, file: &File) -> Diagnostic {
             pos,
             None
         ),
-        
         /* GENERAL */
 		ExpectedType(token) => (
             "Syntax error: expected a type",
@@ -148,20 +128,14 @@ pub fn to_diagnostic(err: SyntaxErr, file: &File) -> Diagnostic {
         ),
 		ExpectedIdent(token) => (
             "Syntax error: expected an identifier",
-            token,None
+            token,
+            None
         ),
-
 		/* FUNCTION DEF/DECL */
 		ExpectedParenAtEndOfParamList(opening, expected) => (
 			"Syntax error: expected a closing delimiter `)`",
 			expected,
-			Some(vec![DiagnosticRelatedInformation {
-				location: Location {
-					uri: file.uri.clone(),
-					range: file.span_to_range(opening),
-				},
-				message: "opening delimiter here".into(),
-			}]),
+			Some(("opening delimiter here", opening)),
 		),
 		ExpectedCommaAfterParamInParamList(pos) => {
 			("Syntax error: expected a comma `,`", pos, None)
@@ -181,15 +155,48 @@ pub fn to_diagnostic(err: SyntaxErr, file: &File) -> Diagnostic {
         )
 	};
 
-	Diagnostic {
+	diags.push(Diagnostic {
 		range: file.span_to_range(span),
 		severity: Some(DiagnosticSeverity::ERROR),
 		code: None,
 		code_description: None,
 		source: Some("glsl".into()),
 		message: message.into(),
-		related_information: related,
+		// Link to the hint if there is one.
+		related_information: if let Some(related) = related {
+			Some(vec![DiagnosticRelatedInformation {
+				location: Location {
+					uri: file.uri.clone(),
+					range: file.span_to_range(related.1),
+				},
+				message: related.0.into(),
+			}])
+		} else {
+			None
+		},
 		tags: None,
 		data: None,
+	});
+
+	// `related_information` on its own doesn't create underlines in the editor, so we need to push a hint as well.
+	if let Some(related) = related {
+		diags.push(Diagnostic {
+			range: file.span_to_range(related.1),
+			severity: Some(DiagnosticSeverity::HINT),
+			code: None,
+			code_description: None,
+			source: Some("glsl".into()),
+			message: related.0.into(),
+			// Link to the original error.
+			related_information: Some(vec![DiagnosticRelatedInformation {
+				location: Location {
+					uri: file.uri.clone(),
+					range: file.span_to_range(span),
+				},
+				message: "original diagnostic here".into(),
+			}]),
+			tags: None,
+			data: None,
+		});
 	}
 }

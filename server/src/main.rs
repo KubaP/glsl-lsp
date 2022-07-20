@@ -131,10 +131,10 @@ impl MyServer {
 	async fn on_change(&self, uri: Url, version: i32, contents: String) {
 		let file = File::new(uri, contents);
 		let (_stmts, errors) = glsl_parser::parser::parse(&file.contents);
-		let diags = errors
+		let mut diags = Vec::new();
+		errors
 			.into_iter()
-			.map(|err| to_diagnostic(err, &file))
-			.collect::<Vec<_>>();
+			.for_each(|err| to_diagnostic(err, &file, &mut diags));
 		self.client
 			.publish_diagnostics(file.uri, diags, Some(version))
 			.await;

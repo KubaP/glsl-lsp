@@ -50,9 +50,29 @@ impl Walker {
 		self.cursor == self.cst.len()
 	}
 
+	/// Returns the [`Span`] of the current `Token`.
+	///
+	/// *Note:* If we have reached the end of the tokens, this will return the value of
+	/// [`get_last_span()`](Self::get_last_span).
+	pub fn get_current_span(&self) -> Span {
+		match self.cst.get(self.cursor) {
+			Some(t) => t.1,
+			None => self.get_last_span(),
+		}
+	}
+
+	/// Returns the [`Span`] of the previous `Token`.
+	///
+	/// *Note:* If the current token is the first, the span returned will be `0-0`.
+	pub fn get_previous_span(&self) -> Span {
+		self.cst.get(self.cursor - 1).map_or(Span::empty(), |t| t.1)
+	}
+
 	/// Returns the [`Span`] of the last `Token`.
+	///
+	/// *Note:* If there are no tokens, the span returned will be `0-0`.
 	pub fn get_last_span(&self) -> Span {
-		self.cst.last().unwrap().1
+		self.cst.last().map_or(Span::empty(), |t| t.1)
 	}
 }
 
@@ -495,9 +515,12 @@ fn parse_fn(
 			// Consume the `,` separator and continue looking for a parameter.
 			Token::Comma => {
 				if !just_finished_param {
-					// We have a `,` without a parameter before it, e.g. `int i,,`.
+					// We have a `,` without a parameter before it, e.g. `int i, ,`.
 					errors.push(SyntaxErr::MissingTypeInParamList(
-						current_span.start_zero_width(),
+						Span::new_between(
+							walker.get_previous_span(),
+							current_span,
+						),
 					));
 				}
 				just_finished_param = false;
@@ -507,9 +530,12 @@ fn parse_fn(
 			// Consume the closing `)` parenthesis and stop looking for parameters.
 			Token::RParen => {
 				if !just_started && !just_finished_param {
-					// We have a `,)`, i.e. are missing a parameter between the comma and parenthesis.
+					// We have a `, )`, i.e. are missing a parameter between the comma and parenthesis.
 					errors.push(SyntaxErr::MissingTypeInParamList(
-						current_span.start_zero_width(),
+						Span::new_between(
+							walker.get_previous_span(),
+							current_span,
+						),
 					));
 				}
 				walker.advance();
@@ -522,7 +548,7 @@ fn parse_fn(
 			Token::Semi => {
 				errors.push(SyntaxErr::ExpectedParenAtEndOfParamList(
 					l_paren_span,
-					current_span.start_zero_width(),
+					current_span,
 				));
 				return (
 					Some(Stmt::FnDef {
@@ -541,7 +567,7 @@ fn parse_fn(
 			Token::LBrace => {
 				errors.push(SyntaxErr::ExpectedParenAtEndOfParamList(
 					l_paren_span,
-					current_span.start_zero_width(),
+					current_span,
 				));
 				break 'param;
 			}
@@ -551,7 +577,10 @@ fn parse_fn(
 					// parameter-list ending tokens, and we have encountered what may be the next parameter, this
 					// an error, e.g. `int i float`.
 					errors.push(SyntaxErr::ExpectedCommaAfterParamInParamList(
-						current_span.start_zero_width(),
+						Span::new_between(
+							walker.get_previous_span(),
+							current_span,
+						),
 					));
 				}
 			}
@@ -688,14 +717,14 @@ fn parse_fn(
 	}
 
 	// Consume either the `;` for a function definition, or a `{` for a function declaration.
-	let (current, current_span) = match walker.peek() {
+	let (current, _) = match walker.peek() {
 		Some(t) => t,
 		None => {
 			// Even though we are missing a necessary token to make the syntax valid, it still makes sense to just
 			// treat this as a "valid" function definition for analysis/goto/etc purposes. We do produce an error
 			// though about the missing token.
 			errors.push(SyntaxErr::ExpectedSemiOrScopeAfterParamList(
-				walker.get_last_span().start_zero_width(),
+				walker.get_last_span().end_zero_width(),
 			));
 			return (
 				Some(Stmt::FnDef {
@@ -740,7 +769,7 @@ fn parse_fn(
 		// treat this as a "valid" function definition for analysis/goto/etc purposes. We do produce an error
 		// though about the missing token.
 		errors.push(SyntaxErr::ExpectedSemiOrScopeAfterParamList(
-			current_span.start_zero_width(),
+			walker.get_previous_span().end_zero_width(),
 		));
 		(
 			Some(Stmt::FnDef {

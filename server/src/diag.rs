@@ -148,6 +148,26 @@ pub fn to_diagnostic(err: SyntaxErr, file: &File, diags: &mut Vec<Diagnostic>) {
             pos,
             None
         ),
+        /* STRUCT DEF/DECL */
+        ExpectedIdentAfterStructKw(pos) => (
+            "Syntax error: expected a struct identifier", pos, None
+        ),
+        ExpectedScopeAfterStructIdent(pos) => (
+            "Syntax error: expected an opening delimiter `{`", pos, None
+        ),
+        StructDefIsIllegal(semi, def) => (
+            "Syntax error: struct definitions are illegal", def, 
+            Some(("illegal semi-colon here", semi))
+        ),
+        ExpectedVarDefInStructBody(stmt) => (
+            "Syntax error: expected a variable definition", stmt, None
+        ),
+        ExpectedAtLeastOneMemberInStruct(decl) => (
+            "Syntax error: expected at least one variable definition", decl, None
+        ),
+        ExpectedSemiAfterStructBody(pos) => (
+            "Syntax error: expected a semi-colon `;`", pos, None
+        ),
         _ => (
             "UNIMPLEMENTED SYNTAX ERROR",
             Span::empty(),

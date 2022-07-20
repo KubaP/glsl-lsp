@@ -172,4 +172,41 @@ pub enum SyntaxErr {
 	/// - `0` - the span where the semi-colon or opening brace should be (i.e. between the parameter list `)` and
 	/// the token which is not what we expected).
 	ExpectedSemiOrScopeAfterParamList(Span),
+
+	/* STRUCT DEF/DECL */
+	/// Did not find an identifier after the `struct` keyword. E.g. in `struct {`, we are missing an identifier
+	/// like so `struct Foo {`.
+	///
+	/// - `0` - the span where the identifier should be.
+	ExpectedIdentAfterStructKw(Span),
+	/// Did not find the beginning of the struct body (`{`) after the identifier. E.g. in `struct A int`, we are
+	/// missing an opening brace like so `struct A { int`.
+	///
+	/// Note that this error is not produced if a semi-colon (`;`) is encountered. In such a case,
+	/// [`Self::StructDefIsIllegal`] is produced instead.
+	///
+	/// - `0` - the span where the opening brace should be (i.e. between the identifier token and the token which
+	///   is not what we expected).
+	ExpectedScopeAfterStructIdent(Span),
+	/// Found a struct definition like so `struct A;`. This is illegal; GLSL only supports struct declarations.
+	///
+	/// - `0` - the span of the semi-colon,
+	/// - `1` - the span of the entire struct definition.
+	StructDefIsIllegal(Span, Span),
+	/// Found a statement other than a variable definition within a struct body. E.g. in `struct A { if...`, we
+	/// have an if-statement which is illegal.
+	///
+	/// - `0` - the span of the illegal statement.
+	ExpectedVarDefInStructBody(Span),
+	/// Did not find at least one variable definition statement within a struct body. E.g. in `struct A {};`, we
+	/// are missing a member like so `struct A { int a; };`.
+	/// 
+	/// - `0` - the span of the struct body.
+	ExpectedAtLeastOneMemberInStruct(Span),
+	/// Did not find a semi-colon (`;`) after the struct declaration. E.g. in `struct A {...}`, we are missing a
+	/// semi-colon like so `struct A {...};`.
+	/// 
+	/// - `0` - the span where the semi-colon should be (i.e. between the declaration body and the token which is
+	///   not what we expected).
+	ExpectedSemiAfterStructBody(Span),
 }

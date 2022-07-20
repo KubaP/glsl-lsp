@@ -133,15 +133,26 @@ pub fn parse(source: &str) -> (Vec<Stmt>, Vec<SyntaxErr>) {
 			// We tried to parse an expression but that immediately failed. This means the current token is one
 			// which cannot start an expression.
 			(None, _) => {
-				let (token, _) = walker.peek().unwrap();
+				let (token, current_span) =
+					walker.peek().map(|t| (&t.0, t.1.clone())).unwrap();
 
 				match token {
 					// After the `struct` keyword we are expecting a struct def/decl.
 					Token::Struct => {
 						walker.advance();
-						match parse_struct(&mut walker, qualifiers) {
-							Some(s) => stmts.push(s),
-							None => break 'parser,
+						match parse_struct(
+							&mut walker,
+							qualifiers,
+							current_span,
+						) {
+							(Some(s), mut errs) => {
+								errors.append(&mut errs);
+								stmts.push(s);
+							}
+							(None, mut errs) => {
+								errors.append(&mut errs);
+								break 'parser;
+							}
 						}
 					}
 					_ => break 'parser,
@@ -1447,122 +1458,156 @@ fn parse_scope_contents(
 fn parse_struct(
 	walker: &mut Walker,
 	qualifiers: Vec<Qualifier>,
-) -> Option<Stmt> {
-	let ident = match expr_parser(walker, Mode::Default, &[Token::LBrace]) {
+	struct_kw_span: Span,
+) -> (Option<Stmt>, Vec<SyntaxErr>) {
+	let mut errors = Vec::new();
+
+	// Look for an identifier.
+	let ident = match expr_parser(
+		walker,
+		Mode::TakeOneUnit,
+		&[Token::LBrace, Token::Semi],
+	) {
 		(Some(e), _) => match e.ty {
+			// TODO: Check if this can be a valid identifier with better error recovery.
 			ExprTy::Ident(i) => i,
-			_ => return None,
-		},
-		(None, _) => return None,
-	};
-
-	let (next, _) = match walker.peek() {
-		Some(t) => t,
-		None => return None,
-	};
-	if *next == Token::LBrace {
-		walker.advance();
-	} else if *next == Token::Semi {
-		walker.advance();
-		return Some(Stmt::StructDef { ident, qualifiers });
-	} else {
-		return None;
-	}
-
-	let mut members = Vec::new();
-	'members: loop {
-		let (qualifiers, _qualifier_errs) = parse_qualifier_list(walker);
-
-		match expr_parser(walker, Mode::Default, &[]) {
-			(Some(expr), _) => {
-				if let Some(type_) = expr.to_type() {
-					let next = match expr_parser(
-						walker,
-						Mode::Default,
-						&[Token::Semi],
-					) {
-						(Some(e), _) => e,
-						(None, _) => return None,
-					};
-
-					let idents = next.to_var_def_decl_or_fn_ident();
-					if idents.len() == 0 {
-						return None;
-					}
-					let mut typenames = idents
-						.into_iter()
-						.map(|i| match i {
-							Either::Left(ident) => (type_.clone(), ident),
-							Either::Right((ident, v)) => {
-								(type_.clone().add_var_decl_arr_size(v), ident)
-							}
-						})
-						.collect::<Vec<_>>();
-
-					let (next, _) = match walker.peek() {
-						Some(t) => t,
-						None => return None,
-					};
-
-					if *next == Token::Semi {
-						// We have a variable definition.
-						walker.advance();
-						members.push(match typenames.len() {
-							1 => {
-								let (type_, ident) = typenames.remove(0);
-								Stmt::VarDef {
-									type_,
-									ident,
-									qualifiers,
-								}
-							}
-							_ => Stmt::VarDefs(typenames, qualifiers),
-						});
-					} else {
-						return None;
-					}
-				} else {
-					return None;
-				}
+			_ => {
+				errors
+					.push(SyntaxErr::ExpectedIdent(walker.get_current_span()));
+				return (None, errors);
 			}
-			(None, _) => break 'members,
+		},
+		(None, _) => {
+			errors.push(SyntaxErr::ExpectedIdentAfterStructKw(
+				walker.get_current_span(),
+			));
+			return (None, errors);
 		}
-	}
-
-	let (next, _) = match walker.peek() {
-		Some(t) => t,
-		None => return None,
 	};
-	if *next == Token::RBrace {
+
+	// Consume either the `;` for a struct definition, or a `{` for a struct declaration.
+	let (current, current_span) = match walker.peek() {
+		Some(t) => t,
+		None => {
+			errors.push(SyntaxErr::ExpectedScopeAfterStructIdent(
+				walker.get_last_span().end_zero_width(),
+			));
+			return (None, errors);
+		}
+	};
+	let l_brace_span = if *current == Token::LBrace {
+		*current_span
+	} else if *current == Token::Semi {
+		// Even though struct definitions are illegal, it still makes sense to just treat this as a "valid"
+		// struct definition for analysis/goto/etc purposes. We do produce an error though about the illegality of
+		// a struct definition.
+		errors.push(SyntaxErr::StructDefIsIllegal(
+			*current_span,
+			Span::new(struct_kw_span.start, current_span.end),
+		));
 		walker.advance();
+		return (Some(Stmt::StructDef { ident, qualifiers }), errors);
 	} else {
-		return None;
+		errors.push(SyntaxErr::ExpectedScopeAfterStructIdent(
+			Span::new_between(walker.get_last_span(), *current_span),
+		));
+		return (None, errors);
+	};
+	walker.advance();
+
+	// Parse the struct body, including the closing `}` brace.
+	let members = parse_scope_contents(walker, BRACE_DELIMITER);
+	// We don't remove invalid statements because we would loose information for the AST.
+	let mut count = 0;
+	members.iter().for_each(|stmt| match stmt {
+		Stmt::VarDef { .. } | Stmt::VarDefs(_, _) => count += 1,
+		// FIXME: Add spans to statements.
+		_ => errors.push(SyntaxErr::ExpectedVarDefInStructBody(Span::empty())),
+	});
+	// Check that there is at least one variable definition within the body.
+	if count == 0 {
+		let r_brace_span = walker.get_previous_span();
+		errors.push(SyntaxErr::ExpectedAtLeastOneMemberInStruct(Span::new(
+			l_brace_span.start,
+			r_brace_span.end,
+		)));
 	}
 
-	let instance = match expr_parser(walker, Mode::Default, &[Token::Semi]) {
+	// Look for an optional instance identifier.
+	let instance = match expr_parser(walker, Mode::TakeOneUnit, &[Token::Semi])
+	{
 		(Some(e), _) => match e.ty {
 			ExprTy::Ident(i) => Some(i),
-			_ => return None,
+			_ => {
+				// Even though we are missing a necessary token to make the syntax valid, it still makes sense to
+				// just treat this as a "valid" struct declaration for analysis/goto/etc purposes. We do produce an
+				// error though about the missing token.
+				errors.push(SyntaxErr::ExpectedSemiAfterStructBody(
+					walker.get_previous_span().end_zero_width(),
+				));
+				return (
+					Some(Stmt::StructDecl {
+						ident,
+						members,
+						qualifiers,
+						instance: None,
+					}),
+					errors,
+				);
+			}
 		},
 		(None, _) => None,
 	};
 
-	let (next, _) = match walker.peek() {
+	// Consume the `;` to end the declaration.
+	let (current, _) = match walker.peek() {
 		Some(t) => t,
-		None => return None,
+		None => {
+			// Even though we are missing a necessary token to make the syntax valid, it still makes sense to just
+			// treat this as a "valid" struct declaration for analysis/goto/etc purposes. We do produce an error
+			// though about the missing token.
+			errors.push(SyntaxErr::ExpectedSemiAfterStructBody(
+				walker.get_previous_span().end_zero_width(),
+			));
+			return (
+				Some(Stmt::StructDecl {
+					ident,
+					members,
+					qualifiers,
+					instance,
+				}),
+				errors,
+			);
+		}
 	};
-	if *next == Token::Semi {
+	if *current == Token::Semi {
 		walker.advance();
+		(
+			Some(Stmt::StructDecl {
+				ident,
+				members,
+				qualifiers,
+				instance,
+			}),
+			errors,
+		)
 	} else {
-		return None;
+		// Even though we are missing a necessary token to make the syntax valid, it still makes sense to just
+		// treat this as a "valid" struct declaration for analysis/goto/etc purposes. We do produce an error though
+		// about the missing token.
+		errors.push(SyntaxErr::ExpectedSemiAfterStructBody(
+			walker.get_previous_span().end_zero_width(),
+		));
+		(
+			Some(Stmt::StructDecl {
+				ident,
+				members,
+				qualifiers,
+				instance,
+			}),
+			errors,
+		)
 	}
-
-	Some(Stmt::StructDecl {
-		ident,
-		members,
-		qualifiers,
-		instance,
-	})
 }
 
 pub fn print_stmt(stmt: &Stmt, indent: usize) {

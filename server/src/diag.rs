@@ -131,6 +131,17 @@ pub fn to_diagnostic(err: SyntaxErr, file: &File, diags: &mut Vec<Diagnostic>) {
             token,
             None
         ),
+        ExpectedBraceScopeEnd(opening, expected) => (
+            "Syntax error: expected a closing scope delimiter `}`",
+            expected,
+            Some(("opening delimiter here", opening))
+        ),
+        /* CONTROL FLOW */
+        ExpectedSwitchCaseEnd(opening, expected) => (
+            "Syntax error: expected a closing delimiter for the switch case; one of either `case`, `default` or `}`",
+            expected,
+            Some(("case opening delimiter here", opening))
+        ),
 		/* FUNCTION DEF/DECL */
 		ExpectedParenAtEndOfParamList(opening, expected) => (
 			"Syntax error: expected a closing delimiter `)`",

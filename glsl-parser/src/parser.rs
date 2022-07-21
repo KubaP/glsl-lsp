@@ -728,8 +728,8 @@ fn parse_fn(
 	}
 
 	// Consume either the `;` for a function definition, or a `{` for a function declaration.
-	let (current, _) = match walker.peek() {
-		Some(t) => t,
+	let (current, current_span) = match walker.peek() {
+		Some(t) => (&t.0, t.1),
 		None => {
 			// Even though we are missing a necessary token to make the syntax valid, it still makes sense to just
 			// treat this as a "valid" function definition for analysis/goto/etc purposes. We do produce an error
@@ -763,7 +763,9 @@ fn parse_fn(
 		walker.advance();
 
 		// Parse the function body, including the closing `}` brace.
-		let stmts = parse_scope_contents(walker, BRACE_DELIMITER);
+		let (stmts, mut errs) =
+			parse_scope_contents(walker, BRACE_DELIMITER, current_span);
+		errors.append(&mut errs);
 
 		(
 			Some(Stmt::FnDecl {
@@ -796,12 +798,22 @@ fn parse_fn(
 
 /// A function, which given in the current `walker`, determines whether to end parsing the current scope of
 /// statements, and return back to the caller.
-type EndScope = fn(&mut Walker) -> bool;
+///
+/// This also takes a mutable reference to a vector of syntax errors, and a `Span` of the opening delimiter, which
+/// allows for the creation of a syntax error if the function never encounters the desired ending delimiter.
+type EndScope = fn(&mut Walker, &mut Vec<SyntaxErr>, Span) -> bool;
 
-const BRACE_DELIMITER: EndScope = |walker| {
+const BRACE_DELIMITER: EndScope = |walker, errors, l_brace_span| {
 	let current = match walker.peek() {
 		Some((t, _)) => t,
-		None => return true,
+		None => {
+			// We did not encounter a `}` at all.
+			errors.push(SyntaxErr::ExpectedBraceScopeEnd(
+				l_brace_span,
+				walker.get_last_span().end_zero_width(),
+			));
+			return true;
+		}
 	};
 
 	if *current == Token::RBrace {
@@ -812,10 +824,17 @@ const BRACE_DELIMITER: EndScope = |walker| {
 	}
 };
 
-const SWITCH_CASE_DELIMITER: EndScope = |walker| {
+const SWITCH_CASE_DELIMITER: EndScope = |walker, errors, colon_span| {
 	let current = match walker.peek() {
 		Some((t, _)) => t,
-		None => return true,
+		None => {
+			// We did not encounter one of the closing tokens at all.
+			errors.push(SyntaxErr::ExpectedSwitchCaseEnd(
+				colon_span,
+				walker.get_last_span().end_zero_width(),
+			));
+			return true;
+		}
 	};
 
 	match current {
@@ -830,23 +849,26 @@ const SWITCH_CASE_DELIMITER: EndScope = |walker| {
 fn parse_scope_contents(
 	walker: &mut Walker,
 	exit_condition: EndScope,
-) -> Vec<Stmt> {
+	opening_delim: Span,
+) -> (Vec<Stmt>, Vec<SyntaxErr>) {
 	let mut stmts = Vec::new();
+	let mut errors = Vec::new();
 
 	'stmt: loop {
 		// If we have reached a closing delimiter, break out of the loop and return the parsed statements.
-		if exit_condition(walker) {
+		if exit_condition(walker, &mut errors, opening_delim) {
 			break 'stmt;
 		}
 
 		// If we immediately encounter an opening `{` brace, that means we have a delimited scope.
-		let (token, _) = walker.peek().unwrap();
-		if *token == Token::LBrace {
+		let (current, current_span) =
+			walker.peek().map(|t| (&t.0, t.1)).unwrap();
+		if *current == Token::LBrace {
 			walker.advance();
-			stmts.push(Stmt::Scope(parse_scope_contents(
-				walker,
-				BRACE_DELIMITER,
-			)));
+			let (inner_stmts, mut inner_errs) =
+				parse_scope_contents(walker, BRACE_DELIMITER, current_span);
+			errors.append(&mut inner_errs);
+			stmts.push(Stmt::Scope(inner_stmts));
 			continue 'stmt;
 		}
 
@@ -942,8 +964,8 @@ fn parse_scope_contents(
 						}
 
 						// Consume the opening `{` scope brace.
-						let current = match walker.peek() {
-							Some((t, _)) => t,
+						let (current, current_span) = match walker.peek() {
+							Some(t) => (&t.0, t.1),
 							None => continue,
 						};
 						if *current == Token::LBrace {
@@ -952,8 +974,12 @@ fn parse_scope_contents(
 							continue;
 						}
 
-						let body =
-							parse_scope_contents(walker, BRACE_DELIMITER);
+						let (body, mut errs) = parse_scope_contents(
+							walker,
+							BRACE_DELIMITER,
+							current_span,
+						);
+						errors.append(&mut errs);
 
 						let mut else_ = None;
 						let mut else_ifs = Vec::new();
@@ -969,18 +995,20 @@ fn parse_scope_contents(
 								break 'elseifs;
 							}
 
-							let current = match walker.peek() {
-								Some((t, _)) => t,
+							let (current, current_span) = match walker.peek() {
+								Some(t) => (&t.0, t.1),
 								None => continue,
 							};
 							if *current == Token::LBrace {
 								// A final else branch.
 								walker.advance();
 
-								let body = parse_scope_contents(
+								let (body, mut errs) = parse_scope_contents(
 									walker,
 									BRACE_DELIMITER,
+									current_span,
 								);
+								errors.append(&mut errs);
 
 								else_ = Some(body);
 								break 'elseifs;
@@ -1019,20 +1047,23 @@ fn parse_scope_contents(
 								}
 
 								// Consume the opening `{` scope brace.
-								let current = match walker.peek() {
-									Some((t, _)) => t,
-									None => continue,
-								};
+								let (current, current_span) =
+									match walker.peek() {
+										Some(t) => (&t.0, t.1),
+										None => continue,
+									};
 								if *current == Token::LBrace {
 									walker.advance();
 								} else {
 									continue;
 								}
 
-								let body = parse_scope_contents(
+								let (body, mut errs) = parse_scope_contents(
 									walker,
 									BRACE_DELIMITER,
+									current_span,
 								);
+								errors.append(&mut errs);
 
 								else_ifs.push((cond, body));
 							} else {
@@ -1112,40 +1143,46 @@ fn parse_scope_contents(
 										(None, _) => continue,
 									};
 
-									let current = match walker.peek() {
-										Some((t, _)) => t,
-										None => break 'cases,
-									};
+									let (current, current_span) =
+										match walker.peek() {
+											Some(t) => (&t.0, t.1),
+											None => break 'cases,
+										};
 									if *current == Token::Colon {
 										walker.advance();
 									} else {
 										continue;
 									}
 
-									let body = parse_scope_contents(
+									let (body, mut errs) = parse_scope_contents(
 										walker,
 										SWITCH_CASE_DELIMITER,
+										current_span,
 									);
+									errors.append(&mut errs);
 
 									cases.push((Some(expr), body));
 								}
 								Token::Default => {
 									walker.advance();
 
-									let current = match walker.peek() {
-										Some((t, _)) => t,
-										None => break 'cases,
-									};
+									let (current, current_span) =
+										match walker.peek() {
+											Some(t) => (&t.0, t.1),
+											None => break 'cases,
+										};
 									if *current == Token::Colon {
 										walker.advance();
 									} else {
 										continue;
 									}
 
-									let body = parse_scope_contents(
+									let (body, mut errs) = parse_scope_contents(
 										walker,
 										SWITCH_CASE_DELIMITER,
+										current_span,
 									);
+									errors.append(&mut errs);
 
 									cases.push((None, body));
 								}
@@ -1239,8 +1276,8 @@ fn parse_scope_contents(
 						}
 
 						// Consume the opening `{` scope brace.
-						let current = match walker.peek() {
-							Some((t, _)) => t,
+						let (current, current_span) = match walker.peek() {
+							Some(t) => (&t.0, t.1),
 							None => continue,
 						};
 						if *current == Token::LBrace {
@@ -1249,8 +1286,12 @@ fn parse_scope_contents(
 							continue;
 						}
 
-						let body =
-							parse_scope_contents(walker, BRACE_DELIMITER);
+						let (body, mut errs) = parse_scope_contents(
+							walker,
+							BRACE_DELIMITER,
+							current_span,
+						);
+						errors.append(&mut errs);
 
 						stmts.push(Stmt::For {
 							var,
@@ -1294,8 +1335,8 @@ fn parse_scope_contents(
 						}
 
 						// Consume the opening `{` scope brace.
-						let current = match walker.peek() {
-							Some((t, _)) => t,
+						let (current, current_span) = match walker.peek() {
+							Some(t) => (&t.0, t.1),
 							None => continue,
 						};
 						if *current == Token::LBrace {
@@ -1304,8 +1345,12 @@ fn parse_scope_contents(
 							continue;
 						}
 
-						let body =
-							parse_scope_contents(walker, BRACE_DELIMITER);
+						let (body, mut errs) = parse_scope_contents(
+							walker,
+							BRACE_DELIMITER,
+							current_span,
+						);
+						errors.append(&mut errs);
 
 						stmts.push(Stmt::While { cond, body });
 					}
@@ -1313,8 +1358,8 @@ fn parse_scope_contents(
 						walker.advance();
 
 						// Consume the opening `{` scope brace.
-						let current = match walker.peek() {
-							Some((t, _)) => t,
+						let (current, current_span) = match walker.peek() {
+							Some(t) => (&t.0, t.1),
 							None => continue,
 						};
 						if *current == Token::LBrace {
@@ -1323,8 +1368,12 @@ fn parse_scope_contents(
 							continue;
 						}
 
-						let body =
-							parse_scope_contents(walker, BRACE_DELIMITER);
+						let (body, mut errs) = parse_scope_contents(
+							walker,
+							BRACE_DELIMITER,
+							current_span,
+						);
+						errors.append(&mut errs);
 
 						// Consume the `while` keyword.
 						let current = match walker.peek() {
@@ -1451,7 +1500,7 @@ fn parse_scope_contents(
 		}
 	}
 
-	stmts
+	(stmts, errors)
 }
 
 /// Parse a struct definition or declaration.
@@ -1516,7 +1565,29 @@ fn parse_struct(
 	walker.advance();
 
 	// Parse the struct body, including the closing `}` brace.
-	let members = parse_scope_contents(walker, BRACE_DELIMITER);
+	let (members, mut errs) =
+		parse_scope_contents(walker, BRACE_DELIMITER, l_brace_span);
+
+	// Check if there is an unclosed-scope syntax error, because if so, we can return early without produce further
+	// error messages which would become confusing since they would be overlaid over each other.
+	let mut missing_body_delim = false;
+	errs.iter().for_each(|e| match e {
+		SyntaxErr::ExpectedBraceScopeEnd(_, _) => missing_body_delim = true,
+		_ => {}
+	});
+	errors.append(&mut errs);
+	if missing_body_delim {
+		return (
+			Some(Stmt::StructDecl {
+				ident,
+				members,
+				qualifiers,
+				instance: None,
+			}),
+			errors,
+		);
+	}
+
 	// We don't remove invalid statements because we would loose information for the AST.
 	let mut count = 0;
 	members.iter().for_each(|stmt| match stmt {

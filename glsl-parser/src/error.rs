@@ -146,6 +146,20 @@ pub enum SyntaxErr {
 	///
 	/// - `0` - the span of the token/expression which is not an identifier.
 	ExpectedIdent(Span),
+	/// Did not find a closing brace (`}`) to end an open scope. E.g. in `fn(){ int a;`, we are missing a closing
+	/// brace like so `fn(){ int a; }`.
+	///
+	/// - `0` - the span of the opening brace,
+	/// - `1` - the span where the closing brace should be.
+	ExpectedBraceScopeEnd(Span, Span),
+
+	/* CONTROL FLOW */
+	/// Did not find either a closing brace (`}`), or a `case` or `default` keyword when parsing a switch
+	/// statement. E.g. in `switch { default:`, we are missing a closing brace like so `switch { default: }`.
+	///
+	/// - `0` - the span of the case opening colon (`:`),
+	/// - `1` - the span where the closing brace should be.
+	ExpectedSwitchCaseEnd(Span, Span),
 
 	/* FUNCTION DEF/DECL */
 	/// Did not find a closing parenthesis (`)`) at the end of the parameter list. E.g. in `fn(void`, we are
@@ -200,12 +214,12 @@ pub enum SyntaxErr {
 	ExpectedVarDefInStructBody(Span),
 	/// Did not find at least one variable definition statement within a struct body. E.g. in `struct A {};`, we
 	/// are missing a member like so `struct A { int a; };`.
-	/// 
+	///
 	/// - `0` - the span of the struct body.
 	ExpectedAtLeastOneMemberInStruct(Span),
 	/// Did not find a semi-colon (`;`) after the struct declaration. E.g. in `struct A {...}`, we are missing a
 	/// semi-colon like so `struct A {...};`.
-	/// 
+	///
 	/// - `0` - the span where the semi-colon should be (i.e. between the declaration body and the token which is
 	///   not what we expected).
 	ExpectedSemiAfterStructBody(Span),

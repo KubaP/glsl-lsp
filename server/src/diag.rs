@@ -136,11 +136,37 @@ pub fn to_diagnostic(err: SyntaxErr, file: &File, diags: &mut Vec<Diagnostic>) {
             expected,
             Some(("opening delimiter here", opening))
         ),
+        ExpectedStmtFoundExpr(expr) => (
+            "Syntax error: expected a statement, found an expression",
+            expr,
+            Some(("consider adding a semi-colon `;` here", expr.end_zero_width())),
+        ),
         /* CONTROL FLOW */
         ExpectedSwitchCaseEnd(opening, expected) => (
             "Syntax error: expected a closing delimiter for the switch case; one of either `case`, `default` or `}`",
             expected,
             Some(("case opening delimiter here", opening))
+        ),
+        /* VAR DEF/DECL */
+        ExpectedIdentsAfterVarType(pos) => (
+            "Syntax error: expected variable identifier(s)",
+            pos,
+            None,
+        ),
+        ExpectedSemiOrEqAfterVarDef(pos) => (
+            "Syntax error: expected either a semi-colon `;` or an equal sign `=`",
+            pos,
+            None
+        ),
+        ExpectedSemiAfterVarDeclExpr(pos) => (
+            "Syntax error: expected a semi-colon `;`",
+            pos,
+            None
+        ),
+        ExpectedExprAfterVarDeclEq(pos) => (
+            "Syntax error: expected an expression",
+            pos,
+            None
         ),
 		/* FUNCTION DEF/DECL */
 		ExpectedParenAtEndOfParamList(opening, expected) => (

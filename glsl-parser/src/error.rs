@@ -152,6 +152,11 @@ pub enum SyntaxErr {
 	/// - `0` - the span of the opening brace,
 	/// - `1` - the span where the closing brace should be.
 	ExpectedBraceScopeEnd(Span, Span),
+	/// Found a sole expression without a semi-colon (`;`) afterwards. E.g. `int` is an expression which is not a
+	/// valid statement, but `int;` is.
+	/// 
+	/// - `0` - the span of the expression.
+	ExpectedStmtFoundExpr(Span),
 
 	/* CONTROL FLOW */
 	/// Did not find either a closing brace (`}`), or a `case` or `default` keyword when parsing a switch
@@ -160,6 +165,31 @@ pub enum SyntaxErr {
 	/// - `0` - the span of the case opening colon (`:`),
 	/// - `1` - the span where the closing brace should be.
 	ExpectedSwitchCaseEnd(Span, Span),
+
+	/* VAR DEF/DECL */
+	/// Did not find identifier(s) after a type identifier. E.g. `int 5` would be an invalid identifier, but `int
+	/// a` wouldn't be.
+	/// 
+	/// - `0` - the span where the identifier should be.
+	ExpectedIdentsAfterVarType(Span),
+	/// Did not find either a semi-colon (`;`) or an equals sign (`=`) after parsing a variable definition(s). E.g.
+	/// in `int a`, we are missing a semi-colon like so `int a;`.
+	///
+	/// - `0` - the span where the semi-colon or equals sign should be (i.e. between the variable identifier(s) and
+	///   the token which is not what we expected).
+	ExpectedSemiOrEqAfterVarDef(Span),
+	/// Did not find a semi-colon (`;`) after the expression in a variable declaration(s). E.g. in `int a = 5`, we
+	/// are missing a semi-colon like so `int a = 5;`.
+	/// 
+	/// - `0` - the span where the semi-colon should be (i.e. between the expression and the token which is not
+	///   what we expected).
+	ExpectedSemiAfterVarDeclExpr(Span),
+	/// Did not find a value expression after the equals sign in a variable declaration. E.g. in `int a = ;`, we
+	/// are missing an expression such as `int a = 5;`.
+	/// 
+	/// - `0` - the span where the expression should be (i.e. between the equals sign and the token which is not
+	///   what we expected).
+	ExpectedExprAfterVarDeclEq(Span),
 
 	/* FUNCTION DEF/DECL */
 	/// Did not find a closing parenthesis (`)`) at the end of the parameter list. E.g. in `fn(void`, we are

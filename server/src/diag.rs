@@ -142,6 +142,21 @@ pub fn to_diagnostic(err: SyntaxErr, file: &File, diags: &mut Vec<Diagnostic>) {
             Some(("consider adding a semi-colon `;` here", expr.end_zero_width())),
         ),
         /* CONTROL FLOW */
+        ExpectedParenAfterControlFlowKw(pos) => (
+            "Syntax error: expected opening parenthesis `(`",
+            pos,
+            None
+        ),
+        ExpectedParenAfterControlFlowExpr(opening, pos) => (
+            "Syntax error: expected closing parenthesis `)`",
+            pos,
+            opening.map(|span| ("opening delimiter here", span))
+        ),
+        ExpectedScopeAfterControlFlowExpr(pos) => (
+            "Syntax error: expected opening brace `{`",
+            pos,
+            None
+        ),
         ExpectedSemiAfterControlFlow(pos) => (
             "Syntax error: expected a semi-colon `;`",
             pos,
@@ -151,6 +166,11 @@ pub fn to_diagnostic(err: SyntaxErr, file: &File, diags: &mut Vec<Diagnostic>) {
             "Syntax error: expected a closing delimiter for the switch case; one of either `case`, `default` or `}`",
             expected,
             Some(("case opening delimiter here", opening))
+        ),
+        ExpectedCondExprForWhile(span) => (
+            "Syntax error: expected an expression",
+            span,
+            None
         ),
         /* VAR DEF/DECL */
         ExpectedIdentsAfterVarType(pos) => (

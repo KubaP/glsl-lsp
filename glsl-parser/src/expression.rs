@@ -987,7 +987,20 @@ impl ShuntingYard {
 
 			// If the current token is one which signifies the end of the current expression, we stop parsing.
 			if end_tokens.contains(token) {
-				break 'main;
+				// We may be given a `)` token to break parsing at, but take this example: `while ((true))`.
+				// As part of the while statement parser, we've already consumed the first `(`. We then start
+				// the rest in here, and we start a parenthesis group with the `true` token within it. But then we
+				// encounter the first `)` and immediately break, leaving an incomplete expression and syntax
+				// errors where they shouldn't be.
+				//
+				// So instead, we only break if we encounter these closing delimiter tokens assuming we don't have
+				// the relevant group open.
+				if *token == Token::RParen && self.exists_paren_fn_group() {
+				} else if *token == Token::RBracket && self.exists_index_group() {
+				} else if *token == Token::RBrace && self.exists_init_group() {
+				} else {
+					break 'main;
+				}
 			}
 
 			match token {

@@ -159,6 +159,22 @@ pub enum SyntaxErr {
 	ExpectedStmtFoundExpr(Span),
 
 	/* CONTROL FLOW */
+	/// Did not find an opening parenthesis (`(`) after a `if`/`switch`/`for`/`while` keyword. E.g. in
+	/// `if true...`, we are missing a parenthesis like so `if (true...`.
+	///
+	/// - `0` - the span where the opening parenthesis should be.
+	ExpectedParenAfterControlFlowKw(Span),
+	/// Did not find a closing parenthesis (`)`) after a control flow expression. E.g. in `if (true {`, we are
+	/// missing a parenthesis like so `if (true) {`.
+	///
+	/// - `0` - the span of the opening parenthesis if it exists,
+	/// - `1` - the span where the closing parenthesis should be.
+	ExpectedParenAfterControlFlowExpr(Option<Span>, Span),
+	/// Did not find an opening brace (`{`) after a control flow expression. E.g. in `if (true) ...`, we are
+	/// missing an opening brace like so `if (true) {...`.
+	/// 
+	/// - `0` - the span where the opening brace should be.
+	ExpectedScopeAfterControlFlowExpr(Span),
 	/// Did not find a semi-colon (`;`) after a control flow statement. E.g. in `break`, we are missing a
 	/// semi-colon like so `break;`. Or in `return 5 + 1`, like so `return 5 + 1;`.
 	///
@@ -171,6 +187,11 @@ pub enum SyntaxErr {
 	/// - `0` - the span of the case opening colon (`:`),
 	/// - `1` - the span where the closing brace should be.
 	ExpectedSwitchCaseEnd(Span, Span),
+	/// Did not find a conditional expression inside the parenthesis when parsing a while loop. E.g. in `while (
+	/// if)`, we are expecting an expression not a statement like so `while (true)`.
+	/// 
+	/// - `0` - the span where the expression should be. 
+	ExpectedCondExprForWhile(Span),
 
 	/* VAR DEF/DECL */
 	/// Did not find identifier(s) after a type identifier. E.g. `int 5` would be an invalid identifier, but `int

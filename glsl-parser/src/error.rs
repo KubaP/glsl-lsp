@@ -159,6 +159,12 @@ pub enum SyntaxErr {
 	ExpectedStmtFoundExpr(Span),
 
 	/* CONTROL FLOW */
+	/// Did not find a semi-colon (`;`) after a control flow statement. E.g. in `break`, we are missing a
+	/// semi-colon like so `break;`. Or in `return 5 + 1`, like so `return 5 + 1;`.
+	///
+	/// - `0` the span where the semi-colon should be (i.e. between the control flow and the token which is not
+	///   what we expected).
+	ExpectedSemiAfterControlFlow(Span),
 	/// Did not find either a closing brace (`}`), or a `case` or `default` keyword when parsing a switch
 	/// statement. E.g. in `switch { default:`, we are missing a closing brace like so `switch { default: }`.
 	///

@@ -142,6 +142,11 @@ pub fn to_diagnostic(err: SyntaxErr, file: &File, diags: &mut Vec<Diagnostic>) {
             Some(("consider adding a semi-colon `;` here", expr.end_zero_width())),
         ),
         /* CONTROL FLOW */
+        ExpectedSemiAfterControlFlow(pos) => (
+            "Syntax error: expected a semi-colon `;`",
+            pos,
+            None,
+        ),
         ExpectedSwitchCaseEnd(opening, expected) => (
             "Syntax error: expected a closing delimiter for the switch case; one of either `case`, `default` or `}`",
             expected,

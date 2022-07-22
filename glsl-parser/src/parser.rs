@@ -1069,7 +1069,8 @@ fn parse_scope_contents(
 			// We tried to parse an expression but that immediately failed. This means the current token is one
 			// which cannot start an expression.
 			(None, _) => {
-				let (token, _) = walker.peek().unwrap();
+				let (token, token_span) =
+					walker.peek().map(|t| (&t.0, t.1)).unwrap();
 
 				match token {
 					Token::Semi => {
@@ -1585,6 +1586,7 @@ fn parse_scope_contents(
 						let (return_expr, _) =
 							expr_parser(walker, Mode::Default, &[Token::Semi]);
 
+						// Consume the `;` to end the statement.
 						let current = match walker.peek() {
 							Some((t, _)) => t,
 							None => continue,
@@ -1592,7 +1594,11 @@ fn parse_scope_contents(
 						if *current == Token::Semi {
 							walker.advance();
 						} else {
-							continue;
+							errors.push(
+								SyntaxErr::ExpectedSemiAfterControlFlow(
+									walker.get_previous_span().end_zero_width(),
+								),
+							);
 						}
 
 						stmts.push(Stmt::Return(return_expr));
@@ -1600,6 +1606,7 @@ fn parse_scope_contents(
 					Token::Break => {
 						walker.advance();
 
+						// Consume the `;` to end the statement.
 						let current = match walker.peek() {
 							Some((t, _)) => t,
 							None => continue,
@@ -1607,7 +1614,11 @@ fn parse_scope_contents(
 						if *current == Token::Semi {
 							walker.advance();
 						} else {
-							continue;
+							errors.push(
+								SyntaxErr::ExpectedSemiAfterControlFlow(
+									token_span.end_zero_width(),
+								),
+							);
 						}
 
 						stmts.push(Stmt::Break);
@@ -1615,6 +1626,7 @@ fn parse_scope_contents(
 					Token::Continue => {
 						walker.advance();
 
+						// Consume the `;` to end the statement.
 						let current = match walker.peek() {
 							Some((t, _)) => t,
 							None => continue,
@@ -1622,7 +1634,11 @@ fn parse_scope_contents(
 						if *current == Token::Semi {
 							walker.advance();
 						} else {
-							continue;
+							errors.push(
+								SyntaxErr::ExpectedSemiAfterControlFlow(
+									token_span.end_zero_width(),
+								),
+							);
 						}
 
 						stmts.push(Stmt::Continue);
@@ -1630,6 +1646,7 @@ fn parse_scope_contents(
 					Token::Discard => {
 						walker.advance();
 
+						// Consume the `;` to end the statement.
 						let current = match walker.peek() {
 							Some((t, _)) => t,
 							None => continue,
@@ -1637,7 +1654,11 @@ fn parse_scope_contents(
 						if *current == Token::Semi {
 							walker.advance();
 						} else {
-							continue;
+							errors.push(
+								SyntaxErr::ExpectedSemiAfterControlFlow(
+									token_span.end_zero_width(),
+								),
+							);
 						}
 
 						stmts.push(Stmt::Discard);

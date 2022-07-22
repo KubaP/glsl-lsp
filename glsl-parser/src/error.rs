@@ -192,6 +192,11 @@ pub enum SyntaxErr {
 	/// 
 	/// - `0` - the span where the expression should be. 
 	ExpectedCondExprForWhile(Span),
+	/// Did not find the `while` keyword after the body of a `do` loop. E.g. in `do {...}`, we are missing the
+	/// keyword like so `do {...} while ...`.
+	/// 
+	/// - `0` - the span where the keyword should be.
+	ExpectedWhileKwAfterDoBody(Span),
 
 	/* VAR DEF/DECL */
 	/// Did not find identifier(s) after a type identifier. E.g. `int 5` would be an invalid identifier, but `int

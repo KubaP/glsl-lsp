@@ -1593,6 +1593,7 @@ fn parse_scope_contents(
 							continue 'stmt;
 						}
 
+						// Consume the body, including the closing `}` brace.
 						let (body, mut errs) = parse_scope_contents(
 							walker,
 							BRACE_DELIMITER,
@@ -1608,72 +1609,198 @@ fn parse_scope_contents(
 						// Consume the opening `{` scope brace.
 						let (current, current_span) = match walker.peek() {
 							Some(t) => (&t.0, t.1),
-							None => continue,
+							None => {
+								errors.push(SyntaxErr::ExpectedScopeAfterControlFlowExpr(
+									token_span.end_zero_width()
+								));
+								continue 'stmt;
+							}
 						};
-						if *current == Token::LBrace {
+						let l_brace_span = if *current == Token::LBrace {
 							walker.advance();
+							current_span
 						} else {
-							continue;
-						}
+							errors.push(
+								SyntaxErr::ExpectedScopeAfterControlFlowExpr(
+									Span::new_between(token_span, current_span),
+								),
+							);
+							continue 'stmt;
+						};
 
+						// Consume the body, including the closing `}` brace.
 						let (body, mut errs) = parse_scope_contents(
 							walker,
 							BRACE_DELIMITER,
-							current_span,
+							l_brace_span,
 						);
 						errors.append(&mut errs);
 
 						// Consume the `while` keyword.
-						let current = match walker.peek() {
-							Some((t, _)) => t,
-							None => continue,
+						let (current, current_span) = match walker.peek() {
+							Some(t) => t,
+							None => {
+								errors.push(
+									SyntaxErr::ExpectedWhileKwAfterDoBody(
+										walker.get_last_span(),
+									),
+								);
+								continue 'stmt;
+							}
 						};
 						if *current == Token::While {
 							walker.advance();
 						} else {
-							continue;
+							errors.push(SyntaxErr::ExpectedWhileKwAfterDoBody(
+								Span::new_between(
+									walker.get_previous_span(),
+									*current_span,
+								),
+							));
+							continue 'stmt;
 						}
 
 						// Consume the opening `(` parenthesis.
-						let current = match walker.peek() {
-							Some((t, _)) => t,
-							None => continue,
-						};
-						if *current == Token::LParen {
+						let (current, current_span) =
+							match walker.peek() {
+								Some(t) => (&t.0, t.1),
+								None => {
+									errors.push(SyntaxErr::ExpectedParenAfterControlFlowKw(
+										walker.get_last_span()
+									));
+									continue 'stmt;
+								}
+							};
+						let l_paren_span = if *current == Token::LParen {
 							walker.advance();
+							Some(current_span)
 						} else {
-							continue;
-						}
+							errors.push(
+								SyntaxErr::ExpectedParenAfterControlFlowKw(
+									Span::new_between(
+										walker.get_previous_span(),
+										current_span,
+									),
+								),
+							);
+							None
+						};
 
+						// Consume the conditional expression.
 						let cond = match expr_parser(
 							walker,
 							Mode::Default,
 							&[Token::RParen],
 						) {
 							(Some(e), _) => e,
-							(None, _) => continue,
+							(None, _) => {
+								// We found tokens which cannot even start an expression. We loop until we come
+								// across either a `)` or a `{`, and we generate an invalid expression for the
+								// entire span.
+								let span_start = l_paren_span
+									.map(|s| s.end)
+									.unwrap_or(walker.get_previous_span().end);
+
+								let expr = 'expr2: loop {
+									let (current, current_span) =
+										match walker.peek() {
+											Some(t) => (&t.0, t.1),
+											None => {
+												errors.push(
+													SyntaxErr::ExpectedCondExprForWhile(
+														Span::new(span_start, walker.get_last_span().end)
+													),
+												);
+												continue 'stmt;
+											}
+										};
+
+									match current {
+										Token::RParen | Token::RBrace => {
+											errors.push(
+												SyntaxErr::ExpectedCondExprForWhile(
+													Span::new(span_start, current_span.start)
+												),
+											);
+											break 'expr2 Expr {
+												ty: ExprTy::Invalid,
+												span: Span::new(
+													span_start,
+													current_span.start,
+												),
+											};
+										}
+										_ => {}
+									}
+								};
+
+								expr
+							}
 						};
 
 						// Consume the closing `)` parenthesis.
-						let current = match walker.peek() {
-							Some((t, _)) => t,
-							None => continue,
+						let (current, current_span) = match walker.peek() {
+							Some(t) => t,
+							None => {
+								errors.push(SyntaxErr::ExpectedParenAfterControlFlowExpr(
+									l_paren_span,
+									walker.get_last_span().end_zero_width()
+								));
+								continue 'stmt;
+							}
 						};
 						if *current == Token::RParen {
 							walker.advance();
+						} else if *current == Token::Semi {
+							// We don't do anything apart from creating a syntax error since the next check deals
+							// with the `;`.
+							errors.push(
+								SyntaxErr::ExpectedParenAfterControlFlowExpr(
+									l_paren_span,
+									Span::new_between(
+										walker.get_previous_span(),
+										*current_span,
+									),
+								),
+							);
 						} else {
-							continue;
+							errors.push(
+								SyntaxErr::ExpectedParenAfterControlFlowExpr(
+									l_paren_span,
+									Span::new_between(
+										walker.get_previous_span(),
+										*current_span,
+									),
+								),
+							);
+							continue 'stmt;
 						}
 
 						// Consume the statement-ending `;` semicolon.
-						let current = match walker.peek() {
-							Some((t, _)) => t,
-							None => continue,
+						let (current, current_span) = match walker.peek() {
+							Some(t) => t,
+							None => {
+								errors.push(
+									SyntaxErr::ExpectedSemiAfterControlFlow(
+										walker.get_last_span(),
+									),
+								);
+								continue 'stmt;
+							}
 						};
 						if *current == Token::Semi {
 							walker.advance();
 						} else {
-							continue;
+							// Even though we are missing a necessary token, it still makes sense to just treat
+							// this as a "valid" loop for analysis. We do produce an error about the missing token.
+							errors.push(
+								SyntaxErr::ExpectedSemiAfterControlFlow(
+									Span::new_between(
+										walker.get_previous_span(),
+										*current_span,
+									),
+								),
+							);
 						}
 
 						stmts.push(Stmt::DoWhile { cond, body });

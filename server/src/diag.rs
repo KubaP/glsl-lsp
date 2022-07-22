@@ -172,6 +172,11 @@ pub fn to_diagnostic(err: SyntaxErr, file: &File, diags: &mut Vec<Diagnostic>) {
             span,
             None
         ),
+        ExpectedWhileKwAfterDoBody(pos) => (
+            "Syntax error: expected the `while` keyword",
+            pos,
+            None
+        ),
         /* VAR DEF/DECL */
         ExpectedIdentsAfterVarType(pos) => (
             "Syntax error: expected variable identifier(s)",

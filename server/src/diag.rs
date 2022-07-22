@@ -167,6 +167,21 @@ pub fn to_diagnostic(err: SyntaxErr, file: &File, diags: &mut Vec<Diagnostic>) {
             expected,
             Some(("case opening delimiter here", opening))
         ),
+        ExpectedSemiInForCond(pos) => (
+            "Syntax error: expected a semi-colon `;`",
+            pos,
+            None
+        ),
+        MissingCondExprInFor(span) => (
+            "Syntax error: expected a condition expression",
+            span,
+            None
+        ),
+        MissingIncrementExprInFor(span) => (
+            "Syntax error: expected an increment expression",
+            span,
+            None
+        ),
         ExpectedCondExprForWhile(span) => (
             "Syntax error: expected an expression",
             span,

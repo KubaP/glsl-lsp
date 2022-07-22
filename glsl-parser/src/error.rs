@@ -154,7 +154,7 @@ pub enum SyntaxErr {
 	ExpectedBraceScopeEnd(Span, Span),
 	/// Found a sole expression without a semi-colon (`;`) afterwards. E.g. `int` is an expression which is not a
 	/// valid statement, but `int;` is.
-	/// 
+	///
 	/// - `0` - the span of the expression.
 	ExpectedStmtFoundExpr(Span),
 
@@ -172,7 +172,7 @@ pub enum SyntaxErr {
 	ExpectedParenAfterControlFlowExpr(Option<Span>, Span),
 	/// Did not find an opening brace (`{`) after a control flow expression. E.g. in `if (true) ...`, we are
 	/// missing an opening brace like so `if (true) {...`.
-	/// 
+	///
 	/// - `0` - the span where the opening brace should be.
 	ExpectedScopeAfterControlFlowExpr(Span),
 	/// Did not find a semi-colon (`;`) after a control flow statement. E.g. in `break`, we are missing a
@@ -187,21 +187,38 @@ pub enum SyntaxErr {
 	/// - `0` - the span of the case opening colon (`:`),
 	/// - `1` - the span where the closing brace should be.
 	ExpectedSwitchCaseEnd(Span, Span),
+	/// Did not find a semi-colon (`;`) to separate the statements/expressions in a for loop. E.g. in `for (int i i
+	/// < 5`, we are missing a semi-colon like so `for (int i; i < 5`.
+	///
+	/// - `0` - the span where the semi-colon should be.
+	ExpectedSemiInForCond(Span),
+	/// Found the `)` token signifying the end of the for loop conditions without encountering a condition
+	/// expression. E.g. in `for (int i;;)`, we are missing the condition expression like so `for (int i; i < 5)`.
+	/// Note that the expression may be empty.
+	///
+	/// - `0` - the span where the expression should be.
+	MissingCondExprInFor(Span),
+	/// Found the `)` token signifying the end of the for loop conditions without encountering an increment
+	/// expression. E.g. in `for (int i; i < 5)`, we are missing the increment expression like so
+	/// `for (int i; i < 5;)`. Note that the expression may be empty.
+	///
+	/// - `0` - the span where the expression should be.
+	MissingIncrementExprInFor(Span),
 	/// Did not find a conditional expression inside the parenthesis when parsing a while loop. E.g. in `while (
 	/// if)`, we are expecting an expression not a statement like so `while (true)`.
-	/// 
-	/// - `0` - the span where the expression should be. 
+	///
+	/// - `0` - the span where the expression should be.
 	ExpectedCondExprForWhile(Span),
 	/// Did not find the `while` keyword after the body of a `do` loop. E.g. in `do {...}`, we are missing the
 	/// keyword like so `do {...} while ...`.
-	/// 
+	///
 	/// - `0` - the span where the keyword should be.
 	ExpectedWhileKwAfterDoBody(Span),
 
 	/* VAR DEF/DECL */
 	/// Did not find identifier(s) after a type identifier. E.g. `int 5` would be an invalid identifier, but `int
 	/// a` wouldn't be.
-	/// 
+	///
 	/// - `0` - the span where the identifier should be.
 	ExpectedIdentsAfterVarType(Span),
 	/// Did not find either a semi-colon (`;`) or an equals sign (`=`) after parsing a variable definition(s). E.g.
@@ -212,13 +229,13 @@ pub enum SyntaxErr {
 	ExpectedSemiOrEqAfterVarDef(Span),
 	/// Did not find a semi-colon (`;`) after the expression in a variable declaration(s). E.g. in `int a = 5`, we
 	/// are missing a semi-colon like so `int a = 5;`.
-	/// 
+	///
 	/// - `0` - the span where the semi-colon should be (i.e. between the expression and the token which is not
 	///   what we expected).
 	ExpectedSemiAfterVarDeclExpr(Span),
 	/// Did not find a value expression after the equals sign in a variable declaration. E.g. in `int a = ;`, we
 	/// are missing an expression such as `int a = 5;`.
-	/// 
+	///
 	/// - `0` - the span where the expression should be (i.e. between the equals sign and the token which is not
 	///   what we expected).
 	ExpectedExprAfterVarDeclEq(Span),

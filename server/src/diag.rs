@@ -139,7 +139,7 @@ pub fn to_diagnostic(err: SyntaxErr, file: &File, diags: &mut Vec<Diagnostic>) {
         ExpectedStmtFoundExpr(expr) => (
             "Syntax error: expected a statement, found an expression",
             expr,
-            Some(("consider adding a semi-colon `;` here", expr.end_zero_width())),
+            Some(("consider adding a semi-colon `;` here", expr.next_single_width())),
         ),
         /* CONTROL FLOW */
         ExpectedParenAfterControlFlowKw(pos) => (
@@ -182,16 +182,28 @@ pub fn to_diagnostic(err: SyntaxErr, file: &File, diags: &mut Vec<Diagnostic>) {
             span,
             None
         ),
-        ExpectedCondExprForWhile(span) => (
-            "Syntax error: expected an expression",
-            span,
-            None
-        ),
         ExpectedWhileKwAfterDoBody(pos) => (
             "Syntax error: expected the `while` keyword",
             pos,
             None
         ),
+        /* WHILE-LOOP */
+        ExpectedParenAfterWhileKw(pos) => (
+            "Syntax error: expected opening parenthesis `(` after `while`",
+            pos,
+            None
+        ),
+        ExpectedCondExprAfterWhile(span) => (
+            "Syntax error: expected a condition expression after `while`",
+            span,
+            None
+        ),
+        ExpectedParenAfterWhileCond(opening, pos) => (
+            "Syntax error: expected a closing parenthesis `)` after the while condition expression",
+            pos,
+            opening.map(|span| ("opening delimiter here", span))
+        ),
+        /* SINGLE-WORD */
         ExpectedSemiAfterReturnKw(pos, has_expr) => (
             if has_expr {
                 "Syntax error: expected a semi-colon `;` after the return expression"

@@ -114,11 +114,39 @@ impl Span {
 		}
 	}
 
-	/// Returns a new zero-width `Span` located at the end of this span.
-	pub fn end_zero_width(self) -> Self {
+	/// Returns a new `Span` one width long, beginning at the end of this span.
+	///
+	/// Examples of how vscode will squiggle this:
+	/// ```c
+	/// // \ is the beginning of the newline char
+	///
+	/// return\
+	///      ^^
+	///
+	/// return  \
+	///       ^^
+	///
+	/// return)
+	///       ^^
+	/// ```
+	pub fn next_single_width(self) -> Self {
+		// Note: Because every line has at least a `\r` or `\n` at the end, even if the token ends at the last
+		// position on the line, the extra +1 will never overflow onto the next line because we have the
+		// end-of-line character(s).
 		Self {
 			start: self.end,
-			end: self.end,
+			end: self.end.saturating_add(1),
+		}
+	}
+
+	/// Returns a new `Span` one width long, ending at the beginning of this span.
+	pub fn previous_single_width(self) -> Self {
+		// Note: Unlike `next_single_width()`, this has a potential to overflow onto the previous line if the token
+		// starts at the beginning on the line. Since this is used comparatively much less often, I don't think
+		// it's worth fixing this.
+		Self {
+			start: self.start.saturating_sub(1),
+			end: self.start,
 		}
 	}
 }

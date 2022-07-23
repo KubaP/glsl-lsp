@@ -248,7 +248,7 @@ fn parse_qualifier_list(
 					Some(t) => t,
 					None => {
 						errors.push(SyntaxErr::ExpectedParenAfterLayout(
-							kw_span.end_zero_width(),
+							kw_span.next_single_width(),
 						));
 						break 'outer;
 					}
@@ -260,7 +260,7 @@ fn parse_qualifier_list(
 					walker.advance();
 				} else {
 					errors.push(SyntaxErr::ExpectedParenAfterLayout(
-						kw_span.end_zero_width(),
+						kw_span.next_single_width(),
 					));
 					break 'outer;
 				};
@@ -275,7 +275,7 @@ fn parse_qualifier_list(
 							// parenthesis yet, but we've now reached the end of the token stream.
 							errors.push(SyntaxErr::ExpectedParenAtEndOfLayout(
 								l_paren_span,
-								walker.get_last_span().end_zero_width(),
+								walker.get_last_span().next_single_width(),
 							));
 							break 'outer;
 						}
@@ -311,7 +311,7 @@ fn parse_qualifier_list(
 											Some(t) => t,
 											None => {
 												errors.push(SyntaxErr::ExpectedEqAfterLayoutIdent(
-													walker.get_last_span().end_zero_width()
+													walker.get_last_span().next_single_width()
 												));
 												break 'outer;
 											}
@@ -337,7 +337,7 @@ fn parse_qualifier_list(
 										}
 										(None, _) => {
 											errors.push(SyntaxErr::ExpectedValExprAfterLayoutIdent(
-												ident_span.end_zero_width()
+												ident_span.next_single_width()
 											));
 											break 'outer;
 										}
@@ -445,7 +445,7 @@ fn parse_type_start(
 	let idents = expr.to_var_def_decl_or_fn_ident();
 	if idents.is_empty() {
 		errors.push(SyntaxErr::ExpectedIdentsAfterVarType(
-			walker.get_previous_span().end_zero_width(),
+			walker.get_previous_span().next_single_width(),
 		));
 		return (None, errors);
 	}
@@ -467,7 +467,7 @@ fn parse_type_start(
 			// treat this as a "valid" variable definition(s) for analysis/goto/etc purposes. We do produce an
 			// error though about the missing token.
 			errors.push(SyntaxErr::ExpectedSemiOrEqAfterVarDef(
-				walker.get_last_span().end_zero_width(),
+				walker.get_last_span().next_single_width(),
 			));
 			return (
 				Some(match typenames.len() {
@@ -514,7 +514,7 @@ fn parse_type_start(
 				// to just treat this as a "valid" variable definition(s) for analysis/goto/etc purposes. We do
 				// produce an error though about the missing token.
 				errors.push(SyntaxErr::ExpectedExprAfterVarDeclEq(
-					walker.get_previous_span().end_zero_width(),
+					walker.get_previous_span().next_single_width(),
 				));
 				return (
 					Some(match typenames.len() {
@@ -541,7 +541,7 @@ fn parse_type_start(
 				// just treat this as a "valid" variable declaration(s) for analysis/goto/etc purposes. We do
 				// produce an error though about the missing token.
 				errors.push(SyntaxErr::ExpectedSemiAfterVarDeclExpr(
-					walker.get_previous_span().end_zero_width(),
+					walker.get_previous_span().next_single_width(),
 				));
 				return (
 					Some(match typenames.len() {
@@ -571,7 +571,7 @@ fn parse_type_start(
 			// treat this as a "valid" variable declaration(s) for analysis/goto/etc purposes. We do produce an
 			// error though about the missing token.
 			errors.push(SyntaxErr::ExpectedSemiAfterVarDeclExpr(
-				walker.get_previous_span().end_zero_width(),
+				walker.get_previous_span().next_single_width(),
 			));
 			return (
 				Some(match typenames.len() {
@@ -618,7 +618,7 @@ fn parse_type_start(
 		// treat this as a "valid" variable definition(s) for analysis/goto/etc purposes. We do produce an error
 		// though about the missing token.
 		errors.push(SyntaxErr::ExpectedSemiOrEqAfterVarDef(
-			walker.get_previous_span().end_zero_width(),
+			walker.get_previous_span().next_single_width(),
 		));
 		(
 			Some(match typenames.len() {
@@ -663,7 +663,7 @@ fn parse_fn(
 				// but we've now reached the end of the token stream.
 				errors.push(SyntaxErr::ExpectedParenAtEndOfParamList(
 					l_paren_span,
-					walker.get_last_span().end_zero_width(),
+					walker.get_last_span().next_single_width(),
 				));
 				return (None, errors);
 			}
@@ -882,7 +882,7 @@ fn parse_fn(
 			// treat this as a "valid" function definition for analysis/goto/etc purposes. We do produce an error
 			// though about the missing token.
 			errors.push(SyntaxErr::ExpectedSemiOrScopeAfterParamList(
-				walker.get_last_span().end_zero_width(),
+				walker.get_last_span().next_single_width(),
 			));
 			return (
 				Some(Stmt::FnDef {
@@ -929,7 +929,7 @@ fn parse_fn(
 		// treat this as a "valid" function definition for analysis/goto/etc purposes. We do produce an error
 		// though about the missing token.
 		errors.push(SyntaxErr::ExpectedSemiOrScopeAfterParamList(
-			walker.get_previous_span().end_zero_width(),
+			walker.get_previous_span().next_single_width(),
 		));
 		(
 			Some(Stmt::FnDef {
@@ -957,7 +957,7 @@ const BRACE_DELIMITER: EndScope = |walker, errors, l_brace_span| {
 			// We did not encounter a `}` at all.
 			errors.push(SyntaxErr::ExpectedBraceScopeEnd(
 				l_brace_span,
-				walker.get_last_span().end_zero_width(),
+				walker.get_last_span().next_single_width(),
 			));
 			return true;
 		}
@@ -978,7 +978,7 @@ const SWITCH_CASE_DELIMITER: EndScope = |walker, errors, colon_span| {
 			// We did not encounter one of the closing tokens at all.
 			errors.push(SyntaxErr::ExpectedSwitchCaseEnd(
 				colon_span,
-				walker.get_last_span().end_zero_width(),
+				walker.get_last_span().next_single_width(),
 			));
 			return true;
 		}
@@ -1353,7 +1353,7 @@ fn parse_scope_contents(
 								Some(t) => (&t.0, t.1),
 								None => {
 									errors.push(SyntaxErr::ExpectedParenAfterControlFlowKw(
-										token_span.end_zero_width()
+										token_span.next_single_width()
 									));
 									continue 'stmt;
 								}
@@ -1407,7 +1407,7 @@ fn parse_scope_contents(
 										SyntaxErr::ExpectedSemiInForCond(
 											walker
 												.get_previous_span()
-												.end_zero_width(),
+												.next_single_width(),
 										),
 									);
 								} else {
@@ -1415,7 +1415,7 @@ fn parse_scope_contents(
 										SyntaxErr::MissingCondExprInFor(
 											walker
 												.get_previous_span()
-												.end_zero_width(),
+												.next_single_width(),
 										),
 									);
 								}
@@ -1447,7 +1447,9 @@ fn parse_scope_contents(
 							Some(t) => t,
 							None => {
 								errors.push(SyntaxErr::ExpectedSemiInForCond(
-									walker.get_previous_span().end_zero_width(),
+									walker
+										.get_previous_span()
+										.next_single_width(),
 								));
 								continue 'stmt;
 							}
@@ -1485,7 +1487,7 @@ fn parse_scope_contents(
 							None => {
 								errors.push(SyntaxErr::ExpectedParenAfterControlFlowExpr(
 									l_paren_span,
-									walker.get_last_span().end_zero_width()
+									walker.get_last_span().next_single_width()
 								));
 								continue 'stmt;
 							}
@@ -1525,7 +1527,7 @@ fn parse_scope_contents(
 								// treat this as a "valid" loop for condition analysis. We do produce an error
 								// about the missing body.
 								errors.push(SyntaxErr::ExpectedScopeAfterControlFlowExpr(
-									walker.get_last_span().end_zero_width()
+									walker.get_last_span().next_single_width()
 								));
 								stmts.push(Stmt::For {
 									var,
@@ -1569,25 +1571,52 @@ fn parse_scope_contents(
 						walker.advance();
 
 						// Consume the opening `(` parenthesis.
-						let (current, current_span) =
-							match walker.peek() {
-								Some(t) => (&t.0, t.1),
-								None => {
-									errors.push(SyntaxErr::ExpectedParenAfterControlFlowKw(
-										token_span.end_zero_width()
-									));
-									continue 'stmt;
-								}
-							};
+						let (current, current_span) = match walker.peek() {
+							Some(t) => (&t.0, t.1),
+							None => {
+								errors.push(
+									SyntaxErr::ExpectedParenAfterWhileKw(
+										token_span.next_single_width(),
+									),
+								);
+								continue 'stmt;
+							}
+						};
 						let l_paren_span = if *current == Token::LParen {
 							walker.advance();
 							Some(current_span)
-						} else {
-							errors.push(
-								SyntaxErr::ExpectedParenAfterControlFlowKw(
-									Span::new_between(token_span, current_span),
-								),
+						} else if *current == Token::LBrace {
+							walker.advance();
+
+							// We are completely missing the condition expression, but we treat this as "valid" for
+							// better recovery.
+							errors.push(SyntaxErr::ExpectedCondExprAfterWhile(
+								Span::new_between(token_span, current_span),
+							));
+
+							// Consume the body, including the closing `}` brace.
+							let (body, mut errs) = parse_scope_contents(
+								walker,
+								BRACE_DELIMITER,
+								current_span,
 							);
+							errors.append(&mut errs);
+
+							stmts.push(Stmt::While {
+								cond: Expr {
+									ty: ExprTy::Missing,
+									span: token_span.next_single_width(),
+								},
+								body,
+							});
+
+							continue 'stmt;
+						} else {
+							// Even though we are missing the token, we will still try to parse this syntax at
+							// least until we expect the body scope.
+							errors.push(SyntaxErr::ExpectedParenAfterWhileKw(
+								token_span.next_single_width(),
+							));
 							None
 						};
 
@@ -1597,23 +1626,21 @@ fn parse_scope_contents(
 							Mode::Default,
 							&[Token::RParen],
 						) {
-							(Some(e), _) => e,
+							(Some(e), mut errs) => {
+								errors.append(&mut errs);
+								e
+							}
 							(None, _) => {
 								// We found tokens which cannot even start an expression. We loop until we come
-								// across either a `)` or a `{`, and we generate an invalid expression for the
-								// entire span.
-								let span_start = l_paren_span
-									.map(|s| s.end)
-									.unwrap_or(token_span.end);
-
+								// across either a `)` or a `{`.
 								let expr = 'expr: loop {
 									let (current, current_span) =
 										match walker.peek() {
 											Some(t) => (&t.0, t.1),
 											None => {
 												errors.push(
-													SyntaxErr::ExpectedCondExprForWhile(
-														Span::new(span_start, walker.get_last_span().end)
+													SyntaxErr::ExpectedCondExprAfterWhile(
+														walker.get_last_span().next_single_width()
 													),
 												);
 												continue 'stmt;
@@ -1622,20 +1649,28 @@ fn parse_scope_contents(
 
 									match current {
 										Token::RParen | Token::RBrace => {
-											errors.push(
-												SyntaxErr::ExpectedCondExprForWhile(
-													Span::new(span_start, current_span.start)
-												),
-											);
+											if let Some(l_paren_span) =
+												l_paren_span
+											{
+												errors.push(
+													SyntaxErr::ExpectedCondExprAfterWhile(
+														Span::new_between(l_paren_span, current_span)
+													),
+												);
+											} else {
+												errors.push(
+													SyntaxErr::ExpectedCondExprAfterWhile(
+														current_span.previous_single_width()
+													),
+												);
+											}
 											break 'expr Expr {
-												ty: ExprTy::Invalid,
-												span: Span::new(
-													span_start,
-													current_span.start,
-												),
+												ty: ExprTy::Missing,
+												span: current_span
+													.previous_single_width(),
 											};
 										}
-										_ => {}
+										_ => continue 'expr,
 									}
 								};
 
@@ -1643,53 +1678,59 @@ fn parse_scope_contents(
 							}
 						};
 
-						// Consume the closing `)` parenthesis.
-						let (current, current_span) = match walker.peek() {
-							Some(t) => t,
-							None => {
-								errors.push(SyntaxErr::ExpectedParenAfterControlFlowExpr(
-									l_paren_span,
-									walker.get_last_span().end_zero_width()
-								));
-								continue 'stmt;
+						// Consume the closing `)` parenthesis. We loop until we hit either a `)` or a `{`. If we
+						// have something like `while (i b - 5)`, we already get an error about the missing binary
+						// operator, so no need to further produce errors; we just silently consume.
+						let r_paren_span = 'r_paren: loop {
+							let (current, current_span) = match walker.peek() {
+								Some(t) => t,
+								None => {
+									errors.push(
+										SyntaxErr::ExpectedParenAfterWhileCond(
+											l_paren_span,
+											walker
+												.get_last_span()
+												.next_single_width(),
+										),
+									);
+									continue 'stmt;
+								}
+							};
+
+							match current {
+								Token::RParen => {
+									let current_span = *current_span;
+									walker.advance();
+									break 'r_paren current_span;
+								}
+								Token::LBrace => {
+									// We don't do anything apart from creating a syntax error since the next check
+									// deals with the `{`.
+									errors.push(
+										SyntaxErr::ExpectedParenAfterWhileCond(
+											l_paren_span,
+											current_span
+												.previous_single_width(),
+										),
+									);
+									break 'r_paren current_span
+										.previous_single_width();
+								}
+								_ => {
+									walker.advance();
+									continue 'r_paren;
+								}
 							}
 						};
-						if *current == Token::RParen {
-							walker.advance();
-						} else if *current == Token::LBrace {
-							// We don't do anything apart from creating a syntax error since the next check deals
-							// with the `{`.
-							errors.push(
-								SyntaxErr::ExpectedParenAfterControlFlowExpr(
-									l_paren_span,
-									Span::new_between(
-										walker.get_previous_span(),
-										*current_span,
-									),
-								),
-							);
-						} else {
-							errors.push(
-								SyntaxErr::ExpectedParenAfterControlFlowExpr(
-									l_paren_span,
-									Span::new_between(
-										walker.get_previous_span(),
-										*current_span,
-									),
-								),
-							);
-							continue 'stmt;
-						}
 
 						// Consume the opening `{` scope brace.
 						let (current, current_span) = match walker.peek() {
 							Some(t) => (&t.0, t.1),
 							None => {
-								// Even though while loops without a body are illegal, it still makes sense to just
-								// treat this as a "valid" loop for condition analysis. We do produce an error
-								// about the missing body.
+								// Even though while loops without a body are illegal, we treat this as "valid" for
+								// better recovery.
 								errors.push(SyntaxErr::ExpectedScopeAfterControlFlowExpr(
-									walker.get_last_span().end_zero_width()
+									walker.get_last_span().next_single_width()
 								));
 								stmts.push(Stmt::While { cond, body: vec![] });
 								continue 'stmt;
@@ -1700,10 +1741,7 @@ fn parse_scope_contents(
 						} else {
 							errors.push(
 								SyntaxErr::ExpectedScopeAfterControlFlowExpr(
-									Span::new_between(
-										walker.get_previous_span(),
-										current_span,
-									),
+									r_paren_span.next_single_width(),
 								),
 							);
 							continue 'stmt;
@@ -1727,7 +1765,7 @@ fn parse_scope_contents(
 							Some(t) => (&t.0, t.1),
 							None => {
 								errors.push(SyntaxErr::ExpectedScopeAfterControlFlowExpr(
-									token_span.end_zero_width()
+									token_span.next_single_width()
 								));
 								continue 'stmt;
 							}
@@ -1823,7 +1861,7 @@ fn parse_scope_contents(
 											Some(t) => (&t.0, t.1),
 											None => {
 												errors.push(
-													SyntaxErr::ExpectedCondExprForWhile(
+													SyntaxErr::ExpectedCondExprAfterWhile(
 														Span::new(span_start, walker.get_last_span().end)
 													),
 												);
@@ -1834,7 +1872,7 @@ fn parse_scope_contents(
 									match current {
 										Token::RParen | Token::RBrace => {
 											errors.push(
-												SyntaxErr::ExpectedCondExprForWhile(
+												SyntaxErr::ExpectedCondExprAfterWhile(
 													Span::new(span_start, current_span.start)
 												),
 											);
@@ -1860,7 +1898,7 @@ fn parse_scope_contents(
 							None => {
 								errors.push(SyntaxErr::ExpectedParenAfterControlFlowExpr(
 									l_paren_span,
-									walker.get_last_span().end_zero_width()
+									walker.get_last_span().next_single_width()
 								));
 								continue 'stmt;
 							}
@@ -1943,7 +1981,7 @@ fn parse_scope_contents(
 
 						if missing_semi {
 							errors.push(SyntaxErr::ExpectedSemiAfterReturnKw(
-								walker.get_previous_span().end_zero_width(),
+								walker.get_previous_span().next_single_width(),
 								return_expr.is_some(),
 							));
 						}
@@ -1967,7 +2005,7 @@ fn parse_scope_contents(
 
 						if missing_semi {
 							errors.push(SyntaxErr::ExpectedSemiAfterBreakKw(
-								token_span.end_zero_width(),
+								token_span.next_single_width(),
 							));
 						}
 						stmts.push(Stmt::Break);
@@ -1991,7 +2029,7 @@ fn parse_scope_contents(
 						if missing_semi {
 							errors.push(
 								SyntaxErr::ExpectedSemiAfterContinueKw(
-									token_span.end_zero_width(),
+									token_span.next_single_width(),
 								),
 							);
 						}
@@ -2015,7 +2053,7 @@ fn parse_scope_contents(
 
 						if missing_semi {
 							errors.push(SyntaxErr::ExpectedSemiAfterDiscardKw(
-								token_span.end_zero_width(),
+								token_span.next_single_width(),
 							));
 						}
 						stmts.push(Stmt::Discard);
@@ -2065,7 +2103,7 @@ fn parse_struct(
 		Some(t) => t,
 		None => {
 			errors.push(SyntaxErr::ExpectedScopeAfterStructIdent(
-				walker.get_last_span().end_zero_width(),
+				walker.get_last_span().next_single_width(),
 			));
 			return (None, errors);
 		}
@@ -2140,7 +2178,7 @@ fn parse_struct(
 				// just treat this as a "valid" struct declaration for analysis/goto/etc purposes. We do produce an
 				// error though about the missing token.
 				errors.push(SyntaxErr::ExpectedSemiAfterStructBody(
-					walker.get_previous_span().end_zero_width(),
+					walker.get_previous_span().next_single_width(),
 				));
 				return (
 					Some(Stmt::StructDecl {
@@ -2164,7 +2202,7 @@ fn parse_struct(
 			// treat this as a "valid" struct declaration for analysis/goto/etc purposes. We do produce an error
 			// though about the missing token.
 			errors.push(SyntaxErr::ExpectedSemiAfterStructBody(
-				walker.get_previous_span().end_zero_width(),
+				walker.get_previous_span().next_single_width(),
 			));
 			return (
 				Some(Stmt::StructDecl {
@@ -2193,7 +2231,7 @@ fn parse_struct(
 		// treat this as a "valid" struct declaration for analysis/goto/etc purposes. We do produce an error though
 		// about the missing token.
 		errors.push(SyntaxErr::ExpectedSemiAfterStructBody(
-			walker.get_previous_span().end_zero_width(),
+			walker.get_previous_span().next_single_width(),
 		));
 		(
 			Some(Stmt::StructDecl {

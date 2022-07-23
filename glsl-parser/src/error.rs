@@ -181,6 +181,23 @@ pub enum SyntaxErr {
 	/// - `0` the span where the semi-colon should be (i.e. between the control flow and the token which is not
 	///   what we expected).
 	ExpectedSemiAfterControlFlow(Span),
+	/* WHILE-LOOP */
+	/// Did not find an opening parenthesis (`(`) after the `while` keyword.
+	///
+	/// - `0` - the position where the parenthesis should be inserted.
+	ExpectedParenAfterWhileKw(Span),
+	/// Did not find a conditional expression inside the parenthesis when parsing a while-loop. E.g. in `while ()`,
+	/// we are expecting an expression like so `while (true)`.
+	///
+	/// - `0` - the span between the parenthesis where the expression should be, or between the `while` or `{` if
+	///   either of the parenthesis are missing.
+	ExpectedCondExprAfterWhile(Span),
+	/// Did not find a closing parenthesis (`)`) after the while-loop condition.
+	///
+	/// - `0` - the span of the opening parenthesis if it exists,
+	/// - `1` - the position where the parenthesis should be inserted.
+	ExpectedParenAfterWhileCond(Option<Span>, Span),
+
 	/// Did not find either a closing brace (`}`), or a `case` or `default` keyword when parsing a switch
 	/// statement. E.g. in `switch { default:`, we are missing a closing brace like so `switch { default: }`.
 	///
@@ -204,33 +221,30 @@ pub enum SyntaxErr {
 	///
 	/// - `0` - the span where the expression should be.
 	MissingIncrementExprInFor(Span),
-	/// Did not find a conditional expression inside the parenthesis when parsing a while loop. E.g. in `while (
-	/// if)`, we are expecting an expression not a statement like so `while (true)`.
-	///
-	/// - `0` - the span where the expression should be.
-	ExpectedCondExprForWhile(Span),
+
 	/// Did not find the `while` keyword after the body of a `do` loop. E.g. in `do {...}`, we are missing the
 	/// keyword like so `do {...} while ...`.
 	///
 	/// - `0` - the span where the keyword should be.
 	ExpectedWhileKwAfterDoBody(Span),
+	/* SINGLE-WORD */
 	/// Did not find a semi-colon (`;`) after the `return` keyword (or after the return expression if there is
 	/// one).
 	///
-	/// - `0` - the position where the semi-colon should be inserted at,
+	/// - `0` - the position where the semi-colon should be inserted,
 	/// - `1` - whether there is a return expression.
 	ExpectedSemiAfterReturnKw(Span, bool),
 	/// Did not find a semi-colon (`;`) after the `break` keyword.
 	///
-	/// - `0` - the position where the semi-colon should be inserted at.
+	/// - `0` - the position where the semi-colon should be inserted.
 	ExpectedSemiAfterBreakKw(Span),
 	/// Did not find a semi-colon (`;`) after the `continue` keyword.
 	///
-	/// - `0` - the position where the semi-colon should be inserted at.
+	/// - `0` - the position where the semi-colon should be inserted.
 	ExpectedSemiAfterContinueKw(Span),
 	/// Did not find a semi-colon (`;`) after the `discar` keyword.
 	///
-	/// - `0` - the position where the semi-colon should be inserted at.
+	/// - `0` - the position where the semi-colon should be inserted.
 	ExpectedSemiAfterDiscardKw(Span),
 
 	/* VAR DEF/DECL */

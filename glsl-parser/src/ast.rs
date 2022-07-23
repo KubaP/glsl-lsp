@@ -14,6 +14,7 @@ pub struct Expr {
 impl std::fmt::Display for Expr {
 	fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
 		match &self.ty {
+			ExprTy::Missing => write!(f, "\x1b[31;4mMISSING\x1b[0m"),
 			ExprTy::Incomplete => write!(f, "\x1b[31;4mINCOMPLETE\x1b[0m"),
 			ExprTy::Invalid => write!(f, "\x1b[31;4mINVALID\x1b[0m"),
 			ExprTy::Lit(l) => write!(f, "{l}"),
@@ -120,6 +121,13 @@ impl Expr {
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum ExprTy {
+	/// A placeholder expression for one that is missing.
+	/// 
+	/// This token exists because when parsing, the entire expected expression, such as a while-loop condition, may
+	/// be missing. We want to have better error recovery so we must be able to represent a missing expression. One
+	/// way would be to make a bunch of `Expr` fields into `Option<Expr>`, but that seems needlessly verbose and
+	/// would require nested matching, so hence we represent this "none" state in this enum through this variant.
+	Missing,
 	/// An expression which is incomplete, e.g. `3+5-`.
 	///
 	/// This token exists to allow the analyzer to gracefully deal with expression errors without affecting the

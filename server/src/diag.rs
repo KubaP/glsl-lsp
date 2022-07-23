@@ -192,6 +192,30 @@ pub fn to_diagnostic(err: SyntaxErr, file: &File, diags: &mut Vec<Diagnostic>) {
             pos,
             None
         ),
+        ExpectedSemiAfterReturnKw(pos, has_expr) => (
+            if has_expr {
+                "Syntax error: expected a semi-colon `;` after the return expression"
+            } else {
+                "Syntax error: expected a semi-colon `;` after `return`"
+            },
+            pos,
+            None
+        ),
+        ExpectedSemiAfterBreakKw(pos) => (
+            "Syntax error: expected a semi-colon `;` after `break`",
+            pos,
+            None
+        ),
+        ExpectedSemiAfterContinueKw(pos) => (
+            "Syntax error: expected a semi-colon `;` after `continue`",
+            pos,
+            None
+        ),
+        ExpectedSemiAfterDiscardKw(pos) => (
+            "Syntax error: expected a semi-colon `;` after `discard`",
+            pos,
+            None
+        ),
         /* VAR DEF/DECL */
         ExpectedIdentsAfterVarType(pos) => (
             "Syntax error: expected variable identifier(s)",

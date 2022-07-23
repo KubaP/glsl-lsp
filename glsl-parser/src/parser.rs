@@ -1929,80 +1929,95 @@ fn parse_scope_contents(
 							expr_parser(walker, Mode::Default, &[Token::Semi]);
 
 						// Consume the `;` to end the statement.
-						let current = match walker.peek() {
-							Some((t, _)) => t,
-							None => continue,
+						let missing_semi = match walker.peek() {
+							Some((current, _)) => {
+								if *current == Token::Semi {
+									walker.advance();
+									false
+								} else {
+									true
+								}
+							}
+							None => true,
 						};
-						if *current == Token::Semi {
-							walker.advance();
-						} else {
-							errors.push(
-								SyntaxErr::ExpectedSemiAfterControlFlow(
-									walker.get_previous_span().end_zero_width(),
-								),
-							);
-						}
 
+						if missing_semi {
+							errors.push(SyntaxErr::ExpectedSemiAfterReturnKw(
+								walker.get_previous_span().end_zero_width(),
+								return_expr.is_some(),
+							));
+						}
 						stmts.push(Stmt::Return(return_expr));
 					}
 					Token::Break => {
 						walker.advance();
 
 						// Consume the `;` to end the statement.
-						let current = match walker.peek() {
-							Some((t, _)) => t,
-							None => continue,
+						let missing_semi = match walker.peek() {
+							Some((current, _)) => {
+								if *current == Token::Semi {
+									walker.advance();
+									false
+								} else {
+									true
+								}
+							}
+							None => true,
 						};
-						if *current == Token::Semi {
-							walker.advance();
-						} else {
-							errors.push(
-								SyntaxErr::ExpectedSemiAfterControlFlow(
-									token_span.end_zero_width(),
-								),
-							);
-						}
 
+						if missing_semi {
+							errors.push(SyntaxErr::ExpectedSemiAfterBreakKw(
+								token_span.end_zero_width(),
+							));
+						}
 						stmts.push(Stmt::Break);
 					}
 					Token::Continue => {
 						walker.advance();
 
 						// Consume the `;` to end the statement.
-						let current = match walker.peek() {
-							Some((t, _)) => t,
-							None => continue,
+						let missing_semi = match walker.peek() {
+							Some((current, _)) => {
+								if *current == Token::Semi {
+									walker.advance();
+									false
+								} else {
+									true
+								}
+							}
+							None => true,
 						};
-						if *current == Token::Semi {
-							walker.advance();
-						} else {
+
+						if missing_semi {
 							errors.push(
-								SyntaxErr::ExpectedSemiAfterControlFlow(
+								SyntaxErr::ExpectedSemiAfterContinueKw(
 									token_span.end_zero_width(),
 								),
 							);
 						}
-
 						stmts.push(Stmt::Continue);
 					}
 					Token::Discard => {
 						walker.advance();
 
 						// Consume the `;` to end the statement.
-						let current = match walker.peek() {
-							Some((t, _)) => t,
-							None => continue,
+						let missing_semi = match walker.peek() {
+							Some((current, _)) => {
+								if *current == Token::Semi {
+									walker.advance();
+									false
+								} else {
+									true
+								}
+							}
+							None => true,
 						};
-						if *current == Token::Semi {
-							walker.advance();
-						} else {
-							errors.push(
-								SyntaxErr::ExpectedSemiAfterControlFlow(
-									token_span.end_zero_width(),
-								),
-							);
-						}
 
+						if missing_semi {
+							errors.push(SyntaxErr::ExpectedSemiAfterDiscardKw(
+								token_span.end_zero_width(),
+							));
+						}
 						stmts.push(Stmt::Discard);
 					}
 					_ => break 'stmt,

@@ -214,6 +214,24 @@ pub enum SyntaxErr {
 	///
 	/// - `0` - the span where the keyword should be.
 	ExpectedWhileKwAfterDoBody(Span),
+	/// Did not find a semi-colon (`;`) after the `return` keyword (or after the return expression if there is
+	/// one).
+	///
+	/// - `0` - the position where the semi-colon should be inserted at,
+	/// - `1` - whether there is a return expression.
+	ExpectedSemiAfterReturnKw(Span, bool),
+	/// Did not find a semi-colon (`;`) after the `break` keyword.
+	///
+	/// - `0` - the position where the semi-colon should be inserted at.
+	ExpectedSemiAfterBreakKw(Span),
+	/// Did not find a semi-colon (`;`) after the `continue` keyword.
+	///
+	/// - `0` - the position where the semi-colon should be inserted at.
+	ExpectedSemiAfterContinueKw(Span),
+	/// Did not find a semi-colon (`;`) after the `discar` keyword.
+	///
+	/// - `0` - the position where the semi-colon should be inserted at.
+	ExpectedSemiAfterDiscardKw(Span),
 
 	/* VAR DEF/DECL */
 	/// Did not find identifier(s) after a type identifier. E.g. `int 5` would be an invalid identifier, but `int

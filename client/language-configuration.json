@@ -5,22 +5,31 @@
 		// Symbols used for start and end a block comment.
 		"blockComment": ["/*", "*/"]
 	},
-	// Symbols used as brackets
+	// Symbols used as brackets.
 	"brackets": [
-		["{", "}"],
+		["(", ")"],
 		["[", "]"],
-		["(", ")"]
+		["{", "}"]
 	],
-	// Symbols that are auto closed when typing
+	"colorizedBracketPairs": [
+		["(", ")"],
+		["[", "]"],
+		["{", "}"]
+	],
+	// Symbols that are auto closed when typing.
 	"autoClosingPairs": [
-		["{", "}"],
+		["(", ")"],
 		["[", "]"],
-		["(", ")"]
+		["{", "}"],
+		["/*", "*/"]
 	],
-	// Symbols that can be used to surround a selection
+	"autoCloseBefore": ";:.,=}]) \n\t",
+	// Symbols that can be used to surround a selection.
 	"surroundingPairs": [
-		["{", "}"],
+		["(", ")"],
 		["[", "]"],
-		["(", ")"]
-	]
+		["{", "}"]
+	],
+	// Pattern for any words, be it keywords of custom identifiers.
+	"wordPattern": "([a-z]|[A-Z]|\\_)([a-z]|[A-Z]|\\_|[0-9])*"
 }

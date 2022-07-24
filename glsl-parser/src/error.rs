@@ -197,6 +197,23 @@ pub enum SyntaxErr {
 	/// - `0` - the span of the opening parenthesis if it exists,
 	/// - `1` - the position where the parenthesis should be inserted.
 	ExpectedParenAfterWhileCond(Option<Span>, Span),
+	/* DO-WHILE-LOOP */
+	/// Did not find an opening brace (`{`) after the `do` keyword.
+	///
+	/// - `0` - the position where the brace should be inserted.
+	ExpectedBraceAfterDoKw(Span),
+	/// Did not find a body between the `do` and `while` keywords.
+	/// 
+	/// - `0` - the span where the body should be.
+	ExpectedScopeAfterDoKw(Span),
+	/// Did not find the `while` keyword after the body of a do-loop.
+	///
+	/// - `0` - the position where the keyword should be inserted.
+	ExpectedWhileKwAfterDoBody(Span),
+	/// Did not find a semi-colon (`;`) after a do-while loop.
+	/// 
+	/// - `0` - the position where the semi-colon should be inserted.
+	ExpectedSemiAfterDoWhileStmt(Span),
 
 	/// Did not find either a closing brace (`}`), or a `case` or `default` keyword when parsing a switch
 	/// statement. E.g. in `switch { default:`, we are missing a closing brace like so `switch { default: }`.
@@ -222,11 +239,6 @@ pub enum SyntaxErr {
 	/// - `0` - the span where the expression should be.
 	MissingIncrementExprInFor(Span),
 
-	/// Did not find the `while` keyword after the body of a `do` loop. E.g. in `do {...}`, we are missing the
-	/// keyword like so `do {...} while ...`.
-	///
-	/// - `0` - the span where the keyword should be.
-	ExpectedWhileKwAfterDoBody(Span),
 	/* SINGLE-WORD */
 	/// Did not find a semi-colon (`;`) after the `return` keyword (or after the return expression if there is
 	/// one).

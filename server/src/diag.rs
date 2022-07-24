@@ -182,11 +182,6 @@ pub fn to_diagnostic(err: SyntaxErr, file: &File, diags: &mut Vec<Diagnostic>) {
             span,
             None
         ),
-        ExpectedWhileKwAfterDoBody(pos) => (
-            "Syntax error: expected the `while` keyword",
-            pos,
-            None
-        ),
         /* WHILE-LOOP */
         ExpectedParenAfterWhileKw(pos) => (
             "Syntax error: expected opening parenthesis `(` after `while`",
@@ -202,6 +197,27 @@ pub fn to_diagnostic(err: SyntaxErr, file: &File, diags: &mut Vec<Diagnostic>) {
             "Syntax error: expected a closing parenthesis `)` after the while condition expression",
             pos,
             opening.map(|span| ("opening delimiter here", span))
+        ),
+        /* DO-WHILE-LOOP */
+        ExpectedBraceAfterDoKw(pos) => (
+            "Syntax error: expected an opening brace `{` after `do`",
+            pos,
+            None
+        ),
+        ExpectedScopeAfterDoKw(pos) => (
+            "Syntax error: expected a body `{..}` after `do`",
+            pos,
+            None
+        ),
+        ExpectedWhileKwAfterDoBody(pos) => (
+            "Syntax error: expected the `while` keyword after the do-while loop body",
+            pos,
+            None
+        ),
+        ExpectedSemiAfterDoWhileStmt(pos) => (
+            "Syntax error: expected a semi-colon `;` after a do-while loop statement",
+            pos,
+            None
         ),
         /* SINGLE-WORD */
         ExpectedSemiAfterReturnKw(pos, has_expr) => (

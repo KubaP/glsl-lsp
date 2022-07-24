@@ -182,9 +182,60 @@ pub fn to_diagnostic(err: SyntaxErr, file: &File, diags: &mut Vec<Diagnostic>) {
             span,
             None
         ),
+        /* FOR-LOOP */
+        ExpectedParenAfterForKw(pos) => (
+            "Syntax error: expected an opening parenthesis `(` after `for`",
+            pos,
+            None
+        ),
+        MissingForHeader(span) => (
+            "Syntax error: expected a for-loop header `(..)` after `for`",
+            span,
+            None
+        ),
+        FoundEmptyForHeader(span) => (
+            "Syntax error: expected expressions in the for-loop header; found nothing",
+            span,
+            None
+        ),
+        ExpectedExprInForFoundElse(span) => (
+            "Syntax error: expected an expression",
+            span,
+            None
+        ),
+        ExpectedSemiAfterForStmtExpr(pos) => (
+            "Syntax error: expected a semi-colon `;` after the expression",
+            pos,
+            None
+        ),
+        FoundTrailingSemiAfter3rdExprInFor(span) => (
+            "Syntax error: found tailing semi-colon `;` which is unnecessary",
+            span,
+            None
+        ),
+        Expected3StmtExprInFor(span) => (
+            "Syntax error: expected 3 expressions in the for-loop header; found less than 3",
+            span,
+            None
+        ),
+        FoundMoreThan3StmtExprInFor(span) => (
+            "Syntax error: found extra expressions in the for-loop header; there should only be 3",
+            span,
+            None
+        ),
+        ExpectedParenAfterForHeader(opening, pos ) => (
+            "Syntax error: expected a closing parenthesis `)` after the for-loop header",
+            pos,
+            opening.map(|span| ("opening delimiter here", span))
+        ),
+        ExpectedBraceAfterForHeader(pos) => (
+            "Syntax error: expecting an opening brace `{` after the for-loop header",
+            pos,
+            None
+        ),
         /* WHILE-LOOP */
         ExpectedParenAfterWhileKw(pos) => (
-            "Syntax error: expected opening parenthesis `(` after `while`",
+            "Syntax error: expected an opening parenthesis `(` after `while`",
             pos,
             None
         ),

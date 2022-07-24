@@ -181,6 +181,49 @@ pub enum SyntaxErr {
 	/// - `0` the span where the semi-colon should be (i.e. between the control flow and the token which is not
 	///   what we expected).
 	ExpectedSemiAfterControlFlow(Span),
+	/* FOR-LOOP */
+	/// Did not find an opening parenthesis (`(`) after the `for` keyword.
+	///
+	/// - `0` - the position where the parenthesis should be inserted.
+	ExpectedParenAfterForKw(Span),
+	/// Did not find a for-loop header after the `for` keyword
+	///
+	/// - `0` - the span between the `for` keyword and the `{` where the header should be. 
+	MissingForHeader(Span),
+	/// Did not find anything within the for-loop header parenthesis.
+	/// 
+	/// - `0` - the span between the parenthesis.
+	FoundEmptyForHeader(Span),
+	/// Did not find an expression within the for-loop header.
+	/// 
+	/// - `0` - the span of the tokens which are not an expression.
+	ExpectedExprInForFoundElse(Span),
+	/// Did not find a semi-colon (`;`) after a for-loop header statement or expression.
+	///
+	/// - `0` - the position where the semi-colon should be inserted.
+	ExpectedSemiAfterForStmtExpr(Span),
+	/// Found a trailing semi-colon (`;`) after the 3rd expression in the for-loop header.
+	///
+	/// - `0` - the span of the semi-colon that needs to be removed.
+	FoundTrailingSemiAfter3rdExprInFor(Span),
+	/// Found less than one statement/expression and 2 expressions in the for-loop header.
+	///
+	/// - `0` - the span between the parenthesis where the statement/expressions should be, or between the `for` or
+	///   `{` if either of the parenthesis are missing.
+	Expected3StmtExprInFor(Span),
+	/// Found more than one statement/expression and 2 expressions in the for-loop header.
+	///
+	/// - `0` - the span of the extra expressions that need to be removed.
+	FoundMoreThan3StmtExprInFor(Span),
+	/// Did not find a closing parenthesis (`)`) for the for-loop header.
+	///
+	/// - `0` - the span of the opening parenthesis if it exists,
+	/// - `1` - the position where the parenthesis should be inserted.
+	ExpectedParenAfterForHeader(Option<Span>, Span),
+	/// Did not find a body after the for-loop header.
+	///
+	/// - `0` - the position where the brace should be inserted.
+	ExpectedBraceAfterForHeader(Span),
 	/* WHILE-LOOP */
 	/// Did not find an opening parenthesis (`(`) after the `while` keyword.
 	///

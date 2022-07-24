@@ -182,6 +182,57 @@ pub fn to_diagnostic(err: SyntaxErr, file: &File, diags: &mut Vec<Diagnostic>) {
             span,
             None
         ),
+        /* SWITCH */
+        ExpectedParenAfterSwitchKw(pos) => (
+            "Syntax error: expected an opening parenthesis `(` after `switch`",
+            pos,
+            None
+        ),
+        MissingSwitchHeader(span) => (
+            "Syntax error: expected a switch header `(..)` after `switch`",
+            span,
+            None
+        ),
+        ExpectedExprInSwitchHeader(span) => (
+            "Syntax error: expected an expression in the switch header",
+            span,
+            None
+        ),
+        ExpectedParenAfterSwitchHeader(opening, pos) => (
+            "Syntax error: expected a closing parenthesis `)` after the switch header",
+            pos,
+            opening.map(|span| ("opening delimiter here", span))
+        ),
+        ExpectedBraceAfterSwitchHeader(pos) => (
+            "Syntax error: expected an opening brace `{` after the switch header",
+            pos,
+            None
+        ),
+        FoundEmptySwitchBody(span) => (
+            "Syntax error: found an empty switch body",
+            span,
+            None
+        ),
+        ExpectedExprAfterCaseKw(pos) => (
+            "Syntax error: expected an expression after `case`",
+            pos,
+            None
+        ),
+        ExpectedColonAfterCase(pos) => (
+            "Syntax error: expected a colon `:` after a case",
+            pos,
+            None
+        ),
+        InvalidSwitchCaseBegin(span) => (
+            "Syntax error: expected either `case` or `default`",
+            span,
+            None
+        ),
+        MissingSwitchBodyClosingBrace(opening, pos) => (
+            "Syntax error: expected a closing brace `}`",
+            pos,
+            opening.map(|span| ("opening delimiter here", span))
+        ),
         /* FOR-LOOP */
         ExpectedParenAfterForKw(pos) => (
             "Syntax error: expected an opening parenthesis `(` after `for`",
@@ -214,7 +265,7 @@ pub fn to_diagnostic(err: SyntaxErr, file: &File, diags: &mut Vec<Diagnostic>) {
             None
         ),
         Expected3StmtExprInFor(span) => (
-            "Syntax error: expected 3 expressions in the for-loop header; found less than 3",
+            "Syntax error: expected 3 expressions in the for-loop header; found fewer",
             span,
             None
         ),

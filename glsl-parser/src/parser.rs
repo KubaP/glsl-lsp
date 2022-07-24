@@ -976,8 +976,8 @@ const SWITCH_CASE_DELIMITER: EndScope = |walker, errors, colon_span| {
 		Some((t, _)) => t,
 		None => {
 			// We did not encounter one of the closing tokens at all.
-			errors.push(SyntaxErr::ExpectedSwitchCaseEnd(
-				colon_span,
+			errors.push(SyntaxErr::MissingSwitchBodyClosingBrace(
+				Some(colon_span),
 				walker.get_last_span().next_single_width(),
 			));
 			return true;
@@ -1230,119 +1230,185 @@ fn parse_scope_contents(
 						walker.advance();
 
 						// Consume the opening `(` parenthesis.
-						let current = match walker.peek() {
-							Some((t, _)) => t,
-							None => continue,
+						let (current, current_span) = match walker.peek() {
+							Some(t) => (&t.0, t.1),
+							None => {
+								errors.push(
+									SyntaxErr::ExpectedParenAfterSwitchKw(
+										token_span.next_single_width(),
+									),
+								);
+								continue 'stmt;
+							}
 						};
-						if *current == Token::LParen {
+						let l_paren_span = if *current == Token::LParen {
 							walker.advance();
-						} else {
-							continue;
-						}
+							Some(current_span)
+						} else if *current == Token::LBrace {
+							walker.advance();
 
+							// We are completely missing the condition expression, but we treat this as "valid" for
+							// better recovery.
+							errors.push(SyntaxErr::MissingSwitchHeader(
+								Span::new_between(token_span, current_span),
+							));
+
+							// Consume the body, including the closing `}` brace.
+							let (cases, mut errs) = parse_switch_body(walker, current_span);
+							errors.append(&mut errs);
+
+							stmts.push(Stmt::Switch {
+								expr: Expr {
+									ty: ExprTy::Missing,
+									span: token_span.next_single_width(),
+								},
+								cases,
+							});
+
+							continue 'stmt;
+						} else {
+							// Even though we are missing the token, we will still try to parse this syntax at
+							// least until we expect the body scope.
+							errors.push(SyntaxErr::ExpectedParenAfterWhileKw(
+								token_span.next_single_width(),
+							));
+							None
+						};
+
+						// Consume the conditional expression.
 						let expr = match expr_parser(
 							walker,
 							Mode::Default,
 							&[Token::RParen],
 						) {
-							(Some(e), _) => e,
-							(None, _) => continue,
+							(Some(e), mut errs) => {
+								errors.append(&mut errs);
+								e
+							}
+							(None, _) => {
+								// We found tokens which cannot even start an expression. We loop until we come
+								// across either a `)` or a `{`.
+								let expr = 'expr_4: loop {
+									let (current, current_span) =
+										match walker.peek() {
+											Some(t) => (&t.0, t.1),
+											None => {
+												errors.push(
+													SyntaxErr::ExpectedExprInSwitchHeader(
+														walker.get_last_span().next_single_width()
+													),
+												);
+												continue 'stmt;
+											}
+										};
+
+									match current {
+										Token::RParen | Token::RBrace => {
+											if let Some(l_paren_span) =
+												l_paren_span
+											{
+												errors.push(
+													SyntaxErr::ExpectedExprInSwitchHeader(
+														Span::new_between(l_paren_span, current_span)
+													),
+												);
+											} else {
+												errors.push(
+													SyntaxErr::ExpectedExprInSwitchHeader(
+														current_span.previous_single_width()
+													),
+												);
+											}
+											break 'expr_4 Expr {
+												ty: ExprTy::Missing,
+												span: current_span
+													.previous_single_width(),
+											};
+										}
+										_ => continue 'expr_4,
+									}
+								};
+
+								expr
+							}
 						};
 
-						// Consume the closing `)` parenthesis.
-						let current = match walker.peek() {
-							Some((t, _)) => t,
-							None => continue,
-						};
-						if *current == Token::RParen {
-							walker.advance();
-						} else {
-							continue;
-						}
-
-						// Consume the opening `{` scope brace.
-						let current = match walker.peek() {
-							Some((t, _)) => t,
-							None => continue,
-						};
-						if *current == Token::LBrace {
-							walker.advance();
-						} else {
-							continue;
-						}
-
-						let mut cases = Vec::new();
-						'cases: loop {
-							let current = match walker.peek() {
-								Some((t, _)) => t,
-								None => break 'cases,
+						// Consume the closing `)` parenthesis. We loop until we hit either a `)` or a `{`. If we
+						// have something like `switch (i b - 5)`, we already get an error about the missing binary
+						// operator, so no need to further produce errors; we just silently consume.
+						let r_paren_span = 'r_paren_3: loop {
+							let (current, current_span) = match walker.peek() {
+								Some(t) => t,
+								None => {
+									errors.push(
+										SyntaxErr::ExpectedParenAfterSwitchHeader(
+											l_paren_span,
+											walker
+												.get_last_span()
+												.next_single_width(),
+										),
+									);
+									continue 'stmt;
+								}
 							};
 
 							match current {
-								Token::Case => {
+								Token::RParen => {
+									let current_span = *current_span;
 									walker.advance();
-
-									let expr = match expr_parser(
-										walker,
-										Mode::Default,
-										&[Token::Colon],
-									) {
-										(Some(e), _) => e,
-										(None, _) => continue,
-									};
-
-									let (current, current_span) =
-										match walker.peek() {
-											Some(t) => (&t.0, t.1),
-											None => break 'cases,
-										};
-									if *current == Token::Colon {
-										walker.advance();
-									} else {
-										continue;
-									}
-
-									let (body, mut errs, _) =
-										parse_scope_contents(
-											walker,
-											SWITCH_CASE_DELIMITER,
-											current_span,
-										);
-									errors.append(&mut errs);
-
-									cases.push((Some(expr), body));
+									break 'r_paren_3 current_span;
 								}
-								Token::Default => {
+								Token::LBrace => {
+									// We don't do anything apart from creating a syntax error since the next check
+									// deals with the `{`.
+									errors.push(
+										SyntaxErr::ExpectedParenAfterSwitchHeader(
+											l_paren_span,
+											current_span
+												.previous_single_width(),
+										),
+									);
+									break 'r_paren_3 current_span
+										.previous_single_width();
+								}
+								_ => {
 									walker.advance();
-
-									let (current, current_span) =
-										match walker.peek() {
-											Some(t) => (&t.0, t.1),
-											None => break 'cases,
-										};
-									if *current == Token::Colon {
-										walker.advance();
-									} else {
-										continue;
-									}
-
-									let (body, mut errs, _) =
-										parse_scope_contents(
-											walker,
-											SWITCH_CASE_DELIMITER,
-											current_span,
-										);
-									errors.append(&mut errs);
-
-									cases.push((None, body));
+									continue 'r_paren_3;
 								}
-								Token::RBrace => {
-									walker.advance();
-									break 'cases;
-								}
-								_ => continue,
 							}
+						};
+
+						// Consume the opening `{` scope brace.
+						let (current, current_span) =
+							match walker.peek() {
+								Some(t) => (&t.0, t.1),
+								None => {
+									// Even though switch statements without a body are illegal, we treat this as
+									// "valid" for better recovery.
+									errors.push(SyntaxErr::ExpectedBraceAfterSwitchHeader(
+									walker.get_last_span().next_single_width()
+								));
+									stmts.push(Stmt::Switch {
+										expr,
+										cases: vec![],
+									});
+									continue 'stmt;
+								}
+							};
+						if *current == Token::LBrace {
+							walker.advance();
+						} else {
+							errors.push(
+								SyntaxErr::ExpectedBraceAfterSwitchHeader(
+									r_paren_span.next_single_width(),
+								),
+							);
+							continue 'stmt;
 						}
+
+						// Consume the body, including the closing `}` brace.
+						let (cases, mut errs) = parse_switch_body(walker, current_span);
+						errors.append(&mut errs);
 
 						stmts.push(Stmt::Switch { expr, cases });
 					}
@@ -2242,6 +2308,177 @@ fn parse_scope_contents(
 	};
 
 	(stmts, errors, closing_delim_span)
+}
+
+/// Parses the body of a switch statement.
+fn parse_switch_body(
+	walker: &mut Walker,
+	l_brace_span: Span
+) -> (Vec<(Option<Expr>, Vec<Stmt>)>, Vec<SyntaxErr>) {
+	let mut errors = Vec::new();
+
+	// Check if the body is empty.
+	match walker.peek() {
+		Some((token, token_span)) => match token {
+			Token::RBrace => {
+				errors.push(SyntaxErr::FoundEmptySwitchBody(
+					Span::new_between(l_brace_span, *token_span)
+				));
+				return (vec![], errors);
+			}
+			_ => {}
+		}
+		None => {
+			errors.push(SyntaxErr::MissingSwitchBodyClosingBrace(
+				Some(l_brace_span),
+				walker.get_last_span().next_single_width()
+			));
+			return (vec![], errors);
+		}
+	}
+
+	// Consume cases until we reach the end of the body.
+	let mut cases = Vec::new();
+	'cases: loop {
+		let (current, current_span) = match walker.peek() {
+			Some(t )=> (&t.0, t.1),
+			None => {
+				errors.push(SyntaxErr::MissingSwitchBodyClosingBrace(
+					Some(l_brace_span),
+					walker.get_last_span().next_single_width()
+				));
+				break 'cases;
+			},
+		};
+
+		match current {
+			Token::Case => {
+				let keyword_span = current_span;
+				walker.advance();
+
+				// Consume the expression.
+				let expr = match expr_parser(
+					walker,
+					Mode::Default,
+					&[Token::Colon, Token::Case, Token::Default, Token::RBrace],
+				) {
+					(Some(e), mut errs) => {
+						errors.append(&mut errs);
+						e
+					}
+					(None, _) => {
+						// We found tokens which cannot even start an expression. We loop until we come
+						// across either `case`, `default` or a `}`.
+						errors.push(SyntaxErr::ExpectedExprAfterCaseKw(keyword_span.next_single_width()));
+						loop {
+							let (current, _) =
+								match walker.peek() {
+									Some(t) => (&t.0, t.1),
+									None => {
+										errors.push(SyntaxErr::MissingSwitchBodyClosingBrace(
+											Some(l_brace_span),
+											walker.get_last_span().next_single_width()
+										));
+										break 'cases;
+									}
+								};
+
+							match current {
+								Token::Case|Token::Default => continue 'cases,
+								Token::RBrace => break 'cases,
+								_ => walker.advance(),
+							}
+						};
+					}
+				};
+
+				// Consume the `:` to begin the scope.
+				let (current, current_span) = match walker.peek() {
+					Some(t) => (&t.0, t.1),
+					None => {
+						errors.push(SyntaxErr::ExpectedColonAfterCase(walker.get_last_span().next_single_width()));
+						break 'cases
+					},
+				};
+				let scope_begin_span = if *current == Token::Colon {
+					walker.advance();
+					current_span
+				} else {
+					// Even though we are missing a necessary token, we treat this as "valid" for better error
+					// recovery.
+					errors.push(SyntaxErr::ExpectedColonAfterCase(expr.span.next_single_width()));
+					walker.get_last_span()
+				};
+
+				// Consume the body of the case. This does not consume a `case` or `default` keyword or `}`.
+				let (body, mut errs, _) = parse_scope_contents(
+					walker,
+					SWITCH_CASE_DELIMITER,
+					scope_begin_span,
+				);
+				errors.append(&mut errs);
+
+				cases.push((Some(expr), body));
+			}
+			Token::Default => {
+				let keyword_span = current_span;
+				walker.advance();
+
+				// Consume the `:` to begin the scope.
+				let (current, current_span) = match walker.peek() {
+					Some(t) => (&t.0, t.1),
+					None => {
+						errors.push(SyntaxErr::ExpectedColonAfterCase(walker.get_last_span().next_single_width()));
+						break 'cases
+					},
+				};
+				let scope_begin_span = if *current == Token::Colon {
+					walker.advance();
+					current_span
+				} else {
+					// Even though we are missing a necessary token, we treat this as "valid" for better error
+					// recovery.
+					errors.push(SyntaxErr::ExpectedColonAfterCase(keyword_span.next_single_width()));
+					keyword_span
+				};
+
+				// Consume the body of the case. This does not consume a `case` or `default` keyword or `}`.
+				let (body, mut errs, _) = parse_scope_contents(
+					walker,
+					SWITCH_CASE_DELIMITER,
+					scope_begin_span,
+				);
+				errors.append(&mut errs);
+
+				cases.push((None, body));
+			}
+			Token::RBrace => break 'cases,
+			_ => {
+				// We have a token which cannot begin a case, so loop until we hit either `case`, `default` or a
+				// `}`.
+				errors.push(SyntaxErr::InvalidSwitchCaseBegin(current_span));
+				'inner: loop {
+					let (current, _) = match walker.peek() {
+						Some(t )=> (&t.0, t.1),
+						None => {
+							errors.push(SyntaxErr::MissingSwitchBodyClosingBrace(
+								Some(l_brace_span),
+								walker.get_last_span().next_single_width()
+							));
+							break 'cases;
+						},
+					};
+
+					match current {
+						Token::Case | Token::Default | Token::RBrace => break 'inner,
+						_ => walker.advance(),
+					}
+				}
+			},
+		}
+	}
+
+	(cases, errors)
 }
 
 /// Parse a struct definition or declaration.

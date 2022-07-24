@@ -181,6 +181,51 @@ pub enum SyntaxErr {
 	/// - `0` the span where the semi-colon should be (i.e. between the control flow and the token which is not
 	///   what we expected).
 	ExpectedSemiAfterControlFlow(Span),
+	/* SWITCH */
+	/// Did not find an opening parenthesis (`(`) after the `switch` keyword.
+	///
+	/// - `0` - the position where the parenthesis should be inserted.
+	ExpectedParenAfterSwitchKw(Span),
+	/// Did not find a switch header after the `switch` keyword.
+	///
+	/// - `0` - the span between the `switch` keyword and the `{` where the header should be.
+	MissingSwitchHeader(Span),
+	/// Did not find a conditional expression inside the parenthesis when parsing a switch. E.g. in `switch ()`,
+	/// we are expecting an expression like so `switch (val)`.
+	///
+	/// - `0` - the span between the parenthesis where the expression should be, or between the `switch` or `{` if
+	///   either of the parenthesis are missing.
+	ExpectedExprInSwitchHeader(Span),
+	/// Did not find a closing parenthesis (`)`) for the switch header.
+	///
+	/// - `0` - the span of the opening parenthesis if it exists,
+	/// - `1` - the position where the parenthesis should be inserted.
+	ExpectedParenAfterSwitchHeader(Option<Span>, Span),
+	/// Did not find a body after the switch header.
+	///
+	/// - `0` - the position where the brace should be inserted.
+	ExpectedBraceAfterSwitchHeader(Span),
+	/// Did not find a single case within the switch body.
+	/// 
+	/// - `0` - the span of the body.
+	FoundEmptySwitchBody(Span),
+	/// Did not find an expression after the `case` keyword.
+	/// 
+	/// - `0` - the position the expression should be inserted.
+	ExpectedExprAfterCaseKw(Span),
+	/// Did not find a colon (`:`) after the case expression or `default` keyword.
+	/// 
+	/// - `0` - the position the colon should be inserted.
+	ExpectedColonAfterCase(Span),
+	/// Found a token to start switch case other than `case` or `default`.
+	/// 
+	/// - `0` - the span of the token.
+	InvalidSwitchCaseBegin(Span),
+	/// Did not find a closing brace (`}`) to close the switch body.
+	/// 
+	/// - `0` - the span of the body opening brace if it exists,
+	/// - `1` - the position where the brace should be inserted.
+	MissingSwitchBodyClosingBrace(Option<Span>, Span),
 	/* FOR-LOOP */
 	/// Did not find an opening parenthesis (`(`) after the `for` keyword.
 	///

@@ -162,24 +162,35 @@ pub fn to_diagnostic(err: SyntaxErr, file: &File, diags: &mut Vec<Diagnostic>) {
             pos,
             None,
         ),
-        ExpectedSwitchCaseEnd(opening, expected) => (
-            "Syntax error: expected a closing delimiter for the switch case; one of either `case`, `default` or `}`",
-            expected,
-            Some(("case opening delimiter here", opening))
-        ),
-        ExpectedSemiInForCond(pos) => (
-            "Syntax error: expected a semi-colon `;`",
+        /* IF */
+        ExpectedParenAfterIfKw(pos) => (
+            "Syntax error: expected an opening parenthesis `(` after `if`",
             pos,
             None
         ),
-        MissingCondExprInFor(span) => (
-            "Syntax error: expected a condition expression",
+        ExpectedExprInIfHeader(span) => (
+            "Syntax error: expected an expression in the if header",
             span,
             None
         ),
-        MissingIncrementExprInFor(span) => (
-            "Syntax error: expected an increment expression",
-            span,
+        ExpectedParenAfterIfHeader(opening, pos) => (
+            "Syntax error: expected a closing parenthesis `)`",
+            pos,
+            opening.map(|span| ("opening delimiter here", span))
+        ),
+        ExpectedBraceOrStmtAfterIfHeader(pos) => (
+            "Syntax error: expected either a statement or a `{` after the if header",
+            pos,
+            None
+        ),
+        ExpectedStmtAfterIfHeader(pos) => (
+            "Syntax error: expected a statement after the if header, found nothing",
+            pos,
+            None
+        ),
+        ExpectedIfOrBodyAfterElseKw(pos) => (
+            "Syntax error: expected either a body or `if` after `else`",
+            pos,
             None
         ),
         /* SWITCH */

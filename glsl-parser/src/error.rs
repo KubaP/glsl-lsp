@@ -181,6 +181,33 @@ pub enum SyntaxErr {
 	/// - `0` the span where the semi-colon should be (i.e. between the control flow and the token which is not
 	///   what we expected).
 	ExpectedSemiAfterControlFlow(Span),
+	/* IF */
+	/// Did not find an opening parenthesis (`(`) after the `if` keyword.
+	///
+	/// - `0` - the position where the parenthesis should be inserted.
+	ExpectedParenAfterIfKw(Span),
+	/// Did not find a conditional expression inside the parenthesis when parsing an if statement. E.g. in `if (
+	/// struct)`, we are expecting an expression not a statement like so `if (true)`.
+	///
+	/// - `0` - the span where the expression should be.
+	ExpectedExprInIfHeader(Span),
+	/// Did not find a closing parenthesis (`)`) for the if header.
+	///
+	/// - `0` - the span of the opening parenthesis if it exists,
+	/// - `1` - the position where the parenthesis should be inserted.
+	ExpectedParenAfterIfHeader(Option<Span>, Span),
+	/// Did not find either a body `{...}` or a statement after the if header.
+	///
+	/// - `0` - the position where the brace or statement should be inserted.
+	ExpectedBraceOrStmtAfterIfHeader(Span),
+	/// Did not find a single statement after the if header.
+	///
+	/// - `0` - the position where the statement should be inserted.
+	ExpectedStmtAfterIfHeader(Span),
+	/// Did not find either a body `{...}` or a statement or the `if` keyword after the `else` keyword.
+	/// 
+	/// - `0` - the position where the item should be inserted.
+	ExpectedIfOrBodyAfterElseKw(Span),
 	/* SWITCH */
 	/// Did not find an opening parenthesis (`(`) after the `switch` keyword.
 	///
@@ -206,23 +233,23 @@ pub enum SyntaxErr {
 	/// - `0` - the position where the brace should be inserted.
 	ExpectedBraceAfterSwitchHeader(Span),
 	/// Did not find a single case within the switch body.
-	/// 
+	///
 	/// - `0` - the span of the body.
 	FoundEmptySwitchBody(Span),
 	/// Did not find an expression after the `case` keyword.
-	/// 
+	///
 	/// - `0` - the position the expression should be inserted.
 	ExpectedExprAfterCaseKw(Span),
 	/// Did not find a colon (`:`) after the case expression or `default` keyword.
-	/// 
+	///
 	/// - `0` - the position the colon should be inserted.
 	ExpectedColonAfterCase(Span),
 	/// Found a token to start switch case other than `case` or `default`.
-	/// 
+	///
 	/// - `0` - the span of the token.
 	InvalidSwitchCaseBegin(Span),
 	/// Did not find a closing brace (`}`) to close the switch body.
-	/// 
+	///
 	/// - `0` - the span of the body opening brace if it exists,
 	/// - `1` - the position where the brace should be inserted.
 	MissingSwitchBodyClosingBrace(Option<Span>, Span),
@@ -233,14 +260,14 @@ pub enum SyntaxErr {
 	ExpectedParenAfterForKw(Span),
 	/// Did not find a for-loop header after the `for` keyword
 	///
-	/// - `0` - the span between the `for` keyword and the `{` where the header should be. 
+	/// - `0` - the span between the `for` keyword and the `{` where the header should be.
 	MissingForHeader(Span),
 	/// Did not find anything within the for-loop header parenthesis.
-	/// 
+	///
 	/// - `0` - the span between the parenthesis.
 	FoundEmptyForHeader(Span),
 	/// Did not find an expression within the for-loop header.
-	/// 
+	///
 	/// - `0` - the span of the tokens which are not an expression.
 	ExpectedExprInForFoundElse(Span),
 	/// Did not find a semi-colon (`;`) after a for-loop header statement or expression.
@@ -285,13 +312,14 @@ pub enum SyntaxErr {
 	/// - `0` - the span of the opening parenthesis if it exists,
 	/// - `1` - the position where the parenthesis should be inserted.
 	ExpectedParenAfterWhileCond(Option<Span>, Span),
+	// TODO: ExpectedBraceAfterWhileHeader(Span),
 	/* DO-WHILE-LOOP */
 	/// Did not find an opening brace (`{`) after the `do` keyword.
 	///
 	/// - `0` - the position where the brace should be inserted.
 	ExpectedBraceAfterDoKw(Span),
 	/// Did not find a body between the `do` and `while` keywords.
-	/// 
+	///
 	/// - `0` - the span where the body should be.
 	ExpectedScopeAfterDoKw(Span),
 	/// Did not find the `while` keyword after the body of a do-loop.
@@ -299,34 +327,9 @@ pub enum SyntaxErr {
 	/// - `0` - the position where the keyword should be inserted.
 	ExpectedWhileKwAfterDoBody(Span),
 	/// Did not find a semi-colon (`;`) after a do-while loop.
-	/// 
+	///
 	/// - `0` - the position where the semi-colon should be inserted.
 	ExpectedSemiAfterDoWhileStmt(Span),
-
-	/// Did not find either a closing brace (`}`), or a `case` or `default` keyword when parsing a switch
-	/// statement. E.g. in `switch { default:`, we are missing a closing brace like so `switch { default: }`.
-	///
-	/// - `0` - the span of the case opening colon (`:`),
-	/// - `1` - the span where the closing brace should be.
-	ExpectedSwitchCaseEnd(Span, Span),
-	/// Did not find a semi-colon (`;`) to separate the statements/expressions in a for loop. E.g. in `for (int i i
-	/// < 5`, we are missing a semi-colon like so `for (int i; i < 5`.
-	///
-	/// - `0` - the span where the semi-colon should be.
-	ExpectedSemiInForCond(Span),
-	/// Found the `)` token signifying the end of the for loop conditions without encountering a condition
-	/// expression. E.g. in `for (int i;;)`, we are missing the condition expression like so `for (int i; i < 5)`.
-	/// Note that the expression may be empty.
-	///
-	/// - `0` - the span where the expression should be.
-	MissingCondExprInFor(Span),
-	/// Found the `)` token signifying the end of the for loop conditions without encountering an increment
-	/// expression. E.g. in `for (int i; i < 5)`, we are missing the increment expression like so
-	/// `for (int i; i < 5;)`. Note that the expression may be empty.
-	///
-	/// - `0` - the span where the expression should be.
-	MissingIncrementExprInFor(Span),
-
 	/* SINGLE-WORD */
 	/// Did not find a semi-colon (`;`) after the `return` keyword (or after the return expression if there is
 	/// one).

@@ -122,7 +122,7 @@ impl Expr {
 #[derive(Debug, Clone, PartialEq)]
 pub enum ExprTy {
 	/// A placeholder expression for one that is missing.
-	/// 
+	///
 	/// This token exists because when parsing, the entire expected expression, such as a while-loop condition, may
 	/// be missing. We want to have better error recovery so we must be able to represent a missing expression. One
 	/// way would be to make a bunch of `Expr` fields into `Option<Expr>`, but that seems needlessly verbose and
@@ -312,8 +312,7 @@ pub enum Stmt {
 	If {
 		cond: Expr,
 		body: Vec<Stmt>,
-		else_ifs: Vec<(Expr, Vec<Stmt>)>,
-		else_: Option<Vec<Stmt>>,
+		branches: Vec<(Option<Expr>, Vec<Stmt>)>,
 	},
 	/// A switch statement.
 	Switch {

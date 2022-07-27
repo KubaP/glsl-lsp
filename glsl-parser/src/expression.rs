@@ -996,7 +996,8 @@ impl ShuntingYard {
 				// So instead, we only break if we encounter these closing delimiter tokens assuming we don't have
 				// the relevant group open.
 				if *token == Token::RParen && self.exists_paren_fn_group() {
-				} else if *token == Token::RBracket && self.exists_index_group() {
+				} else if *token == Token::RBracket && self.exists_index_group()
+				{
 				} else if *token == Token::RBrace && self.exists_init_group() {
 				} else {
 					break 'main;

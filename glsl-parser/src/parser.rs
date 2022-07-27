@@ -911,7 +911,7 @@ fn parse_fn(
 
 		// Parse the function body, including the closing `}` brace.
 		let (stmts, mut errs, _) =
-			parse_scope_contents(walker, BRACE_DELIMITER, current_span);
+			parse_scope_contents(walker, BRACE_DELIMITER, current_span, false);
 		errors.append(&mut errs);
 
 		(
@@ -990,6 +990,18 @@ const SWITCH_CASE_DELIMITER: EndScope = |walker, errors, colon_span| {
 	}
 };
 
+const IF_SINGLE_BODY_DELIMITER: EndScope = |walker, _, _| {
+	let current = match walker.peek() {
+		Some((t, _)) => t,
+		None => return true,
+	};
+
+	match current {
+		Token::RBrace | Token::Else => true,
+		_ => false,
+	}
+};
+
 /// Parse the statements within a scope, up until the scope exit condition is encountered.
 ///
 /// Whether the end delimiter is or is not consumed by the parser depends on the [`EndScope`] function passed in.
@@ -997,30 +1009,44 @@ fn parse_scope_contents(
 	walker: &mut Walker,
 	exit_condition: EndScope,
 	opening_delim: Span,
+	parse_single: bool,
 ) -> (Vec<Stmt>, Vec<SyntaxErr>, Span) {
 	let mut stmts = Vec::new();
 	let mut errors = Vec::new();
 
+	let mut count = 0;
 	let closing_delim_span = 'stmt: loop {
+		// If we are parsing only a single statement and we've had one iteration of the loop, we want to return.
+		if parse_single && count == 1 {
+			break 'stmt walker.get_previous_span().next_single_width();
+		}
+
 		// If we have reached a closing delimiter, break out of the loop and return the parsed statements.
 		if exit_condition(walker, &mut errors, opening_delim) {
 			break 'stmt walker.get_previous_span();
 		}
 
-		// If we immediately encounter an opening `{` brace, that means we have a delimited scope.
+		// If we immediately encounter an opening `{` brace, that means we have a delimited scope. We need to
+		// perform this check before the `expr_parser()` call because that will treat the `{` as the beginning of
+		// an initializer list.
 		let (current, current_span) =
 			walker.peek().map(|t| (&t.0, t.1)).unwrap();
 		if *current == Token::LBrace {
 			walker.advance();
-			let (inner_stmts, mut inner_errs, _) =
-				parse_scope_contents(walker, BRACE_DELIMITER, current_span);
+			let (inner_stmts, mut inner_errs, _) = parse_scope_contents(
+				walker,
+				BRACE_DELIMITER,
+				current_span,
+				false,
+			);
 			errors.append(&mut inner_errs);
 			stmts.push(Stmt::Scope(inner_stmts));
 			continue 'stmt;
 		}
 
 		// First, we look for any qualifiers because they are always located first in a statement.
-		let (qualifiers, _qualifier_errs) = parse_qualifier_list(walker);
+		let (qualifiers, mut errs) = parse_qualifier_list(walker);
+		errors.append(&mut errs);
 
 		// Next, we look for any syntax which can be parsed as an expression, e.g. a `int[3]`.
 		match expr_parser(walker, Mode::Default, &[Token::Semi]) {
@@ -1080,150 +1106,91 @@ fn parse_scope_contents(
 					Token::If => {
 						walker.advance();
 
-						// Consume the opening `(` parenthesis.
-						let current = match walker.peek() {
-							Some((t, _)) => t,
-							None => continue,
-						};
-						if *current == Token::LParen {
-							walker.advance();
-						} else {
-							continue;
-						}
-
-						let cond = match expr_parser(
-							walker,
-							Mode::Default,
-							&[Token::RParen],
-						) {
-							(Some(e), _) => e,
-							(None, _) => continue,
-						};
-
-						// Consume the closing `)` parenthesis.
-						let current = match walker.peek() {
-							Some((t, _)) => t,
-							None => continue,
-						};
-						if *current == Token::RParen {
-							walker.advance();
-						} else {
-							continue;
-						}
-
-						// Consume the opening `{` scope brace.
-						let (current, current_span) = match walker.peek() {
-							Some(t) => (&t.0, t.1),
-							None => continue,
-						};
-						if *current == Token::LBrace {
-							walker.advance();
-						} else {
-							continue;
-						}
-
-						let (body, mut errs) = parse_scope_contents(
-							walker,
-							BRACE_DELIMITER,
-							current_span,
-						);
+						// Parse the first `if ...` branch.
+						let (cond, body, mut errs) =
+							match parse_if(walker, token_span, true) {
+								Ok((expr, body, errs)) => {
+									let expr = match expr {
+										Some(e) => e,
+										None => continue 'stmt,
+									};
+									let body = match body {
+										Some(b) => b,
+										None => continue 'stmt,
+									};
+									(expr, body, errs)
+								}
+								Err(mut errs) => {
+									errors.append(&mut errs);
+									continue 'stmt;
+								},
+							};
 						errors.append(&mut errs);
 
-						let mut else_ = None;
-						let mut else_ifs = Vec::new();
-						'elseifs: loop {
-							// Consume the opening `}` scope brace.
-							let current = match walker.peek() {
-								Some((t, _)) => t,
-								None => continue,
-							};
-							if *current == Token::Else {
-								walker.advance();
-							} else {
-								break 'elseifs;
-							}
-
-							let (current, current_span) = match walker.peek() {
+						let mut branches = Vec::new();
+						'branches: loop {
+							let (token, token_span) = match walker.peek(){
 								Some(t) => (&t.0, t.1),
-								None => continue,
+								None => {
+									continue 'stmt;
+								}
 							};
-							if *current == Token::LBrace {
-								// A final else branch.
-								walker.advance();
 
-								let (body, mut errs, _) = parse_scope_contents(
-									walker,
-									BRACE_DELIMITER,
-									current_span,
-								);
-								errors.append(&mut errs);
-
-								else_ = Some(body);
-								break 'elseifs;
-							} else if *current == Token::If {
-								walker.advance();
-
-								// Consume the opening `(` parenthesis.
-								let current = match walker.peek() {
-									Some((t, _)) => t,
-									None => continue,
-								};
-								if *current == Token::LParen {
+							match token {
+								Token::Else => {
 									walker.advance();
-								} else {
-									continue;
-								}
 
-								let cond = match expr_parser(
-									walker,
-									Mode::Default,
-									&[Token::RParen],
-								) {
-									(Some(e), _) => e,
-									(None, _) => continue,
-								};
-
-								// Consume the closing `)` parenthesis.
-								let current = match walker.peek() {
-									Some((t, _)) => t,
-									None => continue,
-								};
-								if *current == Token::RParen {
-									walker.advance();
-								} else {
-									continue;
-								}
-
-								// Consume the opening `{` scope brace.
-								let (current, current_span) =
-									match walker.peek() {
+									let (current, current_span) = match walker.peek() {
 										Some(t) => (&t.0, t.1),
-										None => continue,
+										None => {
+											errors.push(SyntaxErr::ExpectedIfOrBodyAfterElseKw(
+												walker.get_last_span().next_single_width()
+											));
+											continue 'stmt;
+										}
 									};
-								if *current == Token::LBrace {
-									walker.advance();
-								} else {
-									continue;
-								}
 
-								let (body, mut errs, _) = parse_scope_contents(
-									walker,
-									BRACE_DELIMITER,
-									current_span,
-								);
-								errors.append(&mut errs);
+									if *current == Token::If {
+										// We have `else if`.
+										walker.advance();
 
-								else_ifs.push((cond, body));
-							} else {
-								continue;
+										let (cond, body, mut errs) = match parse_if(walker, current_span, true) {
+											Ok((expr, body, errs)) => {
+												let body = match body {
+													Some(b) => b,
+													None => continue 'stmt,
+												};
+												(expr, body, errs)
+											}
+											Err(_) => continue 'stmt,
+										};
+										errors.append(&mut errs);
+										branches.push((cond, body));
+									} else {
+										// We just have `else`.
+										
+										let (cond, body, mut errs) = match parse_if(walker, token_span, false) {
+											Ok((expr, body, errs)) => {
+												let body = match body {
+													Some(b) => b,
+													None => continue 'stmt,
+												};
+												(expr, body, errs)
+											}
+											Err(_) => continue 'stmt,
+										};
+										errors.append(&mut errs);
+										branches.push((cond, body));
+									}
+								},
+								_ => break 'branches,
 							}
 						}
 
 						stmts.push(Stmt::If {
 							cond,
 							body,
-							else_ifs,
-							else_,
+							branches,
 						});
 					}
 					Token::Switch => {
@@ -1254,7 +1221,8 @@ fn parse_scope_contents(
 							));
 
 							// Consume the body, including the closing `}` brace.
-							let (cases, mut errs) = parse_switch_body(walker, current_span);
+							let (cases, mut errs) =
+								parse_switch_body(walker, current_span);
 							errors.append(&mut errs);
 
 							stmts.push(Stmt::Switch {
@@ -1407,7 +1375,8 @@ fn parse_scope_contents(
 						}
 
 						// Consume the body, including the closing `}` brace.
-						let (cases, mut errs) = parse_switch_body(walker, current_span);
+						let (cases, mut errs) =
+							parse_switch_body(walker, current_span);
 						errors.append(&mut errs);
 
 						stmts.push(Stmt::Switch { expr, cases });
@@ -1445,6 +1414,7 @@ fn parse_scope_contents(
 								walker,
 								BRACE_DELIMITER,
 								current_span,
+								false,
 							);
 							errors.append(&mut errs);
 
@@ -1473,16 +1443,17 @@ fn parse_scope_contents(
 						let mut exprs = vec![None, None];
 						let mut semi_spans = Vec::new();
 						let r_paren_span = 'for_header: loop {
-							let (current, current_span) = match walker.peek() {
-								Some(t) => (&t.0, t.1),
-								None => {
-									errors.push(
+							let (current, current_span) =
+								match walker.peek() {
+									Some(t) => (&t.0, t.1),
+									None => {
+										errors.push(
 										SyntaxErr::ExpectedParenAfterForHeader(
 											l_paren_span, walker.get_last_span().next_single_width())
 									);
-									continue 'stmt;
-								}
-							};
+										continue 'stmt;
+									}
+								};
 
 							match current {
 								Token::Semi => {
@@ -1501,16 +1472,21 @@ fn parse_scope_contents(
 								}
 								Token::RParen if just_started => {
 									// We just had the `(`, which means this is an empty header.
-									errors.push(SyntaxErr::FoundEmptyForHeader(
-										if let Some(l_paren_span) = l_paren_span {
-											Span::new_between(
-												l_paren_span,
-												current_span,
-											)
-										} else {
-											current_span.previous_single_width()
-										},
-									));
+									errors.push(
+										SyntaxErr::FoundEmptyForHeader(
+											if let Some(l_paren_span) =
+												l_paren_span
+											{
+												Span::new_between(
+													l_paren_span,
+													current_span,
+												)
+											} else {
+												current_span
+													.previous_single_width()
+											},
+										),
+									);
 									walker.advance();
 									break 'for_header current_span;
 								}
@@ -1520,16 +1496,21 @@ fn parse_scope_contents(
 									count += 1;
 
 									if count < 3 {
-										errors.push(SyntaxErr::Expected3StmtExprInFor(
-											if let Some(l_paren_span) = l_paren_span {
-												Span::new_between(
-													l_paren_span,
-													current_span,
-												)
-											} else {
-												current_span.previous_single_width()
-											},
-										));
+										errors.push(
+											SyntaxErr::Expected3StmtExprInFor(
+												if let Some(l_paren_span) =
+													l_paren_span
+												{
+													Span::new_between(
+														l_paren_span,
+														current_span,
+													)
+												} else {
+													current_span
+														.previous_single_width()
+												},
+											),
+										);
 									} else if count >= 4 {
 										errors.push(SyntaxErr::FoundMoreThan3StmtExprInFor(
 											Span::new_between(Span::new_zero_width(extra_arg_start), current_span)
@@ -1543,8 +1524,13 @@ fn parse_scope_contents(
 									// Even though we are missing the `)` token, we still treat this as a "valid"
 									// for loop for better error recovery. We don't consume because the next check
 									// deals with `{`.
-									errors.push(SyntaxErr::ExpectedParenAfterForHeader(
-										l_paren_span, current_span.previous_single_width()));
+									errors.push(
+										SyntaxErr::ExpectedParenAfterForHeader(
+											l_paren_span,
+											current_span
+												.previous_single_width(),
+										),
+									);
 									break 'for_header current_span;
 								}
 								_ => {
@@ -1609,8 +1595,7 @@ fn parse_scope_contents(
 								(None, _) => {
 									// Look for a `;` or `)` or `{` that follows immediately from the last. We let
 									// the next loop iteration deal with that.
-									let (current, _) =
-									match walker.peek() {
+									let (current, _) = match walker.peek() {
 										Some(t) => (&t.0, t.1),
 										None => {
 											errors.push(
@@ -1621,7 +1606,9 @@ fn parse_scope_contents(
 										}
 									};
 									match current {
-										Token::Semi |Token::RParen|Token::LBrace => continue 'for_header,
+										Token::Semi
+										| Token::RParen
+										| Token::LBrace => continue 'for_header,
 										_ => {}
 									}
 
@@ -1641,17 +1628,35 @@ fn parse_scope_contents(
 											};
 
 										match current {
-											Token::Semi|Token::RParen|Token::LBrace => {
+											Token::Semi
+											| Token::RParen
+											| Token::LBrace => {
 												// We need to work out the last span that's valid.
-												let last_expr_span = exprs.iter().rev().find(|o| o.is_some()).map(|e| e.as_ref().unwrap().span);
-												let last_semi_span = semi_spans.last();
-												let beginning_span = if let (Some(expr), Some(semi)) = (last_expr_span, last_semi_span) {
+												let last_expr_span = exprs
+													.iter()
+													.rev()
+													.find(|o| o.is_some())
+													.map(|e| {
+														e.as_ref().unwrap().span
+													});
+												let last_semi_span =
+													semi_spans.last();
+												let beginning_span = if let (
+													Some(expr),
+													Some(semi),
+												) = (
+													last_expr_span,
+													last_semi_span,
+												) {
 													if expr.is_after(semi) {
 														expr
 													} else {
 														*semi
 													}
-												} else if let Some(l_paren_span) = l_paren_span {
+												} else if let Some(
+													l_paren_span,
+												) = l_paren_span
+												{
 													l_paren_span
 												} else {
 													keyword_span
@@ -1661,7 +1666,7 @@ fn parse_scope_contents(
 												));
 												break 'inner;
 											}
-											_ => walker.advance()
+											_ => walker.advance(),
 										}
 									}
 								}
@@ -1708,6 +1713,7 @@ fn parse_scope_contents(
 							walker,
 							BRACE_DELIMITER,
 							current_span,
+							false,
 						);
 						errors.append(&mut errs);
 
@@ -1750,6 +1756,7 @@ fn parse_scope_contents(
 								walker,
 								BRACE_DELIMITER,
 								current_span,
+								false,
 							);
 							errors.append(&mut errs);
 
@@ -1903,6 +1910,7 @@ fn parse_scope_contents(
 							walker,
 							BRACE_DELIMITER,
 							current_span,
+							false,
 						);
 						errors.append(&mut errs);
 
@@ -1931,6 +1939,7 @@ fn parse_scope_contents(
 									walker,
 									BRACE_DELIMITER,
 									current_span,
+									false,
 								);
 							errors.append(&mut errs);
 
@@ -2305,6 +2314,8 @@ fn parse_scope_contents(
 				}
 			}
 		}
+
+		count += 1;
 	};
 
 	(stmts, errors, closing_delim_span)
@@ -2313,7 +2324,7 @@ fn parse_scope_contents(
 /// Parses the body of a switch statement.
 fn parse_switch_body(
 	walker: &mut Walker,
-	l_brace_span: Span
+	l_brace_span: Span,
 ) -> (Vec<(Option<Expr>, Vec<Stmt>)>, Vec<SyntaxErr>) {
 	let mut errors = Vec::new();
 
@@ -2322,16 +2333,16 @@ fn parse_switch_body(
 		Some((token, token_span)) => match token {
 			Token::RBrace => {
 				errors.push(SyntaxErr::FoundEmptySwitchBody(
-					Span::new_between(l_brace_span, *token_span)
+					Span::new_between(l_brace_span, *token_span),
 				));
 				return (vec![], errors);
 			}
 			_ => {}
-		}
+		},
 		None => {
 			errors.push(SyntaxErr::MissingSwitchBodyClosingBrace(
 				Some(l_brace_span),
-				walker.get_last_span().next_single_width()
+				walker.get_last_span().next_single_width(),
 			));
 			return (vec![], errors);
 		}
@@ -2341,14 +2352,14 @@ fn parse_switch_body(
 	let mut cases = Vec::new();
 	'cases: loop {
 		let (current, current_span) = match walker.peek() {
-			Some(t )=> (&t.0, t.1),
+			Some(t) => (&t.0, t.1),
 			None => {
 				errors.push(SyntaxErr::MissingSwitchBodyClosingBrace(
 					Some(l_brace_span),
-					walker.get_last_span().next_single_width()
+					walker.get_last_span().next_single_width(),
 				));
 				break 'cases;
-			},
+			}
 		};
 
 		match current {
@@ -2369,26 +2380,27 @@ fn parse_switch_body(
 					(None, _) => {
 						// We found tokens which cannot even start an expression. We loop until we come
 						// across either `case`, `default` or a `}`.
-						errors.push(SyntaxErr::ExpectedExprAfterCaseKw(keyword_span.next_single_width()));
+						errors.push(SyntaxErr::ExpectedExprAfterCaseKw(
+							keyword_span.next_single_width(),
+						));
 						loop {
-							let (current, _) =
-								match walker.peek() {
-									Some(t) => (&t.0, t.1),
-									None => {
-										errors.push(SyntaxErr::MissingSwitchBodyClosingBrace(
+							let (current, _) = match walker.peek() {
+								Some(t) => (&t.0, t.1),
+								None => {
+									errors.push(SyntaxErr::MissingSwitchBodyClosingBrace(
 											Some(l_brace_span),
 											walker.get_last_span().next_single_width()
 										));
-										break 'cases;
-									}
-								};
+									break 'cases;
+								}
+							};
 
 							match current {
-								Token::Case|Token::Default => continue 'cases,
+								Token::Case | Token::Default => continue 'cases,
 								Token::RBrace => break 'cases,
 								_ => walker.advance(),
 							}
-						};
+						}
 					}
 				};
 
@@ -2396,9 +2408,11 @@ fn parse_switch_body(
 				let (current, current_span) = match walker.peek() {
 					Some(t) => (&t.0, t.1),
 					None => {
-						errors.push(SyntaxErr::ExpectedColonAfterCase(walker.get_last_span().next_single_width()));
-						break 'cases
-					},
+						errors.push(SyntaxErr::ExpectedColonAfterCase(
+							walker.get_last_span().next_single_width(),
+						));
+						break 'cases;
+					}
 				};
 				let scope_begin_span = if *current == Token::Colon {
 					walker.advance();
@@ -2406,7 +2420,9 @@ fn parse_switch_body(
 				} else {
 					// Even though we are missing a necessary token, we treat this as "valid" for better error
 					// recovery.
-					errors.push(SyntaxErr::ExpectedColonAfterCase(expr.span.next_single_width()));
+					errors.push(SyntaxErr::ExpectedColonAfterCase(
+						expr.span.next_single_width(),
+					));
 					walker.get_last_span()
 				};
 
@@ -2415,6 +2431,7 @@ fn parse_switch_body(
 					walker,
 					SWITCH_CASE_DELIMITER,
 					scope_begin_span,
+					false,
 				);
 				errors.append(&mut errs);
 
@@ -2428,9 +2445,11 @@ fn parse_switch_body(
 				let (current, current_span) = match walker.peek() {
 					Some(t) => (&t.0, t.1),
 					None => {
-						errors.push(SyntaxErr::ExpectedColonAfterCase(walker.get_last_span().next_single_width()));
-						break 'cases
-					},
+						errors.push(SyntaxErr::ExpectedColonAfterCase(
+							walker.get_last_span().next_single_width(),
+						));
+						break 'cases;
+					}
 				};
 				let scope_begin_span = if *current == Token::Colon {
 					walker.advance();
@@ -2438,7 +2457,9 @@ fn parse_switch_body(
 				} else {
 					// Even though we are missing a necessary token, we treat this as "valid" for better error
 					// recovery.
-					errors.push(SyntaxErr::ExpectedColonAfterCase(keyword_span.next_single_width()));
+					errors.push(SyntaxErr::ExpectedColonAfterCase(
+						keyword_span.next_single_width(),
+					));
 					keyword_span
 				};
 
@@ -2447,6 +2468,7 @@ fn parse_switch_body(
 					walker,
 					SWITCH_CASE_DELIMITER,
 					scope_begin_span,
+					false,
 				);
 				errors.append(&mut errs);
 
@@ -2459,26 +2481,181 @@ fn parse_switch_body(
 				errors.push(SyntaxErr::InvalidSwitchCaseBegin(current_span));
 				'inner: loop {
 					let (current, _) = match walker.peek() {
-						Some(t )=> (&t.0, t.1),
+						Some(t) => (&t.0, t.1),
 						None => {
-							errors.push(SyntaxErr::MissingSwitchBodyClosingBrace(
-								Some(l_brace_span),
-								walker.get_last_span().next_single_width()
-							));
+							errors.push(
+								SyntaxErr::MissingSwitchBodyClosingBrace(
+									Some(l_brace_span),
+									walker.get_last_span().next_single_width(),
+								),
+							);
 							break 'cases;
-						},
+						}
 					};
 
 					match current {
-						Token::Case | Token::Default | Token::RBrace => break 'inner,
+						Token::Case | Token::Default | Token::RBrace => {
+							break 'inner
+						}
 						_ => walker.advance(),
 					}
 				}
-			},
+			}
 		}
 	}
 
 	(cases, errors)
+}
+
+/// Parse an if statement body.
+fn parse_if(
+	walker: &mut Walker,
+	kw_span: Span,
+	expects_condition: bool,
+) -> Result<(Option<Expr>, Option<Vec<Stmt>>, Vec<SyntaxErr>), Vec<SyntaxErr>> {
+	let mut errors = Vec::new();
+
+	let (header_end_span, cond) = if expects_condition {
+		// Consume the opening `(` parenthesis.
+		let (current, current_span) = match walker.peek() {
+			Some(t) => (&t.0, t.1),
+			None => {
+				errors.push(SyntaxErr::ExpectedParenAfterIfKw(
+					kw_span.next_single_width(),
+				));
+				return Err(errors);
+			}
+		};
+		let l_paren_span = if *current == Token::LParen {
+			walker.advance();
+			Some(current_span)
+		} else {
+			errors.push(SyntaxErr::ExpectedParenAfterIfKw(
+				kw_span.next_single_width(),
+			));
+			None
+		};
+
+		// Consume the conditional expression.
+		let cond = match expr_parser(walker, Mode::Default, &[Token::RParen]) {
+			(Some(e), mut errs) => {
+				errors.append(&mut errs);
+				e
+			}
+			(None, _) => {
+				// Unlike with the other control flow statements, we don't loop until we hit a `)`
+				// or a `{` because an if statement can omit the `{`, in which case we could
+				// potentially loop until we hit the end of the file. So, if the next check doesn't
+				// detect either token, we can quit parsing this statement. We do check for a
+				// potential `( )` situation since that is easy to detect and cannot produce false
+				// positives.
+				if let Some((current, current_span)) = walker.peek() {
+					if *current == Token::RParen || *current == Token::LBrace {
+						errors.push(SyntaxErr::ExpectedExprInIfHeader(
+							Span::new_between(
+								if let Some(l_paren_span) = l_paren_span {
+									l_paren_span
+								} else {
+									kw_span
+								},
+								*current_span,
+							),
+						));
+					} else {
+						errors.push(SyntaxErr::ExpectedExprInIfHeader(
+							walker.get_current_span(),
+						));
+					}
+				} else {
+					errors.push(SyntaxErr::ExpectedExprInIfHeader(
+						walker.get_current_span(),
+					));
+				}
+				Expr {
+					ty: ExprTy::Missing,
+					span: walker.get_current_span(),
+				}
+			}
+		};
+
+		// Consume the closing `)` parenthesis.
+		let (current, current_span) = match walker.peek() {
+			Some(t) => (&t.0, t.1),
+			None => {
+				errors.push(SyntaxErr::ExpectedParenAfterIfHeader(
+					l_paren_span,
+					walker.get_last_span().next_single_width(),
+				));
+				return Err(errors);
+			}
+		};
+		if *current == Token::RParen {
+			walker.advance();
+			(current_span, Some(cond))
+		} else if *current == Token::LBrace {
+			// We don't do anything apart from creating a syntax error since the next check deals
+			// with the optional `{`.
+			errors.push(SyntaxErr::ExpectedParenAfterIfHeader(
+				l_paren_span,
+				current_span.previous_single_width(),
+			));
+			(current_span, Some(cond))
+		} else {
+			errors.push(SyntaxErr::ExpectedParenAfterIfHeader(
+				l_paren_span,
+				Span::new_between(walker.get_previous_span(), current_span),
+			));
+			return Err(errors);
+		}
+	} else {
+		(kw_span, None)
+	};
+
+	// Consume the optional opening `{` scope brace.
+	let (current, current_span) = match walker.peek() {
+		Some(t) => (&t.0, t.1),
+		None => {
+			// Even though if statements without a body are illegal, we treat this as "valid"
+			// to produce better error recovery.
+			errors.push(SyntaxErr::ExpectedBraceOrStmtAfterIfHeader(
+				walker.get_last_span().next_single_width(),
+			));
+			return Ok((cond, None, errors));
+		}
+	};
+	let body = if *current == Token::LBrace {
+		walker.advance();
+
+		// Consume the body, including the closing `}` brace.
+		let (body, mut errs, _) =
+			parse_scope_contents(walker, BRACE_DELIMITER, current_span, false);
+		errors.append(&mut errs);
+
+		body
+	} else {
+		// Since we are missing a `{`, we are expecting a single statement.
+		let (stmt, mut errs, _) = parse_scope_contents(
+			walker,
+			IF_SINGLE_BODY_DELIMITER,
+			walker.get_previous_span(),
+			true,
+		);
+		errors.append(&mut errs);
+
+		if stmt.is_empty() {
+			errors.push(SyntaxErr::ExpectedStmtAfterIfHeader(
+				// Panics: `r_paren_span` will be `None` if a `{` was encountered, but in that
+				// case, the branch above will be chosen instead, and if we didn't encounter a
+				// `)`, we will have already quit this parse, so this is always guaranteed to
+				// be `Some` if we are in this branch.
+				header_end_span.next_single_width(),
+			));
+		}
+
+		stmt
+	};
+
+	Ok((cond, Some(body), errors))
 }
 
 /// Parse a struct definition or declaration.
@@ -2544,7 +2721,7 @@ fn parse_struct(
 
 	// Parse the struct body, including the closing `}` brace.
 	let (members, mut errs, _) =
-		parse_scope_contents(walker, BRACE_DELIMITER, l_brace_span);
+		parse_scope_contents(walker, BRACE_DELIMITER, l_brace_span, false);
 
 	// Check if there is an unclosed-scope syntax error, because if so, we can return early without produce further
 	// error messages which would become confusing since they would be overlaid over each other.
@@ -2859,8 +3036,7 @@ pub fn print_stmt(stmt: &Stmt, indent: usize) {
 		Stmt::If {
 			cond,
 			body,
-			else_ifs,
-			else_,
+			branches,
 		} => {
 			print!("\r\n{:indent$}If({cond}) {{", "", indent = indent * 4);
 			for stmt in body {
@@ -2868,16 +3044,12 @@ pub fn print_stmt(stmt: &Stmt, indent: usize) {
 			}
 			print!("\r\n{:indent$}}}", "", indent = indent * 4);
 
-			for (cond, body) in else_ifs {
-				print!("\r\n{:indent$}ElseIf({cond})", "", indent = indent * 4);
-				for stmt in body {
-					print_stmt(stmt, indent + 1);
+			for (cond, body) in branches {
+				if let Some(cond) = cond {
+					print!("\r\n{:indent$}ElseIf({cond}) {{", "", indent = indent * 4);
+				} else {
+					print!("\r\n{:indent$}Else {{", "", indent=indent*4);
 				}
-				print!("\r\n{:indent$}}}", "", indent = indent * 4);
-			}
-
-			if let Some(body) = else_ {
-				print!("\r\n{:indent$}Else {{", "", indent = indent * 4);
 				for stmt in body {
 					print_stmt(stmt, indent + 1);
 				}

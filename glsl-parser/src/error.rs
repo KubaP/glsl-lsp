@@ -205,7 +205,7 @@ pub enum SyntaxErr {
 	/// - `0` - the position where the statement should be inserted.
 	ExpectedStmtAfterIfHeader(Span),
 	/// Did not find either a body `{...}` or a statement or the `if` keyword after the `else` keyword.
-	/// 
+	///
 	/// - `0` - the position where the item should be inserted.
 	ExpectedIfOrBodyAfterElseKw(Span),
 	/* SWITCH */
@@ -437,4 +437,68 @@ pub enum SyntaxErr {
 	/// - `0` - the span where the semi-colon should be (i.e. between the declaration body and the token which is
 	///   not what we expected).
 	ExpectedSemiAfterStructBody(Span),
+
+	/* ILLEGAL STATEMENTS AT TOP-LEVEL */
+	/// Found an expression-statement the top-level of a file.
+	///
+	/// - `0` - the span of the statement.
+	ExprStmtIsIllegalAtTopLevel(Span),
+	/// Found an scope `{...}` at the top-level of a file.
+	///
+	/// - `0` - the span of the statement.
+	ScopeStmtIsIllegalAtTopLevel(Span),
+	/// Found an if-statement at the top-level of a file.
+	///
+	/// - `0` - the span of the statement.
+	IfStmtIsIllegalAtTopLevel(Span),
+	/// Found a switch-statement at the top-level of a file.
+	///
+	/// - `0` - the span of the statement.
+	SwitchStmtIsIllegalAtTopLevel(Span),
+	/// Found an for-loop statement at the top-level of a file.
+	///
+	/// - `0` - the span of the statement.
+	ForStmtIsIllegalAtTopLevel(Span),
+	/// Found an while-loop statement at the top-level of a file.
+	///
+	/// - `0` - the span of the statement.
+	WhileStmtIsIllegalAtTopLevel(Span),
+	/// Found an do-while-loop statement at the top-level of a file.
+	///
+	/// - `0` - the span of the statement.
+	DoWhileStmtIsIllegalAtTopLevel(Span),
+	/// Found a return-statement at the top-level of a file.
+	///
+	/// - `0` - the span of the statement.
+	ReturnStmtIsIllegalAtTopLevel(Span),
+	/// Found a break-statement at the top-level of a file.
+	///
+	/// - `0` - the span of the statement.
+	BreakStmtIsIllegalAtTopLevel(Span),
+	/// Found a continue-statement at the top-level of a file.
+	///
+	/// - `0` - the span of the statement.
+	ContinueStmtIsIllegalAtTopLevel(Span),
+	/// Found a discard-statement at the top-level of a file.
+	///
+	/// - `0` - the span of the statement.
+	DiscardStmtIsIllegalAtTopLevel(Span),
+
+	/* ILLEGAL STATEMENTS INSIDE OF FUNCTIONS */
+	/// Found a function-statement within a function body.
+	///
+	/// - `0` - the span of the statement.
+	FnStmtIsIllegalInFn(Span),
+	/// Found a struct-statement within a function body.
+	///
+	/// - `0` - the span of the statement.
+	StructStmtIsIllegalInFn(Span),
+	/// Found a break-statement within a function body but outside of a loop statement.
+	///
+	/// - `0` - the span of the statement.
+	BreakStmtIsIllegalInFnOutsideLoop(Span),
+	/// Found a continue-statement within a function body but outside of a loop statement.
+	///
+	/// - `0` - the span of the statement.
+	ContinueStmtIsIllegalInFnOutsideLoop(Span),
 }

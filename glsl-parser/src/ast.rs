@@ -1,6 +1,6 @@
 use crate::{
 	lexer::{NumType, OpTy, Token},
-	span::Span,
+	span::{Span, Spanned},
 	Either,
 };
 
@@ -233,41 +233,47 @@ pub struct Op {
 	pub span: Span,
 }
 
-type Param = (Type, Option<Ident>, Vec<Qualifier>);
+type Param = (Type, Option<Ident>, Vec<Spanned<Qualifier>>);
 
 /// A top-level statement. Some of these statements are only valid at the file top-level, whilst others are only
 /// valid inside of functions.
 #[derive(Debug, Clone, PartialEq)]
-pub enum Stmt {
+pub struct Stmt {
+	pub ty: StmtTy,
+	pub span: Span,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub enum StmtTy {
 	/// An empty statement, i.e. just a `;`.
 	Empty,
 	/// A variable definition, e.g. `int a;`.
 	VarDef {
 		type_: Type,
 		ident: Ident,
-		qualifiers: Vec<Qualifier>,
+		qualifiers: Vec<Spanned<Qualifier>>,
 	},
 	/// Multiple variable definitions, e.g. `int a, b;`.
-	VarDefs(Vec<(Type, Ident)>, Vec<Qualifier>),
+	VarDefs(Vec<(Type, Ident)>, Vec<Spanned<Qualifier>>),
 	/// A variable declaration, e.g. `int a = <EXPR>;`.
 	VarDecl {
 		type_: Type,
 		ident: Ident,
 		value: Expr,
-		qualifiers: Vec<Qualifier>,
+		qualifiers: Vec<Spanned<Qualifier>>,
 	},
 	/// Multiple variable declarations, e.g. `int a, b = <EXPR>;`.
 	VarDecls {
 		vars: Vec<(Type, Ident)>,
 		value: Expr,
-		qualifiers: Vec<Qualifier>,
+		qualifiers: Vec<Spanned<Qualifier>>,
 	},
 	/// A function definition.
 	FnDef {
 		return_type: Type,
 		ident: Ident,
 		params: Vec<Param>,
-		qualifiers: Vec<Qualifier>,
+		qualifiers: Vec<Spanned<Qualifier>>,
 	},
 	/// A function declaration.
 	FnDecl {
@@ -275,12 +281,12 @@ pub enum Stmt {
 		ident: Ident,
 		params: Vec<Param>,
 		body: Vec<Stmt>,
-		qualifiers: Vec<Qualifier>,
+		qualifiers: Vec<Spanned<Qualifier>>,
 	},
 	/// A struct definition. *Note:* This is invalid glsl grammar.
 	StructDef {
 		ident: Ident,
-		qualifiers: Vec<Qualifier>,
+		qualifiers: Vec<Spanned<Qualifier>>,
 	},
 	/// A struct declaration.
 	StructDecl {
@@ -288,7 +294,7 @@ pub enum Stmt {
 		/// # Invariants
 		/// These will only be of type `Stmt::VarDef` or `Stmt::VarDefs`.
 		members: Vec<Stmt>,
-		qualifiers: Vec<Qualifier>,
+		qualifiers: Vec<Spanned<Qualifier>>,
 		instance: Option<Ident>,
 	},
 	/// A general expression, e.g.

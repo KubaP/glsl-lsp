@@ -1,5 +1,5 @@
 use crate::{
-	ast::{Expr, ExprTy, Ident, Qualifier, Stmt, Type},
+	ast::{Expr, ExprTy, Ident, Qualifier, Stmt, StmtTy, Type},
 	error::SyntaxErr,
 	expression::{expr_parser, Mode},
 	lexer::{lexer, OpTy, Token},
@@ -85,79 +85,59 @@ pub fn parse(source: &str) -> (Vec<Stmt>, Vec<SyntaxErr>) {
 	let mut stmts = Vec::new();
 	let mut errors = Vec::new();
 
-	'parser: while !walker.is_done() {
-		// First, we look for any qualifiers which are always located first in a statement.
-		let (qualifiers, mut qualifier_errs) =
-			parse_qualifier_list(&mut walker);
-		errors.append(&mut qualifier_errs);
-
-		// Next, we look for any syntax which can be parsed as an expression, e.g. a `int[3]`.
-		match expr_parser(&mut walker, Mode::Default, &[]) {
-			// We tried to parse an expression and succeeded. We have an expression consisting of at least one
-			// token.
-			(Some(expr), _) => {
-				// Check if the expression can be parsed as a typename. If so, then we try to parse the following
-				// tokens as statements which can start with a typename, i.e. variable or function defs/decls.
-				if let Some(type_) = expr.to_type() {
-					match parse_type_start(&mut walker, type_, expr, qualifiers)
-					{
-						(Some(s), mut errs) => {
-							errors.append(&mut errs);
-							stmts.push(s);
-						}
-						(None, mut errs) => {
-							errors.append(&mut errs);
-
-							'till_next: loop {
-								// We did not successfully parse a statement.
-								let (next, _) = match walker.peek() {
-									Some(t) => t,
-									None => break 'parser,
-								};
-
-								if *next == Token::Semi {
-									walker.advance();
-									break 'till_next;
-								} else if next.starts_statement() {
-									// We don't advance because we are currently at a token which begins a new statement, so we
-									// don't want to consume it before we rerun the main loop.
-									break 'till_next;
-								} else {
-									walker.advance();
-									continue 'till_next;
-								}
-							}
-						}
-					};
+	while walker.peek().is_some() {
+		match parse_statement_within_fn(&mut walker) {
+			Ok((stmt, mut errs)) => {
+				errors.append(&mut errs);
+				if let Some(stmt) = stmt {
+					// Check for the validity of the statement at the top-level.
+					match stmt.ty {
+						StmtTy::Expr(_) => errors.push(
+							SyntaxErr::ExprStmtIsIllegalAtTopLevel(stmt.span),
+						),
+						StmtTy::Scope(_) => errors.push(
+							SyntaxErr::ScopeStmtIsIllegalAtTopLevel(stmt.span),
+						),
+						StmtTy::If { .. } => errors.push(
+							SyntaxErr::IfStmtIsIllegalAtTopLevel(stmt.span),
+						),
+						StmtTy::Switch { .. } => errors.push(
+							SyntaxErr::SwitchStmtIsIllegalAtTopLevel(stmt.span),
+						),
+						StmtTy::For { .. } => errors.push(
+							SyntaxErr::ForStmtIsIllegalAtTopLevel(stmt.span),
+						),
+						StmtTy::While { .. } => errors.push(
+							SyntaxErr::WhileStmtIsIllegalAtTopLevel(stmt.span),
+						),
+						StmtTy::DoWhile { .. } => errors.push(
+							SyntaxErr::DoWhileStmtIsIllegalAtTopLevel(
+								stmt.span,
+							),
+						),
+						StmtTy::Return(_) => errors.push(
+							SyntaxErr::ReturnStmtIsIllegalAtTopLevel(stmt.span),
+						),
+						StmtTy::Break => errors.push(
+							SyntaxErr::BreakStmtIsIllegalAtTopLevel(stmt.span),
+						),
+						StmtTy::Continue => errors.push(
+							SyntaxErr::ContinueStmtIsIllegalAtTopLevel(
+								stmt.span,
+							),
+						),
+						StmtTy::Discard => errors.push(
+							SyntaxErr::DiscardStmtIsIllegalAtTopLevel(
+								stmt.span,
+							),
+						),
+						_ => {}
+					}
+					stmts.push(stmt);
 				}
 			}
-			// We tried to parse an expression but that immediately failed. This means the current token is one
-			// which cannot start an expression.
-			(None, _) => {
-				let (token, current_span) =
-					walker.peek().map(|t| (&t.0, t.1.clone())).unwrap();
-
-				match token {
-					// After the `struct` keyword we are expecting a struct def/decl.
-					Token::Struct => {
-						walker.advance();
-						match parse_struct(
-							&mut walker,
-							qualifiers,
-							current_span,
-						) {
-							(Some(s), mut errs) => {
-								errors.append(&mut errs);
-								stmts.push(s);
-							}
-							(None, mut errs) => {
-								errors.append(&mut errs);
-								break 'parser;
-							}
-						}
-					}
-					_ => break 'parser,
-				}
+			Err(mut errs) => {
+				errors.append(&mut errs);
 			}
 		}
 	}
@@ -171,7 +151,7 @@ pub fn parse(source: &str) -> (Vec<Stmt>, Vec<SyntaxErr>) {
 /// - `layout(location = 1) ...`.
 fn parse_qualifier_list(
 	walker: &mut Walker,
-) -> (Vec<Qualifier>, Vec<SyntaxErr>) {
+) -> (Vec<Spanned<Qualifier>>, Vec<SyntaxErr>) {
 	let mut errors = Vec::new();
 
 	let mut qualifiers = Vec::new();
@@ -185,60 +165,67 @@ fn parse_qualifier_list(
 		use crate::ast::{Interpolation, Memory, Storage};
 
 		match current {
-			Token::Const => qualifiers.push(Qualifier::Storage(Storage::Const)),
-			Token::In => qualifiers.push(Qualifier::Storage(Storage::In)),
-			Token::Out => qualifiers.push(Qualifier::Storage(Storage::Out)),
-			Token::InOut => qualifiers.push(Qualifier::Storage(Storage::InOut)),
-			Token::Attribute => {
-				qualifiers.push(Qualifier::Storage(Storage::Attribute))
+			Token::Const => qualifiers
+				.push((Qualifier::Storage(Storage::Const), *current_span)),
+			Token::In => qualifiers
+				.push((Qualifier::Storage(Storage::In), *current_span)),
+			Token::Out => qualifiers
+				.push((Qualifier::Storage(Storage::Out), *current_span)),
+			Token::InOut => qualifiers
+				.push((Qualifier::Storage(Storage::InOut), *current_span)),
+			Token::Attribute => qualifiers
+				.push((Qualifier::Storage(Storage::Attribute), *current_span)),
+			Token::Uniform => qualifiers
+				.push((Qualifier::Storage(Storage::Uniform), *current_span)),
+			Token::Varying => qualifiers
+				.push((Qualifier::Storage(Storage::Varying), *current_span)),
+			Token::Buffer => qualifiers
+				.push((Qualifier::Storage(Storage::Buffer), *current_span)),
+			Token::Shared => qualifiers
+				.push((Qualifier::Storage(Storage::Shared), *current_span)),
+			Token::Centroid => qualifiers
+				.push((Qualifier::Storage(Storage::Centroid), *current_span)),
+			Token::Sample => qualifiers
+				.push((Qualifier::Storage(Storage::Sample), *current_span)),
+			Token::Patch => qualifiers
+				.push((Qualifier::Storage(Storage::Patch), *current_span)),
+			Token::Flat => qualifiers.push((
+				Qualifier::Interpolation(Interpolation::Flat),
+				*current_span,
+			)),
+			Token::Smooth => qualifiers.push((
+				Qualifier::Interpolation(Interpolation::Smooth),
+				*current_span,
+			)),
+			Token::NoPerspective => qualifiers.push((
+				Qualifier::Interpolation(Interpolation::NoPerspective),
+				*current_span,
+			)),
+			Token::HighP => {
+				qualifiers.push((Qualifier::Precision, *current_span))
 			}
-			Token::Uniform => {
-				qualifiers.push(Qualifier::Storage(Storage::Uniform))
+			Token::MediumP => {
+				qualifiers.push((Qualifier::Precision, *current_span))
 			}
-			Token::Varying => {
-				qualifiers.push(Qualifier::Storage(Storage::Varying))
+			Token::LowP => {
+				qualifiers.push((Qualifier::Precision, *current_span))
 			}
-			Token::Buffer => {
-				qualifiers.push(Qualifier::Storage(Storage::Buffer))
+			Token::Invariant => {
+				qualifiers.push((Qualifier::Invariant, *current_span))
 			}
-			Token::Shared => {
-				qualifiers.push(Qualifier::Storage(Storage::Shared))
+			Token::Precise => {
+				qualifiers.push((Qualifier::Precise, *current_span))
 			}
-			Token::Centroid => {
-				qualifiers.push(Qualifier::Storage(Storage::Centroid))
-			}
-			Token::Sample => {
-				qualifiers.push(Qualifier::Storage(Storage::Sample))
-			}
-			Token::Patch => qualifiers.push(Qualifier::Storage(Storage::Patch)),
-			Token::Flat => {
-				qualifiers.push(Qualifier::Interpolation(Interpolation::Flat))
-			}
-			Token::Smooth => {
-				qualifiers.push(Qualifier::Interpolation(Interpolation::Smooth))
-			}
-			Token::NoPerspective => qualifiers
-				.push(Qualifier::Interpolation(Interpolation::NoPerspective)),
-			Token::HighP => qualifiers.push(Qualifier::Precision),
-			Token::MediumP => qualifiers.push(Qualifier::Precision),
-			Token::LowP => qualifiers.push(Qualifier::Precision),
-			Token::Invariant => qualifiers.push(Qualifier::Invariant),
-			Token::Precise => qualifiers.push(Qualifier::Precise),
-			Token::Coherent => {
-				qualifiers.push(Qualifier::Memory(Memory::Coherent))
-			}
-			Token::Volatile => {
-				qualifiers.push(Qualifier::Memory(Memory::Volatile))
-			}
-			Token::Restrict => {
-				qualifiers.push(Qualifier::Memory(Memory::Restrict))
-			}
-			Token::Readonly => {
-				qualifiers.push(Qualifier::Memory(Memory::Readonly))
-			}
-			Token::Writeonly => {
-				qualifiers.push(Qualifier::Memory(Memory::Writeonly))
-			}
+			Token::Coherent => qualifiers
+				.push((Qualifier::Memory(Memory::Coherent), *current_span)),
+			Token::Volatile => qualifiers
+				.push((Qualifier::Memory(Memory::Volatile), *current_span)),
+			Token::Restrict => qualifiers
+				.push((Qualifier::Memory(Memory::Restrict), *current_span)),
+			Token::Readonly => qualifiers
+				.push((Qualifier::Memory(Memory::Readonly), *current_span)),
+			Token::Writeonly => qualifiers
+				.push((Qualifier::Memory(Memory::Writeonly), *current_span)),
 			Token::Layout => {
 				let kw_span = *current_span;
 				walker.advance();
@@ -356,7 +343,10 @@ fn parse_qualifier_list(
 					}
 				}
 
-				qualifiers.push(Qualifier::Layout(layouts));
+				qualifiers.push((
+					Qualifier::Layout(layouts),
+					Span::new(kw_span.start, walker.get_previous_span().end),
+				));
 			}
 			// If we encounter anything other than a qualifier, that means we have reached the end of this list of
 			// qualifiers and can move onto the next parsing step without consuming the current token.
@@ -374,7 +364,7 @@ fn parse_type_start(
 	walker: &mut Walker,
 	type_: Type,
 	original_expr: Expr,
-	qualifiers: Vec<Qualifier>,
+	qualifiers: Vec<Spanned<Qualifier>>,
 ) -> (Option<Stmt>, Vec<SyntaxErr>) {
 	let mut errors = Vec::new();
 
@@ -395,6 +385,7 @@ fn parse_type_start(
 						return parse_fn(
 							walker,
 							type_,
+							original_expr.span,
 							ident,
 							qualifiers,
 							l_paren_span,
@@ -431,7 +422,16 @@ fn parse_type_start(
 			match current {
 				Token::Semi => {
 					// We have something like `int;` which on its own can be a valid expression statement.
-					return (Some(Stmt::Expr(original_expr)), errors);
+					return (
+						Some(Stmt {
+							ty: StmtTy::Expr(original_expr.clone()),
+							span: Span::new(
+								original_expr.span.start,
+								current_span.end,
+							),
+						}),
+						errors,
+					);
 				}
 				_ => {
 					errors.push(SyntaxErr::ExpectedIdentsAfterVarType(
@@ -460,8 +460,8 @@ fn parse_type_start(
 		.collect::<Vec<_>>();
 
 	// Consume either the `;` for a variable definition, or a `=` for a variable declaration.
-	let (current, _) = match walker.peek() {
-		Some(t) => t,
+	let (current, current_span) = match walker.peek() {
+		Some(t) => (&t.0, t.1),
 		None => {
 			// Even though we are missing a necessary token to make the syntax valid, it still makes sense to just
 			// treat this as a "valid" variable definition(s) for analysis/goto/etc purposes. We do produce an
@@ -473,13 +473,25 @@ fn parse_type_start(
 				Some(match typenames.len() {
 					1 => {
 						let (type_, ident) = typenames.remove(0);
-						Stmt::VarDef {
-							type_,
-							ident,
-							qualifiers,
+						Stmt {
+							ty: StmtTy::VarDef {
+								type_,
+								ident,
+								qualifiers,
+							},
+							span: Span::new(
+								original_expr.span.start,
+								walker.get_last_span().end,
+							),
 						}
 					}
-					_ => Stmt::VarDefs(typenames, qualifiers),
+					_ => Stmt {
+						ty: StmtTy::VarDefs(typenames, qualifiers),
+						span: Span::new(
+							original_expr.span.start,
+							walker.get_last_span().end,
+						),
+					},
 				}),
 				errors,
 			);
@@ -492,13 +504,22 @@ fn parse_type_start(
 			Some(match typenames.len() {
 				1 => {
 					let (type_, ident) = typenames.remove(0);
-					Stmt::VarDef {
-						type_,
-						ident,
-						qualifiers,
+					Stmt {
+						ty: StmtTy::VarDef {
+							type_,
+							ident,
+							qualifiers,
+						},
+						span: Span::new(
+							original_expr.span.start,
+							current_span.end,
+						),
 					}
 				}
-				_ => Stmt::VarDefs(typenames, qualifiers),
+				_ => Stmt {
+					ty: StmtTy::VarDefs(typenames, qualifiers),
+					span: Span::new(original_expr.span.start, current_span.end),
+				},
 			}),
 			errors,
 		)
@@ -520,13 +541,25 @@ fn parse_type_start(
 					Some(match typenames.len() {
 						1 => {
 							let (type_, ident) = typenames.remove(0);
-							Stmt::VarDef {
-								type_,
-								ident,
-								qualifiers,
+							Stmt {
+								ty: StmtTy::VarDef {
+									type_,
+									ident,
+									qualifiers,
+								},
+								span: Span::new(
+									original_expr.span.start,
+									walker.get_last_span().end,
+								),
 							}
 						}
-						_ => Stmt::VarDefs(typenames, qualifiers),
+						_ => Stmt {
+							ty: StmtTy::VarDefs(typenames, qualifiers),
+							span: Span::new(
+								original_expr.span.start,
+								walker.get_last_span().end,
+							),
+						},
 					}),
 					errors,
 				);
@@ -534,8 +567,8 @@ fn parse_type_start(
 		};
 
 		// Consume the `;` to end the declaration.
-		let (current, _) = match walker.peek() {
-			Some(t) => t,
+		let (current, current_span) = match walker.peek() {
+			Some(t) => (&t.0, t.1),
 			None => {
 				// Even though we are missing a necessary token to make the syntax valid, it still makes sense to
 				// just treat this as a "valid" variable declaration(s) for analysis/goto/etc purposes. We do
@@ -547,17 +580,29 @@ fn parse_type_start(
 					Some(match typenames.len() {
 						1 => {
 							let (type_, ident) = typenames.remove(0);
-							Stmt::VarDecl {
-								type_,
-								ident,
-								value,
-								qualifiers,
+							Stmt {
+								ty: StmtTy::VarDecl {
+									type_,
+									ident,
+									value,
+									qualifiers,
+								},
+								span: Span::new(
+									original_expr.span.start,
+									walker.get_last_span().end,
+								),
 							}
 						}
-						_ => Stmt::VarDecls {
-							vars: typenames,
-							value,
-							qualifiers,
+						_ => Stmt {
+							ty: StmtTy::VarDecls {
+								vars: typenames,
+								value,
+								qualifiers,
+							},
+							span: Span::new(
+								original_expr.span.start,
+								walker.get_last_span().end,
+							),
 						},
 					}),
 					errors,
@@ -577,17 +622,29 @@ fn parse_type_start(
 				Some(match typenames.len() {
 					1 => {
 						let (type_, ident) = typenames.remove(0);
-						Stmt::VarDecl {
-							type_,
-							ident,
-							value,
-							qualifiers,
+						Stmt {
+							ty: StmtTy::VarDecl {
+								type_,
+								ident,
+								value,
+								qualifiers,
+							},
+							span: Span::new(
+								original_expr.span.start,
+								walker.get_previous_span().end,
+							),
 						}
 					}
-					_ => Stmt::VarDecls {
-						vars: typenames,
-						value,
-						qualifiers,
+					_ => Stmt {
+						ty: StmtTy::VarDecls {
+							vars: typenames,
+							value,
+							qualifiers,
+						},
+						span: Span::new(
+							original_expr.span.start,
+							walker.get_previous_span().end,
+						),
 					},
 				}),
 				errors,
@@ -598,17 +655,26 @@ fn parse_type_start(
 			Some(match typenames.len() {
 				1 => {
 					let (type_, ident) = typenames.remove(0);
-					Stmt::VarDecl {
-						type_,
-						ident,
-						value,
-						qualifiers,
+					Stmt {
+						ty: StmtTy::VarDecl {
+							type_,
+							ident,
+							value,
+							qualifiers,
+						},
+						span: Span::new(
+							original_expr.span.start,
+							current_span.end,
+						),
 					}
 				}
-				_ => Stmt::VarDecls {
-					vars: typenames,
-					value,
-					qualifiers,
+				_ => Stmt {
+					ty: StmtTy::VarDecls {
+						vars: typenames,
+						value,
+						qualifiers,
+					},
+					span: Span::new(original_expr.span.start, current_span.end),
 				},
 			}),
 			errors,
@@ -624,13 +690,25 @@ fn parse_type_start(
 			Some(match typenames.len() {
 				1 => {
 					let (type_, ident) = typenames.remove(0);
-					Stmt::VarDef {
-						type_,
-						ident,
-						qualifiers,
+					Stmt {
+						ty: StmtTy::VarDef {
+							type_,
+							ident,
+							qualifiers,
+						},
+						span: Span::new(
+							original_expr.span.start,
+							walker.get_previous_span().end,
+						),
 					}
 				}
-				_ => Stmt::VarDefs(typenames, qualifiers),
+				_ => Stmt {
+					ty: StmtTy::VarDefs(typenames, qualifiers),
+					span: Span::new(
+						original_expr.span.start,
+						walker.get_previous_span().end,
+					),
+				},
 			}),
 			errors,
 		)
@@ -641,8 +719,9 @@ fn parse_type_start(
 fn parse_fn(
 	walker: &mut Walker,
 	return_type: Type,
+	start_span: Span,
 	ident: Ident,
-	qualifiers: Vec<Qualifier>,
+	qualifiers: Vec<Spanned<Qualifier>>,
 	l_paren_span: Span,
 ) -> (Option<Stmt>, Vec<SyntaxErr>) {
 	let mut errors = Vec::new();
@@ -709,11 +788,14 @@ fn parse_fn(
 					current_span,
 				));
 				return (
-					Some(Stmt::FnDef {
-						return_type,
-						ident,
-						params,
-						qualifiers,
+					Some(Stmt {
+						ty: StmtTy::FnDef {
+							return_type,
+							ident,
+							params,
+							qualifiers,
+						},
+						span: Span::new(start_span.start, current_span.end),
 					}),
 					errors,
 				);
@@ -885,11 +967,17 @@ fn parse_fn(
 				walker.get_last_span().next_single_width(),
 			));
 			return (
-				Some(Stmt::FnDef {
-					return_type,
-					ident,
-					params,
-					qualifiers,
+				Some(Stmt {
+					ty: StmtTy::FnDef {
+						return_type,
+						ident,
+						params,
+						qualifiers,
+					},
+					span: Span::new(
+						start_span.start,
+						walker.get_last_span().end,
+					),
 				}),
 				errors,
 			);
@@ -898,11 +986,14 @@ fn parse_fn(
 	if *current == Token::Semi {
 		walker.advance();
 		(
-			Some(Stmt::FnDef {
-				return_type,
-				ident,
-				params,
-				qualifiers,
+			Some(Stmt {
+				ty: StmtTy::FnDef {
+					return_type,
+					ident,
+					params,
+					qualifiers,
+				},
+				span: Span::new(start_span.start, current_span.end),
 			}),
 			errors,
 		)
@@ -910,17 +1001,20 @@ fn parse_fn(
 		walker.advance();
 
 		// Parse the function body, including the closing `}` brace.
-		let (stmts, mut errs, _) =
+		let (stmts, mut errs, r_brace_span) =
 			parse_scope(walker, BRACE_DELIMITER, current_span);
 		errors.append(&mut errs);
 
 		(
-			Some(Stmt::FnDecl {
-				return_type,
-				ident,
-				params,
-				body: stmts,
-				qualifiers,
+			Some(Stmt {
+				ty: StmtTy::FnDecl {
+					return_type,
+					ident,
+					params,
+					body: stmts,
+					qualifiers,
+				},
+				span: Span::new(start_span.start, r_brace_span.end),
 			}),
 			errors,
 		)
@@ -932,11 +1026,17 @@ fn parse_fn(
 			walker.get_previous_span().next_single_width(),
 		));
 		(
-			Some(Stmt::FnDef {
-				return_type,
-				ident,
-				params,
-				qualifiers,
+			Some(Stmt {
+				ty: StmtTy::FnDef {
+					return_type,
+					ident,
+					params,
+					qualifiers,
+				},
+				span: Span::new(
+					start_span.start,
+					walker.get_previous_span().end,
+				),
 			}),
 			errors,
 		)
@@ -1015,22 +1115,6 @@ fn parse_scope(
 			break 'stmt;
 		}
 
-		// Panics: This is guaranteed to unwrap without panic because of the while-loop precondition.
-		let (current, current_span) =
-			walker.peek().map(|t| (&t.0, t.1)).unwrap();
-
-		// If we immediately encounter an opening `{` brace, that means we have an new inner scope. We need to
-		// perform this check before the `expr_parser()` call because that would treat the `{` as the beginning of
-		// an initializer list.
-		if *current == Token::LBrace {
-			walker.advance();
-			let (inner_stmts, mut inner_errs, _) =
-				parse_scope(walker, BRACE_DELIMITER, current_span);
-			errors.append(&mut inner_errs);
-			stmts.push(Stmt::Scope(inner_stmts));
-			continue 'stmt;
-		}
-
 		match parse_statement_within_fn(walker) {
 			Ok((stmt, mut errs)) => {
 				errors.append(&mut errs);
@@ -1064,6 +1148,29 @@ fn parse_statement_within_fn(
 ) -> Result<(Option<Stmt>, Vec<SyntaxErr>), Vec<SyntaxErr>> {
 	let mut errors = Vec::new();
 
+	// Panics: This is guaranteed to unwrap without panic because of the while-loop precondition.
+	let (current, current_span) = walker.peek().unwrap();
+
+	// If we immediately encounter an opening `{` brace, that means we have an new inner scope. We need to
+	// perform this check before the `expr_parser()` call because that would treat the `{` as the beginning of
+	// an initializer list.
+	if *current == Token::LBrace {
+		let l_brace_span = *current_span;
+		walker.advance();
+
+		let (inner_stmts, mut inner_errs, r_brace_span) =
+			parse_scope(walker, BRACE_DELIMITER, l_brace_span);
+		errors.append(&mut inner_errs);
+
+		return Ok((
+			Some(Stmt {
+				ty: StmtTy::Scope(inner_stmts),
+				span: Span::new(l_brace_span.start, r_brace_span.end),
+			}),
+			errors,
+		));
+	}
+
 	// First, we look for any qualifiers because they are always located first in a statement.
 	let (qualifiers, mut errs) = parse_qualifier_list(walker);
 	errors.append(&mut errs);
@@ -1079,26 +1186,33 @@ fn parse_statement_within_fn(
 		// FIXME: Cannot have a function within a function?
 		return if let Some(type_) = expr.to_type() {
 			match parse_type_start(walker, type_, expr, qualifiers) {
-				(Some(s), _errs) => return Ok((Some(s), errors)),
-				(None, _) => 'till_next: loop {
-					// We did not successfully parse a statement.
-					let (next, _) = match walker.peek() {
-						Some(t) => t,
-						None => return Err(errors),
-					};
+				(Some(s), mut errs) => {
+					errors.append(&mut errs);
+					return Ok((Some(s), errors));
+				}
+				(None, mut errs) => {
+					errors.append(&mut errs);
 
-					if *next == Token::Semi {
-						walker.advance();
-						break 'till_next;
-					} else if next.starts_statement() {
-						// We don't advance because we are currently at a token which begins a new statement, so we
-						// don't want to consume it before we rerun the main loop.
-						break 'till_next;
-					} else {
-						walker.advance();
-						continue 'till_next;
+					'till_next: loop {
+						// We did not successfully parse a statement.
+						let (next, _) = match walker.peek() {
+							Some(t) => t,
+							None => return Err(errors),
+						};
+
+						if *next == Token::Semi {
+							walker.advance();
+							break 'till_next;
+						} else if next.starts_statement() {
+							// We don't advance because we are currently at a token which begins a new statement, so we
+							// don't want to consume it before we rerun the main loop.
+							break 'till_next;
+						} else {
+							walker.advance();
+							continue 'till_next;
+						}
 					}
-				},
+				}
 			};
 			Ok((None, errors))
 		} else {
@@ -1108,7 +1222,13 @@ fn parse_statement_within_fn(
 			};
 			if *current == Token::Semi {
 				walker.advance();
-				Ok((Some(Stmt::Expr(expr)), errors))
+				Ok((
+					Some(Stmt {
+						ty: StmtTy::Expr(expr.clone()),
+						span: expr.span,
+					}),
+					errors,
+				))
 			} else {
 				Ok((None, errors))
 			}
@@ -1122,7 +1242,13 @@ fn parse_statement_within_fn(
 	match token {
 		Token::Semi => {
 			walker.advance();
-			return Ok((Some(Stmt::Empty), errors));
+			return Ok((
+				Some(Stmt {
+					ty: StmtTy::Empty,
+					span: token_span,
+				}),
+				errors,
+			));
 		}
 		Token::If => {
 			walker.advance();
@@ -1154,10 +1280,16 @@ fn parse_statement_within_fn(
 					Some(t) => (&t.0, t.1),
 					None => {
 						return Ok((
-							Some(Stmt::If {
-								cond,
-								body,
-								branches,
+							Some(Stmt {
+								ty: StmtTy::If {
+									cond,
+									body,
+									branches,
+								},
+								span: Span::new(
+									token_span.start,
+									walker.get_last_span().end,
+								),
 							}),
 							errors,
 						));
@@ -1222,10 +1354,16 @@ fn parse_statement_within_fn(
 			}
 
 			return Ok((
-				Some(Stmt::If {
-					cond,
-					body,
-					branches,
+				Some(Stmt {
+					ty: StmtTy::If {
+						cond,
+						body,
+						branches,
+					},
+					span: Span::new(
+						token_span.start,
+						walker.get_previous_span().end,
+					),
 				}),
 				errors,
 			));
@@ -1261,12 +1399,18 @@ fn parse_statement_within_fn(
 				errors.append(&mut errs);
 
 				return Ok((
-					Some(Stmt::Switch {
-						expr: Expr {
-							ty: ExprTy::Missing,
-							span: token_span.next_single_width(),
+					Some(Stmt {
+						ty: StmtTy::Switch {
+							expr: Expr {
+								ty: ExprTy::Missing,
+								span: token_span.next_single_width(),
+							},
+							cases,
 						},
-						cases,
+						span: Span::new(
+							token_span.start,
+							walker.get_previous_span().end,
+						),
 					}),
 					errors,
 				));
@@ -1379,9 +1523,15 @@ fn parse_statement_within_fn(
 						walker.get_last_span().next_single_width(),
 					));
 					return Ok((
-						Some(Stmt::Switch {
-							expr,
-							cases: vec![],
+						Some(Stmt {
+							ty: StmtTy::Switch {
+								expr,
+								cases: vec![],
+							},
+							span: Span::new(
+								token_span.start,
+								walker.get_last_span().end,
+							),
 						}),
 						errors,
 					));
@@ -1394,9 +1544,15 @@ fn parse_statement_within_fn(
 					r_paren_span.next_single_width(),
 				));
 				return Ok((
-					Some(Stmt::Switch {
-						expr,
-						cases: vec![],
+					Some(Stmt {
+						ty: StmtTy::Switch {
+							expr,
+							cases: vec![],
+						},
+						span: Span::new(
+							token_span.start,
+							walker.get_previous_span().end,
+						),
 					}),
 					errors,
 				));
@@ -1406,7 +1562,16 @@ fn parse_statement_within_fn(
 			let (cases, mut errs) = parse_switch_body(walker, current_span);
 			errors.append(&mut errs);
 
-			return Ok((Some(Stmt::Switch { expr, cases }), errors));
+			return Ok((
+				Some(Stmt {
+					ty: StmtTy::Switch { expr, cases },
+					span: Span::new(
+						token_span.start,
+						walker.get_previous_span().end,
+					),
+				}),
+				errors,
+			));
 		}
 		Token::For => {
 			let keyword_span = token_span;
@@ -1441,11 +1606,17 @@ fn parse_statement_within_fn(
 				errors.append(&mut errs);
 
 				return Ok((
-					Some(Stmt::For {
-						var: None,
-						cond: None,
-						inc: None,
-						body,
+					Some(Stmt {
+						ty: StmtTy::For {
+							var: None,
+							cond: None,
+							inc: None,
+							body,
+						},
+						span: Span::new(
+							token_span.start,
+							walker.get_previous_span().end,
+						),
 					}),
 					errors,
 				));
@@ -1590,11 +1761,17 @@ fn parse_statement_within_fn(
 									(None, _) => {
 										walker.cursor = walker_cursor;
 										errors.append(&mut errs);
-										var = Some(Stmt::Expr(expr));
+										var = Some(Stmt {
+											ty: StmtTy::Expr(expr.clone()),
+											span: expr.span,
+										});
 									}
 								}
 							} else {
-								var = Some(Stmt::Expr(expr));
+								var = Some(Stmt {
+									ty: StmtTy::Expr(expr.clone()),
+									span: expr.span,
+								});
 							}
 						} else if count == 1 {
 							errors.append(&mut errs);
@@ -1698,11 +1875,17 @@ fn parse_statement_within_fn(
 						walker.get_last_span().next_single_width(),
 					));
 					return Ok((
-						Some(Stmt::For {
-							var: var.map(|s| Box::from(s)),
-							cond: exprs.remove(0),
-							inc: exprs.remove(0),
-							body: vec![],
+						Some(Stmt {
+							ty: StmtTy::For {
+								var: var.map(|s| Box::from(s)),
+								cond: exprs.remove(0),
+								inc: exprs.remove(0),
+								body: vec![],
+							},
+							span: Span::new(
+								token_span.start,
+								walker.get_last_span().end,
+							),
 						}),
 						errors,
 					));
@@ -1717,11 +1900,17 @@ fn parse_statement_within_fn(
 					r_paren_span.next_single_width(),
 				));
 				return Ok((
-					Some(Stmt::For {
-						var: var.map(|s| Box::from(s)),
-						cond: exprs.remove(0),
-						inc: exprs.remove(0),
-						body: vec![],
+					Some(Stmt {
+						ty: StmtTy::For {
+							var: var.map(|s| Box::from(s)),
+							cond: exprs.remove(0),
+							inc: exprs.remove(0),
+							body: vec![],
+						},
+						span: Span::new(
+							token_span.start,
+							walker.get_previous_span().end,
+						),
 					}),
 					errors,
 				));
@@ -1733,11 +1922,17 @@ fn parse_statement_within_fn(
 			errors.append(&mut errs);
 
 			return Ok((
-				Some(Stmt::For {
-					var: var.map(|s| Box::from(s)),
-					cond: exprs.remove(0),
-					inc: exprs.remove(0),
-					body,
+				Some(Stmt {
+					ty: StmtTy::For {
+						var: var.map(|s| Box::from(s)),
+						cond: exprs.remove(0),
+						inc: exprs.remove(0),
+						body,
+					},
+					span: Span::new(
+						token_span.start,
+						walker.get_previous_span().end,
+					),
 				}),
 				errors,
 			));
@@ -1773,12 +1968,18 @@ fn parse_statement_within_fn(
 				errors.append(&mut errs);
 
 				return Ok((
-					Some(Stmt::While {
-						cond: Expr {
-							ty: ExprTy::Missing,
-							span: token_span.next_single_width(),
+					Some(Stmt {
+						ty: StmtTy::While {
+							cond: Expr {
+								ty: ExprTy::Missing,
+								span: token_span.next_single_width(),
+							},
+							body,
 						},
-						body,
+						span: Span::new(
+							token_span.start,
+							walker.get_previous_span().end,
+						),
 					}),
 					errors,
 				));
@@ -1891,7 +2092,13 @@ fn parse_statement_within_fn(
 						walker.get_last_span().next_single_width(),
 					));
 					return Ok((
-						Some(Stmt::While { cond, body: vec![] }),
+						Some(Stmt {
+							ty: StmtTy::While { cond, body: vec![] },
+							span: Span::new(
+								token_span.start,
+								walker.get_last_span().end,
+							),
+						}),
 						errors,
 					));
 				}
@@ -1902,7 +2109,16 @@ fn parse_statement_within_fn(
 				errors.push(SyntaxErr::ExpectedScopeAfterControlFlowExpr(
 					r_paren_span.next_single_width(),
 				));
-				return Ok((Some(Stmt::While { cond, body: vec![] }), errors));
+				return Ok((
+					Some(Stmt {
+						ty: StmtTy::While { cond, body: vec![] },
+						span: Span::new(
+							token_span.start,
+							walker.get_previous_span().end,
+						),
+					}),
+					errors,
+				));
 			}
 
 			// Consume the body, including the closing `}` brace.
@@ -1910,7 +2126,16 @@ fn parse_statement_within_fn(
 				parse_scope(walker, BRACE_DELIMITER, current_span);
 			errors.append(&mut errs);
 
-			return Ok((Some(Stmt::While { cond, body }), errors));
+			return Ok((
+				Some(Stmt {
+					ty: StmtTy::While { cond, body },
+					span: Span::new(
+						token_span.start,
+						walker.get_previous_span().end,
+					),
+				}),
+				errors,
+			));
 		}
 		Token::Do => {
 			walker.advance();
@@ -2017,12 +2242,18 @@ fn parse_statement_within_fn(
 				}
 
 				return Ok((
-					Some(Stmt::DoWhile {
-						cond: Expr {
-							ty: ExprTy::Missing,
-							span: current_span.previous_single_width(),
+					Some(Stmt {
+						ty: StmtTy::DoWhile {
+							cond: Expr {
+								ty: ExprTy::Missing,
+								span: current_span.previous_single_width(),
+							},
+							body: vec![],
 						},
-						body: vec![],
+						span: Span::new(
+							token_span.start,
+							walker.get_previous_span().end,
+						),
 					}),
 					errors,
 				));
@@ -2169,106 +2400,176 @@ fn parse_statement_within_fn(
 				));
 			}
 
-			return Ok((Some(Stmt::DoWhile { cond, body }), errors));
+			return Ok((
+				Some(Stmt {
+					ty: StmtTy::DoWhile { cond, body },
+					span: Span::new(
+						token_span.start,
+						walker.get_previous_span().end,
+					),
+				}),
+				errors,
+			));
 		}
 		Token::Return => {
 			walker.advance();
 
 			// Look for the optional return value expression.
-			let (return_expr, _) =
+			let (return_expr, mut errs) =
 				expr_parser(walker, Mode::Default, &[Token::Semi]);
+			errors.append(&mut errs);
 
 			// Consume the `;` to end the statement.
-			let missing_semi = match walker.peek() {
+			let semi_span = match walker.peek() {
 				Some((current, _)) => {
 					if *current == Token::Semi {
 						walker.advance();
-						false
+						Some(token_span)
 					} else {
-						true
+						None
 					}
 				}
-				None => true,
+				None => None,
 			};
-
-			if missing_semi {
+			if semi_span.is_none() {
 				errors.push(SyntaxErr::ExpectedSemiAfterReturnKw(
 					walker.get_previous_span().next_single_width(),
 					return_expr.is_some(),
 				));
 			}
-			return Ok((Some(Stmt::Return(return_expr)), errors));
+
+			return Ok((
+				Some(Stmt {
+					ty: StmtTy::Return(return_expr),
+					span: Span::new(
+						token_span.start,
+						if let Some(semi_span) = semi_span {
+							semi_span.end
+						} else {
+							// If an expression was found, this will point to the end of the expression, otherwise
+							// it will point to the end of the `return` keyword.
+							walker.get_previous_span().end
+						},
+					),
+				}),
+				errors,
+			));
 		}
 		Token::Break => {
 			walker.advance();
 
 			// Consume the `;` to end the statement.
-			let missing_semi = match walker.peek() {
+			let semi_span = match walker.peek() {
 				Some((current, _)) => {
 					if *current == Token::Semi {
 						walker.advance();
-						false
+						Some(token_span)
 					} else {
-						true
+						None
 					}
 				}
-				None => true,
+				None => None,
 			};
-
-			if missing_semi {
+			if semi_span.is_none() {
 				errors.push(SyntaxErr::ExpectedSemiAfterBreakKw(
 					token_span.next_single_width(),
 				));
 			}
-			return Ok((Some(Stmt::Break), errors));
+
+			return Ok((
+				Some(Stmt {
+					ty: StmtTy::Break,
+					span: Span::new(
+						token_span.start,
+						if let Some(semi_span) = semi_span {
+							semi_span.end
+						} else {
+							token_span.end
+						},
+					),
+				}),
+				errors,
+			));
 		}
 		Token::Continue => {
 			walker.advance();
 
 			// Consume the `;` to end the statement.
-			let missing_semi = match walker.peek() {
+			let semi_span = match walker.peek() {
 				Some((current, _)) => {
 					if *current == Token::Semi {
 						walker.advance();
-						false
+						Some(token_span)
 					} else {
-						true
+						None
 					}
 				}
-				None => true,
+				None => None,
 			};
-
-			if missing_semi {
+			if semi_span.is_none() {
 				errors.push(SyntaxErr::ExpectedSemiAfterContinueKw(
 					token_span.next_single_width(),
 				));
 			}
-			return Ok((Some(Stmt::Continue), errors));
+
+			return Ok((
+				Some(Stmt {
+					ty: StmtTy::Continue,
+					span: Span::new(
+						token_span.start,
+						if let Some(semi_span) = semi_span {
+							semi_span.end
+						} else {
+							token_span.end
+						},
+					),
+				}),
+				errors,
+			));
 		}
 		Token::Discard => {
 			walker.advance();
 
 			// Consume the `;` to end the statement.
-			let missing_semi = match walker.peek() {
+			let semi_span = match walker.peek() {
 				Some((current, _)) => {
 					if *current == Token::Semi {
 						walker.advance();
-						false
+						Some(token_span)
 					} else {
-						true
+						None
 					}
 				}
-				None => true,
+				None => None,
 			};
-
-			if missing_semi {
+			if semi_span.is_none() {
 				errors.push(SyntaxErr::ExpectedSemiAfterDiscardKw(
 					token_span.next_single_width(),
 				));
 			}
-			return Ok((Some(Stmt::Discard), errors));
+
+			return Ok((
+				Some(Stmt {
+					ty: StmtTy::Discard,
+					span: Span::new(
+						token_span.start,
+						if let Some(semi_span) = semi_span {
+							semi_span.end
+						} else {
+							token_span.end
+						},
+					),
+				}),
+				errors,
+			));
 		}
-		// TODO: Deal with things such as `struct` which is obviously invalid.
+		Token::Struct => {
+			walker.advance();
+
+			let (stmt, mut errs) = parse_struct(walker, qualifiers, token_span);
+			errors.append(&mut errs);
+			return Ok((stmt, errors));
+		}
 		_ => return Ok((None, errors)),
 	}
 }
@@ -2611,7 +2912,7 @@ fn parse_if(
 /// Parse a struct definition or declaration.
 fn parse_struct(
 	walker: &mut Walker,
-	qualifiers: Vec<Qualifier>,
+	qualifiers: Vec<Spanned<Qualifier>>,
 	struct_kw_span: Span,
 ) -> (Option<Stmt>, Vec<SyntaxErr>) {
 	let mut errors = Vec::new();
@@ -2641,7 +2942,7 @@ fn parse_struct(
 
 	// Consume either the `;` for a struct definition, or a `{` for a struct declaration.
 	let (current, current_span) = match walker.peek() {
-		Some(t) => t,
+		Some(t) => (&t.0, t.1),
 		None => {
 			errors.push(SyntaxErr::ExpectedScopeAfterStructIdent(
 				walker.get_last_span().next_single_width(),
@@ -2650,20 +2951,26 @@ fn parse_struct(
 		}
 	};
 	let l_brace_span = if *current == Token::LBrace {
-		*current_span
+		current_span
 	} else if *current == Token::Semi {
 		// Even though struct definitions are illegal, it still makes sense to just treat this as a "valid"
 		// struct definition for analysis/goto/etc purposes. We do produce an error though about the illegality of
 		// a struct definition.
 		errors.push(SyntaxErr::StructDefIsIllegal(
-			*current_span,
+			current_span,
 			Span::new(struct_kw_span.start, current_span.end),
 		));
 		walker.advance();
-		return (Some(Stmt::StructDef { ident, qualifiers }), errors);
+		return (
+			Some(Stmt {
+				ty: StmtTy::StructDef { ident, qualifiers },
+				span: Span::new(struct_kw_span.start, current_span.end),
+			}),
+			errors,
+		);
 	} else {
 		errors.push(SyntaxErr::ExpectedScopeAfterStructIdent(
-			Span::new_between(walker.get_last_span(), *current_span),
+			Span::new_between(walker.get_previous_span(), current_span),
 		));
 		return (None, errors);
 	};
@@ -2683,11 +2990,17 @@ fn parse_struct(
 	errors.append(&mut errs);
 	if missing_body_delim {
 		return (
-			Some(Stmt::StructDecl {
-				ident,
-				members,
-				qualifiers,
-				instance: None,
+			Some(Stmt {
+				ty: StmtTy::StructDecl {
+					ident,
+					members,
+					qualifiers,
+					instance: None,
+				},
+				span: Span::new(
+					struct_kw_span.start,
+					walker.get_previous_span().end,
+				),
 			}),
 			errors,
 		);
@@ -2695,8 +3008,8 @@ fn parse_struct(
 
 	// We don't remove invalid statements because we would loose information for the AST.
 	let mut count = 0;
-	members.iter().for_each(|stmt| match stmt {
-		Stmt::VarDef { .. } | Stmt::VarDefs(_, _) => count += 1,
+	members.iter().for_each(|stmt| match stmt.ty {
+		StmtTy::VarDef { .. } | StmtTy::VarDefs(_, _) => count += 1,
 		// FIXME: Add spans to statements.
 		_ => errors.push(SyntaxErr::ExpectedVarDefInStructBody(Span::empty())),
 	});
@@ -2708,6 +3021,8 @@ fn parse_struct(
 			r_brace_span.end,
 		)));
 	}
+
+	let after_body_span = walker.get_current_span();
 
 	// Look for an optional instance identifier.
 	let instance = match expr_parser(walker, Mode::TakeOneUnit, &[Token::Semi])
@@ -2722,11 +3037,17 @@ fn parse_struct(
 					walker.get_previous_span().next_single_width(),
 				));
 				return (
-					Some(Stmt::StructDecl {
-						ident,
-						members,
-						qualifiers,
-						instance: None,
+					Some(Stmt {
+						ty: StmtTy::StructDecl {
+							ident,
+							members,
+							qualifiers,
+							instance: None,
+						},
+						span: Span::new(
+							struct_kw_span.start,
+							after_body_span.end,
+						),
 					}),
 					errors,
 				);
@@ -2746,11 +3067,17 @@ fn parse_struct(
 				walker.get_previous_span().next_single_width(),
 			));
 			return (
-				Some(Stmt::StructDecl {
-					ident,
-					members,
-					qualifiers,
-					instance,
+				Some(Stmt {
+					ty: StmtTy::StructDecl {
+						ident,
+						members,
+						qualifiers,
+						instance,
+					},
+					span: Span::new(
+						struct_kw_span.start,
+						walker.get_last_span().end,
+					),
 				}),
 				errors,
 			);
@@ -2759,11 +3086,14 @@ fn parse_struct(
 	if *current == Token::Semi {
 		walker.advance();
 		(
-			Some(Stmt::StructDecl {
-				ident,
-				members,
-				qualifiers,
-				instance,
+			Some(Stmt {
+				ty: StmtTy::StructDecl {
+					ident,
+					members,
+					qualifiers,
+					instance,
+				},
+				span: Span::new(struct_kw_span.start, current_span.end),
 			}),
 			errors,
 		)
@@ -2775,11 +3105,17 @@ fn parse_struct(
 			walker.get_previous_span().next_single_width(),
 		));
 		(
-			Some(Stmt::StructDecl {
-				ident,
-				members,
-				qualifiers,
-				instance,
+			Some(Stmt {
+				ty: StmtTy::StructDecl {
+					ident,
+					members,
+					qualifiers,
+					instance,
+				},
+				span: Span::new(
+					struct_kw_span.start,
+					walker.get_previous_span().end,
+				),
 			}),
 			errors,
 		)
@@ -2787,24 +3123,24 @@ fn parse_struct(
 }
 
 pub fn print_stmt(stmt: &Stmt, indent: usize) {
-	match stmt {
-		Stmt::Empty => print!(
+	match &stmt.ty {
+		StmtTy::Empty => print!(
 			"\r\n{:indent$}\x1b[9m(Empty)\x1b[0m",
 			"",
 			indent = indent * 4
 		),
-		Stmt::VarDef {
+		StmtTy::VarDef {
 			type_,
 			ident,
 			qualifiers,
 		} => {
 			print!("\r\n{:indent$}\x1b[32mVar\x1b[0m(type: {type_}, ident: {ident}, qualifiers: [", "", indent = indent*4);
-			for qualifier in qualifiers {
+			for (qualifier, _) in qualifiers {
 				print!("{qualifier}, ");
 			}
 			print!("])");
 		}
-		Stmt::VarDefs(vars, qualifiers) => {
+		StmtTy::VarDefs(vars, qualifiers) => {
 			print!(
 				"\r\n{:indent$}\x1b[32mVar\x1b[0m(",
 				"",
@@ -2814,12 +3150,12 @@ pub fn print_stmt(stmt: &Stmt, indent: usize) {
 				print!("[type: {}, ident: {}], ", var.0, var.1);
 			}
 			print!(" qualifiers: [");
-			for qualifier in qualifiers {
+			for (qualifier, _) in qualifiers {
 				print!("{qualifier}, ");
 			}
 			print!("])");
 		}
-		Stmt::VarDecl {
+		StmtTy::VarDecl {
 			type_,
 			ident,
 			value,
@@ -2830,12 +3166,12 @@ pub fn print_stmt(stmt: &Stmt, indent: usize) {
 				"",
 				indent = indent * 4
 			);
-			for qualifier in qualifiers {
+			for (qualifier, _) in qualifiers {
 				print!("{qualifier}, ");
 			}
 			print!("]) = {value}");
 		}
-		Stmt::VarDecls {
+		StmtTy::VarDecls {
 			vars,
 			value,
 			qualifiers,
@@ -2849,12 +3185,12 @@ pub fn print_stmt(stmt: &Stmt, indent: usize) {
 				print!("[type: {}, ident: {}], ", var.0, var.1);
 			}
 			print!(" qualifiers: [");
-			for qualifier in qualifiers {
+			for (qualifier, _) in qualifiers {
 				print!("{qualifier}, ");
 			}
 			print!("]) = {value}");
 		}
-		Stmt::FnDef {
+		StmtTy::FnDef {
 			return_type,
 			ident,
 			params,
@@ -2869,7 +3205,7 @@ pub fn print_stmt(stmt: &Stmt, indent: usize) {
 				match (ident, qualifiers) {
 					(Some(ident), _) if !qualifiers.is_empty() => {
 						print!("{type_}: {ident} qualifiers: [");
-						for qualifier in qualifiers {
+						for (qualifier, _) in qualifiers {
 							print!("{qualifier}, ");
 						}
 						print!("], ");
@@ -2877,7 +3213,7 @@ pub fn print_stmt(stmt: &Stmt, indent: usize) {
 					(Some(ident), _) => print!("{type_}: {ident}, "),
 					(None, _) if !qualifiers.is_empty() => {
 						print!("{type_} qualifiers: [");
-						for qualifier in qualifiers {
+						for (qualifier, _) in qualifiers {
 							print!("{qualifier}, ");
 						}
 						print!("], ");
@@ -2886,12 +3222,12 @@ pub fn print_stmt(stmt: &Stmt, indent: usize) {
 				}
 			}
 			print!("], qualifiers: [");
-			for qualifier in qualifiers {
+			for (qualifier, _) in qualifiers {
 				print!("{qualifier}, ");
 			}
 			print!("])");
 		}
-		Stmt::FnDecl {
+		StmtTy::FnDecl {
 			return_type,
 			ident,
 			params,
@@ -2907,7 +3243,7 @@ pub fn print_stmt(stmt: &Stmt, indent: usize) {
 				match (ident, qualifiers) {
 					(Some(ident), _) if !qualifiers.is_empty() => {
 						print!("{type_}: {ident} qualifiers: [");
-						for qualifier in qualifiers {
+						for (qualifier, _) in qualifiers {
 							print!("{qualifier}, ");
 						}
 						print!("], ");
@@ -2915,7 +3251,7 @@ pub fn print_stmt(stmt: &Stmt, indent: usize) {
 					(Some(ident), _) => print!("{type_}: {ident}, "),
 					(None, _) if !qualifiers.is_empty() => {
 						print!("{type_} qualifiers: [");
-						for qualifier in qualifiers {
+						for (qualifier, _) in qualifiers {
 							print!("{qualifier}, ");
 						}
 						print!("], ");
@@ -2924,27 +3260,27 @@ pub fn print_stmt(stmt: &Stmt, indent: usize) {
 				}
 			}
 			print!("], qualifiers: [");
-			for qualifier in qualifiers {
+			for (qualifier, _) in qualifiers {
 				print!("{qualifier}, ");
 			}
 			print!("]) {{");
 			for inner in body {
-				print_stmt(inner, indent + 1);
+				print_stmt(&inner, indent + 1);
 			}
 			print!("\r\n{:indent$}}}", "", indent = indent * 4);
 		}
-		Stmt::StructDef { ident, qualifiers } => {
+		StmtTy::StructDef { ident, qualifiers } => {
 			print!(
 				"\r\n{:indent$}\x1b[90;9mStruct\x1b[0m(ident: {ident}, qualifiers: [",
 				"",
 				indent = indent * 4
 			);
-			for qualifier in qualifiers {
+			for (qualifier, _) in qualifiers {
 				print!("{qualifier}, ");
 			}
 			print!("])");
 		}
-		Stmt::StructDecl {
+		StmtTy::StructDecl {
 			ident,
 			members,
 			qualifiers,
@@ -2956,10 +3292,10 @@ pub fn print_stmt(stmt: &Stmt, indent: usize) {
 				indent = indent * 4
 			);
 			for stmt in members {
-				print_stmt(stmt, indent + 1);
+				print_stmt(&stmt, indent + 1);
 			}
 			print!("\r\n{:indent$}}}, qualifiers: [", "", indent = indent * 4);
-			for qualifier in qualifiers {
+			for (qualifier, _) in qualifiers {
 				print!("{qualifier}, ");
 			}
 			if let Some(instance) = instance {
@@ -2968,29 +3304,29 @@ pub fn print_stmt(stmt: &Stmt, indent: usize) {
 				print!("])");
 			}
 		}
-		Stmt::Expr(expr) => {
+		StmtTy::Expr(expr) => {
 			print!("\r\n{:indent$}{expr}", "", indent = indent * 4);
 		}
-		Stmt::Scope(v) => {
+		StmtTy::Scope(v) => {
 			print!("\r\n{:indent$}{{", "", indent = indent * 4);
 			for stmt in v {
-				print_stmt(stmt, indent + 1);
+				print_stmt(&stmt, indent + 1);
 			}
 			print!("\r\n{:indent$}}}", "", indent = indent * 4);
 		}
-		Stmt::Preproc(p) => print!(
+		StmtTy::Preproc(p) => print!(
 			"\r\n{:indent$}\x1b[4mPreproc({p})\x1b[0m",
 			"",
 			indent = indent * 4
 		),
-		Stmt::If {
+		StmtTy::If {
 			cond,
 			body,
 			branches,
 		} => {
 			print!("\r\n{:indent$}If({cond}) {{", "", indent = indent * 4);
 			for stmt in body {
-				print_stmt(stmt, indent + 1);
+				print_stmt(&stmt, indent + 1);
 			}
 			print!("\r\n{:indent$}}}", "", indent = indent * 4);
 
@@ -3005,12 +3341,12 @@ pub fn print_stmt(stmt: &Stmt, indent: usize) {
 					print!("\r\n{:indent$}Else {{", "", indent = indent * 4);
 				}
 				for stmt in body {
-					print_stmt(stmt, indent + 1);
+					print_stmt(&stmt, indent + 1);
 				}
 				print!("\r\n{:indent$}}}", "", indent = indent * 4);
 			}
 		}
-		Stmt::Switch { expr, cases } => {
+		StmtTy::Switch { expr, cases } => {
 			print!("\r\n{:indent$}Switch({expr}) {{", "", indent = indent * 4);
 			for (expr, stmts) in cases {
 				if let Some(expr) = expr {
@@ -3027,13 +3363,13 @@ pub fn print_stmt(stmt: &Stmt, indent: usize) {
 					);
 				}
 				for stmt in stmts {
-					print_stmt(stmt, indent + 2);
+					print_stmt(&stmt, indent + 2);
 				}
 				print!("\r\n{:indent$}}}", "", indent = (indent + 1) * 4);
 			}
 			print!("\r\n{:indent$}}}", "", indent = indent * 4);
 		}
-		Stmt::For {
+		StmtTy::For {
 			var,
 			cond,
 			inc,
@@ -3042,7 +3378,7 @@ pub fn print_stmt(stmt: &Stmt, indent: usize) {
 			print!("\r\n{:indent$}For(", "", indent = indent * 4);
 			if let Some(var) = var {
 				print!("var:");
-				print_stmt(var, indent + 2);
+				print_stmt(&var, indent + 2);
 				print!(", ");
 			}
 			if let Some(cond) = cond {
@@ -3065,41 +3401,41 @@ pub fn print_stmt(stmt: &Stmt, indent: usize) {
 			}
 			print!(") {{");
 			for stmt in body {
-				print_stmt(stmt, indent + 1);
+				print_stmt(&stmt, indent + 1);
 			}
 			print!("\r\n{:indent$}}}", "", indent = indent * 4);
 		}
-		Stmt::While { cond, body } => {
+		StmtTy::While { cond, body } => {
 			print!("\r\n{:indent$}While({cond}) {{", "", indent = indent * 4);
 			for stmt in body {
-				print_stmt(stmt, indent + 1);
+				print_stmt(&stmt, indent + 1);
 			}
 			print!("\r\n{:indent$}}}", "", indent = indent * 4);
 		}
-		Stmt::DoWhile { cond, body } => {
+		StmtTy::DoWhile { cond, body } => {
 			print!(
 				"\r\n{:indent$}Do-While({cond}) {{",
 				"",
 				indent = indent * 4
 			);
 			for stmt in body {
-				print_stmt(stmt, indent + 1);
+				print_stmt(&stmt, indent + 1);
 			}
 			print!("\r\n{:indent$}}}", "", indent = indent * 4);
 		}
-		Stmt::Return(expr) => {
+		StmtTy::Return(expr) => {
 			print!("\r\n{:indent$}RETURN", "", indent = indent * 4);
 			if let Some(expr) = expr {
 				print!("(value: {expr})");
 			}
 		}
-		Stmt::Break => {
+		StmtTy::Break => {
 			print!("\r\n{:indent$}BREAK", "", indent = indent * 4)
 		}
-		Stmt::Continue => {
+		StmtTy::Continue => {
 			print!("\r\n{:indent$}CONTINUE", "", indent = indent * 4)
 		}
-		Stmt::Discard => {
+		StmtTy::Discard => {
 			print!("\r\n{:indent$}DISCARD", "", indent = indent * 4)
 		}
 	}

@@ -233,7 +233,30 @@ pub struct Op {
 	pub span: Span,
 }
 
-type Param = (Type, Option<Ident>, Vec<Spanned<Qualifier>>);
+/// A parameter in a function definition/declaration.
+/// 
+/// - `0` - the type,
+/// - `1` - an optional identifier,
+/// - `2` - optional qualifiers.
+pub type Param = (Type, Option<Ident>, Vec<Spanned<Qualifier>>);
+
+/// A scope of statements, potentially delimited by opening and closing delimiters.
+///
+/// - If this represents a general scope, it would be delimited by `{` and `}`.
+/// - If this represents a switch-case body, it would be delimited by `:` and `case`/`default`/`}`.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Scope {
+	/// The span of the opening delimiter if present.
+	pub opening: Option<Span>,
+	/// The statements within this scope.
+	pub stmts: Vec<Stmt>,
+	/// The span of the closing delimiter if present.
+	pub closing: Option<Span>,
+	/// The span of the entire scope. If the delimiters are present, this is from the beginning of the opening
+	/// delimiter to the end of the closing delimiter. However, if one or both delimiters are missing, the span
+	/// starts/ends at the start/end of the first/last statement.
+	pub span: Span,
+}
 
 /// A top-level statement. Some of these statements are only valid at the file top-level, whilst others are only
 /// valid inside of functions.
@@ -270,32 +293,35 @@ pub enum StmtTy {
 	},
 	/// A function definition.
 	FnDef {
+		qualifiers: Vec<Spanned<Qualifier>>,
 		return_type: Type,
 		ident: Ident,
 		params: Vec<Param>,
-		qualifiers: Vec<Spanned<Qualifier>>,
+		semi: Option<Span>,
 	},
 	/// A function declaration.
 	FnDecl {
+		qualifiers: Vec<Spanned<Qualifier>>,
 		return_type: Type,
 		ident: Ident,
 		params: Vec<Param>,
-		body: Vec<Stmt>,
-		qualifiers: Vec<Spanned<Qualifier>>,
+		body: Scope,
 	},
 	/// A struct definition. *Note:* This is invalid glsl grammar.
 	StructDef {
+		kw: Span,
 		ident: Ident,
 		qualifiers: Vec<Spanned<Qualifier>>,
+		semi: Span,
 	},
 	/// A struct declaration.
 	StructDecl {
+		kw: Span,
 		ident: Ident,
-		/// # Invariants
-		/// These will only be of type `Stmt::VarDef` or `Stmt::VarDefs`.
-		members: Vec<Stmt>,
+		body: Scope,
 		qualifiers: Vec<Spanned<Qualifier>>,
 		instance: Option<Ident>,
+		semi: Option<Span>,
 	},
 	/// A general expression, e.g.
 	///
@@ -303,7 +329,7 @@ pub enum StmtTy {
 	/// - `fn();`
 	/// - `i = 5 + 1;`
 	/// - `i *= fn();`
-	Expr(Expr),
+	Expr { expr: Expr, semi: Option<Span> },
 	/// A standalone scope, e.g.
 	/// ```glsl
 	/// /* .. */
@@ -311,40 +337,79 @@ pub enum StmtTy {
 	/// 	/* new scope */
 	/// }
 	/// ```
-	Scope(Vec<Stmt>),
+	Scope(Scope),
 	/// A preprocessor call.
 	Preproc(Preproc),
 	/// An if statement.
 	If {
+		kw: Span,
+		l_paren: Option<Span>,
 		cond: Expr,
-		body: Vec<Stmt>,
-		branches: Vec<(Option<Expr>, Vec<Stmt>)>,
+		r_paren: Option<Span>,
+		body: Scope,
+		/// Laid out as following: `(else, if, l_paren, cond, r_paren, body)`.
+		branches: Vec<(
+			Span,
+			Option<Span>,
+			Option<Span>,
+			Option<Expr>,
+			Option<Span>,
+			Scope,
+		)>,
 	},
 	/// A switch statement.
 	Switch {
+		kw: Span,
+		l_paren: Option<Span>,
 		expr: Expr,
-		/// `0` - If `None`, then this is a *default* case.
-		cases: Vec<(Option<Expr>, Vec<Stmt>)>,
+		r_paren: Option<Span>,
+		/// - `0` - If `None`, then this is a `default` case, otherwise this is the case expresion,
+		/// - `1` - the colon `:`,
+		/// - `2` - the body.
+		cases: Vec<(Option<Expr>, Option<Span>, Scope)>,
 	},
 	/// A for-loop statement.
 	For {
+		kw: Span,
+		l_paren: Option<Span>,
 		var: Option<Box<Stmt>>,
+		first_semi: Option<Span>,
 		cond: Option<Expr>,
+		second_semi: Option<Span>,
 		inc: Option<Expr>,
-		body: Vec<Stmt>,
+		r_paren: Option<Span>,
+		body: Option<Scope>,
 	},
 	/// A while-loop, i.e. `while ( /*..*/ ) { /*..*/ }`.
-	While { cond: Expr, body: Vec<Stmt> },
+	While {
+		kw: Span,
+		l_paren: Option<Span>,
+		cond: Expr,
+		r_paren: Option<Span>,
+		body: Option<Scope>,
+	},
 	/// A do-while loop, i.e. `do { /*..*/ } while ( /*..*/ );`.
-	DoWhile { cond: Expr, body: Vec<Stmt> },
+	DoWhile {
+		do_kw: Span,
+		body: Option<Scope>,
+		while_kw: Option<Span>,
+		l_paren: Option<Span>,
+		cond: Expr,
+		r_paren: Option<Span>,
+		semi: Option<Span>,
+	},
 	/// A return statement.
-	Return(Option<Expr>),
+	Return {
+		kw: Span,
+		value: Option<Expr>,
+		semi: Option<Span>,
+	},
 	/// A break statement.
-	Break,
+	Break { kw: Span, semi: Option<Span> },
 	/// A continue statement.
-	Continue,
+	Continue { kw: Span, semi: Option<Span> },
 	/// A discard statement.
-	Discard,
+	Discard { kw: Span, semi: Option<Span> },
 }
 
 /// A preprocessor directive.

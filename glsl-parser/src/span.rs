@@ -71,6 +71,11 @@ impl Span {
 		self.start >= other.end
 	}
 
+	/// Returns whether this span is zero-width.
+	pub fn is_zero_width(&self) -> bool {
+		self.start == self.end
+	}
+
 	/// Returns whether the beginning of this span is located at or after the specified position.
 	pub fn starts_at_or_after(&self, position: usize) -> bool {
 		self.start >= position
@@ -111,6 +116,14 @@ impl Span {
 		Self {
 			start: self.start,
 			end: self.start,
+		}
+	}
+
+	/// Returns a new zero-width `Span` located at the end of this span.
+	pub fn end_zero_width(self) -> Self {
+		Self {
+			start: self.end,
+			end: self.end,
 		}
 	}
 

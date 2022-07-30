@@ -438,13 +438,18 @@ fn parse_qualifier_list(
 /// [`Err`] is returned if the following:
 /// - the end of the token stream was reached without being able to produce either a fully valid statement or a
 ///   recovered partially valid statement.
+///
+/// # Panics
+/// This function assumes that there is a current `Token` to peek.
 fn parse_stmt(
 	walker: &mut Walker,
 ) -> Result<(Option<Stmt>, Vec<SyntaxErr>), Vec<SyntaxErr>> {
 	let mut errors = Vec::new();
 
 	// Panics: This is guaranteed to unwrap without panic because of the while-loop precondition.
-	let (current, current_span) = walker.peek().unwrap();
+	let (current, current_span) = walker
+		.peek()
+		.expect("[parser::parse_stmt] Found no current token.");
 
 	// If we immediately encounter an opening `{` brace, that means we have an new inner scope. We need to
 	// perform this check before the `expr_parser()` call because that would treat the `{` as the beginning of
@@ -466,6 +471,8 @@ fn parse_stmt(
 		));
 	}
 
+	// TODO: Deal with comments?
+
 	// First, we look for any qualifiers because they are always located first in a statement.
 	let (qualifiers, mut errs) = parse_qualifier_list(walker);
 	errors.append(&mut errs);
@@ -478,7 +485,6 @@ fn parse_stmt(
 
 		// Check if the expression can be parsed as a typename. If so, then we try to parse the following
 		// tokens as statements which can start with a typename, i.e. variable or function defs/decls.
-		// FIXME: Cannot have a function within a function?
 		return if let Some(type_) = expr.to_type() {
 			match parse_type_start(walker, type_, expr, qualifiers) {
 				(Some(s), mut errs) => {
@@ -533,9 +539,26 @@ fn parse_stmt(
 		};
 	}
 
-	// We tried to parse an expression but that immediately failed. This means the current token is one
-	// which cannot start an expression.
-	let (token, token_span) = walker.peek().map(|t| (&t.0, t.1)).unwrap();
+	let qualifier_span_end = if !qualifiers.is_empty() {
+		Some(qualifiers.last().unwrap().span().end_zero_width())
+	} else {
+		None
+	};
+
+	// We tried to parse an expression but that immediately failed. This means the current token is one which
+	// cannot start an expression.
+	let (token, token_span) = match walker.peek() {
+		Some(t) => (&t.0, t.1),
+		None => {
+			// We potentially parsed some qualifiers and have reached the EOF.
+			if let Some(span) = qualifier_span_end {
+				errors.push(SyntaxErr::ExpectedDefDeclAfterQualifiers(span));
+			}
+			return Err(errors);
+		}
+	};
+
+	// TODO: Deal with the fact that these statements don't support qualifiers.
 
 	match token {
 		Token::Semi => {
@@ -1981,14 +2004,42 @@ fn parse_stmt(
 				errors,
 			));
 		}
+		Token::Directive(_) => {
+			errors.push(SyntaxErr::DirectivesNotSupported(token_span));
+			walker.advance();
+			// TODO: Implementation
+			return Ok((None, errors));
+		}
 		Token::Struct => {
 			walker.advance();
 
 			let (stmt, mut errs) = parse_struct(walker, qualifiers, token_span);
 			errors.append(&mut errs);
+
 			return Ok((stmt, errors));
 		}
-		_ => return Ok((None, errors)),
+		Token::Reserved(_) => {
+			errors.push(SyntaxErr::FoundIllegalReservedKw(token_span));
+			walker.advance();
+			return Ok((None, errors));
+		}
+		Token::Invalid(c) => {
+			errors.push(SyntaxErr::FoundIllegalChar(token_span, *c));
+			walker.advance();
+			return Ok((None, errors));
+		}
+		Token::RBrace => {
+			errors.push(SyntaxErr::FoundLonelyRBrace(token_span));
+			walker.advance();
+			return Ok((None, errors));
+		}
+		_ => {
+			if token.is_punctuation_for_stmt() {
+				errors.push(SyntaxErr::PunctuationCannotStartStmt(token_span));
+			}
+			walker.advance();
+			return Ok((None, errors));
+		}
 	}
 }
 

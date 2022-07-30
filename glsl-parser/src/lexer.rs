@@ -131,36 +131,19 @@ impl Token {
 		}
 	}
 
-	/// Returns whether the current `Token` is a qualifier, or in the case of `layout`, whether it starts a
-	/// qualifier (since a layout has a parenthesis group after it).
-	pub fn is_qualifier(&self) -> bool {
+	/// Returns whether the current `Token` is a punctuation assuming we are at the beginning of parsing a
+	/// statement.
+	pub fn is_punctuation_for_stmt(&self) -> bool {
 		match self {
-			Self::Const
-			| Self::In
-			| Self::Out
-			| Self::InOut
-			| Self::Attribute
-			| Self::Uniform
-			| Self::Varying
-			| Self::Buffer
-			| Self::Shared
-			| Self::Centroid
-			| Self::Sample
-			| Self::Patch
-			| Self::Layout
-			| Self::Flat
-			| Self::Smooth
-			| Self::NoPerspective
-			| Self::HighP
-			| Self::MediumP
-			| Self::LowP
-			| Self::Invariant
-			| Self::Precise
-			| Self::Coherent
-			| Self::Volatile
-			| Self::Restrict
-			| Self::Readonly
-			| Self::Writeonly => true,
+			Self::Op(_)
+			| Self::Comma
+			| Self::Dot
+			| Self::Colon
+			| Self::Question
+			| Self::LParen
+			| Self::RParen
+			| Self::LBracket
+			| Self::RBracket => true,
 			_ => false,
 		}
 	}

@@ -415,6 +415,110 @@ pub fn to_diagnostic(err: SyntaxErr, file: &File, diags: &mut Vec<Diagnostic>) {
         ExpectedSemiAfterStructBody(pos) => (
             "Syntax error: expected a semi-colon `;`", pos, None
         ),
+        /* ILLEGAL STATEMENTS */
+        FoundIllegalReservedKw(pos) => (
+            "Syntax error: found reserved keyword",
+            pos,
+            None
+        ),
+        FoundIllegalChar(pos, _char) => (
+            ("Syntax error: found an illegal character"),
+            pos,
+            None
+        ),
+        PunctuationCannotStartStmt(pos) => (
+            "Syntax error: punctuation cannot start a statement",
+            pos,
+            None
+        ),
+        FoundLonelyRBrace(pos) => (
+            "Syntax error: found un-opened closing brace `}`",
+            pos,
+            None
+        ),
+        /* ILLEGAL STATEMENTS AT TOP-LEVEL */
+        ExprStmtIsIllegalAtTopLevel(span) => (
+            "Syntax error: expression statement is not valid at top-level",
+            span,
+            None
+        ),
+        ScopeStmtIsIllegalAtTopLevel(span) => (
+            "Syntax error: scope is not valid at top-level",
+            span,
+            None
+        ),
+        IfStmtIsIllegalAtTopLevel(span) => (
+            "Syntax error: if statement is not valid at top-level",
+            span,
+            None
+        ),
+        SwitchStmtIsIllegalAtTopLevel(span) => (
+            "Syntax error: switch statement is not valid at top-level",
+            span,
+            None
+        ),
+        ForStmtIsIllegalAtTopLevel(span) => (
+            "Syntax error: for statement is not valid at top-level",
+            span,
+            None
+        ),
+        WhileStmtIsIllegalAtTopLevel(span) => (
+            "Syntax error: while statement is not valid at top-level",
+            span,
+            None
+        ),
+        DoWhileStmtIsIllegalAtTopLevel(span) => (
+            "Syntax error: do-while statement is not valid at top-level",
+            span,
+            None
+        ),
+        ReturnStmtIsIllegalAtTopLevel(span) => (
+            "Syntax error: return statement is not valid at top-level",
+            span,
+            None
+        ),
+        BreakStmtIsIllegalAtTopLevel(span) => (
+            "Syntax error: break statement is not valid at top-level",
+            span,
+            None
+        ),
+        ContinueStmtIsIllegalAtTopLevel(span) => (
+            "Syntax error: continue statement is not valid at top-level",
+            span,
+            None
+        ),
+        DiscardStmtIsIllegalAtTopLevel(span) => (
+            "Syntax error: discard statement is not valid at top-level",
+            span,
+            None
+        ),
+        /* ILLEGAL STATEMENTS INSIDE OF FUNCTIONS */
+        FnStmtIsIllegalInFn(span) => (
+            "Syntax error: function statement is not valid inside of a function",
+            span,
+            None
+        ),
+        StructStmtIsIllegalInFn(span) => (
+            "Syntax error: struct statement is not valid inside of a function",
+            span,
+            None
+        ),
+        BreakStmtIsIllegalInFnOutsideLoop(span) => (
+            "Syntax error: break statement is not valid outside of a loop statement",
+            span,
+            None
+        ),
+        ContinueStmtIsIllegalInFnOutsideLoop(span) => (
+            "Syntax error: continue statement is not valid outside of a loop statement",
+            span,
+            None
+        ),
+        /* TEMPORARY */
+        DirectivesNotSupported(span) => (
+            "Directives are currently not supported",
+            span,
+            None
+        ),
         _ => (
             "UNIMPLEMENTED SYNTAX ERROR",
             Span::empty(),

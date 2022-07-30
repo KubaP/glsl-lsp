@@ -438,6 +438,29 @@ pub enum SyntaxErr {
 	///   not what we expected).
 	ExpectedSemiAfterStructBody(Span),
 
+	/* ILLEGAL STATEMENTS */
+	/// Found a statement beginning with a reserved keyword.
+	///
+	/// - `0` - the span of the keyword.
+	FoundIllegalReservedKw(Span),
+	/// Found an illegal character.
+	///
+	/// - `0` - the span of the character,
+	/// - `1` - the character.
+	FoundIllegalChar(Span, char),
+	/// Found a statement beginning with a punctuation symbol (not `{` or `}` or `;`).
+	///
+	/// - `0` - the span of the punctuation.
+	PunctuationCannotStartStmt(Span),
+	/// Found an unopened closing brace (`}`).
+	///
+	/// - `0` - the span of the brace.
+	FoundLonelyRBrace(Span),
+	/// Expected a function or variable definition/declaration after one or more qualifiers.
+	/// 
+	/// - `0` - the span where the def/decl should be inserted.
+	ExpectedDefDeclAfterQualifiers(Span),
+
 	/* ILLEGAL STATEMENTS AT TOP-LEVEL */
 	/// Found an expression-statement the top-level of a file.
 	///
@@ -501,4 +524,8 @@ pub enum SyntaxErr {
 	///
 	/// - `0` - the span of the statement.
 	ContinueStmtIsIllegalInFnOutsideLoop(Span),
+
+	/* TEMPORARY */
+	/// Directives are currently unsupported.
+	DirectivesNotSupported(Span),
 }

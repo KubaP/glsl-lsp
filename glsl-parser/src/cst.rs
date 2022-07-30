@@ -1167,6 +1167,21 @@ impl std::fmt::Display for Qualifier {
 	}
 }
 
+impl Qualifier {
+	/// Retrieves the [`Span`] of this entire `Qualifier`.
+	pub fn span(&self) -> &Span {
+		match self {
+			Self::Storage { span, .. } => span,
+			Self::Layout { span, .. } => span,
+			Self::Interpolation { span, .. } => span,
+			Self::Precision { span } => span,
+			Self::Invariant { span } => span,
+			Self::Precise { span } => span,
+			Self::Memory { span, .. } => span,
+		}
+	}
+}
+
 #[derive(Debug, Clone, PartialEq)]
 pub enum Storage {
 	Const,

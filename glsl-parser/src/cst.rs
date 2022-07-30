@@ -5,7 +5,7 @@ use crate::{
 };
 
 /// A concrete syntax tree. This represents the root of a file.
-pub type Cst = Vec<Stmt>;
+pub type Cst = Vec<Node>;
 
 /// A literal value.
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -425,7 +425,7 @@ pub struct Param {
 	pub ident: Option<Ident>,
 }
 
-/// A scope of statements, potentially delimited by opening and closing delimiters.
+/// A scope of nodes, potentially delimited by opening and closing delimiters.
 ///
 /// - If this represents a general scope, it would be delimited by `{` and `}`.
 /// - If this represents a switch-case body, it would be delimited by `:` and `case`/`default`/`}`.
@@ -433,13 +433,13 @@ pub struct Param {
 pub struct Scope {
 	/// The span of the opening delimiter if present.
 	pub opening: Option<Span>,
-	/// The statements within this scope.
-	pub stmts: Vec<Stmt>,
+	/// The nodes within this scope.
+	pub stmts: Vec<Node>,
 	/// The span of the closing delimiter if present.
 	pub closing: Option<Span>,
 	/// The span of the entire scope. If the delimiters are present, this is from the beginning of the opening
 	/// delimiter to the end of the closing delimiter. However, if one or both delimiters are missing, the span
-	/// starts/ends at the start/end of the first/last statement.
+	/// starts/ends at the start/end of the first/last node.
 	pub span: Span,
 }
 
@@ -858,16 +858,26 @@ impl Type {
 	}
 }
 
-/// A statement. Some of these statements are only valid at the file top-level, whilst others are only valid inside
-/// of functions.
+/// A collection of tokens (attempted to be) grouped into logical nodes. Nodes are either:
+/// - valid statements in their entirety,
+/// - statements with missing syntax which have been parsed with error recovery,
+/// - individual tokens that could not be recovered into statements.
+///
+/// When it comes to error recovery, the approach taken is that of high likelyhood. If it is quite obvious that a
+/// bit of syntax is missing from making a valid statement, it will be recovered and a statement will be produced,
+/// with the relevant `Option<T>` field set to `None`. If however there is a lot of ambiguity what the
+/// already-parsed tokens could construct, they are emitted as individual `NodeTy::FIXME` nodes.
 #[derive(Debug, Clone, PartialEq)]
-pub struct Stmt {
-	pub ty: StmtTy,
+pub struct Node {
+	pub ty: NodeTy,
 	pub span: Span,
 }
 
+/// All of the variants aside from [`Token`](Self::Token) represent either fully valid statements or statements
+/// that have been created with error recovery. In the case of missing tokens, the relevant `Option<T>` field will
+/// be set to `None`.
 #[derive(Debug, Clone, PartialEq)]
-pub enum StmtTy {
+pub enum NodeTy {
 	/// An empty statement, i.e. just a `;`.
 	Empty,
 	/// A variable definition, e.g. `int a;`.
@@ -972,7 +982,7 @@ pub enum StmtTy {
 	For {
 		kw: Span,
 		l_paren: Option<Span>,
-		var: Option<Box<Stmt>>,
+		var: Option<Box<Node>>,
 		first_semi: Option<Span>,
 		cond: Option<Expr>,
 		second_semi: Option<Span>,
@@ -1010,6 +1020,23 @@ pub enum StmtTy {
 	Continue { kw: Span, semi: Option<Span> },
 	/// A discard statement.
 	Discard { kw: Span, semi: Option<Span> },
+	/// An individual [`Token`] which could not be parsed into a greater statement (even with error recovery).
+	Token(SemanticToken),
+}
+
+/// The type of semantic meaning that an individual [`Token`] has.
+#[derive(Debug, Clone, PartialEq)]
+pub enum SemanticToken {
+	/// A keyword.
+	Keyword,
+	/// An element of punctuation.
+	Punctuation,
+	/// An identifier/word.
+	Ident,
+	/// A preprocessor directive.
+	Directive,
+	/// An invalid token or an illegal character.
+	Invalid,
 }
 
 /// A preprocessor directive.

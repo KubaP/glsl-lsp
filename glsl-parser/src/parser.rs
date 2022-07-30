@@ -1,6 +1,6 @@
 use crate::{
 	cst::{
-		Cst, Expr, ExprTy, Ident, Param, Qualifier, Scope, Stmt, StmtTy, Type,
+		Cst, Expr, ExprTy, Ident, Node, NodeTy, Param, Qualifier, Scope, Type,
 	},
 	error::SyntaxErr,
 	expression::{expr_parser, Mode},
@@ -99,41 +99,41 @@ pub fn parse(source: &str) -> (Cst, Vec<SyntaxErr>) {
 				if let Some(stmt) = stmt {
 					// Check for the validity of the statement at the top-level.
 					match stmt.ty {
-						StmtTy::Expr { .. } => errors.push(
+						NodeTy::Expr { .. } => errors.push(
 							SyntaxErr::ExprStmtIsIllegalAtTopLevel(stmt.span),
 						),
-						StmtTy::Scope { .. } => errors.push(
+						NodeTy::Scope { .. } => errors.push(
 							SyntaxErr::ScopeStmtIsIllegalAtTopLevel(stmt.span),
 						),
-						StmtTy::If { .. } => errors.push(
+						NodeTy::If { .. } => errors.push(
 							SyntaxErr::IfStmtIsIllegalAtTopLevel(stmt.span),
 						),
-						StmtTy::Switch { .. } => errors.push(
+						NodeTy::Switch { .. } => errors.push(
 							SyntaxErr::SwitchStmtIsIllegalAtTopLevel(stmt.span),
 						),
-						StmtTy::For { .. } => errors.push(
+						NodeTy::For { .. } => errors.push(
 							SyntaxErr::ForStmtIsIllegalAtTopLevel(stmt.span),
 						),
-						StmtTy::While { .. } => errors.push(
+						NodeTy::While { .. } => errors.push(
 							SyntaxErr::WhileStmtIsIllegalAtTopLevel(stmt.span),
 						),
-						StmtTy::DoWhile { .. } => errors.push(
+						NodeTy::DoWhile { .. } => errors.push(
 							SyntaxErr::DoWhileStmtIsIllegalAtTopLevel(
 								stmt.span,
 							),
 						),
-						StmtTy::Return { .. } => errors.push(
+						NodeTy::Return { .. } => errors.push(
 							SyntaxErr::ReturnStmtIsIllegalAtTopLevel(stmt.span),
 						),
-						StmtTy::Break { .. } => errors.push(
+						NodeTy::Break { .. } => errors.push(
 							SyntaxErr::BreakStmtIsIllegalAtTopLevel(stmt.span),
 						),
-						StmtTy::Continue { .. } => errors.push(
+						NodeTy::Continue { .. } => errors.push(
 							SyntaxErr::ContinueStmtIsIllegalAtTopLevel(
 								stmt.span,
 							),
 						),
-						StmtTy::Discard { .. } => errors.push(
+						NodeTy::Discard { .. } => errors.push(
 							SyntaxErr::DiscardStmtIsIllegalAtTopLevel(
 								stmt.span,
 							),
@@ -443,7 +443,7 @@ fn parse_qualifier_list(
 /// This function assumes that there is a current `Token` to peek.
 fn parse_stmt(
 	walker: &mut Walker,
-) -> Result<(Option<Stmt>, Vec<SyntaxErr>), Vec<SyntaxErr>> {
+) -> Result<(Option<Node>, Vec<SyntaxErr>), Vec<SyntaxErr>> {
 	let mut errors = Vec::new();
 
 	// Panics: This is guaranteed to unwrap without panic because of the while-loop precondition.
@@ -463,9 +463,9 @@ fn parse_stmt(
 		errors.append(&mut inner_errs);
 
 		return Ok((
-			Some(Stmt {
+			Some(Node {
 				span: Span::new(l_brace_span.start, inner_scope.span.end),
-				ty: StmtTy::Scope(inner_scope),
+				ty: NodeTy::Scope(inner_scope),
 			}),
 			errors,
 		));
@@ -524,8 +524,8 @@ fn parse_stmt(
 			if *current == Token::Semi {
 				walker.advance();
 				Ok((
-					Some(Stmt {
-						ty: StmtTy::Expr {
+					Some(Node {
+						ty: NodeTy::Expr {
 							expr: expr.clone(),
 							semi: Some(current_span),
 						},
@@ -560,12 +560,15 @@ fn parse_stmt(
 
 	// TODO: Deal with the fact that these statements don't support qualifiers.
 
+	// TODO: Add variants to `Stmt` to record invalid things, such as single keywords, or random bits of
+	// punctuation.
+
 	match token {
 		Token::Semi => {
 			walker.advance();
 			return Ok((
-				Some(Stmt {
-					ty: StmtTy::Empty,
+				Some(Node {
+					ty: NodeTy::Empty,
 					span: token_span,
 				}),
 				errors,
@@ -598,8 +601,8 @@ fn parse_stmt(
 					Some(t) => (&t.0, t.1),
 					None => {
 						return Ok((
-							Some(Stmt {
-								ty: StmtTy::If {
+							Some(Node {
+								ty: NodeTy::If {
 									kw: kw_span,
 									l_paren: l_paren_span,
 									cond,
@@ -699,8 +702,8 @@ fn parse_stmt(
 			}
 
 			return Ok((
-				Some(Stmt {
-					ty: StmtTy::If {
+				Some(Node {
+					ty: NodeTy::If {
 						kw: kw_span,
 						l_paren: l_paren_span,
 						cond,
@@ -748,8 +751,8 @@ fn parse_stmt(
 				errors.append(&mut errs);
 
 				return Ok((
-					Some(Stmt {
-						ty: StmtTy::Switch {
+					Some(Node {
+						ty: NodeTy::Switch {
 							kw: kw_span,
 							l_paren: None,
 							expr: Expr {
@@ -877,8 +880,8 @@ fn parse_stmt(
 						walker.get_last_span().next_single_width(),
 					));
 					return Ok((
-						Some(Stmt {
-							ty: StmtTy::Switch {
+						Some(Node {
+							ty: NodeTy::Switch {
 								kw: kw_span,
 								l_paren: l_paren_span,
 								expr,
@@ -901,8 +904,8 @@ fn parse_stmt(
 					span_after_header.next_single_width(),
 				));
 				return Ok((
-					Some(Stmt {
-						ty: StmtTy::Switch {
+					Some(Node {
+						ty: NodeTy::Switch {
 							kw: kw_span,
 							l_paren: l_paren_span,
 							expr,
@@ -923,8 +926,8 @@ fn parse_stmt(
 			errors.append(&mut errs);
 
 			return Ok((
-				Some(Stmt {
-					ty: StmtTy::Switch {
+				Some(Node {
+					ty: NodeTy::Switch {
 						kw: kw_span,
 						l_paren: l_paren_span,
 						expr,
@@ -972,9 +975,9 @@ fn parse_stmt(
 				errors.append(&mut errs);
 
 				return Ok((
-					Some(Stmt {
+					Some(Node {
 						span: Span::new(kw_span.start, body.span.end),
-						ty: StmtTy::For {
+						ty: NodeTy::For {
 							kw: kw_span,
 							l_paren: None,
 							var: None,
@@ -1132,8 +1135,8 @@ fn parse_stmt(
 									(None, _) => {
 										walker.cursor = walker_cursor;
 										errors.append(&mut errs);
-										var = Some(Stmt {
-											ty: StmtTy::Expr {
+										var = Some(Node {
+											ty: NodeTy::Expr {
 												expr: expr.clone(),
 												semi: None,
 											},
@@ -1142,8 +1145,8 @@ fn parse_stmt(
 									}
 								}
 							} else {
-								var = Some(Stmt {
-									ty: StmtTy::Expr {
+								var = Some(Node {
+									ty: NodeTy::Expr {
 										expr: expr.clone(),
 										semi: None,
 									},
@@ -1252,8 +1255,8 @@ fn parse_stmt(
 						walker.get_last_span().next_single_width(),
 					));
 					return Ok((
-						Some(Stmt {
-							ty: StmtTy::For {
+						Some(Node {
+							ty: NodeTy::For {
 								kw: kw_span,
 								l_paren: l_paren_span,
 								var: var.map(|s| Box::from(s)),
@@ -1282,8 +1285,8 @@ fn parse_stmt(
 					span_after_header.next_single_width(),
 				));
 				return Ok((
-					Some(Stmt {
-						ty: StmtTy::For {
+					Some(Node {
+						ty: NodeTy::For {
 							kw: kw_span,
 							l_paren: l_paren_span,
 							var: var.map(|s| Box::from(s)),
@@ -1309,9 +1312,9 @@ fn parse_stmt(
 			errors.append(&mut errs);
 
 			return Ok((
-				Some(Stmt {
+				Some(Node {
 					span: Span::new(token_span.start, body.span.end),
-					ty: StmtTy::For {
+					ty: NodeTy::For {
 						kw: kw_span,
 						l_paren: l_paren_span,
 						var: var.map(|s| Box::from(s)),
@@ -1358,9 +1361,9 @@ fn parse_stmt(
 				errors.append(&mut errs);
 
 				return Ok((
-					Some(Stmt {
+					Some(Node {
 						span: Span::new(kw_span.start, body.span.end),
-						ty: StmtTy::While {
+						ty: NodeTy::While {
 							kw: kw_span,
 							l_paren: None,
 							cond: Expr {
@@ -1484,8 +1487,8 @@ fn parse_stmt(
 						walker.get_last_span().next_single_width(),
 					));
 					return Ok((
-						Some(Stmt {
-							ty: StmtTy::While {
+						Some(Node {
+							ty: NodeTy::While {
 								kw: token_span,
 								l_paren: l_paren_span,
 								cond,
@@ -1508,8 +1511,8 @@ fn parse_stmt(
 					span_before_body.next_single_width(),
 				));
 				return Ok((
-					Some(Stmt {
-						ty: StmtTy::While {
+					Some(Node {
+						ty: NodeTy::While {
 							kw: token_span,
 							l_paren: l_paren_span,
 							cond,
@@ -1531,8 +1534,8 @@ fn parse_stmt(
 			errors.append(&mut errs);
 
 			return Ok((
-				Some(Stmt {
-					ty: StmtTy::While {
+				Some(Node {
+					ty: NodeTy::While {
 						kw: token_span,
 						l_paren: l_paren_span,
 						cond,
@@ -1653,8 +1656,8 @@ fn parse_stmt(
 				}
 
 				return Ok((
-					Some(Stmt {
-						ty: StmtTy::DoWhile {
+					Some(Node {
+						ty: NodeTy::DoWhile {
 							do_kw: do_kw_span,
 							body,
 							while_kw: while_kw_span,
@@ -1821,8 +1824,8 @@ fn parse_stmt(
 			};
 
 			return Ok((
-				Some(Stmt {
-					ty: StmtTy::DoWhile {
+				Some(Node {
+					ty: NodeTy::DoWhile {
 						do_kw: do_kw_span,
 						body,
 						while_kw: while_kw_span,
@@ -1867,8 +1870,8 @@ fn parse_stmt(
 			}
 
 			return Ok((
-				Some(Stmt {
-					ty: StmtTy::Return {
+				Some(Node {
+					ty: NodeTy::Return {
 						kw: token_span,
 						value: return_expr,
 						semi: semi_span,
@@ -1909,8 +1912,8 @@ fn parse_stmt(
 			}
 
 			return Ok((
-				Some(Stmt {
-					ty: StmtTy::Break {
+				Some(Node {
+					ty: NodeTy::Break {
 						kw: token_span,
 						semi: semi_span,
 					},
@@ -1948,8 +1951,8 @@ fn parse_stmt(
 			}
 
 			return Ok((
-				Some(Stmt {
-					ty: StmtTy::Continue {
+				Some(Node {
+					ty: NodeTy::Continue {
 						kw: token_span,
 						semi: semi_span,
 					},
@@ -1987,8 +1990,8 @@ fn parse_stmt(
 			}
 
 			return Ok((
-				Some(Stmt {
-					ty: StmtTy::Discard {
+				Some(Node {
+					ty: NodeTy::Discard {
 						kw: token_span,
 						semi: semi_span,
 					},
@@ -2547,7 +2550,7 @@ fn parse_type_start(
 	type_: Type,
 	original_expr: Expr,
 	qualifiers: Vec<Qualifier>,
-) -> (Option<Stmt>, Vec<SyntaxErr>) {
+) -> (Option<Node>, Vec<SyntaxErr>) {
 	let mut errors = Vec::new();
 
 	// Check whether we have a function definition/declaration.
@@ -2605,8 +2608,8 @@ fn parse_type_start(
 				Token::Semi => {
 					// We have something like `int;` which on its own can be a valid expression statement.
 					return (
-						Some(Stmt {
-							ty: StmtTy::Expr {
+						Some(Node {
+							ty: NodeTy::Expr {
 								expr: original_expr.clone(),
 								semi: Some(*current_span),
 							},
@@ -2658,8 +2661,8 @@ fn parse_type_start(
 				Some(match typenames.len() {
 					1 => {
 						let (type_, ident) = typenames.remove(0);
-						Stmt {
-							ty: StmtTy::VarDef {
+						Node {
+							ty: NodeTy::VarDef {
 								type_,
 								ident,
 								qualifiers,
@@ -2670,8 +2673,8 @@ fn parse_type_start(
 							),
 						}
 					}
-					_ => Stmt {
-						ty: StmtTy::VarDefs(typenames, qualifiers),
+					_ => Node {
+						ty: NodeTy::VarDefs(typenames, qualifiers),
 						span: Span::new(
 							original_expr.span.start,
 							walker.get_last_span().end,
@@ -2689,8 +2692,8 @@ fn parse_type_start(
 			Some(match typenames.len() {
 				1 => {
 					let (type_, ident) = typenames.remove(0);
-					Stmt {
-						ty: StmtTy::VarDef {
+					Node {
+						ty: NodeTy::VarDef {
 							type_,
 							ident,
 							qualifiers,
@@ -2701,8 +2704,8 @@ fn parse_type_start(
 						),
 					}
 				}
-				_ => Stmt {
-					ty: StmtTy::VarDefs(typenames, qualifiers),
+				_ => Node {
+					ty: NodeTy::VarDefs(typenames, qualifiers),
 					span: Span::new(original_expr.span.start, current_span.end),
 				},
 			}),
@@ -2726,8 +2729,8 @@ fn parse_type_start(
 					Some(match typenames.len() {
 						1 => {
 							let (type_, ident) = typenames.remove(0);
-							Stmt {
-								ty: StmtTy::VarDef {
+							Node {
+								ty: NodeTy::VarDef {
 									type_,
 									ident,
 									qualifiers,
@@ -2738,8 +2741,8 @@ fn parse_type_start(
 								),
 							}
 						}
-						_ => Stmt {
-							ty: StmtTy::VarDefs(typenames, qualifiers),
+						_ => Node {
+							ty: NodeTy::VarDefs(typenames, qualifiers),
 							span: Span::new(
 								original_expr.span.start,
 								walker.get_last_span().end,
@@ -2765,8 +2768,8 @@ fn parse_type_start(
 					Some(match typenames.len() {
 						1 => {
 							let (type_, ident) = typenames.remove(0);
-							Stmt {
-								ty: StmtTy::VarDecl {
+							Node {
+								ty: NodeTy::VarDecl {
 									type_,
 									ident,
 									value,
@@ -2778,8 +2781,8 @@ fn parse_type_start(
 								),
 							}
 						}
-						_ => Stmt {
-							ty: StmtTy::VarDecls {
+						_ => Node {
+							ty: NodeTy::VarDecls {
 								vars: typenames,
 								value,
 								qualifiers,
@@ -2807,8 +2810,8 @@ fn parse_type_start(
 				Some(match typenames.len() {
 					1 => {
 						let (type_, ident) = typenames.remove(0);
-						Stmt {
-							ty: StmtTy::VarDecl {
+						Node {
+							ty: NodeTy::VarDecl {
 								type_,
 								ident,
 								value,
@@ -2820,8 +2823,8 @@ fn parse_type_start(
 							),
 						}
 					}
-					_ => Stmt {
-						ty: StmtTy::VarDecls {
+					_ => Node {
+						ty: NodeTy::VarDecls {
 							vars: typenames,
 							value,
 							qualifiers,
@@ -2840,8 +2843,8 @@ fn parse_type_start(
 			Some(match typenames.len() {
 				1 => {
 					let (type_, ident) = typenames.remove(0);
-					Stmt {
-						ty: StmtTy::VarDecl {
+					Node {
+						ty: NodeTy::VarDecl {
 							type_,
 							ident,
 							value,
@@ -2853,8 +2856,8 @@ fn parse_type_start(
 						),
 					}
 				}
-				_ => Stmt {
-					ty: StmtTy::VarDecls {
+				_ => Node {
+					ty: NodeTy::VarDecls {
 						vars: typenames,
 						value,
 						qualifiers,
@@ -2875,8 +2878,8 @@ fn parse_type_start(
 			Some(match typenames.len() {
 				1 => {
 					let (type_, ident) = typenames.remove(0);
-					Stmt {
-						ty: StmtTy::VarDef {
+					Node {
+						ty: NodeTy::VarDef {
 							type_,
 							ident,
 							qualifiers,
@@ -2887,8 +2890,8 @@ fn parse_type_start(
 						),
 					}
 				}
-				_ => Stmt {
-					ty: StmtTy::VarDefs(typenames, qualifiers),
+				_ => Node {
+					ty: NodeTy::VarDefs(typenames, qualifiers),
 					span: Span::new(
 						original_expr.span.start,
 						walker.get_previous_span().end,
@@ -2915,7 +2918,7 @@ fn parse_fn(
 	ident: Ident,
 	qualifiers: Vec<Qualifier>,
 	l_paren_span: Span,
-) -> (Option<Stmt>, Vec<SyntaxErr>) {
+) -> (Option<Node>, Vec<SyntaxErr>) {
 	let mut errors = Vec::new();
 
 	let mut params = Vec::new();
@@ -2980,8 +2983,8 @@ fn parse_fn(
 					current_span,
 				));
 				return (
-					Some(Stmt {
-						ty: StmtTy::FnDef {
+					Some(Node {
+						ty: NodeTy::FnDef {
 							return_type,
 							ident,
 							params,
@@ -3168,8 +3171,8 @@ fn parse_fn(
 				walker.get_last_span().next_single_width(),
 			));
 			return (
-				Some(Stmt {
-					ty: StmtTy::FnDef {
+				Some(Node {
+					ty: NodeTy::FnDef {
 						return_type,
 						ident,
 						params,
@@ -3188,8 +3191,8 @@ fn parse_fn(
 	if *current == Token::Semi {
 		walker.advance();
 		(
-			Some(Stmt {
-				ty: StmtTy::FnDef {
+			Some(Node {
+				ty: NodeTy::FnDef {
 					qualifiers,
 					return_type,
 					ident,
@@ -3209,9 +3212,9 @@ fn parse_fn(
 		errors.append(&mut errs);
 
 		(
-			Some(Stmt {
+			Some(Node {
 				span: Span::new(start_span.start, body.span.end),
-				ty: StmtTy::FnDecl {
+				ty: NodeTy::FnDecl {
 					qualifiers,
 					return_type,
 					ident,
@@ -3229,8 +3232,8 @@ fn parse_fn(
 			walker.get_previous_span().next_single_width(),
 		));
 		(
-			Some(Stmt {
-				ty: StmtTy::FnDef {
+			Some(Node {
+				ty: NodeTy::FnDef {
 					qualifiers,
 					return_type,
 					ident,
@@ -3256,7 +3259,7 @@ fn parse_struct(
 	walker: &mut Walker,
 	qualifiers: Vec<Qualifier>,
 	kw_span: Span,
-) -> (Option<Stmt>, Vec<SyntaxErr>) {
+) -> (Option<Node>, Vec<SyntaxErr>) {
 	let mut errors = Vec::new();
 
 	// Look for an identifier.
@@ -3304,8 +3307,8 @@ fn parse_struct(
 		));
 		walker.advance();
 		return (
-			Some(Stmt {
-				ty: StmtTy::StructDef {
+			Some(Node {
+				ty: NodeTy::StructDef {
 					kw: kw_span,
 					ident,
 					qualifiers,
@@ -3336,9 +3339,9 @@ fn parse_struct(
 	errors.append(&mut errs);
 	if missing_body_delim {
 		return (
-			Some(Stmt {
+			Some(Node {
 				span: Span::new(kw_span.start, body.span.end),
-				ty: StmtTy::StructDecl {
+				ty: NodeTy::StructDecl {
 					kw: kw_span,
 					ident,
 					body,
@@ -3354,7 +3357,7 @@ fn parse_struct(
 	// We don't remove invalid statements because we would loose information for the AST.
 	let mut count = 0;
 	body.stmts.iter().for_each(|stmt| match stmt.ty {
-		StmtTy::VarDef { .. } | StmtTy::VarDefs(_, _) => count += 1,
+		NodeTy::VarDef { .. } | NodeTy::VarDefs(_, _) => count += 1,
 		_ => errors.push(SyntaxErr::ExpectedVarDefInStructBody(stmt.span)),
 	});
 	// Check that there is at least one variable definition within the body.
@@ -3381,8 +3384,8 @@ fn parse_struct(
 					walker.get_previous_span().next_single_width(),
 				));
 				return (
-					Some(Stmt {
-						ty: StmtTy::StructDecl {
+					Some(Node {
+						ty: NodeTy::StructDecl {
 							kw: kw_span,
 							ident,
 							body,
@@ -3410,8 +3413,8 @@ fn parse_struct(
 				walker.get_previous_span().next_single_width(),
 			));
 			return (
-				Some(Stmt {
-					ty: StmtTy::StructDecl {
+				Some(Node {
+					ty: NodeTy::StructDecl {
 						kw: kw_span,
 						ident,
 						body,
@@ -3428,8 +3431,8 @@ fn parse_struct(
 	if *current == Token::Semi {
 		walker.advance();
 		(
-			Some(Stmt {
-				ty: StmtTy::StructDecl {
+			Some(Node {
+				ty: NodeTy::StructDecl {
 					kw: kw_span,
 					ident,
 					body,
@@ -3449,8 +3452,8 @@ fn parse_struct(
 			walker.get_previous_span().next_single_width(),
 		));
 		(
-			Some(Stmt {
-				ty: StmtTy::StructDecl {
+			Some(Node {
+				ty: NodeTy::StructDecl {
 					kw: kw_span,
 					ident,
 					body,
@@ -3465,14 +3468,14 @@ fn parse_struct(
 	}
 }
 
-pub fn print_stmt(stmt: &Stmt, indent: usize) {
+pub fn print_stmt(stmt: &Node, indent: usize) {
 	match &stmt.ty {
-		StmtTy::Empty => print!(
+		NodeTy::Empty => print!(
 			"\r\n{:indent$}\x1b[9m(Empty)\x1b[0m",
 			"",
 			indent = indent * 4
 		),
-		StmtTy::VarDef {
+		NodeTy::VarDef {
 			type_,
 			ident,
 			qualifiers,
@@ -3483,7 +3486,7 @@ pub fn print_stmt(stmt: &Stmt, indent: usize) {
 			}
 			print!("])");
 		}
-		StmtTy::VarDefs(vars, qualifiers) => {
+		NodeTy::VarDefs(vars, qualifiers) => {
 			print!(
 				"\r\n{:indent$}\x1b[32mVar\x1b[0m(",
 				"",
@@ -3498,7 +3501,7 @@ pub fn print_stmt(stmt: &Stmt, indent: usize) {
 			}
 			print!("])");
 		}
-		StmtTy::VarDecl {
+		NodeTy::VarDecl {
 			type_,
 			ident,
 			value,
@@ -3514,7 +3517,7 @@ pub fn print_stmt(stmt: &Stmt, indent: usize) {
 			}
 			print!("]) = {value}");
 		}
-		StmtTy::VarDecls {
+		NodeTy::VarDecls {
 			vars,
 			value,
 			qualifiers,
@@ -3533,7 +3536,7 @@ pub fn print_stmt(stmt: &Stmt, indent: usize) {
 			}
 			print!("]) = {value}");
 		}
-		StmtTy::FnDef {
+		NodeTy::FnDef {
 			return_type,
 			ident,
 			params,
@@ -3576,7 +3579,7 @@ pub fn print_stmt(stmt: &Stmt, indent: usize) {
 			}
 			print!("])");
 		}
-		StmtTy::FnDecl {
+		NodeTy::FnDecl {
 			return_type,
 			ident,
 			params,
@@ -3623,7 +3626,7 @@ pub fn print_stmt(stmt: &Stmt, indent: usize) {
 			}
 			print!("\r\n{:indent$}}}", "", indent = indent * 4);
 		}
-		StmtTy::StructDef {
+		NodeTy::StructDef {
 			ident, qualifiers, ..
 		} => {
 			print!(
@@ -3636,7 +3639,7 @@ pub fn print_stmt(stmt: &Stmt, indent: usize) {
 			}
 			print!("])");
 		}
-		StmtTy::StructDecl {
+		NodeTy::StructDecl {
 			ident,
 			body,
 			qualifiers,
@@ -3661,22 +3664,22 @@ pub fn print_stmt(stmt: &Stmt, indent: usize) {
 				print!("])");
 			}
 		}
-		StmtTy::Expr { expr, .. } => {
+		NodeTy::Expr { expr, .. } => {
 			print!("\r\n{:indent$}{expr}", "", indent = indent * 4);
 		}
-		StmtTy::Scope(scope) => {
+		NodeTy::Scope(scope) => {
 			print!("\r\n{:indent$}{{", "", indent = indent * 4);
 			for stmt in &scope.stmts {
 				print_stmt(&stmt, indent + 1);
 			}
 			print!("\r\n{:indent$}}}", "", indent = indent * 4);
 		}
-		StmtTy::Preproc(p) => print!(
+		NodeTy::Preproc(p) => print!(
 			"\r\n{:indent$}\x1b[4mPreproc({p})\x1b[0m",
 			"",
 			indent = indent * 4
 		),
-		StmtTy::If {
+		NodeTy::If {
 			cond,
 			body,
 			branches,
@@ -3704,7 +3707,7 @@ pub fn print_stmt(stmt: &Stmt, indent: usize) {
 				print!("\r\n{:indent$}}}", "", indent = indent * 4);
 			}
 		}
-		StmtTy::Switch { expr, cases, .. } => {
+		NodeTy::Switch { expr, cases, .. } => {
 			print!("\r\n{:indent$}Switch({expr}) {{", "", indent = indent * 4);
 			for (expr, _, body) in cases {
 				if let Some(expr) = expr {
@@ -3727,7 +3730,7 @@ pub fn print_stmt(stmt: &Stmt, indent: usize) {
 			}
 			print!("\r\n{:indent$}}}", "", indent = indent * 4);
 		}
-		StmtTy::For {
+		NodeTy::For {
 			var,
 			cond,
 			inc,
@@ -3766,7 +3769,7 @@ pub fn print_stmt(stmt: &Stmt, indent: usize) {
 			}
 			print!("\r\n{:indent$}}}", "", indent = indent * 4);
 		}
-		StmtTy::While { cond, body, .. } => {
+		NodeTy::While { cond, body, .. } => {
 			print!("\r\n{:indent$}While({cond}) {{", "", indent = indent * 4);
 			if let Some(body) = body {
 				for stmt in &body.stmts {
@@ -3775,7 +3778,7 @@ pub fn print_stmt(stmt: &Stmt, indent: usize) {
 			}
 			print!("\r\n{:indent$}}}", "", indent = indent * 4);
 		}
-		StmtTy::DoWhile { cond, body, .. } => {
+		NodeTy::DoWhile { cond, body, .. } => {
 			print!(
 				"\r\n{:indent$}Do-While({cond}) {{",
 				"",
@@ -3788,20 +3791,23 @@ pub fn print_stmt(stmt: &Stmt, indent: usize) {
 			}
 			print!("\r\n{:indent$}}}", "", indent = indent * 4);
 		}
-		StmtTy::Return { value, .. } => {
+		NodeTy::Return { value, .. } => {
 			print!("\r\n{:indent$}RETURN", "", indent = indent * 4);
 			if let Some(expr) = value {
 				print!("(value: {expr})");
 			}
 		}
-		StmtTy::Break { .. } => {
+		NodeTy::Break { .. } => {
 			print!("\r\n{:indent$}BREAK", "", indent = indent * 4)
 		}
-		StmtTy::Continue { .. } => {
+		NodeTy::Continue { .. } => {
 			print!("\r\n{:indent$}CONTINUE", "", indent = indent * 4)
 		}
-		StmtTy::Discard { .. } => {
+		NodeTy::Discard { .. } => {
 			print!("\r\n{:indent$}DISCARD", "", indent = indent * 4)
+		}
+		NodeTy::Token(_) => {
+			print!("\r\n{:indent$}UNRECOVERED SYNTAX", "", indent = indent * 4)
 		}
 	}
 }

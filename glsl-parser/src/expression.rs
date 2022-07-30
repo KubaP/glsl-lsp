@@ -2133,7 +2133,7 @@ use crate::lexer::lexer;
 macro_rules! assert_expr {
 	($source:expr, $rest:expr) => {
 		let mut walker = Walker {
-			cst: lexer($source),
+			token_stream: lexer($source),
 			cursor: 0,
 		};
 		assert_eq!(

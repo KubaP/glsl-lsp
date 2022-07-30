@@ -1,5 +1,5 @@
 use crate::{
-	ast::{Expr, ExprTy, Ident, Lit, Op},
+	cst::{Expr, ExprTy, Ident, Lit, Op},
 	error::SyntaxErr,
 	lexer::{OpTy, Token},
 	log,

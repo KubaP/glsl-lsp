@@ -4,6 +4,9 @@ use crate::{
 	Either,
 };
 
+/// A concrete syntax tree. This represents the root of a file.
+pub type Cst = Vec<Stmt>;
+
 /// A literal value.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum Lit {

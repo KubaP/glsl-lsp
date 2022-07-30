@@ -1,8 +1,11 @@
 use crate::{
-	ast::{Expr, Layout},
+	cst::{Expr, Layout},
 	span::{Span, Spanned},
 	Either,
 };
+
+/// A list of tokens generated from the source file.
+pub type TokenStream = Vec<Spanned<Token>>;
 
 /// Lexer tokens.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -748,7 +751,7 @@ fn match_word(str: String) -> Token {
 	}
 }
 
-/// Performs lexical analysis of the source string and returns a vector of [`Token`]s.
+/// Performs lexical analysis of the source string and returns a stream of [`Token`]s.
 ///
 /// This lexer uses the "Maximal munch" principle to greedily create Tokens. This means the longest possible valid
 /// token is always produced. Some examples:
@@ -758,7 +761,7 @@ fn match_word(str: String) -> Token {
 /// i-----7    becomes (i) (--) (--) (-) (7)
 /// i-- - --7  becomes (i) (--) (-) (--) (7)
 /// ```
-pub fn lexer(source: &str) -> Vec<Spanned<Token>> {
+pub fn lexer(source: &str) -> TokenStream {
 	let mut tokens = Vec::new();
 	let mut lexer = Lexer::new(source);
 	let mut buffer = String::new();

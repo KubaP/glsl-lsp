@@ -1,8 +1,196 @@
 use crate::{
 	lexer::{NumType, OpTy, Token},
-	span::{Span, Spanned},
+	span::Span,
 	Either,
 };
+
+/// A literal value.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum Lit {
+	Bool(bool),
+	Int(i64),
+	UInt(u64),
+	Float(f32),
+	Double(f64),
+}
+
+impl std::fmt::Display for Lit {
+	fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+		match self {
+			Self::Bool(b) => write!(f, "\x1b[35m{}\x1b[0m", b.to_string()),
+			Self::Int(i) => write!(f, "\x1b[35m{i}\x1b[0m"),
+			Self::UInt(u) => write!(f, "\x1b[35m{u}\x1b[0m"),
+			Self::Float(fp) => write!(f, "\x1b[35m{fp}\x1b[0m"),
+			Self::Double(d) => write!(f, "\x1b[35m{d}\x1b[0m"),
+		}
+	}
+}
+
+impl Lit {
+	pub fn parse(token: &Token) -> Result<Self, ()> {
+		match token {
+			Token::Bool(b) => Ok(Self::Bool(*b)),
+			Token::Num {
+				num: s,
+				suffix,
+				type_,
+			} => Self::parse_num(&s, suffix.as_deref(), *type_),
+			_ => Err(()),
+		}
+	}
+
+	pub fn parse_num(
+		s: &str,
+		suffix: Option<&str>,
+		type_: NumType,
+	) -> Result<Self, ()> {
+		// This can be empty, e.g. `0xu` is a `NumType::Hex` with contents `` with suffix `u`.
+		if s == "" {
+			return Err(());
+		}
+		match type_ {
+			NumType::Dec => Self::parse_num_dec(s, suffix),
+			NumType::Hex => Self::parse_num_hex(s, suffix),
+			NumType::Oct => Self::parse_num_oct(s, suffix),
+			NumType::Float => Self::parse_num_float(s, suffix),
+		}
+	}
+
+	fn parse_num_dec(s: &str, suffix: Option<&str>) -> Result<Self, ()> {
+		if let Some(suffix) = suffix {
+			if suffix == "u" || suffix == "U" {
+				if let Ok(u) = u64::from_str_radix(s, 10) {
+					return Ok(Self::UInt(u));
+				}
+			} else {
+				return Err(());
+			}
+		} else {
+			if let Ok(i) = i64::from_str_radix(s, 10) {
+				return Ok(Self::Int(i));
+			}
+		}
+
+		Err(())
+	}
+
+	fn parse_num_hex(s: &str, suffix: Option<&str>) -> Result<Self, ()> {
+		if let Some(suffix) = suffix {
+			if suffix == "u" || suffix == "U" {
+				if let Ok(u) = u64::from_str_radix(s, 16) {
+					return Ok(Self::UInt(u));
+				}
+			} else {
+				return Err(());
+			}
+		} else {
+			if let Ok(i) = i64::from_str_radix(s, 16) {
+				return Ok(Self::Int(i));
+			}
+		}
+
+		Err(())
+	}
+
+	fn parse_num_oct(s: &str, suffix: Option<&str>) -> Result<Self, ()> {
+		if let Some(suffix) = suffix {
+			if suffix == "u" || suffix == "U" {
+				if let Ok(u) = u64::from_str_radix(s, 8) {
+					return Ok(Self::UInt(u));
+				}
+			} else {
+				return Err(());
+			}
+		} else {
+			if let Ok(i) = i64::from_str_radix(s, 8) {
+				return Ok(Self::Int(i));
+			}
+		}
+
+		Err(())
+	}
+
+	fn parse_num_float(s: &str, suffix: Option<&str>) -> Result<Self, ()> {
+		if let Some(suffix) = suffix {
+			if suffix == "lf" || suffix == "LF" {
+				if let Ok(f) = s.parse::<f64>() {
+					return Ok(Self::Double(f));
+				}
+			} else if suffix == "f" || suffix == "F" {
+				if let Ok(f) = s.parse::<f32>() {
+					return Ok(Self::Float(f));
+				}
+			} else {
+				return Err(());
+			}
+		} else {
+			if let Ok(f) = s.parse::<f32>() {
+				return Ok(Self::Float(f));
+			}
+		}
+
+		Err(())
+	}
+}
+
+/// An identifier; this can be a variable name, function name, struct name, etc.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Ident {
+	pub name: String,
+	pub span: Span,
+}
+
+impl std::fmt::Display for Ident {
+	fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+		write!(f, "\x1b[33m{}\x1b[0m", self.name)
+	}
+}
+
+impl Ident {
+	fn from_expr(
+		expr: &ExprTy,
+	) -> Option<Either<Ident, (Ident, Vec<ArrSize>)>> {
+		match expr {
+			ExprTy::Ident(i) => Some(Either::Left(i.clone())),
+			ExprTy::Index { item, i, op: _ } => {
+				let mut current_item = item;
+				let mut stack = Vec::new();
+				stack.push(i.as_deref());
+
+				let ident = loop {
+					match &current_item.ty {
+						ExprTy::Ident(i) => {
+							break i.clone();
+						}
+						ExprTy::Index { item, i, op: _ } => {
+							stack.push(i.as_deref());
+							current_item = item;
+						}
+						_ => return None,
+					};
+				};
+
+				// In the expression parser, the `[..]` brackets are right-associative, so the outer-most pair is
+				// at the top, and the inner-most is at the bottom. We want to reverse this to be in line with our
+				// intuition, i.e. 2nd dimension first, then 1st dimension.
+				stack.reverse();
+
+				Some(Either::Right((
+					ident,
+					stack.into_iter().map(|i| i.cloned()).collect(),
+				)))
+			}
+			_ => None,
+		}
+	}
+}
+
+/// An operator, which is part of an expression.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Op {
+	pub ty: OpTy,
+	pub span: Span,
+}
 
 /// An expression, which is part of a larger statement.
 #[derive(Debug, Clone, PartialEq)]
@@ -226,19 +414,13 @@ pub enum ExprTy {
 	List(Vec<Expr>),
 }
 
-/// An operator, which is part of an expression.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct Op {
-	pub ty: OpTy,
-	pub span: Span,
-}
-
 /// A parameter in a function definition/declaration.
-/// 
-/// - `0` - the type,
-/// - `1` - an optional identifier,
-/// - `2` - optional qualifiers.
-pub type Param = (Type, Option<Ident>, Vec<Spanned<Qualifier>>);
+#[derive(Debug, Clone, PartialEq)]
+pub struct Param {
+	pub qualifiers: Vec<Qualifier>,
+	pub type_: Type,
+	pub ident: Option<Ident>,
+}
 
 /// A scope of statements, potentially delimited by opening and closing delimiters.
 ///
@@ -256,607 +438,6 @@ pub struct Scope {
 	/// delimiter to the end of the closing delimiter. However, if one or both delimiters are missing, the span
 	/// starts/ends at the start/end of the first/last statement.
 	pub span: Span,
-}
-
-/// A top-level statement. Some of these statements are only valid at the file top-level, whilst others are only
-/// valid inside of functions.
-#[derive(Debug, Clone, PartialEq)]
-pub struct Stmt {
-	pub ty: StmtTy,
-	pub span: Span,
-}
-
-#[derive(Debug, Clone, PartialEq)]
-pub enum StmtTy {
-	/// An empty statement, i.e. just a `;`.
-	Empty,
-	/// A variable definition, e.g. `int a;`.
-	VarDef {
-		type_: Type,
-		ident: Ident,
-		qualifiers: Vec<Spanned<Qualifier>>,
-	},
-	/// Multiple variable definitions, e.g. `int a, b;`.
-	VarDefs(Vec<(Type, Ident)>, Vec<Spanned<Qualifier>>),
-	/// A variable declaration, e.g. `int a = <EXPR>;`.
-	VarDecl {
-		type_: Type,
-		ident: Ident,
-		value: Expr,
-		qualifiers: Vec<Spanned<Qualifier>>,
-	},
-	/// Multiple variable declarations, e.g. `int a, b = <EXPR>;`.
-	VarDecls {
-		vars: Vec<(Type, Ident)>,
-		value: Expr,
-		qualifiers: Vec<Spanned<Qualifier>>,
-	},
-	/// A function definition.
-	FnDef {
-		qualifiers: Vec<Spanned<Qualifier>>,
-		return_type: Type,
-		ident: Ident,
-		params: Vec<Param>,
-		semi: Option<Span>,
-	},
-	/// A function declaration.
-	FnDecl {
-		qualifiers: Vec<Spanned<Qualifier>>,
-		return_type: Type,
-		ident: Ident,
-		params: Vec<Param>,
-		body: Scope,
-	},
-	/// A struct definition. *Note:* This is invalid glsl grammar.
-	StructDef {
-		kw: Span,
-		ident: Ident,
-		qualifiers: Vec<Spanned<Qualifier>>,
-		semi: Span,
-	},
-	/// A struct declaration.
-	StructDecl {
-		kw: Span,
-		ident: Ident,
-		body: Scope,
-		qualifiers: Vec<Spanned<Qualifier>>,
-		instance: Option<Ident>,
-		semi: Option<Span>,
-	},
-	/// A general expression, e.g.
-	///
-	/// - `i + 5;`
-	/// - `fn();`
-	/// - `i = 5 + 1;`
-	/// - `i *= fn();`
-	Expr { expr: Expr, semi: Option<Span> },
-	/// A standalone scope, e.g.
-	/// ```glsl
-	/// /* .. */
-	/// {
-	/// 	/* new scope */
-	/// }
-	/// ```
-	Scope(Scope),
-	/// A preprocessor call.
-	Preproc(Preproc),
-	/// An if statement.
-	If {
-		kw: Span,
-		l_paren: Option<Span>,
-		cond: Expr,
-		r_paren: Option<Span>,
-		body: Scope,
-		/// Laid out as following: `(else, if, l_paren, cond, r_paren, body)`.
-		branches: Vec<(
-			Span,
-			Option<Span>,
-			Option<Span>,
-			Option<Expr>,
-			Option<Span>,
-			Scope,
-		)>,
-	},
-	/// A switch statement.
-	Switch {
-		kw: Span,
-		l_paren: Option<Span>,
-		expr: Expr,
-		r_paren: Option<Span>,
-		/// - `0` - If `None`, then this is a `default` case, otherwise this is the case expresion,
-		/// - `1` - the colon `:`,
-		/// - `2` - the body.
-		cases: Vec<(Option<Expr>, Option<Span>, Scope)>,
-	},
-	/// A for-loop statement.
-	For {
-		kw: Span,
-		l_paren: Option<Span>,
-		var: Option<Box<Stmt>>,
-		first_semi: Option<Span>,
-		cond: Option<Expr>,
-		second_semi: Option<Span>,
-		inc: Option<Expr>,
-		r_paren: Option<Span>,
-		body: Option<Scope>,
-	},
-	/// A while-loop, i.e. `while ( /*..*/ ) { /*..*/ }`.
-	While {
-		kw: Span,
-		l_paren: Option<Span>,
-		cond: Expr,
-		r_paren: Option<Span>,
-		body: Option<Scope>,
-	},
-	/// A do-while loop, i.e. `do { /*..*/ } while ( /*..*/ );`.
-	DoWhile {
-		do_kw: Span,
-		body: Option<Scope>,
-		while_kw: Option<Span>,
-		l_paren: Option<Span>,
-		cond: Expr,
-		r_paren: Option<Span>,
-		semi: Option<Span>,
-	},
-	/// A return statement.
-	Return {
-		kw: Span,
-		value: Option<Expr>,
-		semi: Option<Span>,
-	},
-	/// A break statement.
-	Break { kw: Span, semi: Option<Span> },
-	/// A continue statement.
-	Continue { kw: Span, semi: Option<Span> },
-	/// A discard statement.
-	Discard { kw: Span, semi: Option<Span> },
-}
-
-/// A preprocessor directive.
-#[derive(Debug, Clone, PartialEq)]
-pub enum Preproc {
-	Version {
-		version: usize,
-		is_core: bool,
-	},
-	Extension {
-		name: String,
-		behaviour: ExtBehaviour,
-	},
-	Line {
-		line: usize,
-		src_str: Option<usize>,
-	},
-	Include(String),
-	UnDef(String),
-	IfDef(String),
-	IfnDef(String),
-	Else,
-	EndIf,
-	Error(String),
-	Pragma(String),
-	Unsupported,
-}
-
-impl std::fmt::Display for Preproc {
-	fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-		match self {
-			Preproc::Version { version, is_core } => write!(
-				f,
-				"version: {version}, profile: {}",
-				if *is_core { "core" } else { "compat" }
-			),
-			Preproc::Extension { name, behaviour } => {
-				write!(f, "extension: {name}, behaviour: {behaviour:?}")
-			}
-			Preproc::Line { line, src_str } => {
-				if let Some(src_str) = src_str {
-					write!(f, "line: {line}, src-str: {src_str}")
-				} else {
-					write!(f, "line: {line}")
-				}
-			}
-			Preproc::Include(s) => write!(f, "include: {s}"),
-			Preproc::UnDef(s) => write!(f, "undef: {s}"),
-			Preproc::IfDef(s) => write!(f, "ifdef: {s}"),
-			Preproc::IfnDef(s) => write!(f, "ifndef: {s}"),
-			Preproc::Else => write!(f, "else"),
-			Preproc::EndIf => write!(f, "end"),
-			Preproc::Error(s) => write!(f, "error: {s}"),
-			Preproc::Pragma(s) => write!(f, "pragma: {s}"),
-			Preproc::Unsupported => write!(f, "UNSUPPORTED"),
-		}
-	}
-}
-
-/// The possible behaviours in an `#extension` directive.
-#[derive(Debug, Clone, Copy, PartialEq)]
-pub enum ExtBehaviour {
-	Enable,
-	Require,
-	Warn,
-	Disable,
-}
-
-/// A qualifier which is associated with a definition/declaration or a parameter.
-#[derive(Debug, Clone, PartialEq)]
-pub enum Qualifier {
-	Storage(Storage),
-	Layout(Vec<Layout>),
-	Interpolation(Interpolation),
-	Precision,
-	Invariant,
-	Precise,
-	Memory(Memory),
-}
-
-impl std::fmt::Display for Qualifier {
-	fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-		match self {
-			Self::Storage(s) => write!(
-				f,
-				"\x1b[95m{}\x1b[0m",
-				match s {
-					Storage::Const => "const",
-					Storage::In => "in",
-					Storage::Out => "out",
-					Storage::InOut => "inout",
-					Storage::Attribute => "attribute",
-					Storage::Uniform => "uniform",
-					Storage::Varying => "varying",
-					Storage::Buffer => "buffer",
-					Storage::Shared => "shared",
-					Storage::Centroid => "centroid",
-					Storage::Sample => "sample",
-					Storage::Patch => "patch",
-				}
-			),
-			Self::Layout(v) => {
-				write!(f, "\x1b[95mlayout\x1b[0m: [")?;
-				for l in v {
-					write!(f, "{l}, ")?;
-				}
-				write!(f, "]")
-			}
-			Self::Interpolation(i) => write!(
-				f,
-				"\x1b[95m{}\x1b[0m",
-				match i {
-					Interpolation::Smooth => "smooth",
-					Interpolation::Flat => "flat",
-					Interpolation::NoPerspective => "noperspective",
-				}
-			),
-			Self::Precision => write!(f, "\x1b[90;9mprecision\x1b[0m"),
-			Self::Invariant => write!(f, "\x1b[95minvariant\x1b[0m"),
-			Self::Precise => write!(f, "\x1b[95mprecise\x1b[0m"),
-			Self::Memory(m) => write!(
-				f,
-				"\x1b[95m{}\x1b[0m",
-				match m {
-					Memory::Coherent => "coherent",
-					Memory::Volatile => "volatile",
-					Memory::Restrict => "restrict",
-					Memory::Readonly => "readonly",
-					Memory::Writeonly => "writeonly",
-				}
-			),
-		}
-	}
-}
-
-#[derive(Debug, Clone, PartialEq)]
-pub enum Storage {
-	Const,
-	In,
-	Out,
-	InOut,
-	Attribute,
-	Uniform,
-	Varying,
-	Buffer,
-	Shared,
-	Centroid,
-	Sample,
-	Patch,
-}
-
-#[derive(Debug, Clone, PartialEq)]
-pub enum Interpolation {
-	Smooth,
-	Flat,
-	NoPerspective,
-}
-
-#[derive(Debug, Clone, PartialEq)]
-pub enum Memory {
-	Coherent,
-	Volatile,
-	Restrict,
-	Readonly,
-	Writeonly,
-}
-
-#[derive(Debug, Clone, PartialEq)]
-pub enum Layout {
-	Shared,
-	Packed,
-	Std140,
-	Std430,
-	RowMajor,
-	ColumnMajor,
-	Binding(Expr),
-	Offset(Expr),
-	Align(Expr),
-	Location(Expr),
-	Component(Expr),
-	Index(Expr),
-	Points,
-	Lines,
-	Isolines,
-	Triangles,
-	Quads,
-	EqualSpacing,
-	FractionalEvenSpacing,
-	FractionalOddSpacing,
-	Clockwise,
-	CounterClockwise,
-	PointMode,
-	LinesAdjacency,
-	TrianglesAdjacency,
-	Invocations(Expr),
-	OriginUpperLeft,
-	PixelCenterInteger,
-	EarlyFragmentTests,
-	LocalSizeX(Expr),
-	LocalSizeY(Expr),
-	LocalSizeZ(Expr),
-	XfbBuffer(Expr),
-	XfbStride(Expr),
-	XfbOffset(Expr),
-	Vertices(Expr),
-	LineStrip,
-	TriangleStrip,
-	MaxVertices(Expr),
-	Stream(Expr),
-	DepthAny,
-	DepthGreater,
-	DepthLess,
-	DepthUnchanged,
-}
-
-impl std::fmt::Display for Layout {
-	fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-		match self {
-			Self::Shared => write!(f, "shared"),
-			Self::Packed => write!(f, "packed"),
-			Self::Std140 => write!(f, "std140"),
-			Self::Std430 => write!(f, "std430"),
-			Self::RowMajor => write!(f, "row-major"),
-			Self::ColumnMajor => write!(f, "column-major"),
-			Self::Binding(e) => write!(f, "binding = {e}"),
-			Self::Offset(e) => write!(f, "offset = {e}"),
-			Self::Align(e) => write!(f, "align = {e}"),
-			Self::Location(e) => write!(f, "location = {e}"),
-			Self::Component(e) => write!(f, "component = {e}"),
-			Self::Index(e) => write!(f, "index = {e}"),
-			Self::Points => write!(f, "points"),
-			Self::Lines => write!(f, "lines"),
-			Self::Isolines => write!(f, "isolines"),
-			Self::Triangles => write!(f, "triangles"),
-			Self::Quads => write!(f, "quads"),
-			Self::EqualSpacing => write!(f, "equal-spacing"),
-			Self::FractionalEvenSpacing => write!(f, "fragment-even-spacing"),
-			Self::FractionalOddSpacing => write!(f, "fragment-odd-spacing"),
-			Self::Clockwise => write!(f, "clockwise"),
-			Self::CounterClockwise => write!(f, "counter-clockwise"),
-			Self::PointMode => write!(f, "point-mode"),
-			Self::LinesAdjacency => write!(f, "lines-adjacency"),
-			Self::TrianglesAdjacency => write!(f, "triangles-adjacency"),
-			Self::Invocations(e) => write!(f, "invocations = {e}"),
-			Self::OriginUpperLeft => write!(f, "origin-upper-left"),
-			Self::PixelCenterInteger => write!(f, "pixel-center-integer"),
-			Self::EarlyFragmentTests => write!(f, "early-fragment-tests"),
-			Self::LocalSizeX(e) => write!(f, "local-size-x = {e}"),
-			Self::LocalSizeY(e) => write!(f, "local-size-y = {e}"),
-			Self::LocalSizeZ(e) => write!(f, "local-size-z = {e}"),
-			Self::XfbBuffer(e) => write!(f, "xfb-buffer = {e}"),
-			Self::XfbStride(e) => write!(f, "xfb-stride = {e}"),
-			Self::XfbOffset(e) => write!(f, "xfb-offset = {e}"),
-			Self::Vertices(e) => write!(f, "vertices = {e}"),
-			Self::LineStrip => write!(f, "line-strip"),
-			Self::TriangleStrip => write!(f, "triangle-strip"),
-			Self::MaxVertices(e) => write!(f, "max-vertices = {e}"),
-			Self::Stream(e) => write!(f, "stream = {e}"),
-			Self::DepthAny => write!(f, "depth-any"),
-			Self::DepthGreater => write!(f, "depth-greater"),
-			Self::DepthLess => write!(f, "depth-less"),
-			Self::DepthUnchanged => write!(f, "depth-unchanged"),
-		}
-	}
-}
-
-/// A literal value.
-#[derive(Debug, Clone, Copy, PartialEq)]
-pub enum Lit {
-	Bool(bool),
-	Int(i64),
-	UInt(u64),
-	Float(f32),
-	Double(f64),
-}
-
-impl std::fmt::Display for Lit {
-	fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-		match self {
-			Self::Bool(b) => write!(f, "\x1b[35m{}\x1b[0m", b.to_string()),
-			Self::Int(i) => write!(f, "\x1b[35m{i}\x1b[0m"),
-			Self::UInt(u) => write!(f, "\x1b[35m{u}\x1b[0m"),
-			Self::Float(fp) => write!(f, "\x1b[35m{fp}\x1b[0m"),
-			Self::Double(d) => write!(f, "\x1b[35m{d}\x1b[0m"),
-		}
-	}
-}
-
-impl Lit {
-	pub fn parse(token: &Token) -> Result<Self, ()> {
-		match token {
-			Token::Bool(b) => Ok(Self::Bool(*b)),
-			Token::Num {
-				num: s,
-				suffix,
-				type_,
-			} => Self::parse_num(&s, suffix.as_deref(), *type_),
-			_ => Err(()),
-		}
-	}
-
-	pub fn parse_num(
-		s: &str,
-		suffix: Option<&str>,
-		type_: NumType,
-	) -> Result<Self, ()> {
-		// This can be empty, e.g. `0xu` is a `NumType::Hex` with contents `` with suffix `u`.
-		if s == "" {
-			return Err(());
-		}
-		match type_ {
-			NumType::Dec => Self::parse_num_dec(s, suffix),
-			NumType::Hex => Self::parse_num_hex(s, suffix),
-			NumType::Oct => Self::parse_num_oct(s, suffix),
-			NumType::Float => Self::parse_num_float(s, suffix),
-		}
-	}
-
-	fn parse_num_dec(s: &str, suffix: Option<&str>) -> Result<Self, ()> {
-		if let Some(suffix) = suffix {
-			if suffix == "u" || suffix == "U" {
-				if let Ok(u) = u64::from_str_radix(s, 10) {
-					return Ok(Self::UInt(u));
-				}
-			} else {
-				return Err(());
-			}
-		} else {
-			if let Ok(i) = i64::from_str_radix(s, 10) {
-				return Ok(Self::Int(i));
-			}
-		}
-
-		Err(())
-	}
-
-	fn parse_num_hex(s: &str, suffix: Option<&str>) -> Result<Self, ()> {
-		if let Some(suffix) = suffix {
-			if suffix == "u" || suffix == "U" {
-				if let Ok(u) = u64::from_str_radix(s, 16) {
-					return Ok(Self::UInt(u));
-				}
-			} else {
-				return Err(());
-			}
-		} else {
-			if let Ok(i) = i64::from_str_radix(s, 16) {
-				return Ok(Self::Int(i));
-			}
-		}
-
-		Err(())
-	}
-
-	fn parse_num_oct(s: &str, suffix: Option<&str>) -> Result<Self, ()> {
-		if let Some(suffix) = suffix {
-			if suffix == "u" || suffix == "U" {
-				if let Ok(u) = u64::from_str_radix(s, 8) {
-					return Ok(Self::UInt(u));
-				}
-			} else {
-				return Err(());
-			}
-		} else {
-			if let Ok(i) = i64::from_str_radix(s, 8) {
-				return Ok(Self::Int(i));
-			}
-		}
-
-		Err(())
-	}
-
-	fn parse_num_float(s: &str, suffix: Option<&str>) -> Result<Self, ()> {
-		if let Some(suffix) = suffix {
-			if suffix == "lf" || suffix == "LF" {
-				if let Ok(f) = s.parse::<f64>() {
-					return Ok(Self::Double(f));
-				}
-			} else if suffix == "f" || suffix == "F" {
-				if let Ok(f) = s.parse::<f32>() {
-					return Ok(Self::Float(f));
-				}
-			} else {
-				return Err(());
-			}
-		} else {
-			if let Ok(f) = s.parse::<f32>() {
-				return Ok(Self::Float(f));
-			}
-		}
-
-		Err(())
-	}
-}
-
-/// An identifier.
-///
-/// This can be a variable name, function name, struct name, etc.
-#[derive(Debug, Clone, PartialEq)]
-pub struct Ident {
-	pub name: String,
-	pub span: Span,
-}
-
-impl std::fmt::Display for Ident {
-	fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-		write!(f, "\x1b[33m{}\x1b[0m", self.name)
-	}
-}
-
-impl Ident {
-	fn from_expr(
-		expr: &ExprTy,
-	) -> Option<Either<Ident, (Ident, Vec<ArrSize>)>> {
-		match expr {
-			ExprTy::Ident(i) => Some(Either::Left(i.clone())),
-			ExprTy::Index { item, i, op: _ } => {
-				let mut current_item = item;
-				let mut stack = Vec::new();
-				stack.push(i.as_deref());
-
-				let ident = loop {
-					match &current_item.ty {
-						ExprTy::Ident(i) => {
-							break i.clone();
-						}
-						ExprTy::Index { item, i, op: _ } => {
-							stack.push(i.as_deref());
-							current_item = item;
-						}
-						_ => return None,
-					};
-				};
-
-				// In the expression parser, the `[..]` brackets are right-associative, so the outer-most pair is
-				// at the top, and the inner-most is at the bottom. We want to reverse this to be in line with our
-				// intuition, i.e. 2nd dimension first, then 1st dimension.
-				stack.reverse();
-
-				Some(Either::Right((
-					ident,
-					stack.into_iter().map(|i| i.cloned()).collect(),
-				)))
-			}
-			_ => None,
-		}
-	}
 }
 
 /// A fundamental type.
@@ -1270,6 +851,456 @@ impl Type {
 			Self::Array2D(primitive, sizes.remove(0), sizes.remove(0))
 		} else {
 			Self::ArrayND(primitive, sizes)
+		}
+	}
+}
+
+/// A statement. Some of these statements are only valid at the file top-level, whilst others are only valid inside
+/// of functions.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Stmt {
+	pub ty: StmtTy,
+	pub span: Span,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub enum StmtTy {
+	/// An empty statement, i.e. just a `;`.
+	Empty,
+	/// A variable definition, e.g. `int a;`.
+	VarDef {
+		type_: Type,
+		ident: Ident,
+		qualifiers: Vec<Qualifier>,
+	},
+	/// Multiple variable definitions, e.g. `int a, b;`.
+	VarDefs(Vec<(Type, Ident)>, Vec<Qualifier>),
+	/// A variable declaration, e.g. `int a = <EXPR>;`.
+	VarDecl {
+		type_: Type,
+		ident: Ident,
+		value: Expr,
+		qualifiers: Vec<Qualifier>,
+	},
+	/// Multiple variable declarations, e.g. `int a, b = <EXPR>;`.
+	VarDecls {
+		vars: Vec<(Type, Ident)>,
+		value: Expr,
+		qualifiers: Vec<Qualifier>,
+	},
+	/// A function definition.
+	FnDef {
+		qualifiers: Vec<Qualifier>,
+		return_type: Type,
+		ident: Ident,
+		params: Vec<Param>,
+		semi: Option<Span>,
+	},
+	/// A function declaration.
+	FnDecl {
+		qualifiers: Vec<Qualifier>,
+		return_type: Type,
+		ident: Ident,
+		params: Vec<Param>,
+		body: Scope,
+	},
+	/// A struct definition. *Note:* This is invalid glsl grammar.
+	StructDef {
+		kw: Span,
+		ident: Ident,
+		qualifiers: Vec<Qualifier>,
+		semi: Span,
+	},
+	/// A struct declaration.
+	StructDecl {
+		kw: Span,
+		ident: Ident,
+		body: Scope,
+		qualifiers: Vec<Qualifier>,
+		instance: Option<Ident>,
+		semi: Option<Span>,
+	},
+	/// A general expression, e.g.
+	///
+	/// - `i + 5;`
+	/// - `fn();`
+	/// - `i = 5 + 1;`
+	/// - `i *= fn();`
+	Expr { expr: Expr, semi: Option<Span> },
+	/// A standalone scope, e.g.
+	/// ```glsl
+	/// /* .. */
+	/// {
+	/// 	/* new scope */
+	/// }
+	/// ```
+	Scope(Scope),
+	/// A preprocessor call.
+	Preproc(Preproc),
+	/// An if statement.
+	If {
+		kw: Span,
+		l_paren: Option<Span>,
+		cond: Expr,
+		r_paren: Option<Span>,
+		body: Scope,
+		/// Laid out as following: `(else, if, l_paren, cond, r_paren, body)`.
+		branches: Vec<(
+			Span,
+			Option<Span>,
+			Option<Span>,
+			Option<Expr>,
+			Option<Span>,
+			Scope,
+		)>,
+	},
+	/// A switch statement.
+	Switch {
+		kw: Span,
+		l_paren: Option<Span>,
+		expr: Expr,
+		r_paren: Option<Span>,
+		/// - `0` - If `None`, then this is a `default` case, otherwise this is the case expresion,
+		/// - `1` - the colon `:`,
+		/// - `2` - the body.
+		cases: Vec<(Option<Expr>, Option<Span>, Scope)>,
+	},
+	/// A for-loop statement.
+	For {
+		kw: Span,
+		l_paren: Option<Span>,
+		var: Option<Box<Stmt>>,
+		first_semi: Option<Span>,
+		cond: Option<Expr>,
+		second_semi: Option<Span>,
+		inc: Option<Expr>,
+		r_paren: Option<Span>,
+		body: Option<Scope>,
+	},
+	/// A while-loop, i.e. `while ( /*..*/ ) { /*..*/ }`.
+	While {
+		kw: Span,
+		l_paren: Option<Span>,
+		cond: Expr,
+		r_paren: Option<Span>,
+		body: Option<Scope>,
+	},
+	/// A do-while loop, i.e. `do { /*..*/ } while ( /*..*/ );`.
+	DoWhile {
+		do_kw: Span,
+		body: Option<Scope>,
+		while_kw: Option<Span>,
+		l_paren: Option<Span>,
+		cond: Expr,
+		r_paren: Option<Span>,
+		semi: Option<Span>,
+	},
+	/// A return statement.
+	Return {
+		kw: Span,
+		value: Option<Expr>,
+		semi: Option<Span>,
+	},
+	/// A break statement.
+	Break { kw: Span, semi: Option<Span> },
+	/// A continue statement.
+	Continue { kw: Span, semi: Option<Span> },
+	/// A discard statement.
+	Discard { kw: Span, semi: Option<Span> },
+}
+
+/// A preprocessor directive.
+#[derive(Debug, Clone, PartialEq)]
+pub enum Preproc {
+	Version {
+		version: usize,
+		is_core: bool,
+	},
+	Extension {
+		name: String,
+		behaviour: ExtBehaviour,
+	},
+	Line {
+		line: usize,
+		src_str: Option<usize>,
+	},
+	Include(String),
+	UnDef(String),
+	IfDef(String),
+	IfnDef(String),
+	Else,
+	EndIf,
+	Error(String),
+	Pragma(String),
+	Unsupported,
+}
+
+impl std::fmt::Display for Preproc {
+	fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+		match self {
+			Preproc::Version { version, is_core } => write!(
+				f,
+				"version: {version}, profile: {}",
+				if *is_core { "core" } else { "compat" }
+			),
+			Preproc::Extension { name, behaviour } => {
+				write!(f, "extension: {name}, behaviour: {behaviour:?}")
+			}
+			Preproc::Line { line, src_str } => {
+				if let Some(src_str) = src_str {
+					write!(f, "line: {line}, src-str: {src_str}")
+				} else {
+					write!(f, "line: {line}")
+				}
+			}
+			Preproc::Include(s) => write!(f, "include: {s}"),
+			Preproc::UnDef(s) => write!(f, "undef: {s}"),
+			Preproc::IfDef(s) => write!(f, "ifdef: {s}"),
+			Preproc::IfnDef(s) => write!(f, "ifndef: {s}"),
+			Preproc::Else => write!(f, "else"),
+			Preproc::EndIf => write!(f, "end"),
+			Preproc::Error(s) => write!(f, "error: {s}"),
+			Preproc::Pragma(s) => write!(f, "pragma: {s}"),
+			Preproc::Unsupported => write!(f, "UNSUPPORTED"),
+		}
+	}
+}
+
+/// The possible behaviours in an `#extension` directive.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum ExtBehaviour {
+	Enable,
+	Require,
+	Warn,
+	Disable,
+}
+
+/// A qualifier which is associated with a definition/declaration or a parameter.
+#[derive(Debug, Clone, PartialEq)]
+pub enum Qualifier {
+	Storage {
+		ty: Storage,
+		span: Span,
+	},
+	Layout {
+		kw: Span,
+		l_paren: Span,
+		idents: Vec<(Layout, Span)>,
+		commas: Vec<Span>,
+		r_paren: Option<Span>,
+		span: Span,
+	},
+	Interpolation {
+		ty: Interpolation,
+		span: Span,
+	},
+	Precision {
+		span: Span,
+	},
+	Invariant {
+		span: Span,
+	},
+	Precise {
+		span: Span,
+	},
+	Memory {
+		ty: Memory,
+		span: Span,
+	},
+}
+
+impl std::fmt::Display for Qualifier {
+	fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+		match self {
+			Self::Storage { ty, .. } => write!(
+				f,
+				"\x1b[95m{}\x1b[0m",
+				match ty {
+					Storage::Const => "const",
+					Storage::In => "in",
+					Storage::Out => "out",
+					Storage::InOut => "inout",
+					Storage::Attribute => "attribute",
+					Storage::Uniform => "uniform",
+					Storage::Varying => "varying",
+					Storage::Buffer => "buffer",
+					Storage::Shared => "shared",
+					Storage::Centroid => "centroid",
+					Storage::Sample => "sample",
+					Storage::Patch => "patch",
+				}
+			),
+			Self::Layout { idents, .. } => {
+				write!(f, "\x1b[95mlayout\x1b[0m: [")?;
+				for (l, _) in idents {
+					write!(f, "{l}, ")?;
+				}
+				write!(f, "]")
+			}
+			Self::Interpolation { ty, .. } => write!(
+				f,
+				"\x1b[95m{}\x1b[0m",
+				match ty {
+					Interpolation::Smooth => "smooth",
+					Interpolation::Flat => "flat",
+					Interpolation::NoPerspective => "noperspective",
+				}
+			),
+			Self::Precision { .. } => write!(f, "\x1b[90;9mprecision\x1b[0m"),
+			Self::Invariant { .. } => write!(f, "\x1b[95minvariant\x1b[0m"),
+			Self::Precise { .. } => write!(f, "\x1b[95mprecise\x1b[0m"),
+			Self::Memory { ty, .. } => write!(
+				f,
+				"\x1b[95m{}\x1b[0m",
+				match ty {
+					Memory::Coherent => "coherent",
+					Memory::Volatile => "volatile",
+					Memory::Restrict => "restrict",
+					Memory::Readonly => "readonly",
+					Memory::Writeonly => "writeonly",
+				}
+			),
+		}
+	}
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub enum Storage {
+	Const,
+	In,
+	Out,
+	InOut,
+	Attribute,
+	Uniform,
+	Varying,
+	Buffer,
+	Shared,
+	Centroid,
+	Sample,
+	Patch,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub enum Interpolation {
+	Smooth,
+	Flat,
+	NoPerspective,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub enum Memory {
+	Coherent,
+	Volatile,
+	Restrict,
+	Readonly,
+	Writeonly,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub enum Layout {
+	Shared,
+	Packed,
+	Std140,
+	Std430,
+	RowMajor,
+	ColumnMajor,
+	Binding { kw: Span, eq: Span, value: Expr },
+	Offset { kw: Span, eq: Span, value: Expr },
+	Align { kw: Span, eq: Span, value: Expr },
+	Location { kw: Span, eq: Span, value: Expr },
+	Component { kw: Span, eq: Span, value: Expr },
+	Index { kw: Span, eq: Span, value: Expr },
+	Points,
+	Lines,
+	Isolines,
+	Triangles,
+	Quads,
+	EqualSpacing,
+	FractionalEvenSpacing,
+	FractionalOddSpacing,
+	Clockwise,
+	CounterClockwise,
+	PointMode,
+	LinesAdjacency,
+	TrianglesAdjacency,
+	Invocations { kw: Span, eq: Span, value: Expr },
+	OriginUpperLeft,
+	PixelCenterInteger,
+	EarlyFragmentTests,
+	LocalSizeX { kw: Span, eq: Span, value: Expr },
+	LocalSizeY { kw: Span, eq: Span, value: Expr },
+	LocalSizeZ { kw: Span, eq: Span, value: Expr },
+	XfbBuffer { kw: Span, eq: Span, value: Expr },
+	XfbStride { kw: Span, eq: Span, value: Expr },
+	XfbOffset { kw: Span, eq: Span, value: Expr },
+	Vertices { kw: Span, eq: Span, value: Expr },
+	LineStrip,
+	TriangleStrip,
+	MaxVertices { kw: Span, eq: Span, value: Expr },
+	Stream { kw: Span, eq: Span, value: Expr },
+	DepthAny,
+	DepthGreater,
+	DepthLess,
+	DepthUnchanged,
+}
+
+impl std::fmt::Display for Layout {
+	fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+		match self {
+			Self::Shared => write!(f, "shared"),
+			Self::Packed => write!(f, "packed"),
+			Self::Std140 => write!(f, "std140"),
+			Self::Std430 => write!(f, "std430"),
+			Self::RowMajor => write!(f, "row-major"),
+			Self::ColumnMajor => write!(f, "column-major"),
+			Self::Binding { value, .. } => write!(f, "binding = {value}"),
+			Self::Offset { value, .. } => write!(f, "offset = {value}"),
+			Self::Align { value, .. } => write!(f, "align = {value}"),
+			Self::Location { value, .. } => write!(f, "location = {value}"),
+			Self::Component { value, .. } => write!(f, "component = {value}"),
+			Self::Index { value, .. } => write!(f, "index = {value}"),
+			Self::Points => write!(f, "points"),
+			Self::Lines => write!(f, "lines"),
+			Self::Isolines => write!(f, "isolines"),
+			Self::Triangles => write!(f, "triangles"),
+			Self::Quads => write!(f, "quads"),
+			Self::EqualSpacing => write!(f, "equal-spacing"),
+			Self::FractionalEvenSpacing => write!(f, "fragment-even-spacing"),
+			Self::FractionalOddSpacing => write!(f, "fragment-odd-spacing"),
+			Self::Clockwise => write!(f, "clockwise"),
+			Self::CounterClockwise => write!(f, "counter-clockwise"),
+			Self::PointMode => write!(f, "point-mode"),
+			Self::LinesAdjacency => write!(f, "lines-adjacency"),
+			Self::TrianglesAdjacency => write!(f, "triangles-adjacency"),
+			Self::Invocations { value, .. } => {
+				write!(f, "invocations = {value}")
+			}
+			Self::OriginUpperLeft => write!(f, "origin-upper-left"),
+			Self::PixelCenterInteger => write!(f, "pixel-center-integer"),
+			Self::EarlyFragmentTests => write!(f, "early-fragment-tests"),
+			Self::LocalSizeX { value, .. } => {
+				write!(f, "local-size-x = {value}")
+			}
+			Self::LocalSizeY { value, .. } => {
+				write!(f, "local-size-y = {value}")
+			}
+			Self::LocalSizeZ { value, .. } => {
+				write!(f, "local-size-z = {value}")
+			}
+			Self::XfbBuffer { value, .. } => write!(f, "xfb-buffer = {value}"),
+			Self::XfbStride { value, .. } => write!(f, "xfb-stride = {value}"),
+			Self::XfbOffset { value, .. } => write!(f, "xfb-offset = {value}"),
+			Self::Vertices { value, .. } => write!(f, "vertices = {value}"),
+			Self::LineStrip => write!(f, "line-strip"),
+			Self::TriangleStrip => write!(f, "triangle-strip"),
+			Self::MaxVertices { value, .. } => {
+				write!(f, "max-vertices = {value}")
+			}
+			Self::Stream { value, .. } => write!(f, "stream = {value}"),
+			Self::DepthAny => write!(f, "depth-any"),
+			Self::DepthGreater => write!(f, "depth-greater"),
+			Self::DepthLess => write!(f, "depth-less"),
+			Self::DepthUnchanged => write!(f, "depth-unchanged"),
 		}
 	}
 }

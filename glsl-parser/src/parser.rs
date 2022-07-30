@@ -1,5 +1,5 @@
 use crate::{
-	ast::{Expr, ExprTy, Ident, Qualifier, Scope, Stmt, StmtTy, Type},
+	ast::{Expr, ExprTy, Ident, Param, Qualifier, Scope, Stmt, StmtTy, Type},
 	error::SyntaxErr,
 	expression::{expr_parser, Mode},
 	lexer::{lexer, OpTy, Token},
@@ -151,7 +151,7 @@ pub fn parse(source: &str) -> (Vec<Stmt>, Vec<SyntaxErr>) {
 /// - `layout(location = 1) ...`.
 fn parse_qualifier_list(
 	walker: &mut Walker,
-) -> (Vec<Spanned<Qualifier>>, Vec<SyntaxErr>) {
+) -> (Vec<Qualifier>, Vec<SyntaxErr>) {
 	let mut errors = Vec::new();
 
 	let mut qualifiers = Vec::new();
@@ -165,67 +165,105 @@ fn parse_qualifier_list(
 		use crate::ast::{Interpolation, Memory, Storage};
 
 		match current {
-			Token::Const => qualifiers
-				.push((Qualifier::Storage(Storage::Const), *current_span)),
-			Token::In => qualifiers
-				.push((Qualifier::Storage(Storage::In), *current_span)),
-			Token::Out => qualifiers
-				.push((Qualifier::Storage(Storage::Out), *current_span)),
-			Token::InOut => qualifiers
-				.push((Qualifier::Storage(Storage::InOut), *current_span)),
-			Token::Attribute => qualifiers
-				.push((Qualifier::Storage(Storage::Attribute), *current_span)),
-			Token::Uniform => qualifiers
-				.push((Qualifier::Storage(Storage::Uniform), *current_span)),
-			Token::Varying => qualifiers
-				.push((Qualifier::Storage(Storage::Varying), *current_span)),
-			Token::Buffer => qualifiers
-				.push((Qualifier::Storage(Storage::Buffer), *current_span)),
-			Token::Shared => qualifiers
-				.push((Qualifier::Storage(Storage::Shared), *current_span)),
-			Token::Centroid => qualifiers
-				.push((Qualifier::Storage(Storage::Centroid), *current_span)),
-			Token::Sample => qualifiers
-				.push((Qualifier::Storage(Storage::Sample), *current_span)),
-			Token::Patch => qualifiers
-				.push((Qualifier::Storage(Storage::Patch), *current_span)),
-			Token::Flat => qualifiers.push((
-				Qualifier::Interpolation(Interpolation::Flat),
-				*current_span,
-			)),
-			Token::Smooth => qualifiers.push((
-				Qualifier::Interpolation(Interpolation::Smooth),
-				*current_span,
-			)),
-			Token::NoPerspective => qualifiers.push((
-				Qualifier::Interpolation(Interpolation::NoPerspective),
-				*current_span,
-			)),
-			Token::HighP => {
-				qualifiers.push((Qualifier::Precision, *current_span))
-			}
-			Token::MediumP => {
-				qualifiers.push((Qualifier::Precision, *current_span))
-			}
-			Token::LowP => {
-				qualifiers.push((Qualifier::Precision, *current_span))
-			}
-			Token::Invariant => {
-				qualifiers.push((Qualifier::Invariant, *current_span))
-			}
-			Token::Precise => {
-				qualifiers.push((Qualifier::Precise, *current_span))
-			}
-			Token::Coherent => qualifiers
-				.push((Qualifier::Memory(Memory::Coherent), *current_span)),
-			Token::Volatile => qualifiers
-				.push((Qualifier::Memory(Memory::Volatile), *current_span)),
-			Token::Restrict => qualifiers
-				.push((Qualifier::Memory(Memory::Restrict), *current_span)),
-			Token::Readonly => qualifiers
-				.push((Qualifier::Memory(Memory::Readonly), *current_span)),
-			Token::Writeonly => qualifiers
-				.push((Qualifier::Memory(Memory::Writeonly), *current_span)),
+			Token::Const => qualifiers.push(Qualifier::Storage {
+				ty: Storage::Const,
+				span: *current_span,
+			}),
+			Token::In => qualifiers.push(Qualifier::Storage {
+				ty: Storage::In,
+				span: *current_span,
+			}),
+			Token::Out => qualifiers.push(Qualifier::Storage {
+				ty: Storage::Out,
+				span: *current_span,
+			}),
+			Token::InOut => qualifiers.push(Qualifier::Storage {
+				ty: Storage::InOut,
+				span: *current_span,
+			}),
+			Token::Attribute => qualifiers.push(Qualifier::Storage {
+				ty: Storage::Attribute,
+				span: *current_span,
+			}),
+			Token::Uniform => qualifiers.push(Qualifier::Storage {
+				ty: Storage::Uniform,
+				span: *current_span,
+			}),
+			Token::Varying => qualifiers.push(Qualifier::Storage {
+				ty: Storage::Varying,
+				span: *current_span,
+			}),
+			Token::Buffer => qualifiers.push(Qualifier::Storage {
+				ty: Storage::Buffer,
+				span: *current_span,
+			}),
+			Token::Shared => qualifiers.push(Qualifier::Storage {
+				ty: Storage::Shared,
+				span: *current_span,
+			}),
+			Token::Centroid => qualifiers.push(Qualifier::Storage {
+				ty: Storage::Centroid,
+				span: *current_span,
+			}),
+			Token::Sample => qualifiers.push(Qualifier::Storage {
+				ty: Storage::Sample,
+				span: *current_span,
+			}),
+			Token::Patch => qualifiers.push(Qualifier::Storage {
+				ty: Storage::Patch,
+				span: *current_span,
+			}),
+			Token::Flat => qualifiers.push(Qualifier::Interpolation {
+				ty: Interpolation::Flat,
+				span: *current_span,
+			}),
+			Token::Smooth => qualifiers.push(Qualifier::Interpolation {
+				ty: Interpolation::Smooth,
+				span: *current_span,
+			}),
+			Token::NoPerspective => qualifiers.push(Qualifier::Interpolation {
+				ty: Interpolation::NoPerspective,
+				span: *current_span,
+			}),
+			Token::HighP => qualifiers.push(Qualifier::Precision {
+				span: *current_span,
+			}),
+			Token::MediumP => qualifiers.push(Qualifier::Precision {
+				span: *current_span,
+			}),
+			Token::LowP => qualifiers.push(Qualifier::Precision {
+				span: *current_span,
+			}),
+			Token::Invariant => qualifiers.push(Qualifier::Precision {
+				span: *current_span,
+			}),
+			Token::Precise => qualifiers.push(Qualifier::Precise {
+				span: *current_span,
+			}),
+			Token::Coherent => qualifiers.push(Qualifier::Memory {
+				ty: Memory::Coherent,
+				span: *current_span,
+			}),
+			Token::Volatile => qualifiers.push(Qualifier::Memory {
+				ty: Memory::Volatile,
+				span: *current_span,
+			}),
+
+			Token::Restrict => qualifiers.push(Qualifier::Memory {
+				ty: Memory::Restrict,
+				span: *current_span,
+			}),
+
+			Token::Readonly => qualifiers.push(Qualifier::Memory {
+				ty: Memory::Readonly,
+				span: *current_span,
+			}),
+
+			Token::Writeonly => qualifiers.push(Qualifier::Memory {
+				ty: Memory::Writeonly,
+				span: *current_span,
+			}),
+
 			Token::Layout => {
 				let kw_span = *current_span;
 				walker.advance();
@@ -253,6 +291,8 @@ fn parse_qualifier_list(
 				};
 
 				let mut layouts = Vec::new();
+				let mut commas = Vec::new();
+				let r_paren_span;
 				// Consume layout identifiers until we reach the closing `)` parenthesis.
 				'identifiers: loop {
 					let (current, current_span) = match walker.peek() {
@@ -271,12 +311,16 @@ fn parse_qualifier_list(
 					match current {
 						// Consume the `,` separator and continue looking for a layout identifier.
 						Token::Comma => {
+							commas.push(*current_span);
 							walker.advance();
 							continue 'identifiers;
 						}
 						// Consume the closing `)` parenthesis and stop parsing this `layout`. We don't consume the
 						// token because we perform that at the end of the 'outer loop.
-						Token::RParen => break 'identifiers,
+						Token::RParen => {
+							r_paren_span = Some(*current_span);
+							break 'identifiers;
+						}
 						Token::Semi => break 'outer,
 						_ => {}
 					}
@@ -285,13 +329,14 @@ fn parse_qualifier_list(
 					// We are expecting a token which is a valid layout identifier.
 					match current.to_layout() {
 						Some(e) => {
+							let ident_token = current.clone();
 							walker.advance();
 
 							match e {
 								Either::Left(layout) => {
-									layouts.push(layout);
+									layouts.push((layout, ident_span));
 								}
-								Either::Right(constructor) => {
+								Either::Right(_) => {
 									// Consume the `=` in `ident = expression`.
 									let (current, current_span) =
 										match walker.peek() {
@@ -303,7 +348,9 @@ fn parse_qualifier_list(
 												break 'outer;
 											}
 										};
+									let eq_span;
 									if *current == Token::Op(OpTy::Eq) {
+										eq_span = *current_span;
 										walker.advance();
 									} else {
 										errors.push(SyntaxErr::ExpectedEqAfterLayoutIdent(
@@ -329,7 +376,13 @@ fn parse_qualifier_list(
 											break 'outer;
 										}
 									};
-									layouts.push(constructor(expr));
+									let layout_end = expr.span.end;
+									layouts.push((
+										ident_token.to_layout_expr(
+											kw_span, eq_span, expr,
+										),
+										Span::new(ident_span.start, layout_end),
+									));
 								}
 							}
 						}
@@ -341,12 +394,16 @@ fn parse_qualifier_list(
 							break 'outer;
 						}
 					}
-				}
+				};
 
-				qualifiers.push((
-					Qualifier::Layout(layouts),
-					Span::new(kw_span.start, walker.get_previous_span().end),
-				));
+				qualifiers.push(Qualifier::Layout {
+					kw: kw_span,
+					l_paren: l_paren_span,
+					idents: layouts,
+					commas,
+					r_paren: r_paren_span,
+					span: Span::new(kw_span.start, walker.get_previous_span().end)
+				});
 			}
 			// If we encounter anything other than a qualifier, that means we have reached the end of this list of
 			// qualifiers and can move onto the next parsing step without consuming the current token.
@@ -364,7 +421,7 @@ fn parse_type_start(
 	walker: &mut Walker,
 	type_: Type,
 	original_expr: Expr,
-	qualifiers: Vec<Spanned<Qualifier>>,
+	qualifiers: Vec<Qualifier>,
 ) -> (Option<Stmt>, Vec<SyntaxErr>) {
 	let mut errors = Vec::new();
 
@@ -724,7 +781,7 @@ fn parse_fn(
 	return_type: Type,
 	start_span: Span,
 	ident: Ident,
-	qualifiers: Vec<Spanned<Qualifier>>,
+	qualifiers: Vec<Qualifier>,
 	l_paren_span: Span,
 ) -> (Option<Stmt>, Vec<SyntaxErr>) {
 	let mut errors = Vec::new();
@@ -919,7 +976,11 @@ fn parse_fn(
 				// Note: We need to `peek()` again because we may have found qualifiers.
 				match walker.peek() {
 					Some((current, current_span)) => {
-						params.push((type_, None, qualifiers));
+						params.push(Param {
+							qualifiers,
+							type_,
+							ident: None,
+						});
 
 						match current {
 							Token::Comma => continue 'param,
@@ -956,7 +1017,11 @@ fn parse_fn(
 			}
 		};
 
-		params.push((type_, Some(ident), qualifiers));
+		params.push(Param {
+			qualifiers,
+			type_,
+			ident: Some(ident),
+		});
 		just_finished_param = true;
 	}
 
@@ -3087,7 +3152,7 @@ fn parse_if(
 /// Parse a struct definition or declaration.
 fn parse_struct(
 	walker: &mut Walker,
-	qualifiers: Vec<Spanned<Qualifier>>,
+	qualifiers: Vec<Qualifier>,
 	kw_span: Span,
 ) -> (Option<Stmt>, Vec<SyntaxErr>) {
 	let mut errors = Vec::new();
@@ -3311,7 +3376,7 @@ pub fn print_stmt(stmt: &Stmt, indent: usize) {
 			qualifiers,
 		} => {
 			print!("\r\n{:indent$}\x1b[32mVar\x1b[0m(type: {type_}, ident: {ident}, qualifiers: [", "", indent = indent*4);
-			for (qualifier, _) in qualifiers {
+			for qualifier in qualifiers {
 				print!("{qualifier}, ");
 			}
 			print!("])");
@@ -3326,7 +3391,7 @@ pub fn print_stmt(stmt: &Stmt, indent: usize) {
 				print!("[type: {}, ident: {}], ", var.0, var.1);
 			}
 			print!(" qualifiers: [");
-			for (qualifier, _) in qualifiers {
+			for qualifier in qualifiers {
 				print!("{qualifier}, ");
 			}
 			print!("])");
@@ -3342,7 +3407,7 @@ pub fn print_stmt(stmt: &Stmt, indent: usize) {
 				"",
 				indent = indent * 4
 			);
-			for (qualifier, _) in qualifiers {
+			for qualifier in qualifiers {
 				print!("{qualifier}, ");
 			}
 			print!("]) = {value}");
@@ -3361,7 +3426,7 @@ pub fn print_stmt(stmt: &Stmt, indent: usize) {
 				print!("[type: {}, ident: {}], ", var.0, var.1);
 			}
 			print!(" qualifiers: [");
-			for (qualifier, _) in qualifiers {
+			for qualifier in qualifiers {
 				print!("{qualifier}, ");
 			}
 			print!("]) = {value}");
@@ -3378,11 +3443,16 @@ pub fn print_stmt(stmt: &Stmt, indent: usize) {
 				"",
 				indent = indent * 4
 			);
-			for (type_, ident, qualifiers) in params {
+			for Param {
+				qualifiers,
+				type_,
+				ident,
+			} in params
+			{
 				match (ident, qualifiers) {
 					(Some(ident), _) if !qualifiers.is_empty() => {
 						print!("{type_}: {ident} qualifiers: [");
-						for (qualifier, _) in qualifiers {
+						for qualifier in qualifiers {
 							print!("{qualifier}, ");
 						}
 						print!("], ");
@@ -3390,7 +3460,7 @@ pub fn print_stmt(stmt: &Stmt, indent: usize) {
 					(Some(ident), _) => print!("{type_}: {ident}, "),
 					(None, _) if !qualifiers.is_empty() => {
 						print!("{type_} qualifiers: [");
-						for (qualifier, _) in qualifiers {
+						for qualifier in qualifiers {
 							print!("{qualifier}, ");
 						}
 						print!("], ");
@@ -3399,7 +3469,7 @@ pub fn print_stmt(stmt: &Stmt, indent: usize) {
 				}
 			}
 			print!("], qualifiers: [");
-			for (qualifier, _) in qualifiers {
+			for qualifier in qualifiers {
 				print!("{qualifier}, ");
 			}
 			print!("])");
@@ -3416,11 +3486,16 @@ pub fn print_stmt(stmt: &Stmt, indent: usize) {
 				"",
 				indent = indent * 4
 			);
-			for (type_, ident, qualifiers) in params {
+			for Param {
+				qualifiers,
+				type_,
+				ident,
+			} in params
+			{
 				match (ident, qualifiers) {
 					(Some(ident), _) if !qualifiers.is_empty() => {
 						print!("{type_}: {ident} qualifiers: [");
-						for (qualifier, _) in qualifiers {
+						for qualifier in qualifiers {
 							print!("{qualifier}, ");
 						}
 						print!("], ");
@@ -3428,7 +3503,7 @@ pub fn print_stmt(stmt: &Stmt, indent: usize) {
 					(Some(ident), _) => print!("{type_}: {ident}, "),
 					(None, _) if !qualifiers.is_empty() => {
 						print!("{type_} qualifiers: [");
-						for (qualifier, _) in qualifiers {
+						for qualifier in qualifiers {
 							print!("{qualifier}, ");
 						}
 						print!("], ");
@@ -3437,7 +3512,7 @@ pub fn print_stmt(stmt: &Stmt, indent: usize) {
 				}
 			}
 			print!("], qualifiers: [");
-			for (qualifier, _) in qualifiers {
+			for qualifier in qualifiers {
 				print!("{qualifier}, ");
 			}
 			print!("]) {{");
@@ -3454,7 +3529,7 @@ pub fn print_stmt(stmt: &Stmt, indent: usize) {
 				"",
 				indent = indent * 4
 			);
-			for (qualifier, _) in qualifiers {
+			for qualifier in qualifiers {
 				print!("{qualifier}, ");
 			}
 			print!("])");
@@ -3475,7 +3550,7 @@ pub fn print_stmt(stmt: &Stmt, indent: usize) {
 				print_stmt(&stmt, indent + 1);
 			}
 			print!("\r\n{:indent$}}}, qualifiers: [", "", indent = indent * 4);
-			for (qualifier, _) in qualifiers {
+			for qualifier in qualifiers {
 				print!("{qualifier}, ");
 			}
 			if let Some(instance) = instance {

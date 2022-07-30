@@ -166,11 +166,11 @@ impl Token {
 	///
 	/// If the token matches a layout identifier that doesn't take an expression, e.g. `early_fragment_tests`, then
 	/// `Left` is returned with the converted `Layout`. If the token matches a layout identifier that takes an
-	/// expression, e.g. `location = n`, then `Right` is returned with a constructor for the appropriate `Layout`
-	/// (the constructor takes the expression once that has been parsed).
+	/// expression, e.g. `location = n`, then `Right` is returned; after the expression has been parsed, call
+	/// [`to_layout_expr()`](Self::to_layout_expr).
 	///
 	/// If `None` is returned, the current token is not a valid layout identifier.
-	pub fn to_layout(&self) -> Option<Either<Layout, fn(Expr) -> Layout>> {
+	pub fn to_layout(&self) -> Option<Either<Layout, ()>> {
 		match self {
 			// `shared` is a keyword in all circumstances, apart from when it is used as a qualifier, hence it's a
 			// distinct variant rather than a string.
@@ -181,12 +181,12 @@ impl Token {
 				"std430" => Some(Either::Left(Layout::Std430)),
 				"row_major" => Some(Either::Left(Layout::RowMajor)),
 				"column_major" => Some(Either::Left(Layout::ColumnMajor)),
-				"binding" => Some(Either::Right(Layout::Binding)),
-				"offset" => Some(Either::Right(Layout::Offset)),
-				"align" => Some(Either::Right(Layout::Align)),
-				"location" => Some(Either::Right(Layout::Location)),
-				"component" => Some(Either::Right(Layout::Component)),
-				"index" => Some(Either::Right(Layout::Index)),
+				"binding" => Some(Either::Right(())),
+				"offset" => Some(Either::Right(())),
+				"align" => Some(Either::Right(())),
+				"location" => Some(Either::Right(())),
+				"component" => Some(Either::Right(())),
+				"index" => Some(Either::Right(())),
 				"points" => Some(Either::Left(Layout::Points)),
 				"lines" => Some(Either::Left(Layout::Lines)),
 				"isolines" => Some(Either::Left(Layout::Isolines)),
@@ -206,7 +206,7 @@ impl Token {
 				"triangle_adjacency" => {
 					Some(Either::Left(Layout::TrianglesAdjacency))
 				}
-				"invocations" => Some(Either::Right(Layout::Invocations)),
+				"invocations" => Some(Either::Right(())),
 				"origin_upper_left" => {
 					Some(Either::Left(Layout::OriginUpperLeft))
 				}
@@ -216,17 +216,17 @@ impl Token {
 				"early_fragment_tests" => {
 					Some(Either::Left(Layout::EarlyFragmentTests))
 				}
-				"local_size_x" => Some(Either::Right(Layout::LocalSizeX)),
-				"local_size_y" => Some(Either::Right(Layout::LocalSizeY)),
-				"local_size_z" => Some(Either::Right(Layout::LocalSizeZ)),
-				"xfb_buffer" => Some(Either::Right(Layout::XfbBuffer)),
-				"xfb_stride" => Some(Either::Right(Layout::XfbStride)),
-				"xfb_offset" => Some(Either::Right(Layout::XfbOffset)),
-				"vertices" => Some(Either::Right(Layout::Vertices)),
+				"local_size_x" => Some(Either::Right(())),
+				"local_size_y" => Some(Either::Right(())),
+				"local_size_z" => Some(Either::Right(())),
+				"xfb_buffer" => Some(Either::Right(())),
+				"xfb_stride" => Some(Either::Right(())),
+				"xfb_offset" => Some(Either::Right(())),
+				"vertices" => Some(Either::Right(())),
 				"line_strip" => Some(Either::Left(Layout::LineStrip)),
 				"triangle_strip" => Some(Either::Left(Layout::TriangleStrip)),
-				"max_vertices" => Some(Either::Right(Layout::MaxVertices)),
-				"stream" => Some(Either::Right(Layout::Stream)),
+				"max_vertices" => Some(Either::Right(())),
+				"stream" => Some(Either::Right(())),
 				"depth_any" => Some(Either::Left(Layout::DepthAny)),
 				"depth_greater" => Some(Either::Left(Layout::DepthGreater)),
 				"depth_less" => Some(Either::Left(Layout::DepthLess)),
@@ -234,6 +234,105 @@ impl Token {
 				_ => None,
 			},
 			_ => None,
+		}
+	}
+
+	/// Constructs a [`Layout`] given the identifier, expression and spans.
+	///
+	/// # Panics
+	/// This is only for layout identifiers which take a value expression. See the documentation for
+	/// [`to_layout()`](Self::to_layout) for more information.
+	pub fn to_layout_expr(
+		&self,
+		kw_span: Span,
+		eq_span: Span,
+		expr: Expr,
+	) -> Layout {
+		match self {
+			Self::Ident(s) => match s.as_ref() {
+				"binding" => Layout::Binding {
+					kw: kw_span,
+					eq: eq_span,
+					value: expr,
+				},
+				"offset" => Layout::Offset {
+					kw: kw_span,
+					eq: eq_span,
+					value: expr,
+				},
+				"align" => Layout::Align {
+					kw: kw_span,
+					eq: eq_span,
+					value: expr,
+				},
+				"location" => Layout::Location {
+					kw: kw_span,
+					eq: eq_span,
+					value: expr,
+				},
+				"component" => Layout::Component {
+					kw: kw_span,
+					eq: eq_span,
+					value: expr,
+				},
+				"index" => Layout::Index {
+					kw: kw_span,
+					eq: eq_span,
+					value: expr,
+				},
+				"invocations" => Layout::Invocations {
+					kw: kw_span,
+					eq: eq_span,
+					value: expr,
+				},
+				"local_size_x" => Layout::LocalSizeX {
+					kw: kw_span,
+					eq: eq_span,
+					value: expr,
+				},
+				"local_size_y" => Layout::LocalSizeY {
+					kw: kw_span,
+					eq: eq_span,
+					value: expr,
+				},
+				"local_size_z" => Layout::LocalSizeZ {
+					kw: kw_span,
+					eq: eq_span,
+					value: expr,
+				},
+				"xfb_buffer" => Layout::XfbBuffer {
+					kw: kw_span,
+					eq: eq_span,
+					value: expr,
+				},
+				"xfb_stride" => Layout::XfbStride {
+					kw: kw_span,
+					eq: eq_span,
+					value: expr,
+				},
+				"xfb_offset" => Layout::XfbOffset {
+					kw: kw_span,
+					eq: eq_span,
+					value: expr,
+				},
+				"vertices" => Layout::Vertices {
+					kw: kw_span,
+					eq: eq_span,
+					value: expr,
+				},
+				"max_vertices" => Layout::MaxVertices {
+					kw: kw_span,
+					eq: eq_span,
+					value: expr,
+				},
+				"stream" => Layout::Stream {
+					kw: kw_span,
+					eq: eq_span,
+					value: expr,
+				},
+				_ => unreachable!("[Token::to_layout_expr] Given a layout identifier that doesn't take an expression value."),
+			},
+			_ => unreachable!("[Token::to_layout_expr] Given a layout identifier that doesn't take an expression value."),
 		}
 	}
 }

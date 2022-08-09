@@ -1,6 +1,7 @@
 use crate::{
 	cst::{
-		Cst, Expr, ExprTy, Ident, Node, NodeTy, Param, Qualifier, Scope, Type,
+		Cst, Expr, ExprTy, Ident, IfBranch, IfTy, Node, NodeTy, Param,
+		Qualifier, Scope, SwitchBranch, Type,
 	},
 	error::SyntaxErr,
 	expression::{expr_parser, Mode},
@@ -89,67 +90,15 @@ pub fn parse(source: &str) -> (Cst, Vec<SyntaxErr>) {
 		token_stream,
 		cursor: 0,
 	};
-	let mut stmts = Vec::new();
+	let mut nodes = Vec::new();
 	let mut errors = Vec::new();
 
 	while walker.peek().is_some() {
-		match parse_stmt(&mut walker) {
-			Ok((stmt, mut errs)) => {
-				errors.append(&mut errs);
-				if let Some(stmt) = stmt {
-					// Check for the validity of the statement at the top-level.
-					match stmt.ty {
-						NodeTy::Expr { .. } => errors.push(
-							SyntaxErr::ExprStmtIsIllegalAtTopLevel(stmt.span),
-						),
-						NodeTy::Scope { .. } => errors.push(
-							SyntaxErr::ScopeStmtIsIllegalAtTopLevel(stmt.span),
-						),
-						NodeTy::If { .. } => errors.push(
-							SyntaxErr::IfStmtIsIllegalAtTopLevel(stmt.span),
-						),
-						NodeTy::Switch { .. } => errors.push(
-							SyntaxErr::SwitchStmtIsIllegalAtTopLevel(stmt.span),
-						),
-						NodeTy::For { .. } => errors.push(
-							SyntaxErr::ForStmtIsIllegalAtTopLevel(stmt.span),
-						),
-						NodeTy::While { .. } => errors.push(
-							SyntaxErr::WhileStmtIsIllegalAtTopLevel(stmt.span),
-						),
-						NodeTy::DoWhile { .. } => errors.push(
-							SyntaxErr::DoWhileStmtIsIllegalAtTopLevel(
-								stmt.span,
-							),
-						),
-						NodeTy::Return { .. } => errors.push(
-							SyntaxErr::ReturnStmtIsIllegalAtTopLevel(stmt.span),
-						),
-						NodeTy::Break { .. } => errors.push(
-							SyntaxErr::BreakStmtIsIllegalAtTopLevel(stmt.span),
-						),
-						NodeTy::Continue { .. } => errors.push(
-							SyntaxErr::ContinueStmtIsIllegalAtTopLevel(
-								stmt.span,
-							),
-						),
-						NodeTy::Discard { .. } => errors.push(
-							SyntaxErr::DiscardStmtIsIllegalAtTopLevel(
-								stmt.span,
-							),
-						),
-						_ => {}
-					}
-					stmts.push(stmt);
-				}
-			}
-			Err(mut errs) => {
-				errors.append(&mut errs);
-			}
-		}
+		let mut errs = parse_stmt(&mut walker, &mut nodes);
+		errors.append(&mut errs);
 	}
 
-	(stmts, errors)
+	(nodes, errors)
 }
 
 /// Parse a list of qualifiers beginning at the current position if there are any. E.g.
@@ -441,9 +390,7 @@ fn parse_qualifier_list(
 ///
 /// # Panics
 /// This function assumes that there is a current `Token` to peek.
-fn parse_stmt(
-	walker: &mut Walker,
-) -> Result<(Option<Node>, Vec<SyntaxErr>), Vec<SyntaxErr>> {
+fn parse_stmt(walker: &mut Walker, nodes: &mut Vec<Node>) -> Vec<SyntaxErr> {
 	let mut errors = Vec::new();
 
 	// Panics: This is guaranteed to unwrap without panic because of the while-loop precondition.
@@ -462,13 +409,11 @@ fn parse_stmt(
 			parse_scope(walker, BRACE_DELIMITER, l_brace_span);
 		errors.append(&mut inner_errs);
 
-		return Ok((
-			Some(Node {
-				span: Span::new(l_brace_span.start, inner_scope.span.end),
-				ty: NodeTy::Scope(inner_scope),
-			}),
-			errors,
-		));
+		nodes.push(Node {
+			span: Span::new(l_brace_span.start, inner_scope.span.end),
+			ty: NodeTy::Scope(inner_scope),
+		});
+		return errors;
 	}
 
 	// TODO: Deal with comments?
@@ -485,11 +430,12 @@ fn parse_stmt(
 
 		// Check if the expression can be parsed as a typename. If so, then we try to parse the following
 		// tokens as statements which can start with a typename, i.e. variable or function defs/decls.
-		return if let Some(type_) = expr.to_type() {
+		if let Some(type_) = expr.to_type() {
 			match parse_type_start(walker, type_, expr, qualifiers) {
-				(Some(s), mut errs) => {
+				(Some(n), mut errs) => {
 					errors.append(&mut errs);
-					return Ok((Some(s), errors));
+					nodes.push(n);
+					return errors;
 				}
 				(None, mut errs) => {
 					errors.append(&mut errs);
@@ -498,11 +444,13 @@ fn parse_stmt(
 						// We did not successfully parse a statement.
 						let (next, _) = match walker.peek() {
 							Some(t) => t,
-							None => return Err(errors),
+							None => return errors,
 						};
 
 						if *next == Token::Semi {
 							walker.advance();
+							break 'till_next;
+						} else if *next == Token::RBrace {
 							break 'till_next;
 						} else if next.starts_statement() {
 							// We don't advance because we are currently at a token which begins a new statement, so we
@@ -513,33 +461,31 @@ fn parse_stmt(
 							continue 'till_next;
 						}
 					}
+					return errors;
 				}
 			};
-			Ok((None, errors))
 		} else {
 			let (current, current_span) = match walker.peek() {
 				Some(t) => (&t.0, t.1),
-				None => return Err(errors),
+				None => return errors,
 			};
 			if *current == Token::Semi {
 				walker.advance();
-				Ok((
-					Some(Node {
-						ty: NodeTy::Expr {
-							expr: expr.clone(),
-							semi: Some(current_span),
-						},
-						span: expr.span,
-					}),
-					errors,
-				))
-			} else {
-				Ok((None, errors))
+				nodes.push(Node {
+					ty: NodeTy::Expr {
+						expr: expr.clone(),
+						semi: Some(current_span),
+					},
+					span: expr.span,
+				});
 			}
+
+			return errors;
 		};
 	}
 
 	let qualifier_span_end = if !qualifiers.is_empty() {
+		// Panics: There is at least one element so `last()` will return `Some`.
 		Some(qualifiers.last().unwrap().span().end_zero_width())
 	} else {
 		None
@@ -554,69 +500,66 @@ fn parse_stmt(
 			if let Some(span) = qualifier_span_end {
 				errors.push(SyntaxErr::ExpectedDefDeclAfterQualifiers(span));
 			}
-			return Err(errors);
+			return errors;
 		}
 	};
 
-	// TODO: Deal with the fact that these statements don't support qualifiers.
-
-	// TODO: Add variants to `Stmt` to record invalid things, such as single keywords, or random bits of
-	// punctuation.
+	match token {
+		Token::Struct => {}
+		_ => {
+			// We cannot have qualifiers before any other keywords.
+			if !qualifiers.is_empty() {
+				qualifiers.into_iter().for_each(|q| {
+					nodes.push(Node {
+						ty: NodeTy::Keyword,
+						span: *q.span(),
+					})
+				});
+				errors.push(SyntaxErr::ExpectedDefDeclAfterQualifiers(
+					// Panics: This is assigned `Some` if `qualifiers` is not empty, and we currently have just
+					// checked for that condition.
+					qualifier_span_end.unwrap(),
+				));
+				return errors;
+			}
+		}
+	}
 
 	match token {
 		Token::Semi => {
 			walker.advance();
-			return Ok((
-				Some(Node {
-					ty: NodeTy::Empty,
-					span: token_span,
-				}),
-				errors,
-			));
+			nodes.push(Node {
+				ty: NodeTy::Empty,
+				span: token_span,
+			});
 		}
 		Token::If => {
 			let kw_span = token_span;
 			walker.advance();
 
 			// Parse the first `if ...` branch.
-			let (l_paren_span, cond, r_paren_span, body, mut errs) =
-				match parse_if_header_body(walker, token_span, true) {
-					Ok((l, expr, r, body, errs)) => {
-						let expr = match expr {
-							Some(e) => e,
-							None => return Ok((None, errors)),
-						};
-						(l, expr, r, body, errs)
-					}
-					Err(mut errs) => {
-						errors.append(&mut errs);
-						return Ok((None, errors));
-					}
-				};
-			errors.append(&mut errs);
-
 			let mut branches = Vec::new();
+			let (first, mut errs) = parse_if_header_body(
+				walker,
+				IfTy::If(kw_span),
+				token_span,
+				true,
+			);
+			errors.append(&mut errs);
+			branches.push(first);
+
 			'branches: loop {
 				let (token, token_span) = match walker.peek() {
 					Some(t) => (&t.0, t.1),
 					None => {
-						return Ok((
-							Some(Node {
-								ty: NodeTy::If {
-									kw: kw_span,
-									l_paren: l_paren_span,
-									cond,
-									r_paren: r_paren_span,
-									body,
-									branches,
-								},
-								span: Span::new(
-									token_span.start,
-									walker.get_last_span().end,
-								),
-							}),
-							errors,
-						));
+						nodes.push(Node {
+							ty: NodeTy::If { branches },
+							span: Span::new(
+								token_span.start,
+								walker.get_last_span().end,
+							),
+						});
+						return errors;
 					}
 				};
 
@@ -635,7 +578,7 @@ fn parse_stmt(
 											.next_single_width(),
 									),
 								);
-								return Err(errors);
+								return errors;
 							}
 						};
 
@@ -644,80 +587,38 @@ fn parse_stmt(
 							// We have `else if`.
 							walker.advance();
 
-							let (
-								l_paren_span,
-								cond,
-								r_paren_span,
-								body,
-								mut errs,
-							) = match parse_if_header_body(
+							let (branch, mut errs) = parse_if_header_body(
 								walker,
-								current_span,
+								IfTy::ElseIf(else_span, if_span),
+								token_span,
 								true,
-							) {
-								Ok((l, expr, r, body, errs)) => {
-									(l, expr, r, body, errs)
-								}
-								Err(_) => return Ok((None, errors)),
-							};
+							);
 							errors.append(&mut errs);
-							branches.push((
-								else_span,
-								Some(if_span),
-								l_paren_span,
-								cond,
-								r_paren_span,
-								body,
-							));
+							branches.push(branch);
 						} else {
 							// We just have `else`.
 
-							let (
-								l_paren_span,
-								cond,
-								r_paren_span,
-								body,
-								mut errs,
-							) = match parse_if_header_body(
-								walker, token_span, false,
-							) {
-								Ok((l, expr, r, body, errs)) => {
-									(l, expr, r, body, errs)
-								}
-								Err(_) => return Ok((None, errors)),
-							};
+							let (branch, mut errs) = parse_if_header_body(
+								walker,
+								IfTy::Else(else_span),
+								token_span,
+								false,
+							);
 							errors.append(&mut errs);
-							branches.push((
-								else_span,
-								None,
-								l_paren_span,
-								cond,
-								r_paren_span,
-								body,
-							));
+							branches.push(branch);
 						}
 					}
 					_ => break 'branches,
 				}
 			}
 
-			return Ok((
-				Some(Node {
-					ty: NodeTy::If {
-						kw: kw_span,
-						l_paren: l_paren_span,
-						cond,
-						r_paren: r_paren_span,
-						body,
-						branches,
-					},
-					span: Span::new(
-						token_span.start,
-						walker.get_previous_span().end,
-					),
-				}),
-				errors,
-			));
+			nodes.push(Node {
+				ty: NodeTy::If { branches },
+				span: Span::new(
+					token_span.start,
+					walker.get_previous_span().end,
+				),
+			});
 		}
 		Token::Switch => {
 			let kw_span = token_span;
@@ -730,7 +631,12 @@ fn parse_stmt(
 					errors.push(SyntaxErr::ExpectedParenAfterSwitchKw(
 						token_span.next_single_width(),
 					));
-					return Err(errors);
+
+					nodes.push(Node {
+						ty: NodeTy::Keyword,
+						span: kw_span,
+					});
+					return errors;
 				}
 			};
 			let l_paren_span = if *current == Token::LParen {
@@ -750,25 +656,20 @@ fn parse_stmt(
 				let (cases, mut errs) = parse_switch_body(walker, current_span);
 				errors.append(&mut errs);
 
-				return Ok((
-					Some(Node {
-						ty: NodeTy::Switch {
-							kw: kw_span,
-							l_paren: None,
-							expr: Expr {
-								ty: ExprTy::Missing,
-								span: token_span.next_single_width(),
-							},
-							r_paren: None,
-							cases,
-						},
-						span: Span::new(
-							token_span.start,
-							walker.get_previous_span().end,
-						),
-					}),
-					errors,
-				));
+				nodes.push(Node {
+					ty: NodeTy::Switch {
+						kw: kw_span,
+						l_paren: None,
+						expr: vec![],
+						r_paren: None,
+						cases,
+					},
+					span: Span::new(
+						token_span.start,
+						walker.get_previous_span().end,
+					),
+				});
+				return errors;
 			} else {
 				// Even though we are missing the token, we will still try to parse this syntax at
 				// least until we expect the body scope.
@@ -779,28 +680,45 @@ fn parse_stmt(
 			};
 
 			// Consume the conditional expression.
-			let expr =
+			let mut expr_nodes =
 				match expr_parser(walker, Mode::Default, &[Token::RParen]) {
 					(Some(e), mut errs) => {
 						errors.append(&mut errs);
-						e
+						vec![Node {
+							span: e.span,
+							ty: NodeTy::Expression(e),
+						}]
 					}
 					(None, _) => {
 						// We found tokens which cannot even start an expression. We loop until we come
 						// across either a `)` or a `{`.
-						let expr = 'expr_4: loop {
-							let (current, current_span) =
-								match walker.peek() {
-									Some(t) => (&t.0, t.1),
-									None => {
-										errors.push(
-											SyntaxErr::ExpectedExprInSwitchHeader(
-												walker.get_last_span().next_single_width()
-											),
-										);
-										return Err(errors);
+						let mut invalid_expr_nodes = Vec::new();
+						'expr_4: loop {
+							let (current, current_span) = match walker.peek() {
+								Some(t) => (&t.0, t.1),
+								None => {
+									errors.push(
+										SyntaxErr::ExpectedExprInSwitchHeader(
+											walker
+												.get_last_span()
+												.next_single_width(),
+										),
+									);
+
+									nodes.push(Node {
+										ty: NodeTy::Keyword,
+										span: kw_span,
+									});
+									if let Some(l_paren_span) = l_paren_span {
+										nodes.push(Node {
+											ty: NodeTy::Punctuation,
+											span: l_paren_span,
+										});
 									}
-								};
+									nodes.append(&mut invalid_expr_nodes);
+									return errors;
+								}
+							};
 
 							match current {
 								Token::RParen | Token::RBrace => {
@@ -817,17 +735,20 @@ fn parse_stmt(
 											),
 										);
 									}
-									break 'expr_4 Expr {
-										ty: ExprTy::Missing,
-										span: current_span
-											.previous_single_width(),
-									};
+									break 'expr_4;
 								}
-								_ => continue 'expr_4,
+								_ => {
+									invalid_expr_nodes.push(Node {
+										ty: NodeTy::Invalid,
+										span: current_span,
+									});
+									walker.advance();
+									continue 'expr_4;
+								}
 							}
-						};
+						}
 
-						expr
+						invalid_expr_nodes
 					}
 				};
 
@@ -843,7 +764,19 @@ fn parse_stmt(
 							l_paren_span,
 							walker.get_last_span().next_single_width(),
 						));
-						return Err(errors);
+
+						nodes.push(Node {
+							ty: NodeTy::Keyword,
+							span: kw_span,
+						});
+						if let Some(l_paren_span) = l_paren_span {
+							nodes.push(Node {
+								ty: NodeTy::Punctuation,
+								span: l_paren_span,
+							});
+						}
+						nodes.append(&mut expr_nodes);
+						return errors;
 					}
 				};
 
@@ -864,6 +797,10 @@ fn parse_stmt(
 						break 'r_paren_3 current_span.previous_single_width();
 					}
 					_ => {
+						expr_nodes.push(Node {
+							ty: NodeTy::Invalid,
+							span: *current_span,
+						});
 						walker.advance();
 						continue 'r_paren_3;
 					}
@@ -879,22 +816,21 @@ fn parse_stmt(
 					errors.push(SyntaxErr::ExpectedBraceAfterSwitchHeader(
 						walker.get_last_span().next_single_width(),
 					));
-					return Ok((
-						Some(Node {
-							ty: NodeTy::Switch {
-								kw: kw_span,
-								l_paren: l_paren_span,
-								expr,
-								r_paren: r_paren_span,
-								cases: vec![],
-							},
-							span: Span::new(
-								token_span.start,
-								walker.get_last_span().end,
-							),
-						}),
-						errors,
-					));
+
+					nodes.push(Node {
+						ty: NodeTy::Switch {
+							kw: kw_span,
+							l_paren: l_paren_span,
+							expr: expr_nodes,
+							r_paren: r_paren_span,
+							cases: vec![],
+						},
+						span: Span::new(
+							token_span.start,
+							walker.get_last_span().end,
+						),
+					});
+					return errors;
 				}
 			};
 			if *current == Token::LBrace {
@@ -903,44 +839,40 @@ fn parse_stmt(
 				errors.push(SyntaxErr::ExpectedBraceAfterSwitchHeader(
 					span_after_header.next_single_width(),
 				));
-				return Ok((
-					Some(Node {
-						ty: NodeTy::Switch {
-							kw: kw_span,
-							l_paren: l_paren_span,
-							expr,
-							r_paren: r_paren_span,
-							cases: vec![],
-						},
-						span: Span::new(
-							token_span.start,
-							walker.get_previous_span().end,
-						),
-					}),
-					errors,
-				));
+
+				nodes.push(Node {
+					ty: NodeTy::Switch {
+						kw: kw_span,
+						l_paren: l_paren_span,
+						expr: expr_nodes,
+						r_paren: r_paren_span,
+						cases: vec![],
+					},
+					span: Span::new(
+						token_span.start,
+						walker.get_previous_span().end,
+					),
+				});
+				return errors;
 			}
 
 			// Consume the body, including the closing `}` brace.
 			let (cases, mut errs) = parse_switch_body(walker, current_span);
 			errors.append(&mut errs);
 
-			return Ok((
-				Some(Node {
-					ty: NodeTy::Switch {
-						kw: kw_span,
-						l_paren: l_paren_span,
-						expr,
-						r_paren: r_paren_span,
-						cases,
-					},
-					span: Span::new(
-						token_span.start,
-						walker.get_previous_span().end,
-					),
-				}),
-				errors,
-			));
+			nodes.push(Node {
+				ty: NodeTy::Switch {
+					kw: kw_span,
+					l_paren: l_paren_span,
+					expr: expr_nodes,
+					r_paren: r_paren_span,
+					cases,
+				},
+				span: Span::new(
+					token_span.start,
+					walker.get_previous_span().end,
+				),
+			});
 		}
 		Token::For => {
 			let kw_span = token_span;
@@ -953,7 +885,12 @@ fn parse_stmt(
 					errors.push(SyntaxErr::ExpectedParenAfterForKw(
 						kw_span.next_single_width(),
 					));
-					return Err(errors);
+
+					nodes.push(Node {
+						ty: NodeTy::Keyword,
+						span: kw_span,
+					});
+					return errors;
 				}
 			};
 			let l_paren_span = if *current == Token::LParen {
@@ -974,23 +911,17 @@ fn parse_stmt(
 					parse_scope(walker, BRACE_DELIMITER, current_span);
 				errors.append(&mut errs);
 
-				return Ok((
-					Some(Node {
-						span: Span::new(kw_span.start, body.span.end),
-						ty: NodeTy::For {
-							kw: kw_span,
-							l_paren: None,
-							var: None,
-							first_semi: None,
-							cond: None,
-							second_semi: None,
-							inc: None,
-							r_paren: None,
-							body: Some(body),
-						},
-					}),
-					errors,
-				));
+				nodes.push(Node {
+					span: Span::new(kw_span.start, body.span.end),
+					ty: NodeTy::For {
+						kw: kw_span,
+						l_paren: None,
+						nodes: vec![],
+						r_paren: None,
+						body: Some(body),
+					},
+				});
+				return errors;
 			} else {
 				// Even though we are missing the token, we will still try to parse this syntax at
 				// least until we expect the body scope.
@@ -1000,113 +931,51 @@ fn parse_stmt(
 				None
 			};
 
-			let mut just_started = true;
-			let mut count = 0;
-			let mut just_parsed_semi = false;
-			let mut extra_arg_start = 0;
-			let mut var = None;
-			let mut exprs = vec![None, None];
-			let mut semi_spans = Vec::new();
+			let mut args = Vec::new();
 			let mut r_paren_span = None;
-			let span_after_header = 'for_header: loop {
+			let test_span_after = 'testing: loop {
 				let (current, current_span) = match walker.peek() {
-					Some(t) => (&t.0, t.1),
+					Some((t, s)) => (t, *s),
 					None => {
 						errors.push(SyntaxErr::ExpectedParenAfterForHeader(
 							l_paren_span,
 							walker.get_last_span().next_single_width(),
 						));
-						return Err(errors);
+
+						nodes.push(Node {
+							ty: NodeTy::Keyword,
+							span: kw_span,
+						});
+						if let Some(l_paren_span) = l_paren_span {
+							nodes.push(Node {
+								ty: NodeTy::Punctuation,
+								span: l_paren_span,
+							});
+						}
+						// TODO:
+						return errors;
 					}
 				};
 
 				match current {
 					Token::Semi => {
-						count += 1;
-						// We have just parsed the 3rd expression and we've come across a `;`, which is
-						// unnecessary.
-						if count == 3 {
-							errors.push(
-								SyntaxErr::FoundTrailingSemiAfter3rdExprInFor(
-									current_span,
-								),
-							);
-							extra_arg_start = current_span.end;
-						}
-						semi_spans.push(current_span);
-						just_parsed_semi = true;
+						args.push((None, Some(current_span)));
 						walker.advance();
+						continue 'testing;
 					}
-					Token::RParen if just_started => {
-						// We just had the `(`, which means this is an empty header.
-						errors.push(SyntaxErr::FoundEmptyForHeader(
-							if let Some(l_paren_span) = l_paren_span {
-								Span::new_between(l_paren_span, current_span)
-							} else {
-								current_span.previous_single_width()
-							},
-						));
+					Token::RParen => {
 						walker.advance();
 						r_paren_span = Some(current_span);
-						break 'for_header current_span;
-					}
-					Token::RParen if !just_started => {
-						// Whether it's `some - expr)` or it's `expr; )`, we want to increase the
-						// argument count in both scenarios.
-						count += 1;
-
-						if count < 3 {
-							errors.push(SyntaxErr::Expected3StmtExprInFor(
-								if let Some(l_paren_span) = l_paren_span {
-									Span::new_between(
-										l_paren_span,
-										current_span,
-									)
-								} else {
-									current_span.previous_single_width()
-								},
-							));
-						} else if count >= 4 {
-							errors.push(
-								SyntaxErr::FoundMoreThan3StmtExprInFor(
-									Span::new_between(
-										Span::new_zero_width(extra_arg_start),
-										current_span,
-									),
-								),
-							);
-						}
-
-						walker.advance();
-						r_paren_span = Some(current_span);
-						break 'for_header current_span;
+						break 'testing current_span;
 					}
 					Token::LBrace => {
-						// Even though we are missing the `)` token, we still treat this as a "valid"
-						// for loop for better error recovery. We don't consume because the next check
-						// deals with `{`.
-						errors.push(SyntaxErr::ExpectedParenAfterForHeader(
-							l_paren_span,
-							current_span.previous_single_width(),
-						));
-						break 'for_header current_span;
+						break 'testing current_span;
 					}
-					_ => {
-						// We just finished parsing a stmt/expr and we are expecting a semi-colon, but
-						// we found something else instead.
-						if !just_parsed_semi && !just_started {
-							errors.push(
-								SyntaxErr::ExpectedSemiAfterForStmtExpr(
-									walker
-										.get_previous_span()
-										.next_single_width(),
-								),
-							);
-						}
-					}
+					_ => {}
 				}
 
-				just_started = false;
+				let mut current_arg_val = None;
+				let mut current_arg_semi = None;
 
 				match expr_parser(
 					walker,
@@ -1114,133 +983,52 @@ fn parse_stmt(
 					&[Token::Semi, Token::RParen],
 				) {
 					(Some(expr), mut errs) => {
-						if count == 0 {
-							// We are looking for the variable statement or expression.
-							if let Some(type_) = expr.to_type() {
-								let walker_cursor = walker.cursor;
-								match parse_type_start(
-									walker,
-									type_,
-									expr.clone(),
-									vec![],
-								) {
-									(Some(s), mut errs) => {
-										errors.append(&mut errs);
-										var = Some(s);
-										// The `parse_type_start()` consumes the `;`, so we have to
-										// manually increment the count.
-										count += 1;
-										just_parsed_semi = true;
-									}
-									(None, _) => {
-										walker.cursor = walker_cursor;
-										errors.append(&mut errs);
-										var = Some(Node {
-											ty: NodeTy::Expr {
-												expr: expr.clone(),
-												semi: None,
-											},
-											span: expr.span,
-										});
-									}
-								}
-							} else {
-								var = Some(Node {
-									ty: NodeTy::Expr {
-										expr: expr.clone(),
-										semi: None,
-									},
-									span: expr.span,
-								});
-							}
-						} else if count == 1 {
-							errors.append(&mut errs);
-							exprs[0] = Some(expr);
-						} else if count == 2 {
-							errors.append(&mut errs);
-							exprs[1] = Some(expr);
-						} else {
-							errors.append(&mut errs);
-							exprs.push(Some(expr));
-						}
+						if let Some(type_) = expr.to_type() {}
+						current_arg_semi = Some(walker.get_previous_span());
 					}
 					(None, _) => {
-						// Look for a `;` or `)` or `{` that follows immediately from the last. We let
-						// the next loop iteration deal with that.
-						let (current, _) = match walker.peek() {
-							Some(t) => (&t.0, t.1),
-							None => {
-								errors.push(
-									SyntaxErr::ExpectedParenAfterForHeader(
-										l_paren_span,
-										walker
-											.get_last_span()
-											.next_single_width(),
-									),
-								);
-								return Err(errors);
-							}
-						};
-						match current {
-							Token::Semi | Token::RParen | Token::LBrace => {
-								continue 'for_header
-							}
-							_ => {}
-						}
+						current_arg_val = Some(Node {
+							ty: NodeTy::Invalid,
+							span: current_span,
+						});
+						walker.advance();
+					}
+				}
 
-						// We have a token which cannot start an expression. We loop until we come
-						// across either a `;`, a `)` or a `{`.
-						'inner: loop {
-							let (current, current_span) =
-								match walker.peek() {
-									Some(t) => (&t.0, t.1),
-									None => {
-										errors.push(
-												SyntaxErr::ExpectedParenAfterForHeader(
-													l_paren_span, walker.get_last_span().next_single_width())
-											);
-										return Err(errors);
-									}
-								};
+				let (current, current_span) = match walker.peek() {
+					Some((t, s)) => (t, *s),
+					None => {
+						errors.push(SyntaxErr::ExpectedParenAfterForHeader(
+							l_paren_span,
+							walker.get_last_span().next_single_width(),
+						));
 
-							match current {
-								Token::Semi | Token::RParen | Token::LBrace => {
-									// We need to work out the last span that's valid.
-									let last_expr_span = exprs
-										.iter()
-										.rev()
-										.find(|o| o.is_some())
-										.map(|e| e.as_ref().unwrap().span);
-									let last_semi_span = semi_spans.last();
-									let beginning_span =
-										if let (Some(expr), Some(semi)) =
-											(last_expr_span, last_semi_span)
-										{
-											if expr.is_after(semi) {
-												expr
-											} else {
-												*semi
-											}
-										} else if let Some(l_paren_span) =
-											l_paren_span
-										{
-											l_paren_span
-										} else {
-											kw_span
-										};
-									errors.push(
-										SyntaxErr::ExpectedExprInForFoundElse(
-											Span::new_between(
-												beginning_span,
-												current_span,
-											),
-										),
-									);
-									break 'inner;
-								}
-								_ => walker.advance(),
-							}
+						//TODO:
+						return errors;
+					}
+				};
+
+				match current {
+					Token::RParen => {
+						args.push((current_arg_val, current_arg_semi));
+						walker.advance();
+						r_paren_span = Some(current_span);
+						break 'testing current_span;
+					}
+					Token::LBrace => {
+						args.push((current_arg_val, current_arg_semi));
+						break 'testing current_span;
+					}
+					Token::Semi => {
+						if let Some(semi) = current_arg_semi {
+							args.push((current_arg_val, current_arg_semi));
+						} else {
+							args.push((current_arg_val, Some(current_span)));
+							walker.advance();
 						}
+					}
+					_ => {
+						args.push((current_arg_val, None));
 					}
 				}
 			};
@@ -1254,26 +1042,21 @@ fn parse_stmt(
 					errors.push(SyntaxErr::ExpectedBraceAfterForHeader(
 						walker.get_last_span().next_single_width(),
 					));
-					return Ok((
-						Some(Node {
-							ty: NodeTy::For {
-								kw: kw_span,
-								l_paren: l_paren_span,
-								var: var.map(|s| Box::from(s)),
-								first_semi: semi_spans.get(0).cloned(),
-								cond: exprs.remove(0),
-								second_semi: semi_spans.get(1).cloned(),
-								inc: exprs.remove(0),
-								r_paren: r_paren_span,
-								body: None,
-							},
-							span: Span::new(
-								token_span.start,
-								walker.get_last_span().end,
-							),
-						}),
-						errors,
-					));
+
+					nodes.push(Node {
+						ty: NodeTy::For {
+							kw: kw_span,
+							l_paren: l_paren_span,
+							nodes: args,
+							r_paren: r_paren_span,
+							body: None,
+						},
+						span: Span::new(
+							token_span.start,
+							walker.get_last_span().end,
+						),
+					});
+					return errors;
 				}
 			};
 			if *current == Token::LBrace {
@@ -1281,29 +1064,24 @@ fn parse_stmt(
 			} else {
 				// Even though for loops without a body are illegal, we treat this as "valid" for
 				// better error recovery.
-				errors.push(SyntaxErr::ExpectedBraceAfterForHeader(
+				/* errors.push(SyntaxErr::ExpectedBraceAfterForHeader(
 					span_after_header.next_single_width(),
-				));
-				return Ok((
-					Some(Node {
-						ty: NodeTy::For {
-							kw: kw_span,
-							l_paren: l_paren_span,
-							var: var.map(|s| Box::from(s)),
-							first_semi: semi_spans.get(0).cloned(),
-							cond: exprs.remove(0),
-							second_semi: semi_spans.get(1).cloned(),
-							inc: exprs.remove(0),
-							r_paren: r_paren_span,
-							body: None,
-						},
-						span: Span::new(
-							token_span.start,
-							walker.get_previous_span().end,
-						),
-					}),
-					errors,
-				));
+				)); */
+
+				nodes.push(Node {
+					ty: NodeTy::For {
+						kw: kw_span,
+						l_paren: l_paren_span,
+						nodes: args,
+						r_paren: r_paren_span,
+						body: None,
+					},
+					span: Span::new(
+						token_span.start,
+						walker.get_previous_span().end,
+					),
+				});
+				return errors;
 			}
 
 			// Consume the body, including the closing `}` brace.
@@ -1311,23 +1089,16 @@ fn parse_stmt(
 				parse_scope(walker, BRACE_DELIMITER, current_span);
 			errors.append(&mut errs);
 
-			return Ok((
-				Some(Node {
-					span: Span::new(token_span.start, body.span.end),
-					ty: NodeTy::For {
-						kw: kw_span,
-						l_paren: l_paren_span,
-						var: var.map(|s| Box::from(s)),
-						first_semi: semi_spans.get(0).cloned(),
-						cond: exprs.remove(0),
-						second_semi: semi_spans.get(1).cloned(),
-						inc: exprs.remove(0),
-						r_paren: r_paren_span,
-						body: Some(body),
-					},
-				}),
-				errors,
-			));
+			nodes.push(Node {
+				span: Span::new(token_span.start, body.span.end),
+				ty: NodeTy::For {
+					kw: kw_span,
+					l_paren: l_paren_span,
+					nodes: args,
+					r_paren: r_paren_span,
+					body: Some(body),
+				},
+			});
 		}
 		Token::While => {
 			let kw_span = token_span;
@@ -1340,7 +1111,12 @@ fn parse_stmt(
 					errors.push(SyntaxErr::ExpectedParenAfterWhileKw(
 						kw_span.next_single_width(),
 					));
-					return Err(errors);
+
+					nodes.push(Node {
+						ty: NodeTy::Keyword,
+						span: kw_span,
+					});
+					return errors;
 				}
 			};
 			let l_paren_span = if *current == Token::LParen {
@@ -1360,22 +1136,17 @@ fn parse_stmt(
 					parse_scope(walker, BRACE_DELIMITER, current_span);
 				errors.append(&mut errs);
 
-				return Ok((
-					Some(Node {
-						span: Span::new(kw_span.start, body.span.end),
-						ty: NodeTy::While {
-							kw: kw_span,
-							l_paren: None,
-							cond: Expr {
-								ty: ExprTy::Missing,
-								span: kw_span.end_zero_width(),
-							},
-							r_paren: None,
-							body: Some(body),
-						},
-					}),
-					errors,
-				));
+				nodes.push(Node {
+					span: Span::new(kw_span.start, body.span.end),
+					ty: NodeTy::While {
+						kw: kw_span,
+						l_paren: None,
+						cond: vec![],
+						r_paren: None,
+						body: Some(body),
+					},
+				});
+				return errors;
 			} else {
 				// Even though we are missing the token, we will still try to parse this syntax at
 				// least until we expect the body scope.
@@ -1386,55 +1157,75 @@ fn parse_stmt(
 			};
 
 			// Consume the conditional expression.
-			let cond =
+			let mut cond_nodes =
 				match expr_parser(walker, Mode::Default, &[Token::RParen]) {
 					(Some(e), mut errs) => {
 						errors.append(&mut errs);
-						e
+						vec![Node {
+							span: e.span,
+							ty: NodeTy::Expression(e),
+						}]
 					}
 					(None, _) => {
 						// We found tokens which cannot even start an expression. We loop until we come
 						// across either a `)` or a `{`.
-						let expr = 'expr: loop {
-							let (current, current_span) =
-								match walker.peek() {
-									Some(t) => (&t.0, t.1),
-									None => {
-										errors.push(
-											SyntaxErr::ExpectedCondExprAfterWhile(
-												walker.get_last_span().next_single_width()
-											),
-										);
-										return Err(errors);
+						let mut invalid_cond_nodes = Vec::new();
+						'expr: loop {
+							let (current, current_span) = match walker.peek() {
+								Some(t) => (&t.0, t.1),
+								None => {
+									errors.push(
+										SyntaxErr::ExpectedCondExprAfterWhile(
+											walker
+												.get_last_span()
+												.next_single_width(),
+										),
+									);
+
+									nodes.push(Node {
+										ty: NodeTy::Keyword,
+										span: kw_span,
+									});
+									if let Some(l_paren_span) = l_paren_span {
+										nodes.push(Node {
+											ty: NodeTy::Punctuation,
+											span: l_paren_span,
+										});
 									}
-								};
+									nodes.append(&mut invalid_cond_nodes);
+									return errors;
+								}
+							};
 
 							match current {
-								Token::RParen | Token::RBrace => {
+								Token::RParen | Token::LBrace => {
 									if let Some(l_paren_span) = l_paren_span {
 										errors.push(
-													SyntaxErr::ExpectedCondExprAfterWhile(
-														Span::new_between(l_paren_span, current_span)
-													),
-												);
+											SyntaxErr::ExpectedCondExprAfterWhile(
+												Span::new_between(l_paren_span, current_span)
+											),
+										);
 									} else {
 										errors.push(
-													SyntaxErr::ExpectedCondExprAfterWhile(
-														current_span.previous_single_width()
-													),
-												);
+											SyntaxErr::ExpectedCondExprAfterWhile(
+												current_span.previous_single_width()
+											),
+										);
 									}
-									break 'expr Expr {
-										ty: ExprTy::Missing,
-										span: current_span
-											.previous_single_width(),
-									};
+									break 'expr;
 								}
-								_ => continue 'expr,
+								_ => {
+									invalid_cond_nodes.push(Node {
+										ty: NodeTy::Invalid,
+										span: current_span,
+									});
+									walker.advance();
+									continue 'expr;
+								}
 							}
-						};
+						}
 
-						expr
+						invalid_cond_nodes
 					}
 				};
 
@@ -1450,7 +1241,19 @@ fn parse_stmt(
 							l_paren_span,
 							walker.get_last_span().next_single_width(),
 						));
-						return Err(errors);
+
+						nodes.push(Node {
+							ty: NodeTy::Keyword,
+							span: kw_span,
+						});
+						if let Some(l_paren) = l_paren_span {
+							nodes.push(Node {
+								ty: NodeTy::Punctuation,
+								span: l_paren,
+							});
+						}
+						nodes.append(&mut cond_nodes);
+						return errors;
 					}
 				};
 
@@ -1471,6 +1274,10 @@ fn parse_stmt(
 						break 'r_paren current_span.start_zero_width();
 					}
 					_ => {
+						cond_nodes.push(Node {
+							ty: NodeTy::Invalid,
+							span: *current_span,
+						});
 						walker.advance();
 						continue 'r_paren;
 					}
@@ -1486,22 +1293,21 @@ fn parse_stmt(
 					errors.push(SyntaxErr::ExpectedScopeAfterControlFlowExpr(
 						walker.get_last_span().next_single_width(),
 					));
-					return Ok((
-						Some(Node {
-							ty: NodeTy::While {
-								kw: token_span,
-								l_paren: l_paren_span,
-								cond,
-								r_paren: r_paren_span,
-								body: None,
-							},
-							span: Span::new(
-								token_span.start,
-								walker.get_last_span().end,
-							),
-						}),
-						errors,
-					));
+
+					nodes.push(Node {
+						ty: NodeTy::While {
+							kw: token_span,
+							l_paren: l_paren_span,
+							cond: cond_nodes,
+							r_paren: r_paren_span,
+							body: None,
+						},
+						span: Span::new(
+							token_span.start,
+							walker.get_last_span().end,
+						),
+					});
+					return errors;
 				}
 			};
 			if *current == Token::LBrace {
@@ -1510,22 +1316,21 @@ fn parse_stmt(
 				errors.push(SyntaxErr::ExpectedScopeAfterControlFlowExpr(
 					span_before_body.next_single_width(),
 				));
-				return Ok((
-					Some(Node {
-						ty: NodeTy::While {
-							kw: token_span,
-							l_paren: l_paren_span,
-							cond,
-							r_paren: r_paren_span,
-							body: None,
-						},
-						span: Span::new(
-							token_span.start,
-							walker.get_previous_span().end,
-						),
-					}),
-					errors,
-				));
+
+				nodes.push(Node {
+					ty: NodeTy::While {
+						kw: token_span,
+						l_paren: l_paren_span,
+						cond: cond_nodes,
+						r_paren: r_paren_span,
+						body: None,
+					},
+					span: Span::new(
+						token_span.start,
+						walker.get_previous_span().end,
+					),
+				});
+				return errors;
 			}
 
 			// Consume the body, including the closing `}` brace.
@@ -1533,22 +1338,19 @@ fn parse_stmt(
 				parse_scope(walker, BRACE_DELIMITER, current_span);
 			errors.append(&mut errs);
 
-			return Ok((
-				Some(Node {
-					ty: NodeTy::While {
-						kw: token_span,
-						l_paren: l_paren_span,
-						cond,
-						r_paren: r_paren_span,
-						body: Some(body),
-					},
-					span: Span::new(
-						token_span.start,
-						walker.get_previous_span().end,
-					),
-				}),
-				errors,
-			));
+			nodes.push(Node {
+				ty: NodeTy::While {
+					kw: token_span,
+					l_paren: l_paren_span,
+					cond: cond_nodes,
+					r_paren: r_paren_span,
+					body: Some(body),
+				},
+				span: Span::new(
+					token_span.start,
+					walker.get_previous_span().end,
+				),
+			});
 		}
 		Token::Do => {
 			let do_kw_span = token_span;
@@ -1561,7 +1363,12 @@ fn parse_stmt(
 					errors.push(SyntaxErr::ExpectedBraceAfterDoKw(
 						token_span.next_single_width(),
 					));
-					return Err(errors);
+
+					nodes.push(Node {
+						ty: NodeTy::Keyword,
+						span: do_kw_span,
+					});
+					return errors;
 				}
 			};
 			let (body, span_after_body) = if *current == Token::LBrace {
@@ -1585,7 +1392,12 @@ fn parse_stmt(
 				errors.push(SyntaxErr::ExpectedBraceAfterDoKw(
 					token_span.next_single_width(),
 				));
-				return Ok((None, errors));
+
+				nodes.push(Node {
+					ty: NodeTy::Keyword,
+					span: do_kw_span,
+				});
+				return errors;
 			};
 
 			// Consume the `while` keyword.
@@ -1595,7 +1407,18 @@ fn parse_stmt(
 					errors.push(SyntaxErr::ExpectedWhileKwAfterDoBody(
 						walker.get_last_span(),
 					));
-					return Err(errors);
+
+					nodes.push(Node {
+						ty: NodeTy::Keyword,
+						span: do_kw_span,
+					});
+					if let Some(body) = body {
+						nodes.push(Node {
+							span: body.span,
+							ty: NodeTy::DelimitedScope(body),
+						})
+					}
+					return errors;
 				}
 			};
 			let while_kw_span = if *current == Token::While {
@@ -1622,7 +1445,18 @@ fn parse_stmt(
 						span_after_body.next_single_width(),
 					));
 				}
-				return Ok((None, errors));
+
+				nodes.push(Node {
+					ty: NodeTy::Keyword,
+					span: do_kw_span,
+				});
+				if let Some(body) = body {
+					nodes.push(Node {
+						span: body.span,
+						ty: NodeTy::DelimitedScope(body),
+					})
+				}
+				return errors;
 			};
 
 			// Consume the opening `(` parenthesis.
@@ -1637,7 +1471,24 @@ fn parse_stmt(
 							while_kw_span.next_single_width(),
 						));
 					}
-					return Err(errors);
+
+					nodes.push(Node {
+						ty: NodeTy::Keyword,
+						span: do_kw_span,
+					});
+					if let Some(body) = body {
+						nodes.push(Node {
+							span: body.span,
+							ty: NodeTy::DelimitedScope(body),
+						})
+					}
+					if let Some(while_kw_span) = while_kw_span {
+						nodes.push(Node {
+							ty: NodeTy::Keyword,
+							span: while_kw_span,
+						});
+					}
+					return errors;
 				}
 			};
 			let l_paren_span = if *current == Token::LParen {
@@ -1655,27 +1506,22 @@ fn parse_stmt(
 					));
 				}
 
-				return Ok((
-					Some(Node {
-						ty: NodeTy::DoWhile {
-							do_kw: do_kw_span,
-							body,
-							while_kw: while_kw_span,
-							l_paren: None,
-							cond: Expr {
-								ty: ExprTy::Missing,
-								span: current_span.start_zero_width(),
-							},
-							r_paren: None,
-							semi: Some(current_span),
-						},
-						span: Span::new(
-							token_span.start,
-							walker.get_previous_span().end,
-						),
-					}),
-					errors,
-				));
+				nodes.push(Node {
+					ty: NodeTy::DoWhile {
+						do_kw: do_kw_span,
+						body,
+						while_kw: while_kw_span,
+						l_paren: None,
+						cond: vec![],
+						r_paren: None,
+						semi: Some(current_span),
+					},
+					span: Span::new(
+						token_span.start,
+						walker.get_previous_span().end,
+					),
+				});
+				return errors;
 			} else {
 				// Since the position of a missing `while` keyword and a missing `(` token can
 				// potentially overlap if both are missing, we avoid this error if we already have the
@@ -1689,76 +1535,107 @@ fn parse_stmt(
 			};
 
 			// Consume the conditional expression.
-			let cond = match expr_parser(
+			let mut cond_nodes = match expr_parser(
 				walker,
 				Mode::Default,
 				&[Token::RParen, Token::Semi],
 			) {
 				(Some(e), mut errs) => {
 					errors.append(&mut errs);
-					e
+					vec![Node {
+						span: e.span,
+						ty: NodeTy::Expression(e),
+					}]
 				}
 				(None, _) => {
 					// We found tokens which cannot even start an expression. We loop until we come
 					// across either a `)` or a `;`.
-					let expr =
-						'expr_2: loop {
-							let (current, current_span) =
-								match walker.peek() {
-									Some(t) => (&t.0, t.1),
-									None => {
-										errors.push(
-											SyntaxErr::ExpectedCondExprAfterWhile(
-												walker.get_last_span().next_single_width()
-											),
-										);
-										return Err(errors);
-									}
-								};
+					let mut invalid_cond_nodes = Vec::new();
+					'expr_2: loop {
+						let (current, current_span) = match walker.peek() {
+							Some(t) => (&t.0, t.1),
+							None => {
+								errors.push(
+									SyntaxErr::ExpectedCondExprAfterWhile(
+										walker
+											.get_last_span()
+											.next_single_width(),
+									),
+								);
 
-							match current {
-								Token::RParen => {
-									if let Some(l_paren_span) = l_paren_span {
-										errors.push(
-													SyntaxErr::ExpectedCondExprAfterWhile(
-														Span::new_between(l_paren_span, current_span)
-													),
-												);
-									} else {
-										errors.push(
-													SyntaxErr::ExpectedCondExprAfterWhile(
-														current_span.previous_single_width()
-													),
-												);
-									}
-									break 'expr_2 Expr {
-										ty: ExprTy::Missing,
-										span: current_span
-											.previous_single_width(),
-									};
+								nodes.push(Node {
+									ty: NodeTy::Keyword,
+									span: do_kw_span,
+								});
+								if let Some(body) = body {
+									nodes.push(Node {
+										span: body.span,
+										ty: NodeTy::DelimitedScope(body),
+									})
 								}
-								Token::Semi => {
-									if let Some(l_paren_span) = l_paren_span {
-										errors.push(
-													SyntaxErr::ExpectedCondExprAfterWhile(
-														l_paren_span.next_single_width()
-													),
-												);
-									} else {
-										// We do nothing since the next check deals with the `;` and
-										// produces an error for it.
-									}
-									break 'expr_2 Expr {
-										ty: ExprTy::Missing,
-										span: current_span
-											.previous_single_width(),
-									};
+								if let Some(while_kw_span) = while_kw_span {
+									nodes.push(Node {
+										ty: NodeTy::Keyword,
+										span: while_kw_span,
+									});
 								}
-								_ => continue 'expr_2,
+								if let Some(l_paren) = l_paren_span {
+									nodes.push(Node {
+										ty: NodeTy::Punctuation,
+										span: l_paren,
+									});
+								}
+								nodes.append(&mut invalid_cond_nodes);
+								return errors;
 							}
 						};
 
-					expr
+						match current {
+							Token::RParen => {
+								if let Some(l_paren_span) = l_paren_span {
+									errors.push(
+										SyntaxErr::ExpectedCondExprAfterWhile(
+											Span::new_between(
+												l_paren_span,
+												current_span,
+											),
+										),
+									);
+								} else {
+									errors.push(
+										SyntaxErr::ExpectedCondExprAfterWhile(
+											current_span
+												.previous_single_width(),
+										),
+									);
+								}
+								break 'expr_2;
+							}
+							Token::Semi => {
+								if let Some(l_paren_span) = l_paren_span {
+									errors.push(
+										SyntaxErr::ExpectedCondExprAfterWhile(
+											l_paren_span.next_single_width(),
+										),
+									);
+								} else {
+									// We do nothing since the next check deals with the `;` and
+									// produces an error for it.
+								}
+								break 'expr_2;
+							}
+							_ => {
+								invalid_cond_nodes.push(Node {
+									ty: NodeTy::Invalid,
+									span: current_span,
+								});
+								walker.advance();
+								continue 'expr_2;
+							}
+						}
+					}
+
+					invalid_cond_nodes
 				}
 			};
 
@@ -1774,7 +1651,23 @@ fn parse_stmt(
 							l_paren_span,
 							walker.get_last_span().next_single_width(),
 						));
-						return Err(errors);
+
+						nodes.push(Node {
+							ty: NodeTy::DoWhile {
+								do_kw: do_kw_span,
+								body,
+								while_kw: while_kw_span,
+								l_paren: l_paren_span,
+								cond: cond_nodes,
+								r_paren: None,
+								semi: None,
+							},
+							span: Span::new(
+								token_span.start,
+								walker.get_previous_span().end,
+							),
+						});
+						return errors;
 					}
 				};
 
@@ -1795,6 +1688,10 @@ fn parse_stmt(
 						break 'r_paren_2 current_span.previous_single_width();
 					}
 					_ => {
+						cond_nodes.push(Node {
+							ty: NodeTy::Invalid,
+							span: *current_span,
+						});
 						walker.advance();
 						continue 'r_paren_2;
 					}
@@ -1808,7 +1705,23 @@ fn parse_stmt(
 					errors.push(SyntaxErr::ExpectedSemiAfterDoWhileStmt(
 						walker.get_last_span(),
 					));
-					return Err(errors);
+
+					nodes.push(Node {
+						ty: NodeTy::DoWhile {
+							do_kw: do_kw_span,
+							body,
+							while_kw: while_kw_span,
+							l_paren: l_paren_span,
+							cond: cond_nodes,
+							r_paren: r_paren_span,
+							semi: None,
+						},
+						span: Span::new(
+							token_span.start,
+							walker.get_previous_span().end,
+						),
+					});
+					return errors;
 				}
 			};
 			let semi_span = if *current == Token::Semi {
@@ -1823,24 +1736,21 @@ fn parse_stmt(
 				None
 			};
 
-			return Ok((
-				Some(Node {
-					ty: NodeTy::DoWhile {
-						do_kw: do_kw_span,
-						body,
-						while_kw: while_kw_span,
-						l_paren: l_paren_span,
-						cond,
-						r_paren: r_paren_span,
-						semi: semi_span,
-					},
-					span: Span::new(
-						token_span.start,
-						walker.get_previous_span().end,
-					),
-				}),
-				errors,
-			));
+			nodes.push(Node {
+				ty: NodeTy::DoWhile {
+					do_kw: do_kw_span,
+					body,
+					while_kw: while_kw_span,
+					l_paren: l_paren_span,
+					cond: cond_nodes,
+					r_paren: r_paren_span,
+					semi: semi_span,
+				},
+				span: Span::new(
+					token_span.start,
+					walker.get_previous_span().end,
+				),
+			});
 		}
 		Token::Return => {
 			walker.advance();
@@ -1869,26 +1779,23 @@ fn parse_stmt(
 				));
 			}
 
-			return Ok((
-				Some(Node {
-					ty: NodeTy::Return {
-						kw: token_span,
-						value: return_expr,
-						semi: semi_span,
+			nodes.push(Node {
+				ty: NodeTy::Return {
+					kw: token_span,
+					value: return_expr,
+					semi: semi_span,
+				},
+				span: Span::new(
+					token_span.start,
+					if let Some(semi_span) = semi_span {
+						semi_span.end
+					} else {
+						// If an expression was found, this will point to the end of the expression, otherwise
+						// it will point to the end of the `return` keyword.
+						walker.get_previous_span().end
 					},
-					span: Span::new(
-						token_span.start,
-						if let Some(semi_span) = semi_span {
-							semi_span.end
-						} else {
-							// If an expression was found, this will point to the end of the expression, otherwise
-							// it will point to the end of the `return` keyword.
-							walker.get_previous_span().end
-						},
-					),
-				}),
-				errors,
-			));
+				),
+			});
 		}
 		Token::Break => {
 			walker.advance();
@@ -1911,23 +1818,20 @@ fn parse_stmt(
 				));
 			}
 
-			return Ok((
-				Some(Node {
-					ty: NodeTy::Break {
-						kw: token_span,
-						semi: semi_span,
+			nodes.push(Node {
+				ty: NodeTy::Break {
+					kw: token_span,
+					semi: semi_span,
+				},
+				span: Span::new(
+					token_span.start,
+					if let Some(semi_span) = semi_span {
+						semi_span.end
+					} else {
+						token_span.end
 					},
-					span: Span::new(
-						token_span.start,
-						if let Some(semi_span) = semi_span {
-							semi_span.end
-						} else {
-							token_span.end
-						},
-					),
-				}),
-				errors,
-			));
+				),
+			});
 		}
 		Token::Continue => {
 			walker.advance();
@@ -1950,23 +1854,20 @@ fn parse_stmt(
 				));
 			}
 
-			return Ok((
-				Some(Node {
-					ty: NodeTy::Continue {
-						kw: token_span,
-						semi: semi_span,
+			nodes.push(Node {
+				ty: NodeTy::Continue {
+					kw: token_span,
+					semi: semi_span,
+				},
+				span: Span::new(
+					token_span.start,
+					if let Some(semi_span) = semi_span {
+						semi_span.end
+					} else {
+						token_span.end
 					},
-					span: Span::new(
-						token_span.start,
-						if let Some(semi_span) = semi_span {
-							semi_span.end
-						} else {
-							token_span.end
-						},
-					),
-				}),
-				errors,
-			));
+				),
+			});
 		}
 		Token::Discard => {
 			walker.advance();
@@ -1989,61 +1890,83 @@ fn parse_stmt(
 				));
 			}
 
-			return Ok((
-				Some(Node {
-					ty: NodeTy::Discard {
-						kw: token_span,
-						semi: semi_span,
+			nodes.push(Node {
+				ty: NodeTy::Discard {
+					kw: token_span,
+					semi: semi_span,
+				},
+				span: Span::new(
+					token_span.start,
+					if let Some(semi_span) = semi_span {
+						semi_span.end
+					} else {
+						token_span.end
 					},
-					span: Span::new(
-						token_span.start,
-						if let Some(semi_span) = semi_span {
-							semi_span.end
-						} else {
-							token_span.end
-						},
-					),
-				}),
-				errors,
-			));
+				),
+			});
 		}
 		Token::Directive(_) => {
-			errors.push(SyntaxErr::DirectivesNotSupported(token_span));
 			walker.advance();
-			// TODO: Implementation
-			return Ok((None, errors));
+			errors.push(SyntaxErr::DirectivesNotSupported(token_span));
+			// TODO: Implement preprocessor stuff.
+			nodes.push(Node {
+				ty: NodeTy::Directive,
+				span: token_span,
+			});
 		}
 		Token::Struct => {
 			walker.advance();
 
-			let (stmt, mut errs) = parse_struct(walker, qualifiers, token_span);
+			let (node, mut errs) = parse_struct(walker, qualifiers, token_span);
 			errors.append(&mut errs);
 
-			return Ok((stmt, errors));
+			if let Some(node) = node {
+				nodes.push(node);
+			}
 		}
 		Token::Reserved(_) => {
-			errors.push(SyntaxErr::FoundIllegalReservedKw(token_span));
 			walker.advance();
-			return Ok((None, errors));
+			errors.push(SyntaxErr::FoundIllegalReservedKw(token_span));
+			nodes.push(Node {
+				ty: NodeTy::Keyword,
+				span: token_span,
+			});
 		}
 		Token::Invalid(c) => {
 			errors.push(SyntaxErr::FoundIllegalChar(token_span, *c));
 			walker.advance();
-			return Ok((None, errors));
+			nodes.push(Node {
+				ty: NodeTy::Invalid,
+				span: token_span,
+			});
 		}
 		Token::RBrace => {
-			errors.push(SyntaxErr::FoundLonelyRBrace(token_span));
 			walker.advance();
-			return Ok((None, errors));
+			errors.push(SyntaxErr::FoundLonelyRBrace(token_span));
+			nodes.push(Node {
+				ty: NodeTy::Punctuation,
+				span: token_span,
+			});
 		}
 		_ => {
 			if token.is_punctuation_for_stmt() {
 				errors.push(SyntaxErr::PunctuationCannotStartStmt(token_span));
+				nodes.push(Node {
+					ty: NodeTy::Punctuation,
+					span: token_span,
+				});
+			} else {
+				// FIXME: Is this branch `unreachable!()`?
+				nodes.push(Node {
+					ty: NodeTy::Invalid,
+					span: token_span,
+				});
 			}
 			walker.advance();
-			return Ok((None, errors));
 		}
 	}
+
+	return errors;
 }
 
 /// A function, which given the current `walker`, determines whether to end parsing the current scope of
@@ -2077,7 +2000,7 @@ const BRACE_DELIMITER: EndScope = |walker, errors, l_brace_span| {
 
 const SWITCH_CASE_DELIMITER: EndScope = |walker, errors, colon_span| {
 	let (current, current_span) = match walker.peek() {
-		Some(t) => t,
+		Some((t, s)) => (t, *s),
 		None => {
 			// We did not encounter one of the closing tokens at all.
 			errors.push(SyntaxErr::MissingSwitchBodyClosingBrace(
@@ -2089,7 +2012,8 @@ const SWITCH_CASE_DELIMITER: EndScope = |walker, errors, colon_span| {
 	};
 
 	match current {
-		Token::RBrace | Token::Case | Token::Default => Some(*current_span),
+		Token::RBrace => Some(current_span),
+		Token::Case | Token::Default => Some(current_span),
 		_ => None,
 	}
 };
@@ -2104,12 +2028,12 @@ fn parse_scope(
 	exit_condition: EndScope,
 	opening_delim: Span,
 ) -> (Scope, Vec<SyntaxErr>) {
-	let mut stmts = Vec::new();
+	let mut inner_nodes = Vec::new();
 	let mut errors = Vec::new();
 
 	// Invariant: Cannot `break` out of a while-loop with a value, but this variable is assigned-to in every branch
 	// that `break` is called in.
-	let mut ending_span = Span::empty();
+	let mut ending_span = walker.get_last_span().end_zero_width();
 	let mut closing_delim = None;
 
 	'stmt: while let Some(_) = walker.peek() {
@@ -2122,25 +2046,14 @@ fn parse_scope(
 			break 'stmt;
 		}
 
-		match parse_stmt(walker) {
-			Ok((stmt, mut errs)) => {
-				errors.append(&mut errs);
-				if let Some(stmt) = stmt {
-					stmts.push(stmt);
-				}
-			}
-			Err(mut errs) => {
-				errors.append(&mut errs);
-				ending_span = walker.get_last_span().end_zero_width();
-				break 'stmt;
-			}
-		}
+		let mut errs = parse_stmt(walker, &mut inner_nodes);
+		errors.append(&mut errs);
 	}
 
 	(
 		Scope {
 			opening: Some(opening_delim),
-			stmts,
+			inner: inner_nodes,
 			closing: closing_delim,
 			span: Span::new(opening_delim.start, ending_span.end),
 		},
@@ -2163,120 +2076,140 @@ fn parse_scope(
 /// The `Err` return value means we encountered an unrecoverable syntax error.
 fn parse_if_header_body(
 	walker: &mut Walker,
+	ty: IfTy,
 	kw_span: Span,
 	expects_condition: bool,
-) -> Result<
-	(
-		Option<Span>,
-		Option<Expr>,
-		Option<Span>,
-		Scope,
-		Vec<SyntaxErr>,
-	),
-	Vec<SyntaxErr>,
-> {
+) -> (IfBranch, Vec<SyntaxErr>) {
 	let mut errors = Vec::new();
 
-	let (l_paren_span, r_paren_span, header_end_span, cond) =
-		if expects_condition {
-			// Consume the opening `(` parenthesis.
-			let (current, current_span) = match walker.peek() {
-				Some(t) => (&t.0, t.1),
-				None => {
-					errors.push(SyntaxErr::ExpectedParenAfterIfKw(
-						kw_span.next_single_width(),
-					));
-					return Err(errors);
-				}
-			};
-			let l_paren_span = if *current == Token::LParen {
-				walker.advance();
-				Some(current_span)
-			} else {
+	let (l_paren_span, cond_node, r_paren_span) = if expects_condition {
+		// Consume the opening `(` parenthesis.
+		let (current, current_span) = match walker.peek() {
+			Some(t) => (&t.0, t.1),
+			None => {
 				errors.push(SyntaxErr::ExpectedParenAfterIfKw(
 					kw_span.next_single_width(),
 				));
-				None
-			};
+				return (
+					IfBranch {
+						ty,
+						l_paren: None,
+						cond: None,
+						r_paren: None,
+						body: None,
+					},
+					errors,
+				);
+			}
+		};
+		let l_paren_span = if *current == Token::LParen {
+			walker.advance();
+			Some(current_span)
+		} else {
+			errors.push(SyntaxErr::ExpectedParenAfterIfKw(
+				kw_span.next_single_width(),
+			));
+			None
+		};
 
-			// Consume the conditional expression.
-			let cond =
-				match expr_parser(walker, Mode::Default, &[Token::RParen]) {
-					(Some(e), mut errs) => {
-						errors.append(&mut errs);
-						e
-					}
-					(None, _) => {
-						// Unlike with the other control flow statements, we don't loop until we hit a `)`
-						// or a `{` because an if statement can omit the `{`, in which case we could
-						// potentially loop until we hit the end of the file. So, if the next check doesn't
-						// detect either token, we can quit parsing this statement. We do check for a
-						// potential `( )` situation since that is easy to detect and cannot produce false
-						// positives.
-						if let Some((current, current_span)) = walker.peek() {
-							if *current == Token::RParen
-								|| *current == Token::LBrace
-							{
-								errors.push(SyntaxErr::ExpectedExprInIfHeader(
-									Span::new_between(
-										if let Some(l_paren_span) = l_paren_span
-										{
-											l_paren_span
-										} else {
-											kw_span
-										},
-										*current_span,
-									),
-								));
-							} else {
-								errors.push(SyntaxErr::ExpectedExprInIfHeader(
-									walker.get_current_span(),
-								));
-							}
+		// Consume the conditional expression.
+		let cond_node =
+			match expr_parser(walker, Mode::Default, &[Token::RParen]) {
+				(Some(e), mut errs) => {
+					errors.append(&mut errs);
+					Some(Node {
+						span: e.span,
+						ty: NodeTy::Expression(e),
+					})
+				}
+				(None, _) => {
+					// Unlike with the other control flow statements, we don't loop until we hit a `)`
+					// or a `{` because an if statement can omit the `{`, in which case we could
+					// potentially loop until we hit the end of the file. So, if the next check doesn't
+					// detect either token, we can quit parsing this statement. We do check for a
+					// potential `( )` situation since that is easy to detect and cannot produce false
+					// positives.
+					if let Some((current, current_span)) = walker.peek() {
+						if *current == Token::RParen
+							|| *current == Token::LBrace
+						{
+							errors.push(SyntaxErr::ExpectedExprInIfHeader(
+								Span::new_between(
+									if let Some(l_paren_span) = l_paren_span {
+										l_paren_span
+									} else {
+										kw_span
+									},
+									*current_span,
+								),
+							));
 						} else {
 							errors.push(SyntaxErr::ExpectedExprInIfHeader(
 								walker.get_current_span(),
 							));
 						}
-						Expr {
-							ty: ExprTy::Missing,
-							span: walker.get_current_span(),
-						}
+					} else {
+						errors.push(SyntaxErr::ExpectedExprInIfHeader(
+							walker.get_current_span(),
+						));
 					}
-				};
 
-			// Consume the closing `)` parenthesis.
-			let (current, current_span) = match walker.peek() {
-				Some(t) => (&t.0, t.1),
-				None => {
-					errors.push(SyntaxErr::ExpectedParenAfterIfHeader(
-						l_paren_span,
-						walker.get_last_span().next_single_width(),
-					));
-					return Err(errors);
+					None
 				}
 			};
-			if *current == Token::RParen {
-				walker.advance();
-				(l_paren_span, Some(current_span), current_span, Some(cond))
-			} else if *current == Token::LBrace {
-				// We don't do anything apart from creating a syntax error since the next check deals
-				// with the optional `{`.
+
+		// Consume the closing `)` parenthesis.
+		let (current, current_span) = match walker.peek() {
+			Some(t) => (&t.0, t.1),
+			None => {
 				errors.push(SyntaxErr::ExpectedParenAfterIfHeader(
 					l_paren_span,
-					current_span.previous_single_width(),
+					walker.get_last_span().next_single_width(),
 				));
-				(l_paren_span, None, current_span, Some(cond))
-			} else {
-				errors.push(SyntaxErr::ExpectedParenAfterIfHeader(
-					l_paren_span,
-					Span::new_between(walker.get_previous_span(), current_span),
-				));
-				return Err(errors);
+				return (
+					IfBranch {
+						ty,
+						l_paren: l_paren_span,
+						cond: cond_node,
+						r_paren: None,
+						body: None,
+					},
+					errors,
+				);
 			}
-		} else {
-			(None, None, kw_span, None)
 		};
+		let branch = if *current == Token::RParen {
+			walker.advance();
+			(l_paren_span, cond_node, Some(current_span))
+		} else if *current == Token::LBrace {
+			// We don't do anything apart from creating a syntax error since the next check deals
+			// with the optional `{`.
+			errors.push(SyntaxErr::ExpectedParenAfterIfHeader(
+				l_paren_span,
+				current_span.previous_single_width(),
+			));
+			(l_paren_span, cond_node, None)
+		} else {
+			errors.push(SyntaxErr::ExpectedParenAfterIfHeader(
+				l_paren_span,
+				Span::new_between(walker.get_previous_span(), current_span),
+			));
+			return (
+				IfBranch {
+					ty,
+					l_paren: l_paren_span,
+					cond: cond_node,
+					r_paren: None,
+					body: None,
+				},
+				errors,
+			);
+		};
+
+		branch
+	} else {
+		(None, None, None)
+	};
 
 	// Consume the optional opening `{` scope brace.
 	let (current, current_span) = match walker.peek() {
@@ -2287,18 +2220,16 @@ fn parse_if_header_body(
 			errors.push(SyntaxErr::ExpectedBraceOrStmtAfterIfHeader(
 				walker.get_last_span().next_single_width(),
 			));
-			return Ok((
-				l_paren_span,
-				cond,
-				r_paren_span,
-				Scope {
-					opening: None,
-					stmts: vec![],
-					closing: None,
-					span: walker.get_last_span().end_zero_width(),
+			return (
+				IfBranch {
+					ty,
+					l_paren: l_paren_span,
+					cond: cond_node,
+					r_paren: r_paren_span,
+					body: None,
 				},
 				errors,
-			));
+			);
 		}
 	};
 	let body = if *current == Token::LBrace {
@@ -2310,41 +2241,47 @@ fn parse_if_header_body(
 			parse_scope(walker, BRACE_DELIMITER, current_span);
 		errors.append(&mut errs);
 
-		body
+		Some(body)
 	} else {
 		// Since we are missing a `{`, we are expecting a single statement.
-		let (stmt, mut errs) = match parse_stmt(walker) {
-			Ok((stmt, err)) => (stmt, err),
-			Err(err) => (None, err),
-		};
+		let mut nodes = Vec::new();
+		let mut errs = parse_stmt(walker, &mut nodes);
 		errors.append(&mut errs);
 
-		match stmt {
-			Some(s) => Scope {
-				span: s.span,
+		if !nodes.is_empty() {
+			// Panics: `nodes` is not empty, so `first()` and `last()` will return `Some`.
+			let span = Span::new(
+				nodes.first().unwrap().span.start,
+				nodes.last().unwrap().span.end,
+			);
+			Some(Scope {
+				span,
 				opening: None,
-				stmts: vec![s],
+				inner: nodes,
 				closing: None,
-			},
-			None => {
-				errors.push(SyntaxErr::ExpectedStmtAfterIfHeader(
-					// Panics: `r_paren_span` will be `None` if a `{` was encountered, but in that
-					// case, the branch above will be chosen instead, and if we didn't encounter a
-					// `)`, we will have already quit this parse, so this is always guaranteed to
-					// be `Some` if we are in this branch.
-					header_end_span.next_single_width(),
-				));
-				Scope {
-					opening: None,
-					stmts: vec![],
-					closing: None,
-					span: walker.get_last_span().end_zero_width(),
-				}
-			}
+			})
+		} else {
+			errors.push(SyntaxErr::ExpectedStmtAfterIfHeader(
+				// Panics: `r_paren_span` will be `None` if a `{` was encountered, but in that
+				// case, the branch above will be chosen instead, and if we didn't encounter a
+				// `)`, we will have already quit this parse, so this is always guaranteed to
+				// be `Some` if we are in this branch.
+				walker.get_previous_span().next_single_width(),
+			));
+			None
 		}
 	};
 
-	Ok((l_paren_span, cond, r_paren_span, body, errors))
+	(
+		IfBranch {
+			ty,
+			l_paren: l_paren_span,
+			cond: cond_node,
+			r_paren: r_paren_span,
+			body,
+		},
+		errors,
+	)
 }
 
 /// Parse a switch-statement body beginning at the current position (the `switch (...)` should already be
@@ -2360,7 +2297,7 @@ fn parse_if_header_body(
 fn parse_switch_body(
 	walker: &mut Walker,
 	l_brace_span: Span,
-) -> (Vec<(Option<Expr>, Option<Span>, Scope)>, Vec<SyntaxErr>) {
+) -> (Vec<SwitchBranch>, Vec<SyntaxErr>) {
 	let mut errors = Vec::new();
 
 	// Check if the body is empty.
@@ -2384,7 +2321,7 @@ fn parse_switch_body(
 	}
 
 	// Consume cases until we reach the end of the body.
-	let mut cases = Vec::new();
+	let mut cases: Vec<SwitchBranch> = Vec::new();
 	'cases: loop {
 		let (current, current_span) = match walker.peek() {
 			Some(t) => (&t.0, t.1),
@@ -2399,43 +2336,89 @@ fn parse_switch_body(
 
 		match current {
 			Token::Case => {
-				let keyword_span = current_span;
+				let kw_span = current_span;
 				walker.advance();
 
 				// Consume the expression.
-				let expr = match expr_parser(
+				let expr_nodes = match expr_parser(
 					walker,
 					Mode::Default,
 					&[Token::Colon, Token::Case, Token::Default, Token::RBrace],
 				) {
 					(Some(e), mut errs) => {
 						errors.append(&mut errs);
-						e
+						vec![Node {
+							span: e.span,
+							ty: NodeTy::Expression(e),
+						}]
 					}
 					(None, _) => {
 						// We found tokens which cannot even start an expression. We loop until we come
 						// across either `case`, `default` or a `}`.
 						errors.push(SyntaxErr::ExpectedExprAfterCaseKw(
-							keyword_span.next_single_width(),
+							kw_span.next_single_width(),
 						));
-						loop {
-							let (current, _) = match walker.peek() {
-								Some(t) => (&t.0, t.1),
+						let mut invalid_expr_nodes = Vec::new();
+						'expr: loop {
+							let (current, current_span) = match walker.peek() {
+								Some(t) => t,
 								None => {
 									errors.push(SyntaxErr::MissingSwitchBodyClosingBrace(
-											Some(l_brace_span),
-											walker.get_last_span().next_single_width()
-										));
+										Some(l_brace_span),
+										walker.get_last_span().next_single_width()
+									));
 									break 'cases;
 								}
 							};
 
 							match current {
-								Token::Case | Token::Default => continue 'cases,
-								Token::RBrace => break 'cases,
-								_ => walker.advance(),
+								Token::Colon => {
+									// We don't do anything since the next check deals with the `:`.
+									break 'expr;
+								}
+								Token::Case | Token::Default => {
+									errors.push(
+										SyntaxErr::ExpectedExprAfterCaseKw(
+											kw_span.next_single_width(),
+										),
+									);
+									cases.push(SwitchBranch {
+										kw: kw_span,
+										is_default: false,
+										expr: invalid_expr_nodes,
+										colon: None,
+										body: None,
+									});
+									continue 'cases;
+								}
+								Token::RBrace => {
+									errors.push(
+										SyntaxErr::ExpectedExprAfterCaseKw(
+											kw_span.next_single_width(),
+										),
+									);
+									cases.push(SwitchBranch {
+										kw: kw_span,
+										is_default: false,
+										expr: invalid_expr_nodes,
+										colon: None,
+										body: None,
+									});
+									walker.advance();
+									break 'cases;
+								}
+								_ => {
+									invalid_expr_nodes.push(Node {
+										ty: NodeTy::Invalid,
+										span: *current_span,
+									});
+									walker.advance();
+									continue 'expr;
+								}
 							}
 						}
+
+						invalid_expr_nodes
 					}
 				};
 
@@ -2458,7 +2441,11 @@ fn parse_switch_body(
 					// Even though we are missing a necessary token, we treat this as "valid" for better error
 					// recovery.
 					errors.push(SyntaxErr::ExpectedColonAfterCase(
-						expr.span.next_single_width(),
+						if let Some(last) = expr_nodes.last() {
+							last.span.next_single_width()
+						} else {
+							kw_span.next_single_width()
+						},
 					));
 					walker.get_last_span()
 				};
@@ -2471,10 +2458,16 @@ fn parse_switch_body(
 				);
 				errors.append(&mut errs);
 
-				cases.push((Some(expr), colon_span, body));
+				cases.push(SwitchBranch {
+					kw: kw_span,
+					is_default: false,
+					expr: expr_nodes,
+					colon: colon_span,
+					body: Some(body),
+				});
 			}
 			Token::Default => {
-				let keyword_span = current_span;
+				let kw_span = current_span;
 				walker.advance();
 
 				// Consume the `:` to begin the scope.
@@ -2496,9 +2489,9 @@ fn parse_switch_body(
 					// Even though we are missing a necessary token, we treat this as "valid" for better error
 					// recovery.
 					errors.push(SyntaxErr::ExpectedColonAfterCase(
-						keyword_span.next_single_width(),
+						kw_span.next_single_width(),
 					));
-					keyword_span
+					kw_span.end_zero_width()
 				};
 
 				// Consume the body of the case. This does not consume a `case` or `default` keyword or `}`.
@@ -2509,9 +2502,18 @@ fn parse_switch_body(
 				);
 				errors.append(&mut errs);
 
-				cases.push((None, colon_span, body));
+				cases.push(SwitchBranch {
+					kw: kw_span,
+					is_default: true,
+					expr: vec![],
+					colon: colon_span,
+					body: Some(body),
+				});
 			}
-			Token::RBrace => break 'cases,
+			Token::RBrace => {
+				walker.advance();
+				break 'cases;
+			}
 			_ => {
 				// We have a token which cannot begin a case, so loop until we hit either `case`, `default` or a
 				// `}`.
@@ -3356,7 +3358,7 @@ fn parse_struct(
 
 	// We don't remove invalid statements because we would loose information for the AST.
 	let mut count = 0;
-	body.stmts.iter().for_each(|stmt| match stmt.ty {
+	body.inner.iter().for_each(|stmt| match stmt.ty {
 		NodeTy::VarDef { .. } | NodeTy::VarDefs(_, _) => count += 1,
 		_ => errors.push(SyntaxErr::ExpectedVarDefInStructBody(stmt.span)),
 	});
@@ -3470,6 +3472,32 @@ fn parse_struct(
 
 pub fn print_stmt(stmt: &Node, indent: usize) {
 	match &stmt.ty {
+		NodeTy::Keyword => {
+			print!("\r\n{:indent$}KEYWORD", "", indent = indent * 4)
+		}
+		NodeTy::Punctuation => {
+			print!("\r\n{:indent$}PUNCT", "", indent = indent * 4)
+		}
+		NodeTy::Ident => print!("\r\n{:indent$}IDENT", "", indent = indent * 4),
+		NodeTy::Directive => {
+			print!("\r\n{:indent$}DIRECTIVE", "", indent = indent * 4)
+		}
+		NodeTy::Invalid => {
+			print!("\r\n{:indent$}INVALID", "", indent = indent * 4)
+		}
+		NodeTy::ZeroWidth => {
+			print!("\r\n{:indent$}INVISIBLE", "", indent = indent * 4)
+		}
+		NodeTy::Expression(e) => {
+			print!("\r\n{:indent$}EXPR({e})", "", indent = indent * 4)
+		}
+		NodeTy::DelimitedScope(s) => {
+			print!("\r\n{:indent$}SCOPE(", "", indent = indent * 4);
+			for node in &s.inner {
+				print_stmt(node, indent + 1);
+			}
+			print!(")");
+		}
 		NodeTy::Empty => print!(
 			"\r\n{:indent$}\x1b[9m(Empty)\x1b[0m",
 			"",
@@ -3621,7 +3649,7 @@ pub fn print_stmt(stmt: &Node, indent: usize) {
 				print!("{qualifier}, ");
 			}
 			print!("]) {{");
-			for inner in &body.stmts {
+			for inner in &body.inner {
 				print_stmt(&inner, indent + 1);
 			}
 			print!("\r\n{:indent$}}}", "", indent = indent * 4);
@@ -3651,7 +3679,7 @@ pub fn print_stmt(stmt: &Node, indent: usize) {
 				"",
 				indent = indent * 4
 			);
-			for stmt in &body.stmts {
+			for stmt in &body.inner {
 				print_stmt(&stmt, indent + 1);
 			}
 			print!("\r\n{:indent$}}}, qualifiers: [", "", indent = indent * 4);
@@ -3669,7 +3697,7 @@ pub fn print_stmt(stmt: &Node, indent: usize) {
 		}
 		NodeTy::Scope(scope) => {
 			print!("\r\n{:indent$}{{", "", indent = indent * 4);
-			for stmt in &scope.stmts {
+			for stmt in &scope.inner {
 				print_stmt(&stmt, indent + 1);
 			}
 			print!("\r\n{:indent$}}}", "", indent = indent * 4);
@@ -3679,113 +3707,106 @@ pub fn print_stmt(stmt: &Node, indent: usize) {
 			"",
 			indent = indent * 4
 		),
-		NodeTy::If {
-			cond,
-			body,
-			branches,
-			..
-		} => {
-			print!("\r\n{:indent$}If({cond}) {{", "", indent = indent * 4);
-			for stmt in &body.stmts {
-				print_stmt(&stmt, indent + 1);
-			}
-			print!("\r\n{:indent$}}}", "", indent = indent * 4);
-
-			for (_, _, _, cond, _, body) in branches {
-				if let Some(cond) = cond {
-					print!(
-						"\r\n{:indent$}ElseIf({cond}) {{",
-						"",
-						indent = indent * 4
-					);
-				} else {
-					print!("\r\n{:indent$}Else {{", "", indent = indent * 4);
+		NodeTy::If { branches } => {
+			for branch in branches {
+				print!(
+					"\r\n{:indent$}{}(",
+					"",
+					match branch.ty {
+						IfTy::If(_) => "If",
+						IfTy::ElseIf(_, _) => "ElseIf",
+						IfTy::Else(_) => "Else",
+					},
+					indent = indent * 4
+				);
+				if let Some(cond) = &branch.cond {
+					print_stmt(&cond, indent);
 				}
-				for stmt in &body.stmts {
-					print_stmt(&stmt, indent + 1);
+				print!(") {{");
+				if let Some(body) = &branch.body {
+					for node in &body.inner {
+						print_stmt(node, indent + 1);
+					}
 				}
 				print!("\r\n{:indent$}}}", "", indent = indent * 4);
 			}
 		}
 		NodeTy::Switch { expr, cases, .. } => {
-			print!("\r\n{:indent$}Switch({expr}) {{", "", indent = indent * 4);
-			for (expr, _, body) in cases {
-				if let Some(expr) = expr {
-					print!(
-						"\r\n{:indent$}Case({expr}) {{",
-						"",
-						indent = (indent + 1) * 4
-					);
-				} else {
+			print!("\r\n{:indent$}Switch(", "", indent = indent * 4);
+			for expr in expr {
+				print_stmt(expr, indent);
+			}
+			print!(") {{");
+			for SwitchBranch {
+				is_default,
+				expr,
+				body,
+				..
+			} in cases
+			{
+				if *is_default {
 					print!(
 						"\r\n{:indent$}Default {{",
 						"",
 						indent = (indent + 1) * 4
 					);
+				} else {
+					print!(
+						"\r\n{:indent$}Case(",
+						"",
+						indent = (indent + 1) * 4
+					);
+					for stmt in expr {
+						print_stmt(stmt, indent);
+					}
+					print!(") {{");
 				}
-				for stmt in &body.stmts {
-					print_stmt(&stmt, indent + 2);
+
+				if let Some(scope) = body {
+					for stmt in &scope.inner {
+						print_stmt(stmt, indent + 2);
+					}
 				}
 				print!("\r\n{:indent$}}}", "", indent = (indent + 1) * 4);
 			}
 			print!("\r\n{:indent$}}}", "", indent = indent * 4);
 		}
-		NodeTy::For {
-			var,
-			cond,
-			inc,
-			body,
-			..
-		} => {
+		NodeTy::For { nodes, body, .. } => {
 			print!("\r\n{:indent$}For(", "", indent = indent * 4);
-			if let Some(var) = var {
-				print!("var:");
-				print_stmt(&var, indent + 2);
-				print!(", ");
-			}
-			if let Some(cond) = cond {
-				print!(
-					"\r\n{:indent$}cond:\r\n{:indent_2$}{cond}, ",
-					"",
-					"",
-					indent = (indent + 1) * 4,
-					indent_2 = (indent + 2) * 4
-				);
-			}
-			if let Some(inc) = inc {
-				print!(
-					"\r\n{:indent$}inc:\r\n{:indent_2$}{inc}, ",
-					"",
-					"",
-					indent = (indent + 1) * 4,
-					indent_2 = (indent + 2) * 4
-				);
+			for (node, _) in nodes {
+				if let Some(node) = node {
+					print_stmt(node, indent);
+				}
 			}
 			print!(") {{");
 			if let Some(body) = body {
-				for stmt in &body.stmts {
+				for stmt in &body.inner {
 					print_stmt(&stmt, indent + 1);
 				}
 			}
 			print!("\r\n{:indent$}}}", "", indent = indent * 4);
 		}
 		NodeTy::While { cond, body, .. } => {
-			print!("\r\n{:indent$}While({cond}) {{", "", indent = indent * 4);
+			print!("\r\n{:indent$}While(", "", indent = indent * 4);
+			for expr in cond {
+				print_stmt(expr, indent);
+			}
+			print!(") {{");
 			if let Some(body) = body {
-				for stmt in &body.stmts {
+				for stmt in &body.inner {
 					print_stmt(&stmt, indent + 1);
 				}
 			}
 			print!("\r\n{:indent$}}}", "", indent = indent * 4);
 		}
 		NodeTy::DoWhile { cond, body, .. } => {
-			print!(
-				"\r\n{:indent$}Do-While({cond}) {{",
-				"",
-				indent = indent * 4
-			);
+			print!("\r\n{:indent$}Do-While(", "", indent = indent * 4);
+			for expr in cond {
+				print_stmt(expr, indent);
+			}
+			print!(") {{");
 			if let Some(body) = body {
-				for stmt in &body.stmts {
+				for stmt in &body.inner {
 					print_stmt(&stmt, indent + 1);
 				}
 			}
@@ -3805,9 +3826,6 @@ pub fn print_stmt(stmt: &Node, indent: usize) {
 		}
 		NodeTy::Discard { .. } => {
 			print!("\r\n{:indent$}DISCARD", "", indent = indent * 4)
-		}
-		NodeTy::Token(_) => {
-			print!("\r\n{:indent$}UNRECOVERED SYNTAX", "", indent = indent * 4)
 		}
 	}
 }

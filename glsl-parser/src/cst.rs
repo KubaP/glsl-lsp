@@ -423,6 +423,35 @@ pub struct Param {
 	pub qualifiers: Vec<Qualifier>,
 	pub type_: Type,
 	pub ident: Option<Ident>,
+	// TODO: Hold comma span too.
+}
+
+/// The type of an if-statement branch. This also tracks the relevant keyword spans.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum IfTy {
+	If(Span),
+	ElseIf(Span, Span),
+	Else(Span),
+}
+
+/// An if-statement branch.
+#[derive(Debug, Clone, PartialEq)]
+pub struct IfBranch {
+	pub ty: IfTy,
+	pub l_paren: Option<Span>,
+	pub cond: Option<Node>,
+	pub r_paren: Option<Span>,
+	pub body: Option<Scope>,
+}
+
+/// A switch-statement branch.
+#[derive(Debug, Clone, PartialEq)]
+pub struct SwitchBranch {
+	pub kw: Span,
+	pub is_default: bool,
+	pub expr: Vec<Node>,
+	pub colon: Option<Span>,
+	pub body: Option<Scope>,
 }
 
 /// A scope of nodes, potentially delimited by opening and closing delimiters.
@@ -433,8 +462,8 @@ pub struct Param {
 pub struct Scope {
 	/// The span of the opening delimiter if present.
 	pub opening: Option<Span>,
-	/// The nodes within this scope.
-	pub stmts: Vec<Node>,
+	/// The inner nodes within this scope.
+	pub inner: Vec<Node>,
 	/// The span of the closing delimiter if present.
 	pub closing: Option<Span>,
 	/// The span of the entire scope. If the delimiters are present, this is from the beginning of the opening
@@ -873,11 +902,30 @@ pub struct Node {
 	pub span: Span,
 }
 
-/// All of the variants aside from [`Token`](Self::Token) represent either fully valid statements or statements
-/// that have been created with error recovery. In the case of missing tokens, the relevant `Option<T>` field will
-/// be set to `None`.
+/// The following variants represent individual [`Token`]s or groups of tokens that were not parsed into a
+/// statement:
+/// - `Keyword`,
+/// - `Punctuation`,
+/// - `Ident`,
+/// - `Directive`,
+/// - `Invalid`,
+/// - `Expression`,
+/// - `DelimitedScope`.
+///
+/// All of the other variants represent either fully valid statements, or statements that have been created with
+/// error recovery. In the case of missing tokens, the relevant `Option<Span>` field will be set to `None`, or the
+/// relevant `Vec<T>` will be empty of expected nodes.
 #[derive(Debug, Clone, PartialEq)]
 pub enum NodeTy {
+	Keyword,
+	Punctuation,
+	Ident,
+	Directive,
+	Invalid,
+	ZeroWidth,
+	Expression(Expr),
+	DelimitedScope(Scope),
+	/* STATEMENTS */
 	/// An empty statement, i.e. just a `;`.
 	Empty,
 	/// A variable definition, e.g. `int a;`.
@@ -939,7 +987,10 @@ pub enum NodeTy {
 	/// - `fn();`
 	/// - `i = 5 + 1;`
 	/// - `i *= fn();`
-	Expr { expr: Expr, semi: Option<Span> },
+	Expr {
+		expr: Expr,
+		semi: Option<Span>,
+	},
 	/// A standalone scope, e.g.
 	/// ```glsl
 	/// /* .. */
@@ -952,41 +1003,21 @@ pub enum NodeTy {
 	Preproc(Preproc),
 	/// An if statement.
 	If {
-		kw: Span,
-		l_paren: Option<Span>,
-		cond: Expr,
-		r_paren: Option<Span>,
-		body: Scope,
-		/// Laid out as following: `(else, if, l_paren, cond, r_paren, body)`.
-		branches: Vec<(
-			Span,
-			Option<Span>,
-			Option<Span>,
-			Option<Expr>,
-			Option<Span>,
-			Scope,
-		)>,
+		branches: Vec<IfBranch>,
 	},
 	/// A switch statement.
 	Switch {
 		kw: Span,
 		l_paren: Option<Span>,
-		expr: Expr,
+		expr: Vec<Node>,
 		r_paren: Option<Span>,
-		/// - `0` - If `None`, then this is a `default` case, otherwise this is the case expresion,
-		/// - `1` - the colon `:`,
-		/// - `2` - the body.
-		cases: Vec<(Option<Expr>, Option<Span>, Scope)>,
+		cases: Vec<SwitchBranch>,
 	},
 	/// A for-loop statement.
 	For {
 		kw: Span,
 		l_paren: Option<Span>,
-		var: Option<Box<Node>>,
-		first_semi: Option<Span>,
-		cond: Option<Expr>,
-		second_semi: Option<Span>,
-		inc: Option<Expr>,
+		nodes: Vec<(Option<Node>, Option<Span>)>,
 		r_paren: Option<Span>,
 		body: Option<Scope>,
 	},
@@ -994,7 +1025,7 @@ pub enum NodeTy {
 	While {
 		kw: Span,
 		l_paren: Option<Span>,
-		cond: Expr,
+		cond: Vec<Node>,
 		r_paren: Option<Span>,
 		body: Option<Scope>,
 	},
@@ -1004,7 +1035,7 @@ pub enum NodeTy {
 		body: Option<Scope>,
 		while_kw: Option<Span>,
 		l_paren: Option<Span>,
-		cond: Expr,
+		cond: Vec<Node>,
 		r_paren: Option<Span>,
 		semi: Option<Span>,
 	},
@@ -1015,28 +1046,20 @@ pub enum NodeTy {
 		semi: Option<Span>,
 	},
 	/// A break statement.
-	Break { kw: Span, semi: Option<Span> },
+	Break {
+		kw: Span,
+		semi: Option<Span>,
+	},
 	/// A continue statement.
-	Continue { kw: Span, semi: Option<Span> },
+	Continue {
+		kw: Span,
+		semi: Option<Span>,
+	},
 	/// A discard statement.
-	Discard { kw: Span, semi: Option<Span> },
-	/// An individual [`Token`] which could not be parsed into a greater statement (even with error recovery).
-	Token(SemanticToken),
-}
-
-/// The type of semantic meaning that an individual [`Token`] has.
-#[derive(Debug, Clone, PartialEq)]
-pub enum SemanticToken {
-	/// A keyword.
-	Keyword,
-	/// An element of punctuation.
-	Punctuation,
-	/// An identifier/word.
-	Ident,
-	/// A preprocessor directive.
-	Directive,
-	/// An invalid token or an illegal character.
-	Invalid,
+	Discard {
+		kw: Span,
+		semi: Option<Span>,
+	},
 }
 
 /// A preprocessor directive.

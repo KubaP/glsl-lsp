@@ -8,6 +8,12 @@ use tower_lsp::lsp_types::{
 };
 
 /// Converts a [`SyntaxErr`] to an LSP `Diagnostic` type.
+///
+/// - `err` - the syntax error,
+/// - `file` - the file the error is from,
+/// - `diags` - a vector to which the diagnostic(s) will be appended to; it is done this way instead of by return
+///   value because some syntax errors create more than one diagnostic,
+/// - `diag_conf` - the state of diagnostic capabilities.
 pub fn to_diagnostic(
 	err: SyntaxErr,
 	file: &File,

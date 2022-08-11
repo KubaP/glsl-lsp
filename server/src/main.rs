@@ -92,12 +92,23 @@ impl LanguageServer for MyServer {
 		self.client
 			.log_message(MessageType::INFO, "Server received 'did_open' event.")
 			.await;
-		self.on_change(
-			params.text_document.uri,
-			params.text_document.version,
-			params.text_document.text,
-		)
-		.await;
+
+		let TextDocumentItem {
+			uri,
+			language_id,
+			version,
+			text,
+		} = params.text_document;
+
+		// Ignore non-GLSL files.
+		// PERF: This should be impossible because the client defines the language id's to trigger on.
+		if language_id != "glsl" {
+			return;
+		}
+
+		let mut state = self.state.lock().await;
+		state.open_file(uri, version, text);
+		state.publish_diagnostics(&self.client).await;
 	}
 
 	async fn did_change(&self, mut params: DidChangeTextDocumentParams) {
@@ -107,12 +118,14 @@ impl LanguageServer for MyServer {
 				"Server received 'did_change' event.",
 			)
 			.await;
-		self.on_change(
+
+		let mut state = self.state.lock().await;
+		state.change_file(
 			params.text_document.uri,
 			params.text_document.version,
 			params.content_changes.remove(0).text,
-		)
-		.await;
+		);
+		state.publish_diagnostics(&self.client).await;
 	}
 
 	async fn did_save(&self, _params: DidSaveTextDocumentParams) {
@@ -127,18 +140,6 @@ impl LanguageServer for MyServer {
 				MessageType::INFO,
 				"Server received 'did_close' event.",
 			)
-			.await;
-	}
-}
-
-impl MyServer {
-	async fn on_change(&self, uri: Url, version: i32, contents: String) {
-		let file = File::new(uri, contents);
-		let (_stmts, errors) = glsl_parser::parser::parse(&file.contents);
-
-		let state = self.state.lock().await;
-		state
-			.publish_diagnostics(&self.client, &file, version, errors)
 			.await;
 	}
 }
@@ -158,10 +159,16 @@ async fn main() {
 }
 
 /// A source file.
+#[derive(Debug)]
 pub struct File {
+	/// The file url.
 	uri: Url,
+	/// The version number since the file was first opened in this session; this number increments on every change.
+	version: i32,
+	/// The file contents.
 	contents: String,
 	/// A character index-to-line conversion table.
+	///
 	/// - `0` - line number,
 	/// - `1` - character index which starts at the line number.
 	lines: Vec<(usize, usize)>,
@@ -169,7 +176,50 @@ pub struct File {
 
 impl File {
 	/// Constructs a new `File` with the source string.
-	pub fn new(uri: Url, contents: String) -> Self {
+	pub fn new(uri: Url, version: i32, contents: String) -> Self {
+		Self {
+			uri,
+			version,
+			lines: Self::generate_line_table(&contents),
+			contents,
+		}
+	}
+
+	/// Updates the `File` with new content, and performs any necessary recalculations.
+	pub fn update(&mut self, version: i32, contents: String) {
+		self.version = version;
+		self.lines = Self::generate_line_table(&contents);
+		self.contents = contents;
+	}
+
+	/// Converts a [`Span`] to an LSP `Range` type.
+	pub fn span_to_range(&self, span: Span) -> Range {
+		let mut start = (0, 0);
+		let mut end = (0, 0);
+
+		for (a, b) in self.lines.iter().zip(self.lines.iter().skip(1)) {
+			if a.1 <= span.start && span.start < b.1 {
+				start = (a.0, span.start - a.1);
+			}
+			if a.1 <= span.end && span.end < b.1 {
+				end = (a.0, span.end - a.1);
+				break;
+			}
+		}
+
+		#[cfg(debug_assertions)]
+		assert!(
+			end.0 >= start.0,
+			"[File::span_to_range] The `end` is on a line number earlier than the `start`."
+		);
+
+		Range {
+			start: Position::new(start.0 as u32, start.1 as u32),
+			end: Position::new(end.0 as u32, end.1 as u32),
+		}
+	}
+
+	fn generate_line_table(contents: &str) -> Vec<(usize, usize)> {
 		let mut lines = Vec::new();
 		lines.push((0, 0));
 
@@ -223,37 +273,6 @@ impl File {
 		// `previous_*` counters outside of the loop and write to them, but that has unnecessary overhead.
 		lines.push((line, usize::MAX));
 
-		Self {
-			uri,
-			contents,
-			lines,
-		}
-	}
-
-	/// Converts a [`Span`] to an LSP `Range` type.
-	fn span_to_range(&self, span: Span) -> Range {
-		let mut start = (0, 0);
-		let mut end = (0, 0);
-
-		for (a, b) in self.lines.iter().zip(self.lines.iter().skip(1)) {
-			if a.1 <= span.start && span.start < b.1 {
-				start = (a.0, span.start - a.1);
-			}
-			if a.1 <= span.end && span.end < b.1 {
-				end = (a.0, span.end - a.1);
-				break;
-			}
-		}
-
-		#[cfg(debug_assertions)]
-		assert!(
-			end.0 >= start.0,
-			"[File::span_to_range] The `end` is on a line number earlier than the `start`."
-		);
-
-		Range {
-			start: Position::new(start.0 as u32, start.1 as u32),
-			end: Position::new(end.0 as u32, end.1 as u32),
-		}
+		lines
 	}
 }

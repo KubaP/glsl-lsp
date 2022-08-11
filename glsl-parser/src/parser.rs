@@ -101,12 +101,14 @@ pub fn parse(source: &str) -> (Cst, Vec<SyntaxErr>) {
 	(nodes, errors)
 }
 
-/// Parse a list of qualifiers beginning at the current position if there are any. E.g.
-///
-/// - `const in ...`
-/// - `flat uniform ...`
+/// Try to parse a list of qualifiers beginning at the current position if there are any. E.g.
+/// - `const in ...`,
+/// - `flat uniform ...`,
 /// - `layout(location = 1) ...`.
-fn parse_qualifier_list(
+///
+/// This function makes no assumption as to what the current token is. This function does not produce any error if
+/// no qualifiers were found.
+fn try_parse_qualifier_list(
 	walker: &mut Walker,
 ) -> (Vec<Qualifier>, Vec<SyntaxErr>) {
 	let mut errors = Vec::new();
@@ -366,7 +368,7 @@ fn parse_qualifier_list(
 				});
 			}
 			// If we encounter anything other than a qualifier, that means we have reached the end of this list of
-			// qualifiers and can move onto the next parsing step without consuming the current token.
+			// qualifiers and can return to move onto the next parsing step without consuming the current token.
 			_ => break 'outer,
 		}
 
@@ -376,6 +378,458 @@ fn parse_qualifier_list(
 	(qualifiers, errors)
 }
 
+/// Try to parse a single statement beginning at the current position which **doesn't** begin with a keyword. E.g.
+/// - `int i;`,
+/// - `i + 5;`,
+/// - `void fn(...`.
+///
+/// This function makes no assumption as to what the current token is. This function does not produce any error if
+/// the current token can start a statement beginning with a keyword. This function treats a `{` at the beginning
+/// as a start to an initializer list. If you want to treat `{` as beginning a scope, such a check must be
+/// performed *before* this function is called.
+///
+/// If successful, this function returns: `Some(nodes, has_consumed_end_semi_colon, syntax_errors)`. If this
+/// function returns `None`, it means it has not consumed any tokens.
+fn try_parse_stmt_not_beginning_with_keyword(
+	walker: &mut Walker,
+	qualifiers: &Vec<Qualifier>,
+	end_tokens: &[Token],
+) -> Option<(Vec<Node>, bool, Vec<SyntaxErr>)> {
+	let mut errors = Vec::new();
+
+	// Save the position of the cursor so that we can go back to it if our attempt fails.
+	let _cursor_before_attempting = walker.cursor;
+
+	let (start, mut errs) = match expr_parser(walker, Mode::Default, end_tokens)
+	{
+		(Some(e), errs) => (e, errs),
+		// If the current token cannot begin any form of expression, that means this will be either a statement
+		// beginning with a keyword or this is not a valid statement at all. In either case, we return back to the
+		// caller.
+		(None, _) => return None,
+	};
+
+	// Test to see if the expression can be converted to a type.
+	if let Some(type_) = start.to_type() {
+		// What we have parsed so far can be converted to a type. Since we ran the parser in `Mode::Default`, we
+		// know that this cannot be a scenario such as `i` in `i = 5`; it must be something like `int` in `int i`.
+
+		// This may be a more complex expression which includes brackets. We want to keep those syntax errors, but
+		// we want to remove any syntax error about a missing operator between operands, so that we don't get a
+		// syntax error for the fact that `int i` has no operator between `int` and `i`.
+		errs.retain(|e| match e {
+			SyntaxErr::FoundOperandAfterOperand(_, _) => false,
+			_ => true,
+		});
+		errors.append(&mut errs);
+
+		// Check whether we have a function def/decl.
+		match walker.peek() {
+			Some((current, current_span)) => match current {
+				Token::Ident(i) => match walker.lookahead_1() {
+					Some((next, next_span)) => match next {
+						Token::LParen => {
+							// We have something like `int name (` which makes this a function.
+							let ident = Ident {
+								name: i.clone(),
+								span: *current_span,
+							};
+							let l_paren_span = *next_span;
+							walker.advance();
+							walker.advance();
+							let (ret, err) = parse_fn(
+								walker,
+								type_,
+								start.span,
+								ident,
+								qualifiers,
+								l_paren_span,
+							);
+							return Some((
+								if let Some(ret) = ret {
+									vec![ret]
+								} else {
+									vec![]
+								},
+								false,
+								err,
+							));
+						}
+						_ => {}
+					},
+					None => {}
+				},
+				_ => {}
+			},
+			None => {
+				// We have something like `int` on its own which means we are missing a semi-colon.
+				errors.push(SyntaxErr::ExpectedSemiAfterStmt(
+					walker.get_last_span().next_single_width(),
+				));
+
+				return Some((
+					vec![Node {
+						span: start.span,
+						ty: NodeTy::Invalid,
+					}],
+					false,
+					errors,
+				));
+			}
+		}
+
+		// We don't have a function def/decl, so this can only be a variable def/decl and nothing else.
+
+		// Look for an identifier (or multiple) following the type.
+		let ident_expr =
+			match expr_parser(walker, Mode::BreakAtEq, &[Token::Semi]) {
+				(Some(e), mut errs) => {
+					errors.append(&mut errs);
+					e
+				}
+				(None, _) => {
+					// We have something like `int` on its own which means we are missing a semi-colon.
+					errors.push(SyntaxErr::ExpectedSemiAfterStmt(
+						walker.get_last_span().next_single_width(),
+					));
+
+					return Some((
+						vec![Node {
+							span: start.span,
+							ty: NodeTy::Invalid,
+						}],
+						false,
+						errors,
+					));
+				}
+			};
+
+		// Try to convert the expression into one or more type-identifier pairs. This is necessary because the
+		// expression that contains the identifier may also contain an array size, which needs to be take into
+		// account. There may also be more than one identifier.
+		let idents = ident_expr.to_var_def_decl_ident();
+		if idents.is_empty() {
+			errors.push(SyntaxErr::ExpectedIdentsAfterVarType(ident_expr.span));
+			let mut nodes = vec![
+				Node {
+					span: start.span,
+					ty: NodeTy::Invalid,
+				},
+				Node {
+					span: ident_expr.span,
+					ty: NodeTy::Invalid,
+				},
+			];
+
+			// Loop and consume tokens as invalid until we hit something which can unambiguously start a new
+			// statement, or a semi-colon to end the statement.
+			let mut consumed_semi = false;
+			loop {
+				let (current, current_span) = match walker.peek() {
+					Some(t) => t,
+					None => {
+						break;
+					}
+				};
+
+				if *current == Token::Semi {
+					nodes.push(Node {
+						ty: NodeTy::Punctuation,
+						span: *current_span,
+					});
+					walker.advance();
+					consumed_semi = true;
+					break;
+				} else if current.starts_statement() {
+					break;
+				} else {
+					nodes.push(Node {
+						ty: NodeTy::Invalid,
+						span: *current_span,
+					});
+					walker.advance();
+					continue;
+				}
+			}
+
+			return Some((nodes, consumed_semi, errors));
+		}
+		let type_ident_pairs = idents
+			.into_iter()
+			.map(|i| match i {
+				Either::Left(ident) => (type_.clone(), ident),
+				Either::Right((ident, arr)) => {
+					(type_.clone().add_var_decl_arr_size(arr), ident)
+				}
+			})
+			.collect::<Vec<_>>();
+
+		// Declare constructors here to avoid duplicating the code all over the place.
+		fn var_def_constructor(
+			mut type_ident_pairs: Vec<(Type, Ident)>,
+			qualifiers: &Vec<Qualifier>,
+		) -> Node {
+			match type_ident_pairs.len() {
+				1 => {
+					let (type_, ident) = type_ident_pairs.remove(0);
+					Node {
+						ty: NodeTy::VarDef {
+							type_,
+							ident,
+							qualifiers: qualifiers.to_vec(),
+						},
+						span: Span::empty(),
+					}
+				}
+				_ => Node {
+					ty: NodeTy::VarDefs(type_ident_pairs, qualifiers.to_vec()),
+					span: Span::empty(),
+				},
+			}
+		}
+		fn var_decl_constructor(
+			mut type_ident_pairs: Vec<(Type, Ident)>,
+			qualifiers: &Vec<Qualifier>,
+			value: Expr,
+		) -> Node {
+			match type_ident_pairs.len() {
+				1 => {
+					let (type_, ident) = type_ident_pairs.remove(0);
+					Node {
+						ty: NodeTy::VarDecl {
+							type_,
+							ident,
+							value,
+							qualifiers: qualifiers.to_vec(),
+						},
+						span: Span::empty(),
+					}
+				}
+				_ => Node {
+					ty: NodeTy::VarDecls {
+						vars: type_ident_pairs,
+						value,
+						qualifiers: qualifiers.to_vec(),
+					},
+					span: Span::empty(),
+				},
+			}
+		}
+
+		// Consume either the `;` for a definition or a `=` for a declaration.
+		let (current, current_span) = match walker.peek() {
+			Some((t, s)) => (t, *s),
+			None => {
+				// We are missing the necessary syntax to make this valid, but we still accept it anyway.
+				errors.push(SyntaxErr::ExpectedSemiOrEqAfterVarDef(
+					walker.get_last_span().next_single_width(),
+				));
+
+				return Some((
+					vec![var_def_constructor(type_ident_pairs, qualifiers)],
+					false,
+					errors,
+				));
+			}
+		};
+		if *current == Token::Semi {
+			// We have a variable definition.
+			walker.advance();
+
+			return Some((
+				vec![var_def_constructor(type_ident_pairs, qualifiers)],
+				true,
+				errors,
+			));
+		} else if *current == Token::Op(OpTy::Eq) {
+			// We have a variable declarations.
+			let eq_span = current_span;
+			walker.advance();
+
+			let value_expr =
+				match expr_parser(walker, Mode::Default, &[Token::Semi]) {
+					(Some(e), mut errs) => {
+						errors.append(&mut errs);
+						e
+					}
+					(None, _) => {
+						errors.push(SyntaxErr::ExpectedExprAfterVarDeclEq(
+							eq_span.next_single_width(),
+						));
+						return Some((
+							vec![var_def_constructor(
+								type_ident_pairs,
+								qualifiers,
+							)],
+							false,
+							errors,
+						));
+					}
+				};
+
+			// Consume the `;` to end the declarations.
+			let (current, current_span) = match walker.peek() {
+				Some((t, s)) => (t, *s),
+				None => {
+					errors.push(SyntaxErr::ExpectedSemiAfterVarDeclExpr(
+						walker.get_last_span().next_single_width(),
+					));
+					return Some((
+						vec![var_decl_constructor(
+							type_ident_pairs,
+							qualifiers,
+							value_expr,
+						)],
+						false,
+						errors,
+					));
+				}
+			};
+
+			if *current == Token::Semi {
+				walker.advance();
+
+				return Some((
+					vec![var_decl_constructor(
+						type_ident_pairs,
+						qualifiers,
+						value_expr,
+					)],
+					true,
+					errors,
+				));
+			} else {
+				let mut nodes = vec![var_decl_constructor(
+					type_ident_pairs,
+					qualifiers,
+					value_expr,
+				)];
+
+				// Loop and consume tokens as invalid until we hit something which can unambiguously start a new
+				// statement, or a semi-colon to end the statement.
+				let mut consumed_semi = false;
+				loop {
+					let (current, current_span) = match walker.peek() {
+						Some(t) => t,
+						None => {
+							break;
+						}
+					};
+
+					if *current == Token::Semi {
+						nodes.push(Node {
+							ty: NodeTy::Punctuation,
+							span: *current_span,
+						});
+						walker.advance();
+						consumed_semi = true;
+						break;
+					} else if current.starts_statement() {
+						break;
+					} else {
+						nodes.push(Node {
+							ty: NodeTy::Invalid,
+							span: *current_span,
+						});
+						walker.advance();
+						continue;
+					}
+				}
+
+				return Some((nodes, consumed_semi, errors));
+			}
+		} else {
+			// We are missing necessary syntax, but we treat this as valid anyway.
+			errors.push(SyntaxErr::ExpectedSemiOrEqAfterVarDef(current_span));
+
+			// TODO: loop error recovery?
+
+			return Some((
+				vec![var_def_constructor(type_ident_pairs, qualifiers)],
+				false,
+				errors,
+			));
+		}
+	}
+
+	// Whatever we have cannot be the start of a def/decl, hence it must just be an expression statement in its own
+	// right.
+	let expr = start;
+	errors.append(&mut errs);
+
+	// Consume the `;` to end the statement.
+	let (current, current_span) = match walker.peek() {
+		Some(t) => t,
+		None => {
+			errors.push(SyntaxErr::ExpectedSemiAfterStmt(
+				expr.span.next_single_width(),
+			));
+
+			return Some((
+				vec![Node {
+					span: expr.span,
+					ty: NodeTy::Expr { expr, semi: None },
+				}],
+				false,
+				errors,
+			));
+		}
+	};
+	if *current == Token::Semi {
+		let node = Node {
+			span: Span::new(expr.span.start, current_span.end),
+			ty: NodeTy::Expr {
+				expr,
+				semi: Some(*current_span),
+			},
+		};
+		walker.advance();
+
+		Some((vec![node], true, errors))
+	} else {
+		errors.push(SyntaxErr::ExpectedSemiAfterStmt(
+			expr.span.next_single_width(),
+		));
+
+		let mut nodes = vec![Node {
+			span: expr.span,
+			ty: NodeTy::Expr { expr, semi: None },
+		}];
+
+		// Loop and consume tokens as invalid until we hit something which can unambiguously start a new statement,
+		// or a semi-colon to end the statement.
+		let mut consumed_semi = false;
+		'invalid: loop {
+			let (current, current_span) = match walker.peek() {
+				Some(t) => t,
+				None => {
+					break 'invalid;
+				}
+			};
+
+			if *current == Token::Semi {
+				nodes.push(Node {
+					ty: NodeTy::Punctuation,
+					span: *current_span,
+				});
+				walker.advance();
+				consumed_semi = true;
+				break 'invalid;
+			} else if current.starts_statement() {
+				break 'invalid;
+			} else {
+				nodes.push(Node {
+					ty: NodeTy::Invalid,
+					span: *current_span,
+				});
+				walker.advance();
+				continue 'invalid;
+			}
+		}
+
+		Some((nodes, consumed_semi, errors))
+	}
+}
 /// Parse a statement beginning at the current position.
 ///
 /// [`Ok`] is returned in the following cases:
@@ -419,70 +873,25 @@ fn parse_stmt(walker: &mut Walker, nodes: &mut Vec<Node>) -> Vec<SyntaxErr> {
 	// TODO: Deal with comments?
 
 	// First, we look for any qualifiers because they are always located first in a statement.
-	let (qualifiers, mut errs) = parse_qualifier_list(walker);
+	let (qualifiers, mut errs) = try_parse_qualifier_list(walker);
 	errors.append(&mut errs);
 
-	// Next, we look for any syntax which can be parsed as an expression, e.g. a `int[3]`.
-	if let (Some(expr), _) = expr_parser(walker, Mode::Default, &[Token::Semi])
-	{
-		// We tried to parse an expression and succeeded. We have an expression consisting of at least one
-		// token.
-
-		// Check if the expression can be parsed as a typename. If so, then we try to parse the following
-		// tokens as statements which can start with a typename, i.e. variable or function defs/decls.
-		if let Some(type_) = expr.to_type() {
-			match parse_type_start(walker, type_, expr, qualifiers) {
-				(Some(n), mut errs) => {
-					errors.append(&mut errs);
-					nodes.push(n);
-					return errors;
-				}
-				(None, mut errs) => {
-					errors.append(&mut errs);
-
-					'till_next: loop {
-						// We did not successfully parse a statement.
-						let (next, _) = match walker.peek() {
-							Some(t) => t,
-							None => return errors,
-						};
-
-						if *next == Token::Semi {
-							walker.advance();
-							break 'till_next;
-						} else if *next == Token::RBrace {
-							break 'till_next;
-						} else if next.starts_statement() {
-							// We don't advance because we are currently at a token which begins a new statement, so we
-							// don't want to consume it before we rerun the main loop.
-							break 'till_next;
-						} else {
-							walker.advance();
-							continue 'till_next;
-						}
-					}
-					return errors;
-				}
-			};
-		} else {
-			let (current, current_span) = match walker.peek() {
-				Some(t) => (&t.0, t.1),
-				None => return errors,
-			};
-			if *current == Token::Semi {
-				walker.advance();
-				nodes.push(Node {
-					ty: NodeTy::Expr {
-						expr: expr.clone(),
-						semi: Some(current_span),
-					},
-					span: expr.span,
-				});
-			}
-
+	// Next, we try to parse a statement that doesn't begin with a keyword, such as a variable declaration.
+	match try_parse_stmt_not_beginning_with_keyword(
+		walker,
+		&qualifiers,
+		&[Token::Semi],
+	) {
+		Some((mut inner, _, mut err)) => {
+			errors.append(&mut err);
+			nodes.append(&mut inner);
 			return errors;
-		};
+		}
+		None => {}
 	}
+
+	// We failed to parse anything, which means that this must be a statement beginning with a keyword. We check
+	// for qualifiers since those cannot annotate a keyword statement.
 
 	let qualifier_span_end = if !qualifiers.is_empty() {
 		// Panics: There is at least one element so `last()` will return `Some`.
@@ -490,9 +899,6 @@ fn parse_stmt(walker: &mut Walker, nodes: &mut Vec<Node>) -> Vec<SyntaxErr> {
 	} else {
 		None
 	};
-
-	// We tried to parse an expression but that immediately failed. This means the current token is one which
-	// cannot start an expression.
 	let (token, token_span) = match walker.peek() {
 		Some(t) => (&t.0, t.1),
 		None => {
@@ -2546,367 +2952,8 @@ fn parse_switch_body(
 	(cases, errors)
 }
 
-/// Parse a statement which begins with a potential type identifier (the identifier should already be consumed).
-fn parse_type_start(
-	walker: &mut Walker,
-	type_: Type,
-	original_expr: Expr,
-	qualifiers: Vec<Qualifier>,
-) -> (Option<Node>, Vec<SyntaxErr>) {
-	let mut errors = Vec::new();
-
-	// Check whether we have a function definition/declaration.
-	match walker.peek() {
-		Some((current, current_span)) => match current {
-			Token::Ident(i) => match walker.lookahead_1() {
-				Some((next, next_span)) => match next {
-					Token::LParen => {
-						// We have `TYPE IDENT (` which makes this a function.
-						let ident = Ident {
-							name: i.clone(),
-							span: *current_span,
-						};
-						let l_paren_span = *next_span;
-						walker.advance();
-						walker.advance();
-						return parse_fn(
-							walker,
-							type_,
-							original_expr.span,
-							ident,
-							qualifiers,
-							l_paren_span,
-						);
-					}
-					_ => {}
-				},
-				None => {}
-			},
-			_ => {}
-		},
-		None => {
-			// We have something like `int` which on its own is not a valid statement.
-			errors.push(SyntaxErr::ExpectedStmtFoundExpr(original_expr.span));
-			return (None, errors);
-		}
-	};
-
-	// Look for an identifier (or multiple).
-	let expr = match expr_parser(walker, Mode::BreakAtEq, &[Token::Semi]) {
-		(Some(e), _) => e,
-		(None, _) => {
-			let (current, current_span) = match walker.peek() {
-				Some(t) => t,
-				None => {
-					// We have something like `int` which on its own is not a valid statement.
-					errors.push(SyntaxErr::ExpectedStmtFoundExpr(
-						original_expr.span,
-					));
-					return (None, errors);
-				}
-			};
-
-			match current {
-				Token::Semi => {
-					// We have something like `int;` which on its own can be a valid expression statement.
-					return (
-						Some(Node {
-							ty: NodeTy::Expr {
-								expr: original_expr.clone(),
-								semi: Some(*current_span),
-							},
-							span: Span::new(
-								original_expr.span.start,
-								current_span.end,
-							),
-						}),
-						errors,
-					);
-				}
-				_ => {
-					errors.push(SyntaxErr::ExpectedIdentsAfterVarType(
-						*current_span,
-					));
-					return (None, errors);
-				}
-			}
-		}
-	};
-	let idents = expr.to_var_def_decl_or_fn_ident();
-	if idents.is_empty() {
-		errors.push(SyntaxErr::ExpectedIdentsAfterVarType(
-			walker.get_previous_span().next_single_width(),
-		));
-		return (None, errors);
-	}
-	let mut typenames = idents
-		.into_iter()
-		.map(|i| match i {
-			Either::Left(ident) => (type_.clone(), ident),
-			Either::Right((ident, v)) => {
-				(type_.clone().add_var_decl_arr_size(v), ident)
-			}
-		})
-		.collect::<Vec<_>>();
-
-	// Consume either the `;` for a variable definition, or a `=` for a variable declaration.
-	let (current, current_span) = match walker.peek() {
-		Some(t) => (&t.0, t.1),
-		None => {
-			// Even though we are missing a necessary token to make the syntax valid, it still makes sense to just
-			// treat this as a "valid" variable definition(s) for analysis/goto/etc purposes. We do produce an
-			// error though about the missing token.
-			errors.push(SyntaxErr::ExpectedSemiOrEqAfterVarDef(
-				walker.get_last_span().next_single_width(),
-			));
-			return (
-				Some(match typenames.len() {
-					1 => {
-						let (type_, ident) = typenames.remove(0);
-						Node {
-							ty: NodeTy::VarDef {
-								type_,
-								ident,
-								qualifiers,
-							},
-							span: Span::new(
-								original_expr.span.start,
-								walker.get_last_span().end,
-							),
-						}
-					}
-					_ => Node {
-						ty: NodeTy::VarDefs(typenames, qualifiers),
-						span: Span::new(
-							original_expr.span.start,
-							walker.get_last_span().end,
-						),
-					},
-				}),
-				errors,
-			);
-		}
-	};
-	if *current == Token::Semi {
-		// We have a variable definition.
-		walker.advance();
-		(
-			Some(match typenames.len() {
-				1 => {
-					let (type_, ident) = typenames.remove(0);
-					Node {
-						ty: NodeTy::VarDef {
-							type_,
-							ident,
-							qualifiers,
-						},
-						span: Span::new(
-							original_expr.span.start,
-							current_span.end,
-						),
-					}
-				}
-				_ => Node {
-					ty: NodeTy::VarDefs(typenames, qualifiers),
-					span: Span::new(original_expr.span.start, current_span.end),
-				},
-			}),
-			errors,
-		)
-	} else if *current == Token::Op(OpTy::Eq) {
-		// We have a variable declaration.
-		walker.advance();
-
-		// Look for a value.
-		let value = match expr_parser(walker, Mode::Default, &[Token::Semi]) {
-			(Some(e), _) => e,
-			(None, _) => {
-				// Even though we are missing a necessary expression to make the syntax valid, it still makes sense
-				// to just treat this as a "valid" variable definition(s) for analysis/goto/etc purposes. We do
-				// produce an error though about the missing token.
-				errors.push(SyntaxErr::ExpectedExprAfterVarDeclEq(
-					walker.get_previous_span().next_single_width(),
-				));
-				return (
-					Some(match typenames.len() {
-						1 => {
-							let (type_, ident) = typenames.remove(0);
-							Node {
-								ty: NodeTy::VarDef {
-									type_,
-									ident,
-									qualifiers,
-								},
-								span: Span::new(
-									original_expr.span.start,
-									walker.get_last_span().end,
-								),
-							}
-						}
-						_ => Node {
-							ty: NodeTy::VarDefs(typenames, qualifiers),
-							span: Span::new(
-								original_expr.span.start,
-								walker.get_last_span().end,
-							),
-						},
-					}),
-					errors,
-				);
-			}
-		};
-
-		// Consume the `;` to end the declaration.
-		let (current, current_span) = match walker.peek() {
-			Some(t) => (&t.0, t.1),
-			None => {
-				// Even though we are missing a necessary token to make the syntax valid, it still makes sense to
-				// just treat this as a "valid" variable declaration(s) for analysis/goto/etc purposes. We do
-				// produce an error though about the missing token.
-				errors.push(SyntaxErr::ExpectedSemiAfterVarDeclExpr(
-					walker.get_previous_span().next_single_width(),
-				));
-				return (
-					Some(match typenames.len() {
-						1 => {
-							let (type_, ident) = typenames.remove(0);
-							Node {
-								ty: NodeTy::VarDecl {
-									type_,
-									ident,
-									value,
-									qualifiers,
-								},
-								span: Span::new(
-									original_expr.span.start,
-									walker.get_last_span().end,
-								),
-							}
-						}
-						_ => Node {
-							ty: NodeTy::VarDecls {
-								vars: typenames,
-								value,
-								qualifiers,
-							},
-							span: Span::new(
-								original_expr.span.start,
-								walker.get_last_span().end,
-							),
-						},
-					}),
-					errors,
-				);
-			}
-		};
-		if *current == Token::Semi {
-			walker.advance();
-		} else {
-			// Even though we are missing a necessary token to make the syntax valid, it still makes sense to just
-			// treat this as a "valid" variable declaration(s) for analysis/goto/etc purposes. We do produce an
-			// error though about the missing token.
-			errors.push(SyntaxErr::ExpectedSemiAfterVarDeclExpr(
-				walker.get_previous_span().next_single_width(),
-			));
-			return (
-				Some(match typenames.len() {
-					1 => {
-						let (type_, ident) = typenames.remove(0);
-						Node {
-							ty: NodeTy::VarDecl {
-								type_,
-								ident,
-								value,
-								qualifiers,
-							},
-							span: Span::new(
-								original_expr.span.start,
-								walker.get_previous_span().end,
-							),
-						}
-					}
-					_ => Node {
-						ty: NodeTy::VarDecls {
-							vars: typenames,
-							value,
-							qualifiers,
-						},
-						span: Span::new(
-							original_expr.span.start,
-							walker.get_previous_span().end,
-						),
-					},
-				}),
-				errors,
-			);
-		}
-
-		(
-			Some(match typenames.len() {
-				1 => {
-					let (type_, ident) = typenames.remove(0);
-					Node {
-						ty: NodeTy::VarDecl {
-							type_,
-							ident,
-							value,
-							qualifiers,
-						},
-						span: Span::new(
-							original_expr.span.start,
-							current_span.end,
-						),
-					}
-				}
-				_ => Node {
-					ty: NodeTy::VarDecls {
-						vars: typenames,
-						value,
-						qualifiers,
-					},
-					span: Span::new(original_expr.span.start, current_span.end),
-				},
-			}),
-			errors,
-		)
-	} else {
-		// Even though we are missing a necessary token to make the syntax valid, it still makes sense to just
-		// treat this as a "valid" variable definition(s) for analysis/goto/etc purposes. We do produce an error
-		// though about the missing token.
-		errors.push(SyntaxErr::ExpectedSemiOrEqAfterVarDef(
-			walker.get_previous_span().next_single_width(),
-		));
-		(
-			Some(match typenames.len() {
-				1 => {
-					let (type_, ident) = typenames.remove(0);
-					Node {
-						ty: NodeTy::VarDef {
-							type_,
-							ident,
-							qualifiers,
-						},
-						span: Span::new(
-							original_expr.span.start,
-							walker.get_previous_span().end,
-						),
-					}
-				}
-				_ => Node {
-					ty: NodeTy::VarDefs(typenames, qualifiers),
-					span: Span::new(
-						original_expr.span.start,
-						walker.get_previous_span().end,
-					),
-				},
-			}),
-			errors,
-		)
-	}
-}
-
-/// Parse a function definition or declaration beginning at the current position (the return type, the identifier,
-/// and the opening parenthesis `(` should already be consumed).
+/// Continue parsing a function definition or declaration beginning at the current position; (the return type, the
+/// identifier, and the opening parenthesis `(` should already be consumed).
 ///
 /// - `return_type` - the function return type,
 /// - `start_span - the span which starts the function def/decl, i.e. the span of the return type,
@@ -2918,7 +2965,7 @@ fn parse_fn(
 	return_type: Type,
 	start_span: Span,
 	ident: Ident,
-	qualifiers: Vec<Qualifier>,
+	qualifiers: &Vec<Qualifier>,
 	l_paren_span: Span,
 ) -> (Option<Node>, Vec<SyntaxErr>) {
 	let mut errors = Vec::new();
@@ -2990,7 +3037,7 @@ fn parse_fn(
 							return_type,
 							ident,
 							params,
-							qualifiers,
+							qualifiers: qualifiers.to_vec(),
 							semi: Some(current_span),
 						},
 						span: Span::new(start_span.start, current_span.end),
@@ -3027,7 +3074,7 @@ fn parse_fn(
 		just_started = false;
 
 		// Look for any optional qualifiers.
-		let (qualifiers, mut qualifier_errs) = parse_qualifier_list(walker);
+		let (qualifiers, mut qualifier_errs) = try_parse_qualifier_list(walker);
 		errors.append(&mut qualifier_errs);
 
 		// Look for a type.
@@ -3146,8 +3193,7 @@ fn parse_fn(
 
 		// Since a type-identifier definition may be split up, e.g. `int i[3]`, we now convert the two "items"
 		// into the actual type and identifier.
-		let (type_, ident) = match expr.to_var_def_decl_or_fn_ident().remove(0)
-		{
+		let (type_, ident) = match expr.to_var_def_decl_ident().remove(0) {
 			Either::Left(ident) => (type_.clone(), ident),
 			Either::Right((ident, v)) => {
 				(type_.clone().add_var_decl_arr_size(v), ident)
@@ -3178,7 +3224,7 @@ fn parse_fn(
 						return_type,
 						ident,
 						params,
-						qualifiers,
+						qualifiers: qualifiers.to_vec(),
 						semi: None,
 					},
 					span: Span::new(
@@ -3195,7 +3241,7 @@ fn parse_fn(
 		(
 			Some(Node {
 				ty: NodeTy::FnDef {
-					qualifiers,
+					qualifiers: qualifiers.to_vec(),
 					return_type,
 					ident,
 					params,
@@ -3217,7 +3263,7 @@ fn parse_fn(
 			Some(Node {
 				span: Span::new(start_span.start, body.span.end),
 				ty: NodeTy::FnDecl {
-					qualifiers,
+					qualifiers: qualifiers.to_vec(),
 					return_type,
 					ident,
 					params,
@@ -3236,7 +3282,7 @@ fn parse_fn(
 		(
 			Some(Node {
 				ty: NodeTy::FnDef {
-					qualifiers,
+					qualifiers: qualifiers.to_vec(),
 					return_type,
 					ident,
 					params,

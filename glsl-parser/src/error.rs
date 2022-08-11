@@ -157,6 +157,10 @@ pub enum SyntaxErr {
 	///
 	/// - `0` - the span of the expression.
 	ExpectedStmtFoundExpr(Span),
+	/// Found a statement without a semi-colon (`;`) afterwards.
+	///
+	/// - `0` - the span where the semi-colon should be inserted.
+	ExpectedSemiAfterStmt(Span),
 
 	/* CONTROL FLOW */
 	/// Did not find an opening parenthesis (`(`) after a `if`/`switch`/`for`/`while` keyword. E.g. in
@@ -457,7 +461,7 @@ pub enum SyntaxErr {
 	/// - `0` - the span of the brace.
 	FoundLonelyRBrace(Span),
 	/// Expected a function or variable definition/declaration after one or more qualifiers.
-	/// 
+	///
 	/// - `0` - the span where the def/decl should be inserted.
 	ExpectedDefDeclAfterQualifiers(Span),
 

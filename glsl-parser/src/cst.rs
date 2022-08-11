@@ -286,7 +286,7 @@ impl Expr {
 	///
 	/// Each entry is either just an [`Ident`] if the expression is something like `my_num`, or it is an `Ident`
 	/// plus one or more [`ArrSize`] if the expression is something like `a[1]` or `b[][3]`.
-	pub fn to_var_def_decl_or_fn_ident(
+	pub fn to_var_def_decl_ident(
 		&self,
 	) -> Vec<Either<Ident, (Ident, Vec<ArrSize>)>> {
 		let mut idents = Vec::new();

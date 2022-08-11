@@ -1,21 +1,24 @@
-use diag::to_diagnostic;
+use crate::state::State;
 use glsl_parser::span::Span;
+use tokio::sync::Mutex;
 use tower_lsp::jsonrpc::Result;
 use tower_lsp::lsp_types::*;
 use tower_lsp::{Client, LanguageServer, LspService, Server};
 
-pub mod diag;
+mod diag;
+mod state;
 
 #[derive(Debug)]
 struct MyServer {
 	client: Client,
+	state: Mutex<State>,
 }
 
 #[tower_lsp::async_trait]
 impl LanguageServer for MyServer {
 	async fn initialize(
 		&self,
-		_params: InitializeParams,
+		params: InitializeParams,
 	) -> Result<InitializeResult> {
 		self.client
 			.log_message(
@@ -23,6 +26,9 @@ impl LanguageServer for MyServer {
 				"Server received 'initialize' request.",
 			)
 			.await;
+
+		let mut state = self.state.lock().await;
+		state.initialize(params);
 
 		Ok(InitializeResult {
 			server_info: None,
@@ -126,17 +132,13 @@ impl LanguageServer for MyServer {
 }
 
 impl MyServer {
-	async fn on_open(&self, document: TextDocumentItem) {}
-
 	async fn on_change(&self, uri: Url, version: i32, contents: String) {
 		let file = File::new(uri, contents);
 		let (_stmts, errors) = glsl_parser::parser::parse(&file.contents);
-		let mut diags = Vec::new();
-		errors
-			.into_iter()
-			.for_each(|err| to_diagnostic(err, &file, &mut diags));
-		self.client
-			.publish_diagnostics(file.uri, diags, Some(version))
+
+		let state = self.state.lock().await;
+		state
+			.publish_diagnostics(&self.client, &file, version, errors)
 			.await;
 	}
 }
@@ -146,8 +148,11 @@ async fn main() {
 	let stdin = tokio::io::stdin();
 	let stdout = tokio::io::stdout();
 
-	let (service, socket) =
-		LspService::build(|client| MyServer { client }).finish();
+	let (service, socket) = LspService::build(|client| MyServer {
+		client,
+		state: Mutex::new(State::new()),
+	})
+	.finish();
 
 	Server::new(stdin, stdout, socket).serve(service).await;
 }
@@ -156,7 +161,7 @@ async fn main() {
 pub struct File {
 	uri: Url,
 	contents: String,
-	/// A character index to line conversion table.
+	/// A character index-to-line conversion table.
 	/// - `0` - line number,
 	/// - `1` - character index which starts at the line number.
 	lines: Vec<(usize, usize)>,

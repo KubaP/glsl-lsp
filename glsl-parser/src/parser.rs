@@ -1,7 +1,8 @@
 use crate::{
+	ast::Type,
 	cst::{
-		Cst, Expr, ExprTy, Ident, IfBranch, IfTy, Node, NodeTy, Param,
-		Qualifier, Scope, SwitchBranch, Type,
+		Cst, Expr, ExprTy, Ident, IfBranch, IfTy, List, Node, NodeTy, Param,
+		Qualifier, Scope, SwitchBranch,
 	},
 	error::SyntaxErr,
 	expression::{expr_parser, Mode},
@@ -106,8 +107,8 @@ pub fn parse(source: &str) -> (Cst, Vec<SyntaxErr>) {
 /// - `flat uniform ...`,
 /// - `layout(location = 1) ...`.
 ///
-/// This function makes no assumption as to what the current token is. This function does not produce any error if
-/// no qualifiers were found.
+/// This function makes no assumption as to what the current token is. This function does not produce a syntax
+/// error if the attempt failed.
 fn try_parse_qualifier_list(
 	walker: &mut Walker,
 ) -> (Vec<Qualifier>, Vec<SyntaxErr>) {
@@ -383,13 +384,12 @@ fn try_parse_qualifier_list(
 /// - `i + 5;`,
 /// - `void fn(...`.
 ///
-/// This function makes no assumption as to what the current token is. This function does not produce any error if
-/// the current token can start a statement beginning with a keyword. This function treats a `{` at the beginning
-/// as a start to an initializer list. If you want to treat `{` as beginning a scope, such a check must be
-/// performed *before* this function is called.
+/// This function makes no assumption as to what the current token is. This function does not produce a syntax
+/// error if the attempt failed. If successful, this function returns: `Some(nodes, has_consumed_end_semi_colon,
+/// syntax_errors)`. If unsuccessful, this function returns `None` which means that no tokens were consumed.
 ///
-/// If successful, this function returns: `Some(nodes, has_consumed_end_semi_colon, syntax_errors)`. If this
-/// function returns `None`, it means it has not consumed any tokens.
+/// If the current token is `{`, this function treats it as a start to an initializer list. If you want to treat
+/// `{` as a beginning of a scope, the check must be performed *before* this function is called.
 fn try_parse_stmt_not_beginning_with_keyword(
 	walker: &mut Walker,
 	qualifiers: &Vec<Qualifier>,
@@ -410,7 +410,7 @@ fn try_parse_stmt_not_beginning_with_keyword(
 	};
 
 	// Test to see if the expression can be converted to a type.
-	if let Some(type_) = start.to_type() {
+	if let Some(_) = Type::parse(&start) {
 		// What we have parsed so far can be converted to a type. Since we ran the parser in `Mode::Default`, we
 		// know that this cannot be a scenario such as `i` in `i = 5`; it must be something like `int` in `int i`.
 
@@ -422,6 +422,8 @@ fn try_parse_stmt_not_beginning_with_keyword(
 			_ => true,
 		});
 		errors.append(&mut errs);
+
+		let type_ = start;
 
 		// Check whether we have a function def/decl.
 		match walker.peek() {
@@ -437,14 +439,14 @@ fn try_parse_stmt_not_beginning_with_keyword(
 							let l_paren_span = *next_span;
 							walker.advance();
 							walker.advance();
-							let (ret, err) = parse_fn(
+							let (ret, mut errs) = parse_fn(
 								walker,
 								type_,
-								start.span,
 								ident,
 								qualifiers,
 								l_paren_span,
 							);
+							errors.append(&mut errs);
 							return Some((
 								if let Some(ret) = ret {
 									vec![ret]
@@ -452,7 +454,7 @@ fn try_parse_stmt_not_beginning_with_keyword(
 									vec![]
 								},
 								false,
-								err,
+								errors,
 							));
 						}
 						_ => {}
@@ -469,7 +471,7 @@ fn try_parse_stmt_not_beginning_with_keyword(
 
 				return Some((
 					vec![Node {
-						span: start.span,
+						span: type_.span,
 						ty: NodeTy::Invalid,
 					}],
 					false,
@@ -481,22 +483,24 @@ fn try_parse_stmt_not_beginning_with_keyword(
 		// We don't have a function def/decl, so this can only be a variable def/decl and nothing else.
 
 		// Look for an identifier (or multiple) following the type.
-		let ident_expr =
+		let (ident_expr, mut errs) =
 			match expr_parser(walker, Mode::BreakAtEq, &[Token::Semi]) {
-				(Some(e), mut errs) => {
-					errors.append(&mut errs);
-					e
-				}
+				(Some(e), errs) => (e, errs),
 				(None, _) => {
-					// We have something like `int` on its own which means we are missing a semi-colon.
-					errors.push(SyntaxErr::ExpectedSemiAfterStmt(
-						walker.get_last_span().next_single_width(),
+					// We have a single expression followed by something that can't be parsed as an expression (or
+					// nothing), so we treat this as an expression statement instead.
+					//
+					// Error recovery: we are missing a semi-colon.
+					errors.push(SyntaxErr::ExpectedStmtFoundExpr(
+						type_.span.next_single_width(),
 					));
-
 					return Some((
 						vec![Node {
-							span: start.span,
-							ty: NodeTy::Invalid,
+							span: type_.span,
+							ty: NodeTy::Expr {
+								expr: type_,
+								semi: None,
+							},
 						}],
 						false,
 						errors,
@@ -504,15 +508,19 @@ fn try_parse_stmt_not_beginning_with_keyword(
 				}
 			};
 
-		// Try to convert the expression into one or more type-identifier pairs. This is necessary because the
-		// expression that contains the identifier may also contain an array size, which needs to be take into
-		// account. There may also be more than one identifier.
-		let idents = ident_expr.to_var_def_decl_ident();
-		if idents.is_empty() {
+		// Test to see if we can convert the expression into one or more identifiers. This is necessary
+		// because the expression can contain one or more identifiers, and these identifiers can also contain an
+		// array size.
+		let ident_exprs = ident_expr.to_ident_list();
+		if ident_exprs.is_empty() {
+			// We could not convert the expression into multiple identifier sub-expressions. This could be
+			// something like `i + 5`.
+			//
+			// Error recovery: we are missing identifier expression(s) after the type expression.
 			errors.push(SyntaxErr::ExpectedIdentsAfterVarType(ident_expr.span));
 			let mut nodes = vec![
 				Node {
-					span: start.span,
+					span: type_.span,
 					ty: NodeTy::Invalid,
 				},
 				Node {
@@ -521,15 +529,13 @@ fn try_parse_stmt_not_beginning_with_keyword(
 				},
 			];
 
-			// Loop and consume tokens as invalid until we hit something which can unambiguously start a new
-			// statement, or a semi-colon to end the statement.
+			// Consume tokens until we come across a token which can unambiguously end this statement, this could
+			// be another semi-colon `;` or a keyword which starts a new statement.
 			let mut consumed_semi = false;
 			loop {
 				let (current, current_span) = match walker.peek() {
 					Some(t) => t,
-					None => {
-						break;
-					}
+					None => break,
 				};
 
 				if *current == Token::Semi {
@@ -554,62 +560,68 @@ fn try_parse_stmt_not_beginning_with_keyword(
 
 			return Some((nodes, consumed_semi, errors));
 		}
-		let type_ident_pairs = idents
-			.into_iter()
-			.map(|i| match i {
-				Either::Left(ident) => (type_.clone(), ident),
-				Either::Right((ident, arr)) => {
-					(type_.clone().add_var_decl_arr_size(arr), ident)
-				}
-			})
-			.collect::<Vec<_>>();
+
+		let ident_count = ident_exprs.len();
+		errors.append(&mut errs);
 
 		// Declare constructors here to avoid duplicating the code all over the place.
 		fn var_def_constructor(
-			mut type_ident_pairs: Vec<(Type, Ident)>,
 			qualifiers: &Vec<Qualifier>,
+			type_: Expr,
+			idents: Expr,
+			count: usize,
+			semi: Option<Span>,
 		) -> Node {
-			match type_ident_pairs.len() {
-				1 => {
-					let (type_, ident) = type_ident_pairs.remove(0);
-					Node {
-						ty: NodeTy::VarDef {
-							type_,
-							ident,
-							qualifiers: qualifiers.to_vec(),
-						},
-						span: Span::empty(),
-					}
-				}
+			match count {
+				1 => Node {
+					ty: NodeTy::VarDef {
+						qualifiers: qualifiers.to_vec(),
+						type_,
+						ident: idents,
+						semi,
+					},
+					span: Span::empty(),
+				},
 				_ => Node {
-					ty: NodeTy::VarDefs(type_ident_pairs, qualifiers.to_vec()),
+					ty: NodeTy::VarDefs {
+						qualifiers: qualifiers.to_vec(),
+						type_,
+						idents,
+						semi,
+					},
 					span: Span::empty(),
 				},
 			}
 		}
 		fn var_decl_constructor(
-			mut type_ident_pairs: Vec<(Type, Ident)>,
 			qualifiers: &Vec<Qualifier>,
-			value: Expr,
+			type_: Expr,
+			idents: Expr,
+			count: usize,
+			eq: Option<Span>,
+			value: Option<Expr>,
+			semi: Option<Span>,
 		) -> Node {
-			match type_ident_pairs.len() {
-				1 => {
-					let (type_, ident) = type_ident_pairs.remove(0);
-					Node {
-						ty: NodeTy::VarDecl {
-							type_,
-							ident,
-							value,
-							qualifiers: qualifiers.to_vec(),
-						},
-						span: Span::empty(),
-					}
-				}
+			match count {
+				1 => Node {
+					ty: NodeTy::VarDecl {
+						qualifiers: qualifiers.to_vec(),
+						type_,
+						ident: idents,
+						eq,
+						value,
+						semi,
+					},
+					span: Span::empty(),
+				},
 				_ => Node {
 					ty: NodeTy::VarDecls {
-						vars: type_ident_pairs,
-						value,
 						qualifiers: qualifiers.to_vec(),
+						type_,
+						idents,
+						eq,
+						value,
+						semi,
 					},
 					span: Span::empty(),
 				},
@@ -624,9 +636,14 @@ fn try_parse_stmt_not_beginning_with_keyword(
 				errors.push(SyntaxErr::ExpectedSemiOrEqAfterVarDef(
 					walker.get_last_span().next_single_width(),
 				));
-
 				return Some((
-					vec![var_def_constructor(type_ident_pairs, qualifiers)],
+					vec![var_def_constructor(
+						qualifiers,
+						type_,
+						ident_expr,
+						ident_count,
+						None,
+					)],
 					false,
 					errors,
 				));
@@ -637,7 +654,13 @@ fn try_parse_stmt_not_beginning_with_keyword(
 			walker.advance();
 
 			return Some((
-				vec![var_def_constructor(type_ident_pairs, qualifiers)],
+				vec![var_def_constructor(
+					qualifiers,
+					type_,
+					ident_expr,
+					ident_count,
+					Some(current_span),
+				)],
 				true,
 				errors,
 			));
@@ -657,9 +680,14 @@ fn try_parse_stmt_not_beginning_with_keyword(
 							eq_span.next_single_width(),
 						));
 						return Some((
-							vec![var_def_constructor(
-								type_ident_pairs,
+							vec![var_decl_constructor(
 								qualifiers,
+								type_,
+								ident_expr,
+								ident_count,
+								Some(eq_span),
+								None,
+								None,
 							)],
 							false,
 							errors,
@@ -676,9 +704,13 @@ fn try_parse_stmt_not_beginning_with_keyword(
 					));
 					return Some((
 						vec![var_decl_constructor(
-							type_ident_pairs,
 							qualifiers,
-							value_expr,
+							type_,
+							ident_expr,
+							ident_count,
+							Some(eq_span),
+							Some(value_expr),
+							None,
 						)],
 						false,
 						errors,
@@ -691,29 +723,35 @@ fn try_parse_stmt_not_beginning_with_keyword(
 
 				return Some((
 					vec![var_decl_constructor(
-						type_ident_pairs,
 						qualifiers,
-						value_expr,
+						type_,
+						ident_expr,
+						ident_count,
+						Some(eq_span),
+						Some(value_expr),
+						Some(current_span),
 					)],
 					true,
 					errors,
 				));
 			} else {
 				let mut nodes = vec![var_decl_constructor(
-					type_ident_pairs,
 					qualifiers,
-					value_expr,
+					type_,
+					ident_expr,
+					ident_count,
+					Some(eq_span),
+					Some(value_expr),
+					None,
 				)];
 
-				// Loop and consume tokens as invalid until we hit something which can unambiguously start a new
-				// statement, or a semi-colon to end the statement.
+				// Consume tokens until we come across a token which can unambiguously end this statement, this could
+				// be another semi-colon `;` or a keyword which starts a new statement.
 				let mut consumed_semi = false;
 				loop {
 					let (current, current_span) = match walker.peek() {
 						Some(t) => t,
-						None => {
-							break;
-						}
+						None => break,
 					};
 
 					if *current == Token::Semi {
@@ -739,16 +777,48 @@ fn try_parse_stmt_not_beginning_with_keyword(
 				return Some((nodes, consumed_semi, errors));
 			}
 		} else {
-			// We are missing necessary syntax, but we treat this as valid anyway.
-			errors.push(SyntaxErr::ExpectedSemiOrEqAfterVarDef(current_span));
-
-			// TODO: loop error recovery?
-
-			return Some((
-				vec![var_def_constructor(type_ident_pairs, qualifiers)],
-				false,
-				errors,
+			// Error recovery: we are missing a semi-colon or an equals-sign.
+			errors.push(SyntaxErr::ExpectedSemiOrEqAfterVarDef(
+				walker.get_previous_span().next_single_width(),
 			));
+			let mut nodes = vec![var_def_constructor(
+				qualifiers,
+				type_,
+				ident_expr,
+				ident_count,
+				None,
+			)];
+
+			// Consume tokens until we come across a token which can unambiguously end this statement, this could
+			// be another semi-colon `;` or a keyword which starts a new statement.
+			let mut consumed_semi = false;
+			loop {
+				let (current, current_span) = match walker.peek() {
+					Some(t) => t,
+					None => break,
+				};
+
+				if *current == Token::Semi {
+					nodes.push(Node {
+						ty: NodeTy::Punctuation,
+						span: *current_span,
+					});
+					walker.advance();
+					consumed_semi = true;
+					break;
+				} else if current.starts_statement() {
+					break;
+				} else {
+					nodes.push(Node {
+						ty: NodeTy::Invalid,
+						span: *current_span,
+					});
+					walker.advance();
+					continue;
+				}
+			}
+
+			return Some((nodes, consumed_semi, errors));
 		}
 	}
 
@@ -761,6 +831,7 @@ fn try_parse_stmt_not_beginning_with_keyword(
 	let (current, current_span) = match walker.peek() {
 		Some(t) => t,
 		None => {
+			// Error recovery: we are missing a semi-colon.
 			errors.push(SyntaxErr::ExpectedSemiAfterStmt(
 				expr.span.next_single_width(),
 			));
@@ -796,15 +867,13 @@ fn try_parse_stmt_not_beginning_with_keyword(
 			ty: NodeTy::Expr { expr, semi: None },
 		}];
 
-		// Loop and consume tokens as invalid until we hit something which can unambiguously start a new statement,
-		// or a semi-colon to end the statement.
+		// Consume tokens until we come across a token which can unambiguously end this statement, this could
+		// be another semi-colon `;` or a keyword which starts a new statement.
 		let mut consumed_semi = false;
-		'invalid: loop {
+		loop {
 			let (current, current_span) = match walker.peek() {
 				Some(t) => t,
-				None => {
-					break 'invalid;
-				}
+				None => break,
 			};
 
 			if *current == Token::Semi {
@@ -814,22 +883,23 @@ fn try_parse_stmt_not_beginning_with_keyword(
 				});
 				walker.advance();
 				consumed_semi = true;
-				break 'invalid;
+				break;
 			} else if current.starts_statement() {
-				break 'invalid;
+				break;
 			} else {
 				nodes.push(Node {
 					ty: NodeTy::Invalid,
 					span: *current_span,
 				});
 				walker.advance();
-				continue 'invalid;
+				continue;
 			}
 		}
 
 		Some((nodes, consumed_semi, errors))
 	}
 }
+
 /// Parse a statement beginning at the current position.
 ///
 /// [`Ok`] is returned in the following cases:
@@ -1389,7 +1459,7 @@ fn parse_stmt(walker: &mut Walker, nodes: &mut Vec<Node>) -> Vec<SyntaxErr> {
 					&[Token::Semi, Token::RParen],
 				) {
 					(Some(expr), mut errs) => {
-						if let Some(type_) = expr.to_type() {}
+						if let Some(type_) = Type::parse(&expr) {}
 						current_arg_semi = Some(walker.get_previous_span());
 					}
 					(None, _) => {
@@ -2962,8 +3032,7 @@ fn parse_switch_body(
 /// - `l_paren_span` - the span of the opening parenthesis of the parameter list which follows the identifier.
 fn parse_fn(
 	walker: &mut Walker,
-	return_type: Type,
-	start_span: Span,
+	return_type: Expr,
 	ident: Ident,
 	qualifiers: &Vec<Qualifier>,
 	l_paren_span: Span,
@@ -3033,6 +3102,10 @@ fn parse_fn(
 				));
 				return (
 					Some(Node {
+						span: Span::new(
+							return_type.span.start,
+							current_span.end,
+						),
 						ty: NodeTy::FnDef {
 							return_type,
 							ident,
@@ -3040,7 +3113,6 @@ fn parse_fn(
 							qualifiers: qualifiers.to_vec(),
 							semi: Some(current_span),
 						},
-						span: Span::new(start_span.start, current_span.end),
 					}),
 					errors,
 				);
@@ -3092,8 +3164,8 @@ fn parse_fn(
 					}
 				}
 
-				match Type::parse(&e.ty) {
-					Some(t) => t,
+				match Type::parse(&e) {
+					Some(_) => e,
 					None => {
 						errors.push(SyntaxErr::ExpectedType(e.span));
 						just_finished_param = true;
@@ -3144,7 +3216,7 @@ fn parse_fn(
 		};
 
 		// Look for an identifier.
-		let expr = match expr_parser(
+		let ident_expr = match expr_parser(
 			walker,
 			Mode::TakeOneUnit,
 			&[Token::LBrace, Token::Semi],
@@ -3191,19 +3263,10 @@ fn parse_fn(
 			}
 		};
 
-		// Since a type-identifier definition may be split up, e.g. `int i[3]`, we now convert the two "items"
-		// into the actual type and identifier.
-		let (type_, ident) = match expr.to_var_def_decl_ident().remove(0) {
-			Either::Left(ident) => (type_.clone(), ident),
-			Either::Right((ident, v)) => {
-				(type_.clone().add_var_decl_arr_size(v), ident)
-			}
-		};
-
 		params.push(Param {
 			qualifiers,
 			type_,
-			ident: Some(ident),
+			ident: Some(ident_expr),
 		});
 		just_finished_param = true;
 	}
@@ -3220,6 +3283,10 @@ fn parse_fn(
 			));
 			return (
 				Some(Node {
+					span: Span::new(
+						return_type.span.start,
+						walker.get_last_span().end,
+					),
 					ty: NodeTy::FnDef {
 						return_type,
 						ident,
@@ -3227,10 +3294,6 @@ fn parse_fn(
 						qualifiers: qualifiers.to_vec(),
 						semi: None,
 					},
-					span: Span::new(
-						start_span.start,
-						walker.get_last_span().end,
-					),
 				}),
 				errors,
 			);
@@ -3240,6 +3303,7 @@ fn parse_fn(
 		walker.advance();
 		(
 			Some(Node {
+				span: Span::new(return_type.span.start, current_span.end),
 				ty: NodeTy::FnDef {
 					qualifiers: qualifiers.to_vec(),
 					return_type,
@@ -3247,7 +3311,6 @@ fn parse_fn(
 					params,
 					semi: Some(current_span),
 				},
-				span: Span::new(start_span.start, current_span.end),
 			}),
 			errors,
 		)
@@ -3261,7 +3324,7 @@ fn parse_fn(
 
 		(
 			Some(Node {
-				span: Span::new(start_span.start, body.span.end),
+				span: Span::new(return_type.span.start, body.span.end),
 				ty: NodeTy::FnDecl {
 					qualifiers: qualifiers.to_vec(),
 					return_type,
@@ -3281,6 +3344,10 @@ fn parse_fn(
 		));
 		(
 			Some(Node {
+				span: Span::new(
+					return_type.span.start,
+					walker.get_previous_span().end,
+				),
 				ty: NodeTy::FnDef {
 					qualifiers: qualifiers.to_vec(),
 					return_type,
@@ -3288,10 +3355,6 @@ fn parse_fn(
 					params,
 					semi: None,
 				},
-				span: Span::new(
-					start_span.start,
-					walker.get_previous_span().end,
-				),
 			}),
 			errors,
 		)
@@ -3405,7 +3468,7 @@ fn parse_struct(
 	// We don't remove invalid statements because we would loose information for the AST.
 	let mut count = 0;
 	body.inner.iter().for_each(|stmt| match stmt.ty {
-		NodeTy::VarDef { .. } | NodeTy::VarDefs(_, _) => count += 1,
+		NodeTy::VarDef { .. } | NodeTy::VarDefs { .. } => count += 1,
 		_ => errors.push(SyntaxErr::ExpectedVarDefInStructBody(stmt.span)),
 	});
 	// Check that there is at least one variable definition within the body.
@@ -3553,6 +3616,7 @@ pub fn print_stmt(stmt: &Node, indent: usize) {
 			type_,
 			ident,
 			qualifiers,
+			..
 		} => {
 			print!("\r\n{:indent$}\x1b[32mVar\x1b[0m(type: {type_}, ident: {ident}, qualifiers: [", "", indent = indent*4);
 			for qualifier in qualifiers {
@@ -3560,15 +3624,18 @@ pub fn print_stmt(stmt: &Node, indent: usize) {
 			}
 			print!("])");
 		}
-		NodeTy::VarDefs(vars, qualifiers) => {
+		NodeTy::VarDefs {
+			type_,
+			idents,
+			qualifiers,
+			..
+		} => {
 			print!(
 				"\r\n{:indent$}\x1b[32mVar\x1b[0m(",
 				"",
 				indent = indent * 4
 			);
-			for var in vars {
-				print!("[type: {}, ident: {}], ", var.0, var.1);
-			}
+
 			print!(" qualifiers: [");
 			for qualifier in qualifiers {
 				print!("{qualifier}, ");
@@ -3580,6 +3647,7 @@ pub fn print_stmt(stmt: &Node, indent: usize) {
 			ident,
 			value,
 			qualifiers,
+			..
 		} => {
 			print!(
 				"\r\n{:indent$}\x1b[32mVar\x1b[0m(type: {type_}, ident: {ident}, qualifiers: [",
@@ -3589,26 +3657,27 @@ pub fn print_stmt(stmt: &Node, indent: usize) {
 			for qualifier in qualifiers {
 				print!("{qualifier}, ");
 			}
-			print!("]) = {value}");
+			print!("])");
+			if let Some(value) = value {
+				print!("= {value}");
+			}
 		}
 		NodeTy::VarDecls {
-			vars,
-			value,
-			qualifiers,
+			value, qualifiers, ..
 		} => {
 			print!(
 				"\r\n{:indent$}\x1b[32mVar\x1b[0m(",
 				"",
 				indent = indent * 4
 			);
-			for var in vars {
-				print!("[type: {}, ident: {}], ", var.0, var.1);
-			}
 			print!(" qualifiers: [");
 			for qualifier in qualifiers {
 				print!("{qualifier}, ");
 			}
-			print!("]) = {value}");
+			print!("])");
+			if let Some(value) = value {
+				print!("= {value}");
+			}
 		}
 		NodeTy::FnDef {
 			return_type,

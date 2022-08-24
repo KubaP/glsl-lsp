@@ -6,6 +6,7 @@ use tower_lsp::lsp_types::*;
 use tower_lsp::{Client, LanguageServer, LspService, Server};
 
 mod diag;
+mod extensions;
 mod state;
 
 #[derive(Debug)]
@@ -144,6 +145,25 @@ impl LanguageServer for MyServer {
 	}
 }
 
+impl MyServer {
+	async fn syntax_tree(
+		&self,
+		params: extensions::SyntaxTreeParams,
+	) -> Result<String> {
+		self.client
+			.log_message(
+				MessageType::INFO,
+				"Server received 'glsl/syntaxTree' event.",
+			)
+			.await;
+
+		let mut msg = "CONCRETE SYNTAX TREE: ".to_string();
+		msg.push_str(&params.text_document_uri.to_string());
+
+		Ok(msg)
+	}
+}
+
 #[tokio::main]
 async fn main() {
 	let stdin = tokio::io::stdin();
@@ -153,6 +173,7 @@ async fn main() {
 		client,
 		state: Mutex::new(State::new()),
 	})
+	.custom_method(extensions::SYNTAX_TREE, MyServer::syntax_tree)
 	.finish();
 
 	Server::new(stdin, stdout, socket).serve(service).await;

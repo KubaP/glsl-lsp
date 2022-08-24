@@ -9,3 +9,4 @@ edition = "2021"
 glsl-parser = { path = "../glsl-parser" }
 tokio = { version = "1.17.0", features = ["full"] }
 tower-lsp = "0.17.0"
+serde = "1.0.139"

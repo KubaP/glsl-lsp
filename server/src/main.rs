@@ -146,21 +146,58 @@ impl LanguageServer for MyServer {
 }
 
 impl MyServer {
-	async fn syntax_tree(
+	async fn syntax_tree_content(
 		&self,
-		params: extensions::SyntaxTreeParams,
-	) -> Result<String> {
+		params: extensions::SyntaxTreeContentParams,
+	) -> Result<extensions::SyntaxTreeContentResult> {
 		self.client
 			.log_message(
 				MessageType::INFO,
-				"Server received 'glsl/syntaxTree' event.",
+				"Server received 'glsl/syntaxTreeContent' event.",
 			)
 			.await;
 
 		let mut msg = "CONCRETE SYNTAX TREE: ".to_string();
 		msg.push_str(&params.text_document_uri.to_string());
 
-		Ok(msg)
+		Ok(extensions::SyntaxTreeContentResult {
+			cst: msg,
+			highlight: Range::new(
+				Position {
+					line: 0,
+					character: 0,
+				},
+				Position {
+					line: 0,
+					character: 2,
+				},
+			),
+		})
+	}
+
+	async fn syntax_tree_highlight(
+		&self,
+		_params: extensions::SyntaxTreeHighlightParams,
+	) -> Result<extensions::SyntaxTreeHighlightResult> {
+		self.client
+			.log_message(
+				MessageType::INFO,
+				"Server received 'glsl/syntaxTreeHighlight' event.",
+			)
+			.await;
+
+		Ok(extensions::SyntaxTreeHighlightResult {
+			highlight: Range::new(
+				Position {
+					line: 0,
+					character: 0,
+				},
+				Position {
+					line: 0,
+					character: 6,
+				},
+			),
+		})
 	}
 }
 
@@ -173,7 +210,14 @@ async fn main() {
 		client,
 		state: Mutex::new(State::new()),
 	})
-	.custom_method(extensions::SYNTAX_TREE, MyServer::syntax_tree)
+	.custom_method(
+		extensions::SYNTAX_TREE_CONTENT,
+		MyServer::syntax_tree_content,
+	)
+	.custom_method(
+		extensions::SYNTAX_TREE_HIGHLIGHT,
+		MyServer::syntax_tree_highlight,
+	)
 	.finish();
 
 	Server::new(stdin, stdout, socket).serve(service).await;

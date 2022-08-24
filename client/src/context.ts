@@ -97,7 +97,7 @@ export function getActiveGLSLEditor(): vscode.TextEditor | undefined {
 }
 
 /**
- * Returns the `TextEditor` which contains the `tree.glsl.cst` file, if there is one.
+ * Returns the `TextEditor` which contains the `tree.glsl.cst` file, if one is visible is one.
  */
 export function getSyntaxTreeEditor(): vscode.TextEditor | undefined {
 	return vscode.window.visibleTextEditors.find((value) => {

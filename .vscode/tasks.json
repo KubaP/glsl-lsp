@@ -207,6 +207,22 @@
 			},
 			"problemMatcher": "$tsc-watch",
 			"dependsOn": ["Cargo build server"]
+		},
+		{
+			"label": "npm build grammar",
+			"type": "npm",
+			"script": "buildGrammar",
+			"options": {
+				"cwd": "${workspaceFolder}/client"
+			},
+			"group": "build",
+			"presentation": {
+				"echo": true,
+				"reveal": "silent",
+				"focus": false,
+				"panel": "dedicated"
+			},
+			"problemMatcher": "$tsc"
 		}
 	]
 }

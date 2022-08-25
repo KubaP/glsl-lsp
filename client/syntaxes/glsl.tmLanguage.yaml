@@ -1,0 +1,79 @@
+name: GLSL
+scopeName: "source.glsl"
+fileTypes: ["glsl"]
+patterns:
+    - include: "#number"
+    - include: "#directive"
+    - include: "#constant"
+    - include: "#invalid"
+    - include: "#keyword"
+    - include: "#storage"
+    #- include: "#support"
+    - include: "#comment"
+repository:
+    comment:
+        patterns:
+            - name: "comment.block.glsl"
+              begin: "/\\*"
+              beginCaptures:
+                  "0":
+                      name: "punctuation.definition.comment.begin.glsl"
+              end: "\\*/"
+              endCaptures:
+                  "0":
+                      name: "punctuation.definition.comment.end.glsl"
+            - name: "comment.line.glsl"
+              begin: "//"
+              beginCaptures:
+                  "0":
+                      name: "punctuation.definition.comment.glsl"
+              end: "\r|\n"
+    constant:
+        name: "constant.language.boolean.glsl"
+        match: "\\b(true|false)\\b"
+    directive:
+        name: "meta.preprocessor.glsl"
+        begin: "\\#"
+        beginCaptures:
+            "0":
+                name: "punctuation.definition.directive.begin.glsl"
+        end: "\r|\n"
+    invalid:
+        name: "invalid.illegal"
+        match: "(\\@|\\¬|\\`|\\¦|\\'|\\\"|\\£|\\$|\\€)"
+    keyword:
+        patterns:
+            - name: "keyword.control.glsl"
+              match: "\\b(if|else|switch|case|default|for|while|do|break|continue|return|discard)\\b"
+            - name: "keyword.declaration.struct"
+              match: "\\bstruct\\b"
+            - name: "keyword.operator.arithmetic.glsl"
+              match: "(\\+\\+|\\-\\-|\\+|\\-|\\*|\\/|\\%)"
+            - name: "keyword.operator.assignment.glsl"
+              match: "(\\+\\=|\\-\\=|\\*\\=|\\/\\=|\\%\\=|\\&\\=|\\|\\=|\\^\\=|\\<\\<\\=|\\>\\>\\=)"
+            - name: "keyword.operator.comparative.glsl"
+              match: "(\\=\\=|\\!\\=|\\<|\\<\\=|\\>|\\>\\=)"
+            - name: "keyword.operator.bitwise.glsl"
+              match: "(\\~|\\&|\\||\\^|\\<\\<|\\>\\>)"
+            #- name: "keyword.operator.ternary.glsl"
+    number:
+        patterns:
+            - name: "constant.numeric.float.glsl"
+              match: "\\b(((\\.[0-9]+)|([0-9]+\\.[0-9]+)|([0-9]+\\.))((e|E)(\\+|\\-)?[0-9]+)?)(f|F)?\\b"
+            - name: "constant.numeric.double.glsl"
+              match: "\\b(((\\.[0-9]+)|([0-9]+\\.[0-9]+)|([0-9]+\\.))((e|E)(\\+|\\-)?[0-9]+)?)(lf|LF)?\\b"
+            - name: "constant.numeric.hex.glsl"
+              match: "\\b0x([0-9]|[a-f]|[A-F])+\\b"
+            - name: "constant.numeric.oct.glsl"
+              match: "\\b0[0-7]+\\b"
+            - name: "constant.numeric.dec.glsl"
+              match: "\\b0\\b"
+            - name: "constant.numeric.dec.glsl"
+              match: "\\b[1-9][0-9]*\\b"
+    storage:
+        patterns:
+            - name: "storage.type.glsl"
+              match: "\\b(void|bool|int|uint|float|double|bvec[2|3|4]|ivec[2|3|4]|uvec[2|3|4]|vec[2|3|4]|dvec[2|3|4]|mat[2|3|4]|mat2x2|mat2x3|mat2x4|mat3x2|mat3x3|mat3x4|mat4x2|mat4x3|mat4x4|dmat[2|3|4]|dmat2x2|dmat2x3|dmat2x4|dmat3x2|dmat3x3|dmat3x4|dmat4x2|dmat4x3|dmat4x4|sampler[1|2|3]D|[i|u]sampler[1|2|3]D|samplerCube|[i|u]samplerCube|sampler2DRect|[i|u]sampler2DRect|sampler[1|2]DArray|[i|u]sampler[1|2]DArray|samplerCubeArray|[i|u]samplerCubeArray|samplerBuffer|[i|u]samplerBuffer|sampler2DMS|[i|u]sampler2DMS|sampler2DMSArray|[i|u]sampler2DMSArray|sampler[1|2]DShadow|samplerCubeShadow|sampler2DRectShadow|sampler[1|2]DArrayShadow|samplerCubeArrayShadow|image[1|2|3]D|[i|u]image[1|2|3]D|imageCube|[i|u]imageCube|image2DRect|[i|u]image2DRect|image[1|2]DArray|[i|u]image[1|2]DArray|imageCubeArray|[i|u]imageCubeArray|imageBuffer|[i|u]imageBuffer|image2DMS|[i|u]image2DMS|image2DMSArray|[i|u]image2DMSArray|atomic_uint)\\b"
+            - name: "storage.modifier.glsl"
+              match: "\\b(const|in|out|inout|attribute|uniform|varying|buffer|shared|centroid|sample|patch|layout|smooth|flat|noperspective|highp|mediump|lowp|invariant|precise|coherent|volatile|restrict|readonly|writeonly)\\b"
+    #support:

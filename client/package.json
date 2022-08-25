@@ -50,6 +50,11 @@
 				"language": "glsl",
 				"scopeName": "source.glsl",
 				"path": "./syntaxes/glsl.tmLanguage.json"
+			},
+			{
+				"language": "glsl_syntax_tree",
+				"scopeName": "source.glsl_syntax_tree",
+				"path": "./syntaxes/glsl.cst.tmLanguage.json"
 			}
 		],
 		"commands": [
@@ -80,7 +85,7 @@
 		"vscode:prepublish": "npm run build",
 		"build": "tsc -b",
 		"watch": "tsc -b -w",
-		"buildGrammar": "npx js-yaml syntaxes/glsl.tmLanguage.yaml > syntaxes/glsl.tmLanguage.json"
+		"buildGrammar": "npx js-yaml syntaxes/glsl.tmLanguage.yaml > syntaxes/glsl.tmLanguage.json && npx js-yaml syntaxes/glsl.cst.tmLanguage.yaml > syntaxes/glsl.cst.tmLanguage.json"
 	},
 	"dependencies": {
 		"vscode-languageclient": "^8.0.2"

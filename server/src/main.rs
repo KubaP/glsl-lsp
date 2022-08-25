@@ -157,11 +157,13 @@ impl MyServer {
 			)
 			.await;
 
-		let mut msg = "CONCRETE SYNTAX TREE: ".to_string();
-		msg.push_str(&params.text_document_uri.to_string());
+		let mut state = self.state.lock().await;
 
 		Ok(extensions::SyntaxTreeContentResult {
-			cst: msg,
+			cst: state.get_syntax_tree(
+				params.text_document_uri,
+				params.text_document_version,
+			),
 			highlight: Range::new(
 				Position {
 					line: 0,
@@ -177,7 +179,7 @@ impl MyServer {
 
 	async fn syntax_tree_highlight(
 		&self,
-		_params: extensions::SyntaxTreeHighlightParams,
+		params: extensions::SyntaxTreeHighlightParams,
 	) -> Result<extensions::SyntaxTreeHighlightResult> {
 		self.client
 			.log_message(
@@ -186,16 +188,13 @@ impl MyServer {
 			)
 			.await;
 
+		let state = self.state.lock().await;
+
 		Ok(extensions::SyntaxTreeHighlightResult {
-			highlight: Range::new(
-				Position {
-					line: 0,
-					character: 0,
-				},
-				Position {
-					line: 0,
-					character: 6,
-				},
+			highlight: state.get_syntax_tree_highlight(
+				params.text_document_uri,
+				params.text_document_version,
+				params.cursor,
 			),
 		})
 	}

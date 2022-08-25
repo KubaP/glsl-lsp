@@ -14,6 +14,8 @@ name: glsl/syntaxTreeContent
 SyntaxTreeContentParams {
     /// The `Uri` of the currently active GLSL file.
     textDocumentUri: string,
+    /// The version of the currently active GLSL file.
+    textDocumentVersion: i32,
     /// An optional `Range` of the GLSL file. If this is `null`,
     /// the CST for the entire file is returned,
     /// otherwise only the relevant snippet.
@@ -47,6 +49,8 @@ name: glsl/syntaxTreeHighlight
 SyntaxTreeHighlightParams {
     /// The `Uri` of the currently active GLSL file.
     textDocumentUri: string,
+    /// The version of the currently active GLSL file.
+    textDocumentVersion: i32,
     /// The position of the cursor in the file.
     cursor: Position,
 }

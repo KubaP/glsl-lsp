@@ -1,7 +1,8 @@
 use crate::{diag, File};
+use glsl_parser::cst::Cst;
 use std::collections::HashMap;
 use tower_lsp::{
-	lsp_types::{InitializeParams, Url},
+	lsp_types::{InitializeParams, Position, Range, Url},
 	Client,
 };
 
@@ -23,14 +24,20 @@ pub struct State {
 
 	/// Currently open files, (or previously opened within this session).
 	files: HashMap<Url, File>,
+
+	/// CSTs of requested files.
+	/// MAYBE: Clear entries after a timeout?
+	syntax_trees: HashMap<Url, (i32, Cst)>,
 }
 
 impl State {
-	/// Constructs a new server `State`.
+	/// Constructs a new server `State`. By default, all functionality is disabled until the client initiates
+	/// communication and sends over it's capabilities (to [`initialize()`](Self::initialize)).
 	pub fn new() -> Self {
 		Self {
 			diagnostics: Default::default(),
 			files: HashMap::new(),
+			syntax_trees: HashMap::new(),
 		}
 	}
 
@@ -77,7 +84,7 @@ impl State {
 	pub fn change_file(&mut self, uri: Url, version: i32, contents: String) {
 		match self.files.get_mut(&uri) {
 			Some(file) => file.update(version, contents),
-			None => unreachable!("[State::change_file] Received a file `uri` which has not been registered yet!"),
+			None => unreachable!("[State::change_file] Received a file `uri: {uri}` which has not been opened yet."),
 		}
 	}
 
@@ -97,7 +104,7 @@ impl State {
 		// right now, in the future when the cross-file analysis eventually gets implemented, any primitive caching
 		// will be useless.
 		for (_, file) in &self.files {
-			let (_stmts, errors) = glsl_parser::parser::parse(&file.contents);
+			let (_cst, errors) = glsl_parser::parser::parse(&file.contents);
 
 			let mut diagnostics = Vec::new();
 			errors.into_iter().for_each(|err| {
@@ -117,5 +124,43 @@ impl State {
 				)
 				.await;
 		}
+	}
+
+	/// Returns a formatted CST for the specified file.
+	pub fn get_syntax_tree(&mut self, uri: Url, version: i32) -> String {
+		let file = self.files.get(&uri).expect(
+			&format!("[State::get_syntax_tree] Received a file `uri: {uri}` which has not been opened yet.")
+		);
+
+		// Parse the file and print the CST into a tree.
+		let (cst, _) = glsl_parser::parser::parse(&file.contents);
+		let string = "".to_owned();
+
+		// If this file's CST was already cached then update it, otherwise insert a new entry.
+		self.syntax_trees.insert(uri, (version, cst));
+
+		string
+	}
+
+	/// Returns a `Range` of the CST node within the formatted string, which corresponds to the CST node that the
+	/// cursor is over in the specified file.
+	pub fn get_syntax_tree_highlight(
+		&self,
+		_uri: Url,
+		_version: i32,
+		_cursor: Position,
+	) -> Range {
+		// TODO: Implement
+
+		Range::new(
+			Position {
+				line: 0,
+				character: 0,
+			},
+			Position {
+				line: 0,
+				character: 4,
+			},
+		)
 	}
 }

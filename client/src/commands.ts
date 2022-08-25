@@ -57,7 +57,11 @@ export function syntaxTree(context: Context): Cmd {
 			// Send the request to the server. Normally we would pass the `uri` of the current file, but since we
 			// are currently within the `tree.glsl.cst` "special" file, we instead want to pass the uri of the
 			// currently active GLSL file.
-			const params = { textDocumentUri: activeEditor.document.uri.toString(), range };
+			const params = {
+				textDocumentUri: activeEditor.document.uri.toString(),
+				textDocumentVersion: activeEditor.document.version,
+				range,
+			};
 			const { cst, highlight } = await context.client.sendRequest(
 				extensions.syntaxTreeContent,
 				params,
@@ -115,7 +119,11 @@ export function syntaxTree(context: Context): Cmd {
 				event.selections[0].start.line,
 				event.selections[0].start.character
 			);
-			const params = { textDocumentUri: editor.document.uri.toString(), cursor };
+			const params = {
+				textDocumentUri: editor.document.uri.toString(),
+				textDocumentVersion: editor.document.version,
+				cursor,
+			};
 			const { highlight } = await context.client.sendRequest(extensions.syntaxTreeHighlight, params);
 
 			// Add the decoration for the node outline, and scroll the editor to keep the node in view.

@@ -5,6 +5,7 @@ import * as client from "vscode-languageclient";
 
 export interface SyntaxTreeContentParams {
 	textDocumentUri: client.DocumentUri;
+	textDocumentVersion: number;
 	range: client.Range | null;
 }
 export interface SyntaxTreeContentResult {
@@ -17,6 +18,7 @@ export const syntaxTreeContent = new client.RequestType<SyntaxTreeContentParams,
 
 export interface SyntaxTreeHighlightParams {
 	textDocumentUri: client.DocumentUri;
+	textDocumentVersion: number;
 	cursor: client.Position;
 }
 export interface SyntaxTreeHighlightResult {

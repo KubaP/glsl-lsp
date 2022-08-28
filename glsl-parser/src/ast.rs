@@ -18,19 +18,6 @@ pub enum Fundamental {
 	Double,
 }
 
-impl std::fmt::Display for Fundamental {
-	fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-		match self {
-			Fundamental::Void => write!(f, "void"),
-			Fundamental::Bool => write!(f, "bool"),
-			Fundamental::Int => write!(f, "int"),
-			Fundamental::Uint => write!(f, "uint"),
-			Fundamental::Float => write!(f, "float"),
-			Fundamental::Double => write!(f, "double"),
-		}
-	}
-}
-
 /// A texture type of a `sampler_` or `image_` primitive type.
 #[derive(Debug, Clone, PartialEq)]
 pub enum TexType {
@@ -54,32 +41,6 @@ pub enum TexType {
 	ShadowArray1D,
 	ShadowArray2D,
 	ShadowCubeArray,
-}
-
-impl std::fmt::Display for TexType {
-	fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-		match self {
-			TexType::D1 => write!(f, "1D"),
-			TexType::D2 => write!(f, "2D"),
-			TexType::D3 => write!(f, "3D"),
-			TexType::Cube => write!(f, "Cube"),
-			TexType::Rect2D => write!(f, "2DRect"),
-			TexType::Array1D => write!(f, "1DArray"),
-			TexType::Array2D => write!(f, "2DArray"),
-			TexType::CubeArray => write!(f, "CubeArray"),
-			TexType::Buffer => write!(f, "Buffer"),
-			TexType::Multisample2D => write!(f, "2DMS"),
-			TexType::MultisampleArray2D => write!(f, "2DMSArray"),
-			TexType::ShadowD1 => write!(f, "1DShadow"),
-			TexType::ShadowD2 => write!(f, "2DShadow"),
-			TexType::ShadowD3 => write!(f, "3DShadow"),
-			TexType::ShadowCube => write!(f, "CubeShadow"),
-			TexType::ShadowRect2D => write!(f, "2DRectShadow"),
-			TexType::ShadowArray1D => write!(f, "1DArrayShadow"),
-			TexType::ShadowArray2D => write!(f, "2DArrayShadow"),
-			TexType::ShadowCubeArray => write!(f, "CubeArrayShadow"),
-		}
-	}
 }
 
 /// A primitive language type.
@@ -124,39 +85,6 @@ pub enum Primitive {
 	Image(Fundamental, TexType),
 	/// An atomic counter type.
 	Atomic,
-}
-
-impl std::fmt::Display for Primitive {
-	fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-		match self {
-			Primitive::Scalar(ff) => write!(f, "{ff}"),
-			Primitive::Vector(ff, size) => write!(f, "{ff}-vec-{size}"),
-			Primitive::Matrix(i, j) => write!(f, "mat-{i}x{j}"),
-			Primitive::DMatrix(i, j) => write!(f, "double-mat-{i}x{j}"),
-			Primitive::Struct(i) => write!(f, "struct: {i}"),
-			Primitive::Sampler(ff, t) => {
-				write!(f, "sampler-")?;
-				match ff {
-					Fundamental::Float => {}
-					Fundamental::Int => write!(f, "int-")?,
-					Fundamental::Uint => write!(f, "uint-")?,
-					_ => unreachable!(),
-				}
-				write!(f, "{t}")
-			}
-			Primitive::Image(ff, t) => {
-				write!(f, "image-")?;
-				match ff {
-					Fundamental::Float => {}
-					Fundamental::Int => write!(f, "int-")?,
-					Fundamental::Uint => write!(f, "uint-")?,
-					_ => unreachable!(),
-				}
-				write!(f, "{t}")
-			}
-			Primitive::Atomic => write!(f, "atomic"),
-		}
-	}
 }
 
 impl Primitive {
@@ -305,43 +233,6 @@ pub enum Type {
 	///
 	/// - `1` - Vec containing the sizes of arrays, starting with the outer-most array.
 	ArrayND(Primitive, Vec<ArrSize>),
-}
-
-impl std::fmt::Display for Type {
-	fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-		fn format_size(i: &Option<Expr>) -> String {
-			if let Some(inner) = i {
-				format!("{inner}")
-			} else {
-				"".to_owned()
-			}
-		}
-		match self {
-			Type::Basic(t) => write!(f, "\x1b[91m{t}\x1b[0m"),
-			Type::Array(t, i) => {
-				write!(f, "\x1b[91m{t}\x1b[0m[{}]", format_size(i))
-			}
-			Type::Array2D(t, i, j) => {
-				write!(
-					f,
-					"\x1b[91m{t}\x1b[0m[{}][{}]",
-					format_size(i),
-					format_size(j)
-				)
-			}
-			Type::ArrayND(t, v) => {
-				write!(f, "\x1b[91m{t}\x1b[0m")?;
-				for v in v {
-					if let Some(expr) = v {
-						write!(f, "[{expr}]")?;
-					} else {
-						write!(f, "[]")?;
-					}
-				}
-				Ok(())
-			}
-		}
-	}
 }
 
 impl Type {

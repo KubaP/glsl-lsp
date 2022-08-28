@@ -1,3 +1,5 @@
+mod shader;
+
 use gl::types::{GLenum, GLsizei, GLuint};
 use glutin::{window::Window, ContextWrapper, PossiblyCurrent};
 use notify::Watcher;
@@ -9,13 +11,9 @@ use std::{
 	thread,
 };
 
-mod shader;
-
 pub fn parse_file(source: &str) {
-	let (stmts, errs) = glsl_parser::parser::parse(source);
-	for stmt in stmts {
-		glsl_parser::parser::print_stmt(&stmt, 0);
-	}
+	let (cst, errs) = glsl_parser::parser::parse(source);
+	glsl_parser::parser::print_tree(&cst);
 	print!("\r\n");
 	for err in errs {
 		println!("{err:?}");

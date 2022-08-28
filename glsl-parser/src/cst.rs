@@ -18,18 +18,6 @@ pub enum Lit {
 	Double(f64),
 }
 
-impl std::fmt::Display for Lit {
-	fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-		match self {
-			Self::Bool(b) => write!(f, "\x1b[35m{}\x1b[0m", b.to_string()),
-			Self::Int(i) => write!(f, "\x1b[35m{i}\x1b[0m"),
-			Self::UInt(u) => write!(f, "\x1b[35m{u}\x1b[0m"),
-			Self::Float(fp) => write!(f, "\x1b[35m{fp}\x1b[0m"),
-			Self::Double(d) => write!(f, "\x1b[35m{d}\x1b[0m"),
-		}
-	}
-}
-
 impl Lit {
 	pub fn parse(token: &Token) -> Result<Self, ()> {
 		match token {
@@ -144,12 +132,6 @@ pub struct Ident {
 	pub span: Span,
 }
 
-impl std::fmt::Display for Ident {
-	fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-		write!(f, "\x1b[33m{}\x1b[0m", self.name)
-	}
-}
-
 impl Ident {
 	fn from_expr(
 		expr: &ExprTy,
@@ -209,8 +191,8 @@ impl std::fmt::Display for Expr {
 			ExprTy::Missing => write!(f, "\x1b[31;4mMISSING\x1b[0m"),
 			ExprTy::Incomplete => write!(f, "\x1b[31;4mINCOMPLETE\x1b[0m"),
 			ExprTy::Invalid => write!(f, "\x1b[31;4mINVALID\x1b[0m"),
-			ExprTy::Lit(l) => write!(f, "{l}"),
-			ExprTy::Ident(i) => write!(f, "{i}"),
+			ExprTy::Lit(l) => write!(f, "LITERAL"),
+			ExprTy::Ident(i) => write!(f, "IDENT"),
 			ExprTy::Prefix { expr, op } => {
 				write!(f, "\x1b[36mPre\x1b[0m({expr} \x1b[36m{op}\x1b[0m)")
 			}
@@ -245,7 +227,7 @@ impl std::fmt::Display for Expr {
 				write!(f, "\x1b[36mAccess\x1b[0m({obj} -> {leaf})")
 			}
 			ExprTy::Fn { ident, args } => {
-				write!(f, "\x1b[34mCall\x1b[0m(ident: {ident}, args: [")?;
+				write!(f, "\x1b[34mCall\x1b[0m(ident: IDENT, args: [")?;
 				for arg in args {
 					write!(f, "{arg}, ")?;
 				}
@@ -1072,37 +1054,6 @@ pub enum Preproc {
 	Unsupported,
 }
 
-impl std::fmt::Display for Preproc {
-	fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-		match self {
-			Preproc::Version { version, is_core } => write!(
-				f,
-				"version: {version}, profile: {}",
-				if *is_core { "core" } else { "compat" }
-			),
-			Preproc::Extension { name, behaviour } => {
-				write!(f, "extension: {name}, behaviour: {behaviour:?}")
-			}
-			Preproc::Line { line, src_str } => {
-				if let Some(src_str) = src_str {
-					write!(f, "line: {line}, src-str: {src_str}")
-				} else {
-					write!(f, "line: {line}")
-				}
-			}
-			Preproc::Include(s) => write!(f, "include: {s}"),
-			Preproc::UnDef(s) => write!(f, "undef: {s}"),
-			Preproc::IfDef(s) => write!(f, "ifdef: {s}"),
-			Preproc::IfnDef(s) => write!(f, "ifndef: {s}"),
-			Preproc::Else => write!(f, "else"),
-			Preproc::EndIf => write!(f, "end"),
-			Preproc::Error(s) => write!(f, "error: {s}"),
-			Preproc::Pragma(s) => write!(f, "pragma: {s}"),
-			Preproc::Unsupported => write!(f, "UNSUPPORTED"),
-		}
-	}
-}
-
 /// The possible behaviours in an `#extension` directive.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum ExtBehaviour {
@@ -1133,63 +1084,6 @@ pub enum QualifierTy {
 	Invariant,
 	Precise,
 	Memory(Memory),
-}
-
-impl std::fmt::Display for Qualifier {
-	fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-		match &self.ty {
-			QualifierTy::Storage(ty) => write!(
-				f,
-				"\x1b[95m{}\x1b[0m",
-				match ty {
-					Storage::Const => "const",
-					Storage::In => "in",
-					Storage::Out => "out",
-					Storage::InOut => "inout",
-					Storage::Attribute => "attribute",
-					Storage::Uniform => "uniform",
-					Storage::Varying => "varying",
-					Storage::Buffer => "buffer",
-					Storage::Shared => "shared",
-					Storage::Centroid => "centroid",
-					Storage::Sample => "sample",
-					Storage::Patch => "patch",
-				}
-			),
-			QualifierTy::Layout { idents, .. } => {
-				write!(f, "\x1b[95mlayout\x1b[0m: [")?;
-				/* for l in idents.item_iter() {
-					write!(f, "{l}, ")?;
-				} */
-				write!(f, "]")
-			}
-			QualifierTy::Interpolation(ty) => write!(
-				f,
-				"\x1b[95m{}\x1b[0m",
-				match ty {
-					Interpolation::Smooth => "smooth",
-					Interpolation::Flat => "flat",
-					Interpolation::NoPerspective => "noperspective",
-				}
-			),
-			QualifierTy::Precision(_) => {
-				write!(f, "\x1b[90;9mprecision\x1b[0m")
-			}
-			QualifierTy::Invariant => write!(f, "\x1b[95minvariant\x1b[0m"),
-			QualifierTy::Precise => write!(f, "\x1b[95mprecise\x1b[0m"),
-			QualifierTy::Memory(ty) => write!(
-				f,
-				"\x1b[95m{}\x1b[0m",
-				match ty {
-					Memory::Coherent => "coherent",
-					Memory::Volatile => "volatile",
-					Memory::Restrict => "restrict",
-					Memory::Readonly => "readonly",
-					Memory::Writeonly => "writeonly",
-				}
-			),
-		}
-	}
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -1347,94 +1241,4 @@ pub enum LayoutTy {
 	DepthGreater,
 	DepthLess,
 	DepthUnchanged,
-}
-
-impl std::fmt::Display for Layout {
-	fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-		Ok(())
-		/* match &self.ty {
-			LayoutTy::Shared => write!(f, "shared"),
-			LayoutTy::Packed => write!(f, "packed"),
-			LayoutTy::Std140 => write!(f, "std140"),
-			LayoutTy::Std430 => write!(f, "std430"),
-			LayoutTy::RowMajor => write!(f, "row-major"),
-			LayoutTy::ColumnMajor => write!(f, "column-major"),
-			LayoutTy::Binding { value, .. } => {
-				write!(f, "binding = {value}")
-			}
-			LayoutTy::Offset { value, .. } => {
-				write!(f, "offset = {value}")
-			}
-			LayoutTy::Align { value, .. } => write!(f, "align = {value}"),
-			LayoutTy::Location { value, .. } => {
-				write!(f, "location = {value}")
-			}
-			LayoutTy::Component { value, .. } => {
-				write!(f, "component = {value}")
-			}
-			LayoutTy::Index { value, .. } => write!(f, "index = {value}"),
-			LayoutTy::Points => write!(f, "points"),
-			LayoutTy::Lines => write!(f, "lines"),
-			LayoutTy::Isolines => write!(f, "isolines"),
-			LayoutTy::Triangles => write!(f, "triangles"),
-			LayoutTy::Quads => write!(f, "quads"),
-			LayoutTy::EqualSpacing => write!(f, "equal-spacing"),
-			LayoutTy::FractionalEvenSpacing => {
-				write!(f, "fragment-even-spacing")
-			}
-			LayoutTy::FractionalOddSpacing => {
-				write!(f, "fragment-odd-spacing")
-			}
-			LayoutTy::Clockwise => write!(f, "clockwise"),
-			LayoutTy::CounterClockwise => write!(f, "counter-clockwise"),
-			LayoutTy::PointMode => write!(f, "point-mode"),
-			LayoutTy::LinesAdjacency => write!(f, "lines-adjacency"),
-			LayoutTy::TrianglesAdjacency => {
-				write!(f, "triangles-adjacency")
-			}
-			LayoutTy::Invocations { value, .. } => {
-				write!(f, "invocations = {value}")
-			}
-			LayoutTy::OriginUpperLeft => write!(f, "origin-upper-left"),
-			LayoutTy::PixelCenterInteger => {
-				write!(f, "pixel-center-integer")
-			}
-			LayoutTy::EarlyFragmentTests => {
-				write!(f, "early-fragment-tests")
-			}
-			LayoutTy::LocalSizeX { value, .. } => {
-				write!(f, "local-size-x = {value}")
-			}
-			LayoutTy::LocalSizeY { value, .. } => {
-				write!(f, "local-size-y = {value}")
-			}
-			LayoutTy::LocalSizeZ { value, .. } => {
-				write!(f, "local-size-z = {value}")
-			}
-			LayoutTy::XfbBuffer { value, .. } => {
-				write!(f, "xfb-buffer = {value}")
-			}
-			LayoutTy::XfbStride { value, .. } => {
-				write!(f, "xfb-stride = {value}")
-			}
-			LayoutTy::XfbOffset { value, .. } => {
-				write!(f, "xfb-offset = {value}")
-			}
-			LayoutTy::Vertices { value, .. } => {
-				write!(f, "vertices = {value}")
-			}
-			LayoutTy::LineStrip => write!(f, "line-strip"),
-			LayoutTy::TriangleStrip => write!(f, "triangle-strip"),
-			LayoutTy::MaxVertices { value, .. } => {
-				write!(f, "max-vertices = {value}")
-			}
-			LayoutTy::Stream { value, .. } => {
-				write!(f, "stream = {value}")
-			}
-			LayoutTy::DepthAny => write!(f, "depth-any"),
-			LayoutTy::DepthGreater => write!(f, "depth-greater"),
-			LayoutTy::DepthLess => write!(f, "depth-less"),
-			LayoutTy::DepthUnchanged => write!(f, "depth-unchanged"),
-		} */
-	}
 }

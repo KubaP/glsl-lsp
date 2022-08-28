@@ -306,24 +306,25 @@ impl Expr {
 	}
 
 	pub fn to_ident_list(&self) -> List<Expr> {
-		let mut idents = Vec::new();
+		let mut idents = List::new();
 
 		match &self.ty {
+			// TODO: Track comma spans.
 			ExprTy::List(v) => {
 				for expr in v {
 					match Ident::from_expr(&expr.ty) {
-						Some(_) => idents.push((expr.clone(), None)),
+						Some(_) => idents.push_item(expr.clone()),
 						None => {}
 					}
 				}
 			}
 			_ => match Ident::from_expr(&self.ty) {
-				Some(_) => idents.push((self.clone(), None)),
+				Some(_) => idents.push_item(self.clone()),
 				None => {}
 			},
 		}
 
-		List { items: idents }
+		idents
 	}
 }
 
@@ -434,35 +435,273 @@ pub enum ExprTy {
 	List(Vec<Expr>),
 }
 
-/// A comma-seperated list.
+/// A symbol-seperated list of items of type `T`.
+///
+/// This struct stores entries; each entry consists of an optional `T` and of an optional separator [`Span`].
+///
+/// The following series of syntactical tokens:
+/// ```text
+/// T , T  T ,  ,
+/// ```
+/// would be constructed like so:
+/// ```
+/// # let mut list = List::new();
+/// # let t = 1;
+/// # let comma_span = Span::new(0, 1);
+/// list.push_item(t);
+/// list.push_separator(comma_span);
+/// list.push_item(t);
+/// list.push_item(t);
+/// list.push_separator(comma_span);
+/// list.push_separator(comma_span);
+/// ```
 #[derive(Debug, Clone, PartialEq)]
 pub struct List<T> {
-	pub items: Vec<(T, Option<Span>)>,
+	/// Each entry consists of an optional item followed by an optional separator.
+	entries: Vec<(Option<T>, Option<Span>)>,
 }
 
 impl<T> List<T> {
-	pub fn len(&self) -> usize {
-		self.items.len()
-	}
-
-	pub fn is_empty(&self) -> bool {
-		self.items.is_empty()
-	}
-
-	pub fn push(&mut self, item: T) {
-		self.items.push((item, None));
-	}
-
-	pub fn push_comma(&mut self, span: Span) {
-		if let Some(last) = self.items.last_mut() {
-			last.1 = Some(span);
-		} else {
-			
+	/// Constructs a new `List`.
+	pub fn new() -> Self {
+		Self {
+			entries: Vec::new(),
 		}
 	}
 
-	pub fn remove(&mut self, idx: usize) -> T {
-		self.items.remove(idx).0
+	/// Returns the number of elements in this `List`.
+	pub fn len(&self) -> usize {
+		self.entries.len()
+	}
+
+	/// Returns whether this `List` is empty.
+	pub fn is_empty(&self) -> bool {
+		self.entries.is_empty()
+	}
+
+	/// Appends an item `T` to the `List`.
+	pub fn push_item(&mut self, item: T) {
+		self.entries.push((Some(item), None));
+	}
+
+	/// Appends a separator to the `List`.
+	pub fn push_separator(&mut self, span: Span) {
+		if let Some(last) = self.entries.last_mut() {
+			if last.1.is_none() {
+				last.1 = Some(span);
+				return;
+			}
+		}
+		self.entries.push((None, Some(span)));
+	}
+
+	/// Wraps this `List` within an `Option<List`. If this list is empty, `None` will returned.
+	pub fn wrap_in_option(self) -> Option<Self> {
+		if self.entries.is_empty() {
+			None
+		} else {
+			Some(self)
+		}
+	}
+
+	/// Creates an iterator over the items **and** the separators in the `List`.
+	///
+	/// The iterator returns `Either<&T, &Span>` corresponding to `Either<Item, Separator span>`, in the order that
+	/// they appear in.
+	pub fn entry_iter(&self) -> ListEntryIterator<T> {
+		ListEntryIterator {
+			items: &&self.entries,
+			cursor: 0,
+			index: 0,
+		}
+	}
+
+	/// Creates an iterator over the items in this `List`.
+	pub fn item_iter(&self) -> ListItemIterator<T> {
+		ListItemIterator {
+			items: &self.entries,
+			cursor: 0,
+		}
+	}
+}
+
+impl List<Param> {
+	/// Returns the [`Span`] of the entire `List` if the list is not empty.
+	pub fn span(&self) -> Option<Span> {
+		if self.entries.is_empty() {
+			return None;
+		}
+
+		let first = self.entries.first().unwrap();
+		let start = if let Some(p) = &first.0 {
+			p.span.start
+		} else if let Some(s) = &first.1 {
+			s.start
+		} else {
+			unreachable!("[List<Param>::span] `self.entries` first element has no item or separator.")
+		};
+
+		let last = self.entries.last().unwrap();
+		let end = if let Some(s) = &last.1 {
+			s.end
+		} else if let Some(p) = &last.0 {
+			p.span.end
+		} else {
+			unreachable!("[List<Param>::span] `self.entries` last element has no item or separator.")
+		};
+
+		Some(Span::new(start, end))
+	}
+
+	/// Converts this list of [`Param`]s into individual nodes. This is used in the scenario that the parsing of a
+	/// function definition/declaration failed early.
+	pub fn convert_into_failed_nodes(self, nodes: &mut Nodes) {
+		for entry in self.entries {
+			if let Some(Param {
+				qualifiers,
+				type_,
+				ident,
+				span,
+			}) = entry.0
+			{
+				for Qualifier { span, .. } in qualifiers {
+					nodes.push(Node {
+						span,
+						ty: NodeTy::Keyword,
+					});
+				}
+				nodes.push(Node {
+					span: type_.span,
+					ty: NodeTy::Expression(type_),
+				});
+				if let Some(ident) = ident {
+					nodes.push(Node {
+						span: ident.span,
+						ty: NodeTy::Ident,
+					});
+				}
+			}
+			if let Some(separator) = entry.1 {
+				nodes.push(Node {
+					span: separator,
+					ty: NodeTy::Punctuation,
+				});
+			}
+		}
+	}
+}
+
+impl List<Layout> {
+	/// Returns the [`Span`] of the entire `List` if the list is not empty.
+	pub fn span(&self) -> Option<Span> {
+		if self.entries.is_empty() {
+			return None;
+		}
+
+		let first = self.entries.first().unwrap();
+		let start = if let Some(l) = &first.0 {
+			l.span.start
+		} else if let Some(s) = &first.1 {
+			s.start
+		} else {
+			unreachable!("[List<Layout>::span] `self.entries` first element has no item or separator.")
+		};
+
+		let last = self.entries.last().unwrap();
+		let end = if let Some(s) = &last.1 {
+			s.end
+		} else if let Some(l) = &last.0 {
+			l.span.end
+		} else {
+			unreachable!("[List<Layout>::span] `self.entries` last element has no item or separator.")
+		};
+
+		Some(Span::new(start, end))
+	}
+}
+
+impl List<Nodes> {
+	/// Returns the [`Span`] of the entire `List` if the list is not empty.
+	pub fn span(&self) -> Option<Span> {
+		if self.entries.is_empty() {
+			return None;
+		}
+
+		let first = self.entries.first().unwrap();
+		let start = if let Some(n) = &first.0 {
+			n.span().start
+		} else if let Some(s) = &first.1 {
+			s.start
+		} else {
+			unreachable!("[List<Layout>::span] `self.entries` first element has no item or separator.")
+		};
+
+		let last = self.entries.last().unwrap();
+		let end = if let Some(s) = &last.1 {
+			s.end
+		} else if let Some(n) = &last.0 {
+			n.span().end
+		} else {
+			unreachable!("[List<Layout>::span] `self.entries` last element has no item or separator.")
+		};
+
+		Some(Span::new(start, end))
+	}
+}
+
+/// An iterator over the items `T` **and** separators of a [`List<T>`]. This iterator returns `Either<&T, &Span>`
+/// corresponding to `Either<Item, Separator span>`.
+///
+/// This struct is created by the [`List::entry_iter()`](List::entry_iter) method.
+pub struct ListEntryIterator<'a, T> {
+	items: &'a [(Option<T>, Option<Span>)],
+	cursor: usize,
+	index: usize,
+}
+
+impl<'a, T> Iterator for ListEntryIterator<'a, T> {
+	type Item = Either<&'a T, &'a Span>;
+
+	fn next(&mut self) -> Option<Self::Item> {
+		while let Some(t) = self.items.get(self.cursor) {
+			if self.index == 0 {
+				if let Some(t) = &t.0 {
+					self.index = 1;
+					return Some(Either::Left(t));
+				}
+			}
+
+			self.cursor += 1;
+			self.index = 0;
+
+			if let Some(s) = &t.1 {
+				return Some(Either::Right(s));
+			}
+		}
+		None
+	}
+}
+
+/// An iterator over the items `T` of a [`List<T>`].
+///
+/// This struct is created by the [`List::item_iter()`](List::item_iter) method.
+pub struct ListItemIterator<'a, T> {
+	items: &'a [(Option<T>, Option<Span>)],
+	cursor: usize,
+}
+
+impl<'a, T> Iterator for ListItemIterator<'a, T> {
+	type Item = &'a T;
+
+	fn next(&mut self) -> Option<Self::Item> {
+		while let Some(t) = self.items.get(self.cursor) {
+			self.cursor += 1;
+
+			if let Some(t) = &t.0 {
+				return Some(t);
+			}
+		}
+		None
 	}
 }
 
@@ -471,8 +710,9 @@ impl<T> List<T> {
 pub struct Param {
 	pub qualifiers: Vec<Qualifier>,
 	pub type_: Expr,
+	/// Parameter name can be omitted, so `None` is a valid value.
 	pub ident: Option<Expr>,
-	// TODO: Hold comma span too.
+	pub span: Span,
 }
 
 /// The type of an if-statement branch. This also tracks the relevant keyword spans.
@@ -483,6 +723,17 @@ pub enum IfTy {
 	Else(Span),
 }
 
+impl IfTy {
+	/// Returns the [`Span`] of the keywords of this if-branch type.
+	pub fn span(&self) -> Span {
+		match self {
+			Self::If(i) => *i,
+			Self::ElseIf(e, i) => Span::new(e.start, i.end),
+			Self::Else(e) => *e,
+		}
+	}
+}
+
 /// An if-statement branch.
 #[derive(Debug, Clone, PartialEq)]
 pub struct IfBranch {
@@ -491,6 +742,7 @@ pub struct IfBranch {
 	pub cond: Option<Node>,
 	pub r_paren: Option<Span>,
 	pub body: Option<Scope>,
+	pub span: Span,
 }
 
 /// A switch-statement branch.
@@ -498,9 +750,10 @@ pub struct IfBranch {
 pub struct SwitchBranch {
 	pub kw: Span,
 	pub is_default: bool,
-	pub expr: Vec<Node>,
+	pub expr: Option<Nodes>,
 	pub colon: Option<Span>,
 	pub body: Option<Scope>,
+	pub span: Span,
 }
 
 /// A scope of nodes, potentially delimited by opening and closing delimiters.
@@ -519,6 +772,85 @@ pub struct Scope {
 	/// delimiter to the end of the closing delimiter. However, if one or both delimiters are missing, the span
 	/// starts/ends at the start/end of the first/last node.
 	pub span: Span,
+}
+
+/// A growable collection of [`Node`]s.
+///
+/// This is basically a wrapper around `Vec<Node>` with some helper functions to automatically keep track of spans.
+/// This differs from [`Scope`] in that `Scope` represents a complete lexical scope of nodes. This is more of just
+/// a collection, and is suited towards the parsing logic where nodes may need to be added later down the line.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Nodes {
+	pub inner: Vec<Node>,
+	start: usize,
+	end: usize,
+}
+
+impl Nodes {
+	/// Constructs an empty set of `Nodes`.
+	pub fn new() -> Self {
+		Self {
+			inner: Vec::new(),
+			start: 0,
+			end: 0,
+		}
+	}
+
+	/// Constructs a set of `Nodes` with the provided [`Node`].
+	pub fn new_with(node: Node) -> Self {
+		let start = node.span.start;
+		let end = node.span.end;
+		Self {
+			inner: vec![node],
+			start,
+			end,
+		}
+	}
+
+	/// Converts a [`Vec<Node>`] into a set of `Nodes`.
+	pub fn from_vec(v: Vec<Node>) -> Self {
+		let (start, end) = if !v.is_empty() {
+			(v.first().unwrap().span.start, v.last().unwrap().span.end)
+		} else {
+			(0, 0)
+		};
+		Self {
+			inner: v,
+			start,
+			end,
+		}
+	}
+
+	/// Appends a [`Node`] to this set of `Nodes`.
+	pub fn push(&mut self, node: Node) {
+		// If this is the first node added, we need to set the `start` position for this collection.
+		if self.inner.is_empty() {
+			self.start = node.span.start;
+		}
+
+		self.end = node.span.end;
+		self.inner.push(node);
+	}
+
+	/// Returns whether this set of `Nodes` is empty.
+	pub fn is_empty(&self) -> bool {
+		self.inner.is_empty()
+	}
+
+	/// Returns the first [`Node`] from this set of `Nodes`, if there is one.
+	pub fn first(&self) -> Option<&Node> {
+		self.inner.first()
+	}
+
+	/// Returns the last [`Node`] from this set of `Nodes`, if there is one.
+	pub fn last(&self) -> Option<&Node> {
+		self.inner.last()
+	}
+
+	/// Returns the [`Span`] of this set of `Nodes`.
+	pub fn span(&self) -> Span {
+		Span::new(self.start, self.end)
+	}
 }
 
 /// A collection of tokens (attempted to be) grouped into logical nodes. Nodes are either:
@@ -561,7 +893,7 @@ pub enum NodeTy {
 	DelimitedScope(Scope),
 	/* STATEMENTS */
 	/// An empty statement, i.e. just a `;`.
-	Empty,
+	EmptyStmt,
 	/// A variable definition, e.g. `int a;`.
 	VarDef {
 		qualifiers: Vec<Qualifier>,
@@ -599,7 +931,9 @@ pub enum NodeTy {
 		qualifiers: Vec<Qualifier>,
 		return_type: Expr,
 		ident: Ident,
-		params: Vec<Param>,
+		l_paren: Span,
+		params: List<Param>,
+		r_paren: Option<Span>,
 		semi: Option<Span>,
 	},
 	/// A function declaration.
@@ -607,22 +941,25 @@ pub enum NodeTy {
 		qualifiers: Vec<Qualifier>,
 		return_type: Expr,
 		ident: Ident,
-		params: Vec<Param>,
+		l_paren: Span,
+		params: List<Param>,
+		r_paren: Option<Span>,
 		body: Scope,
 	},
 	/// A struct definition. *Note:* This is invalid glsl grammar.
 	StructDef {
+		qualifiers: Vec<Qualifier>,
 		kw: Span,
 		ident: Ident,
-		qualifiers: Vec<Qualifier>,
 		semi: Span,
 	},
 	/// A struct declaration.
 	StructDecl {
+		qualifiers: Vec<Qualifier>,
 		kw: Span,
 		ident: Ident,
 		body: Scope,
-		qualifiers: Vec<Qualifier>,
+		/// Instance name can be omitted, so `None` is a valid value.
 		instance: Option<Ident>,
 		semi: Option<Span>,
 	},
@@ -632,7 +969,7 @@ pub enum NodeTy {
 	/// - `fn();`
 	/// - `i = 5 + 1;`
 	/// - `i *= fn();`
-	Expr {
+	ExprStmt {
 		expr: Expr,
 		semi: Option<Span>,
 	},
@@ -654,15 +991,17 @@ pub enum NodeTy {
 	Switch {
 		kw: Span,
 		l_paren: Option<Span>,
-		expr: Vec<Node>,
+		expr: Option<Nodes>,
 		r_paren: Option<Span>,
+		l_brace: Option<Span>,
 		cases: Vec<SwitchBranch>,
+		r_brace: Option<Span>,
 	},
 	/// A for-loop statement.
 	For {
 		kw: Span,
 		l_paren: Option<Span>,
-		nodes: Vec<(Option<Node>, Option<Span>)>,
+		nodes: Option<List<Nodes>>,
 		r_paren: Option<Span>,
 		body: Option<Scope>,
 	},
@@ -670,7 +1009,7 @@ pub enum NodeTy {
 	While {
 		kw: Span,
 		l_paren: Option<Span>,
-		cond: Vec<Node>,
+		cond: Option<Nodes>,
 		r_paren: Option<Span>,
 		body: Option<Scope>,
 	},
@@ -680,7 +1019,7 @@ pub enum NodeTy {
 		body: Option<Scope>,
 		while_kw: Option<Span>,
 		l_paren: Option<Span>,
-		cond: Vec<Node>,
+		cond: Option<Nodes>,
 		r_paren: Option<Span>,
 		semi: Option<Span>,
 	},
@@ -775,42 +1114,31 @@ pub enum ExtBehaviour {
 
 /// A qualifier which is associated with a definition/declaration or a parameter.
 #[derive(Debug, Clone, PartialEq)]
-pub enum Qualifier {
-	Storage {
-		ty: Storage,
-		span: Span,
-	},
+pub struct Qualifier {
+	pub ty: QualifierTy,
+	pub span: Span,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub enum QualifierTy {
+	Storage(Storage),
 	Layout {
 		kw: Span,
-		l_paren: Span,
-		idents: Vec<(Layout, Span)>,
-		commas: Vec<Span>,
+		l_paren: Option<Span>,
+		idents: Option<List<Layout>>,
 		r_paren: Option<Span>,
-		span: Span,
 	},
-	Interpolation {
-		ty: Interpolation,
-		span: Span,
-	},
-	Precision {
-		span: Span,
-	},
-	Invariant {
-		span: Span,
-	},
-	Precise {
-		span: Span,
-	},
-	Memory {
-		ty: Memory,
-		span: Span,
-	},
+	Interpolation(Interpolation),
+	Precision(Precision),
+	Invariant,
+	Precise,
+	Memory(Memory),
 }
 
 impl std::fmt::Display for Qualifier {
 	fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-		match self {
-			Self::Storage { ty, .. } => write!(
+		match &self.ty {
+			QualifierTy::Storage(ty) => write!(
 				f,
 				"\x1b[95m{}\x1b[0m",
 				match ty {
@@ -828,14 +1156,14 @@ impl std::fmt::Display for Qualifier {
 					Storage::Patch => "patch",
 				}
 			),
-			Self::Layout { idents, .. } => {
+			QualifierTy::Layout { idents, .. } => {
 				write!(f, "\x1b[95mlayout\x1b[0m: [")?;
-				for (l, _) in idents {
+				/* for l in idents.item_iter() {
 					write!(f, "{l}, ")?;
-				}
+				} */
 				write!(f, "]")
 			}
-			Self::Interpolation { ty, .. } => write!(
+			QualifierTy::Interpolation(ty) => write!(
 				f,
 				"\x1b[95m{}\x1b[0m",
 				match ty {
@@ -844,10 +1172,12 @@ impl std::fmt::Display for Qualifier {
 					Interpolation::NoPerspective => "noperspective",
 				}
 			),
-			Self::Precision { .. } => write!(f, "\x1b[90;9mprecision\x1b[0m"),
-			Self::Invariant { .. } => write!(f, "\x1b[95minvariant\x1b[0m"),
-			Self::Precise { .. } => write!(f, "\x1b[95mprecise\x1b[0m"),
-			Self::Memory { ty, .. } => write!(
+			QualifierTy::Precision(_) => {
+				write!(f, "\x1b[90;9mprecision\x1b[0m")
+			}
+			QualifierTy::Invariant => write!(f, "\x1b[95minvariant\x1b[0m"),
+			QualifierTy::Precise => write!(f, "\x1b[95mprecise\x1b[0m"),
+			QualifierTy::Memory(ty) => write!(
 				f,
 				"\x1b[95m{}\x1b[0m",
 				match ty {
@@ -858,21 +1188,6 @@ impl std::fmt::Display for Qualifier {
 					Memory::Writeonly => "writeonly",
 				}
 			),
-		}
-	}
-}
-
-impl Qualifier {
-	/// Retrieves the [`Span`] of this entire `Qualifier`.
-	pub fn span(&self) -> &Span {
-		match self {
-			Self::Storage { span, .. } => span,
-			Self::Layout { span, .. } => span,
-			Self::Interpolation { span, .. } => span,
-			Self::Precision { span } => span,
-			Self::Invariant { span } => span,
-			Self::Precise { span } => span,
-			Self::Memory { span, .. } => span,
 		}
 	}
 }
@@ -894,6 +1209,13 @@ pub enum Storage {
 }
 
 #[derive(Debug, Clone, PartialEq)]
+pub enum Precision {
+	HighP,
+	MediumP,
+	LowP,
+}
+
+#[derive(Debug, Clone, PartialEq)]
 pub enum Interpolation {
 	Smooth,
 	Flat,
@@ -910,19 +1232,49 @@ pub enum Memory {
 }
 
 #[derive(Debug, Clone, PartialEq)]
-pub enum Layout {
+pub struct Layout {
+	pub ty: LayoutTy,
+	pub span: Span,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub enum LayoutTy {
 	Shared,
 	Packed,
 	Std140,
 	Std430,
 	RowMajor,
 	ColumnMajor,
-	Binding { kw: Span, eq: Span, value: Expr },
-	Offset { kw: Span, eq: Span, value: Expr },
-	Align { kw: Span, eq: Span, value: Expr },
-	Location { kw: Span, eq: Span, value: Expr },
-	Component { kw: Span, eq: Span, value: Expr },
-	Index { kw: Span, eq: Span, value: Expr },
+	Binding {
+		kw: Span,
+		eq: Option<Span>,
+		value: Option<Expr>,
+	},
+	Offset {
+		kw: Span,
+		eq: Option<Span>,
+		value: Option<Expr>,
+	},
+	Align {
+		kw: Span,
+		eq: Option<Span>,
+		value: Option<Expr>,
+	},
+	Location {
+		kw: Span,
+		eq: Option<Span>,
+		value: Option<Expr>,
+	},
+	Component {
+		kw: Span,
+		eq: Option<Span>,
+		value: Option<Expr>,
+	},
+	Index {
+		kw: Span,
+		eq: Option<Span>,
+		value: Option<Expr>,
+	},
 	Points,
 	Lines,
 	Isolines,
@@ -936,21 +1288,61 @@ pub enum Layout {
 	PointMode,
 	LinesAdjacency,
 	TrianglesAdjacency,
-	Invocations { kw: Span, eq: Span, value: Expr },
+	Invocations {
+		kw: Span,
+		eq: Option<Span>,
+		value: Option<Expr>,
+	},
 	OriginUpperLeft,
 	PixelCenterInteger,
 	EarlyFragmentTests,
-	LocalSizeX { kw: Span, eq: Span, value: Expr },
-	LocalSizeY { kw: Span, eq: Span, value: Expr },
-	LocalSizeZ { kw: Span, eq: Span, value: Expr },
-	XfbBuffer { kw: Span, eq: Span, value: Expr },
-	XfbStride { kw: Span, eq: Span, value: Expr },
-	XfbOffset { kw: Span, eq: Span, value: Expr },
-	Vertices { kw: Span, eq: Span, value: Expr },
+	LocalSizeX {
+		kw: Span,
+		eq: Option<Span>,
+		value: Option<Expr>,
+	},
+	LocalSizeY {
+		kw: Span,
+		eq: Option<Span>,
+		value: Option<Expr>,
+	},
+	LocalSizeZ {
+		kw: Span,
+		eq: Option<Span>,
+		value: Option<Expr>,
+	},
+	XfbBuffer {
+		kw: Span,
+		eq: Option<Span>,
+		value: Option<Expr>,
+	},
+	XfbStride {
+		kw: Span,
+		eq: Option<Span>,
+		value: Option<Expr>,
+	},
+	XfbOffset {
+		kw: Span,
+		eq: Option<Span>,
+		value: Option<Expr>,
+	},
+	Vertices {
+		kw: Span,
+		eq: Option<Span>,
+		value: Option<Expr>,
+	},
 	LineStrip,
 	TriangleStrip,
-	MaxVertices { kw: Span, eq: Span, value: Expr },
-	Stream { kw: Span, eq: Span, value: Expr },
+	MaxVertices {
+		kw: Span,
+		eq: Option<Span>,
+		value: Option<Expr>,
+	},
+	Stream {
+		kw: Span,
+		eq: Option<Span>,
+		value: Option<Expr>,
+	},
 	DepthAny,
 	DepthGreater,
 	DepthLess,
@@ -959,61 +1351,90 @@ pub enum Layout {
 
 impl std::fmt::Display for Layout {
 	fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-		match self {
-			Self::Shared => write!(f, "shared"),
-			Self::Packed => write!(f, "packed"),
-			Self::Std140 => write!(f, "std140"),
-			Self::Std430 => write!(f, "std430"),
-			Self::RowMajor => write!(f, "row-major"),
-			Self::ColumnMajor => write!(f, "column-major"),
-			Self::Binding { value, .. } => write!(f, "binding = {value}"),
-			Self::Offset { value, .. } => write!(f, "offset = {value}"),
-			Self::Align { value, .. } => write!(f, "align = {value}"),
-			Self::Location { value, .. } => write!(f, "location = {value}"),
-			Self::Component { value, .. } => write!(f, "component = {value}"),
-			Self::Index { value, .. } => write!(f, "index = {value}"),
-			Self::Points => write!(f, "points"),
-			Self::Lines => write!(f, "lines"),
-			Self::Isolines => write!(f, "isolines"),
-			Self::Triangles => write!(f, "triangles"),
-			Self::Quads => write!(f, "quads"),
-			Self::EqualSpacing => write!(f, "equal-spacing"),
-			Self::FractionalEvenSpacing => write!(f, "fragment-even-spacing"),
-			Self::FractionalOddSpacing => write!(f, "fragment-odd-spacing"),
-			Self::Clockwise => write!(f, "clockwise"),
-			Self::CounterClockwise => write!(f, "counter-clockwise"),
-			Self::PointMode => write!(f, "point-mode"),
-			Self::LinesAdjacency => write!(f, "lines-adjacency"),
-			Self::TrianglesAdjacency => write!(f, "triangles-adjacency"),
-			Self::Invocations { value, .. } => {
+		Ok(())
+		/* match &self.ty {
+			LayoutTy::Shared => write!(f, "shared"),
+			LayoutTy::Packed => write!(f, "packed"),
+			LayoutTy::Std140 => write!(f, "std140"),
+			LayoutTy::Std430 => write!(f, "std430"),
+			LayoutTy::RowMajor => write!(f, "row-major"),
+			LayoutTy::ColumnMajor => write!(f, "column-major"),
+			LayoutTy::Binding { value, .. } => {
+				write!(f, "binding = {value}")
+			}
+			LayoutTy::Offset { value, .. } => {
+				write!(f, "offset = {value}")
+			}
+			LayoutTy::Align { value, .. } => write!(f, "align = {value}"),
+			LayoutTy::Location { value, .. } => {
+				write!(f, "location = {value}")
+			}
+			LayoutTy::Component { value, .. } => {
+				write!(f, "component = {value}")
+			}
+			LayoutTy::Index { value, .. } => write!(f, "index = {value}"),
+			LayoutTy::Points => write!(f, "points"),
+			LayoutTy::Lines => write!(f, "lines"),
+			LayoutTy::Isolines => write!(f, "isolines"),
+			LayoutTy::Triangles => write!(f, "triangles"),
+			LayoutTy::Quads => write!(f, "quads"),
+			LayoutTy::EqualSpacing => write!(f, "equal-spacing"),
+			LayoutTy::FractionalEvenSpacing => {
+				write!(f, "fragment-even-spacing")
+			}
+			LayoutTy::FractionalOddSpacing => {
+				write!(f, "fragment-odd-spacing")
+			}
+			LayoutTy::Clockwise => write!(f, "clockwise"),
+			LayoutTy::CounterClockwise => write!(f, "counter-clockwise"),
+			LayoutTy::PointMode => write!(f, "point-mode"),
+			LayoutTy::LinesAdjacency => write!(f, "lines-adjacency"),
+			LayoutTy::TrianglesAdjacency => {
+				write!(f, "triangles-adjacency")
+			}
+			LayoutTy::Invocations { value, .. } => {
 				write!(f, "invocations = {value}")
 			}
-			Self::OriginUpperLeft => write!(f, "origin-upper-left"),
-			Self::PixelCenterInteger => write!(f, "pixel-center-integer"),
-			Self::EarlyFragmentTests => write!(f, "early-fragment-tests"),
-			Self::LocalSizeX { value, .. } => {
+			LayoutTy::OriginUpperLeft => write!(f, "origin-upper-left"),
+			LayoutTy::PixelCenterInteger => {
+				write!(f, "pixel-center-integer")
+			}
+			LayoutTy::EarlyFragmentTests => {
+				write!(f, "early-fragment-tests")
+			}
+			LayoutTy::LocalSizeX { value, .. } => {
 				write!(f, "local-size-x = {value}")
 			}
-			Self::LocalSizeY { value, .. } => {
+			LayoutTy::LocalSizeY { value, .. } => {
 				write!(f, "local-size-y = {value}")
 			}
-			Self::LocalSizeZ { value, .. } => {
+			LayoutTy::LocalSizeZ { value, .. } => {
 				write!(f, "local-size-z = {value}")
 			}
-			Self::XfbBuffer { value, .. } => write!(f, "xfb-buffer = {value}"),
-			Self::XfbStride { value, .. } => write!(f, "xfb-stride = {value}"),
-			Self::XfbOffset { value, .. } => write!(f, "xfb-offset = {value}"),
-			Self::Vertices { value, .. } => write!(f, "vertices = {value}"),
-			Self::LineStrip => write!(f, "line-strip"),
-			Self::TriangleStrip => write!(f, "triangle-strip"),
-			Self::MaxVertices { value, .. } => {
+			LayoutTy::XfbBuffer { value, .. } => {
+				write!(f, "xfb-buffer = {value}")
+			}
+			LayoutTy::XfbStride { value, .. } => {
+				write!(f, "xfb-stride = {value}")
+			}
+			LayoutTy::XfbOffset { value, .. } => {
+				write!(f, "xfb-offset = {value}")
+			}
+			LayoutTy::Vertices { value, .. } => {
+				write!(f, "vertices = {value}")
+			}
+			LayoutTy::LineStrip => write!(f, "line-strip"),
+			LayoutTy::TriangleStrip => write!(f, "triangle-strip"),
+			LayoutTy::MaxVertices { value, .. } => {
 				write!(f, "max-vertices = {value}")
 			}
-			Self::Stream { value, .. } => write!(f, "stream = {value}"),
-			Self::DepthAny => write!(f, "depth-any"),
-			Self::DepthGreater => write!(f, "depth-greater"),
-			Self::DepthLess => write!(f, "depth-less"),
-			Self::DepthUnchanged => write!(f, "depth-unchanged"),
-		}
+			LayoutTy::Stream { value, .. } => {
+				write!(f, "stream = {value}")
+			}
+			LayoutTy::DepthAny => write!(f, "depth-any"),
+			LayoutTy::DepthGreater => write!(f, "depth-greater"),
+			LayoutTy::DepthLess => write!(f, "depth-less"),
+			LayoutTy::DepthUnchanged => write!(f, "depth-unchanged"),
+		} */
 	}
 }

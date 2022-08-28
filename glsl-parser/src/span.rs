@@ -162,6 +162,11 @@ impl Span {
 			end: self.start,
 		}
 	}
+
+	/// Returns whether a position lies within this `Span`.
+	pub fn contains_position(&self, position: usize) -> bool {
+		self.start <= position && position <= self.end
+	}
 }
 
 impl std::fmt::Debug for Span {
@@ -172,7 +177,7 @@ impl std::fmt::Debug for Span {
 
 impl std::fmt::Display for Span {
 	fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-		write!(f, "{}-{}", self.start, self.end)
+		write!(f, "{}..{}", self.start, self.end)
 	}
 }
 

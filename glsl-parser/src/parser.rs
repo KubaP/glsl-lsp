@@ -1,8 +1,8 @@
 use crate::{
 	ast::Type,
 	cst::{
-		Cst, Expr, ExprTy, Ident, IfBranch, IfTy, List, Node, NodeTy, Param,
-		Qualifier, Scope, SwitchBranch,
+		Cst, Expr, ExprTy, Ident, IfBranch, IfTy, List, Node, NodeTy, Nodes,
+		Param, Qualifier, Scope, SwitchBranch,
 	},
 	error::SyntaxErr,
 	expression::{expr_parser, Mode},
@@ -102,221 +102,306 @@ pub fn parse(source: &str) -> (Cst, Vec<SyntaxErr>) {
 	(nodes, errors)
 }
 
-/// Try to parse a list of qualifiers beginning at the current position if there are any. E.g.
+/// Try to parse a list of qualifiers beginning at the current position, if there are any. E.g.
 /// - `const in ...`,
 /// - `flat uniform ...`,
 /// - `layout(location = 1) ...`.
 ///
 /// This function makes no assumption as to what the current token is. This function does not produce a syntax
-/// error if the attempt failed.
+/// error if no qualifiers were found.
 fn try_parse_qualifier_list(
 	walker: &mut Walker,
 ) -> (Vec<Qualifier>, Vec<SyntaxErr>) {
 	let mut errors = Vec::new();
 
-	let mut qualifiers = Vec::new();
 	// Consume tokens until we've run out of qualifiers.
+	let mut qualifiers = Vec::new();
 	'outer: loop {
 		let (current, current_span) = match walker.peek() {
 			Some(t) => t,
 			None => break 'outer,
 		};
 
-		use crate::cst::{Interpolation, Memory, Storage};
+		use crate::cst::{
+			Interpolation, Layout, Memory, Precision, QualifierTy, Storage,
+		};
 
 		match current {
-			Token::Const => qualifiers.push(Qualifier::Storage {
-				ty: Storage::Const,
+			Token::Const => qualifiers.push(Qualifier {
+				ty: QualifierTy::Storage(Storage::Const),
 				span: *current_span,
 			}),
-			Token::In => qualifiers.push(Qualifier::Storage {
-				ty: Storage::In,
+			Token::In => qualifiers.push(Qualifier {
+				ty: QualifierTy::Storage(Storage::In),
 				span: *current_span,
 			}),
-			Token::Out => qualifiers.push(Qualifier::Storage {
-				ty: Storage::Out,
+			Token::Out => qualifiers.push(Qualifier {
+				ty: QualifierTy::Storage(Storage::Out),
 				span: *current_span,
 			}),
-			Token::InOut => qualifiers.push(Qualifier::Storage {
-				ty: Storage::InOut,
+			Token::InOut => qualifiers.push(Qualifier {
+				ty: QualifierTy::Storage(Storage::InOut),
 				span: *current_span,
 			}),
-			Token::Attribute => qualifiers.push(Qualifier::Storage {
-				ty: Storage::Attribute,
+			Token::Attribute => qualifiers.push(Qualifier {
+				ty: QualifierTy::Storage(Storage::Attribute),
 				span: *current_span,
 			}),
-			Token::Uniform => qualifiers.push(Qualifier::Storage {
-				ty: Storage::Uniform,
+			Token::Uniform => qualifiers.push(Qualifier {
+				ty: QualifierTy::Storage(Storage::Uniform),
 				span: *current_span,
 			}),
-			Token::Varying => qualifiers.push(Qualifier::Storage {
-				ty: Storage::Varying,
+			Token::Varying => qualifiers.push(Qualifier {
+				ty: QualifierTy::Storage(Storage::Varying),
 				span: *current_span,
 			}),
-			Token::Buffer => qualifiers.push(Qualifier::Storage {
-				ty: Storage::Buffer,
+			Token::Buffer => qualifiers.push(Qualifier {
+				ty: QualifierTy::Storage(Storage::Buffer),
 				span: *current_span,
 			}),
-			Token::Shared => qualifiers.push(Qualifier::Storage {
-				ty: Storage::Shared,
+			Token::Shared => qualifiers.push(Qualifier {
+				ty: QualifierTy::Storage(Storage::Shared),
 				span: *current_span,
 			}),
-			Token::Centroid => qualifiers.push(Qualifier::Storage {
-				ty: Storage::Centroid,
+			Token::Centroid => qualifiers.push(Qualifier {
+				ty: QualifierTy::Storage(Storage::Centroid),
 				span: *current_span,
 			}),
-			Token::Sample => qualifiers.push(Qualifier::Storage {
-				ty: Storage::Sample,
+			Token::Sample => qualifiers.push(Qualifier {
+				ty: QualifierTy::Storage(Storage::Sample),
 				span: *current_span,
 			}),
-			Token::Patch => qualifiers.push(Qualifier::Storage {
-				ty: Storage::Patch,
+			Token::Patch => qualifiers.push(Qualifier {
+				ty: QualifierTy::Storage(Storage::Patch),
 				span: *current_span,
 			}),
-			Token::Flat => qualifiers.push(Qualifier::Interpolation {
-				ty: Interpolation::Flat,
+			Token::Flat => qualifiers.push(Qualifier {
+				ty: QualifierTy::Interpolation(Interpolation::Flat),
 				span: *current_span,
 			}),
-			Token::Smooth => qualifiers.push(Qualifier::Interpolation {
-				ty: Interpolation::Smooth,
+			Token::Smooth => qualifiers.push(Qualifier {
+				ty: QualifierTy::Interpolation(Interpolation::Smooth),
 				span: *current_span,
 			}),
-			Token::NoPerspective => qualifiers.push(Qualifier::Interpolation {
-				ty: Interpolation::NoPerspective,
+			Token::NoPerspective => qualifiers.push(Qualifier {
+				ty: QualifierTy::Interpolation(Interpolation::NoPerspective),
 				span: *current_span,
 			}),
-			Token::HighP => qualifiers.push(Qualifier::Precision {
+			Token::HighP => qualifiers.push(Qualifier {
+				ty: QualifierTy::Precision(Precision::HighP),
 				span: *current_span,
 			}),
-			Token::MediumP => qualifiers.push(Qualifier::Precision {
+			Token::MediumP => qualifiers.push(Qualifier {
+				ty: QualifierTy::Precision(Precision::MediumP),
 				span: *current_span,
 			}),
-			Token::LowP => qualifiers.push(Qualifier::Precision {
+			Token::LowP => qualifiers.push(Qualifier {
+				ty: QualifierTy::Precision(Precision::LowP),
 				span: *current_span,
 			}),
-			Token::Invariant => qualifiers.push(Qualifier::Precision {
+			Token::Invariant => qualifiers.push(Qualifier {
+				ty: QualifierTy::Invariant,
 				span: *current_span,
 			}),
-			Token::Precise => qualifiers.push(Qualifier::Precise {
+			Token::Precise => qualifiers.push(Qualifier {
+				ty: QualifierTy::Precise,
 				span: *current_span,
 			}),
-			Token::Coherent => qualifiers.push(Qualifier::Memory {
-				ty: Memory::Coherent,
+			Token::Coherent => qualifiers.push(Qualifier {
+				ty: QualifierTy::Memory(Memory::Coherent),
 				span: *current_span,
 			}),
-			Token::Volatile => qualifiers.push(Qualifier::Memory {
-				ty: Memory::Volatile,
-				span: *current_span,
-			}),
-
-			Token::Restrict => qualifiers.push(Qualifier::Memory {
-				ty: Memory::Restrict,
-				span: *current_span,
-			}),
-
-			Token::Readonly => qualifiers.push(Qualifier::Memory {
-				ty: Memory::Readonly,
+			Token::Volatile => qualifiers.push(Qualifier {
+				ty: QualifierTy::Memory(Memory::Volatile),
 				span: *current_span,
 			}),
 
-			Token::Writeonly => qualifiers.push(Qualifier::Memory {
-				ty: Memory::Writeonly,
+			Token::Restrict => qualifiers.push(Qualifier {
+				ty: QualifierTy::Memory(Memory::Restrict),
+				span: *current_span,
+			}),
+
+			Token::Readonly => qualifiers.push(Qualifier {
+				ty: QualifierTy::Memory(Memory::Readonly),
+				span: *current_span,
+			}),
+
+			Token::Writeonly => qualifiers.push(Qualifier {
+				ty: QualifierTy::Memory(Memory::Writeonly),
 				span: *current_span,
 			}),
 
 			Token::Layout => {
 				let kw_span = *current_span;
+				let node_span_start = kw_span.start;
 				walker.advance();
 
 				// Consume the opening `(` parenthesis.
 				let (current, current_span) = match walker.peek() {
 					Some(t) => t,
 					None => {
+						// We haven't found the opening `(` parenthesis, but we've reached the end of the token
+						// stream.
+
+						// Error recovery: we are missing the opening parenthesis.
 						errors.push(SyntaxErr::ExpectedParenAfterLayout(
 							kw_span.next_single_width(),
 						));
+						qualifiers.push(Qualifier {
+							ty: QualifierTy::Layout {
+								kw: kw_span,
+								l_paren: None,
+								idents: None,
+								r_paren: None,
+							},
+							span: kw_span,
+						});
 						break 'outer;
 					}
 				};
-
 				let l_paren_span;
 				if *current == Token::LParen {
 					l_paren_span = *current_span;
 					walker.advance();
 				} else {
+					// Error recovery: we are missing the opening parenthesis.
 					errors.push(SyntaxErr::ExpectedParenAfterLayout(
 						kw_span.next_single_width(),
 					));
-					break 'outer;
+					qualifiers.push(Qualifier {
+						ty: QualifierTy::Layout {
+							kw: kw_span,
+							l_paren: None,
+							idents: None,
+							r_paren: None,
+						},
+						span: kw_span,
+					});
+					continue 'outer;
 				};
 
-				let mut layouts = Vec::new();
-				let mut commas = Vec::new();
-				let r_paren_span;
-				// Consume layout identifiers until we reach the closing `)` parenthesis.
-				'identifiers: loop {
+				// Consume layout identifiers (and optionally expressions) until we reach the closing `)`
+				// parenthesis.
+				let mut layouts = List::<Layout>::new();
+				let r_paren_span = 'identifiers: loop {
 					let (current, current_span) = match walker.peek() {
 						Some(t) => t,
 						None => {
-							// Since we are still in this loop, that means we haven't found the closing `)`
-							// parenthesis yet, but we've now reached the end of the token stream.
+							// We haven't found the closing `)` parenthesis yet, but we've reached the end of the
+							// token stream.
+
+							// Error recovery: we are missing the closing parenthesis.
+							let node_last_span = walker.get_last_span();
 							errors.push(SyntaxErr::ExpectedParenAtEndOfLayout(
 								l_paren_span,
-								walker.get_last_span().next_single_width(),
+								node_last_span.next_single_width(),
 							));
+							qualifiers.push(Qualifier {
+								ty: QualifierTy::Layout {
+									kw: kw_span,
+									l_paren: Some(l_paren_span),
+									idents: layouts.wrap_in_option(),
+									r_paren: None,
+								},
+								span: Span::new(
+									node_span_start,
+									node_last_span.end,
+								),
+							});
 							break 'outer;
 						}
 					};
 
 					match current {
-						// Consume the `,` separator and continue looking for a layout identifier.
 						Token::Comma => {
-							commas.push(*current_span);
+							// Consume the `,` separator and continue looking for a layout identifier.
+							layouts.push_separator(*current_span);
 							walker.advance();
 							continue 'identifiers;
 						}
-						// Consume the closing `)` parenthesis and stop parsing this `layout`. We don't consume the
-						// token because we perform that at the end of the 'outer loop.
 						Token::RParen => {
-							r_paren_span = Some(*current_span);
-							break 'identifiers;
+							// Consume the closing `)` parenthesis and stop parsing this layout qualifier.
+							let r_paren_span = *current_span;
+							walker.advance();
+							break 'identifiers r_paren_span;
 						}
-						Token::Semi => break 'outer,
+						// Note: Any other tokens, such as `;`, will be detected in the `.to_layout()` method as
+						// invalid and will exit the layout loop.
 						_ => {}
 					}
 
-					let ident_span = *current_span;
+					let layout_ident_span = *current_span;
 					// We are expecting a token which is a valid layout identifier.
 					match current.to_layout() {
 						Some(e) => {
-							let ident_token = current.clone();
-							walker.advance();
-
 							match e {
-								Either::Left(layout) => {
-									layouts.push((layout, ident_span));
+								Either::Left(ty) => {
+									// We have a simple layout identifier.
+									walker.advance();
+									layouts.push_item(Layout {
+										ty,
+										span: layout_ident_span,
+									});
 								}
 								Either::Right(_) => {
+									// We have a layout identifier that expects a value afterwards.
+									let layout_ident_token = current.clone();
+									walker.advance();
+
 									// Consume the `=` in `ident = expression`.
-									let (current, current_span) =
-										match walker.peek() {
-											Some(t) => t,
-											None => {
-												errors.push(SyntaxErr::ExpectedEqAfterLayoutIdent(
-													walker.get_last_span().next_single_width()
-												));
-												break 'outer;
-											}
-										};
+									let (current, current_span) = match walker
+										.peek()
+									{
+										Some(t) => t,
+										None => {
+											// We haven't found the equals sign `=`, but we've reached the end
+											// of the token stream.
+
+											// Error recovery: we are missing an equals sign.
+											layouts.push_item(
+												layout_ident_token
+													.to_layout_expr(
+														layout_ident_span,
+														None,
+														None,
+													),
+											);
+											let node_last_span =
+												walker.get_last_span();
+											errors.push(SyntaxErr::ExpectedEqAfterLayoutIdent(
+												node_last_span.next_single_width()
+											));
+											qualifiers.push(Qualifier {
+												ty: QualifierTy::Layout {
+													kw: kw_span,
+													l_paren: Some(l_paren_span),
+													idents: layouts
+														.wrap_in_option(),
+													r_paren: None,
+												},
+												span: Span::new(
+													node_span_start,
+													node_last_span.end,
+												),
+											});
+											break 'outer;
+										}
+									};
 									let eq_span;
 									if *current == Token::Op(OpTy::Eq) {
 										eq_span = *current_span;
 										walker.advance();
 									} else {
+										// Error recovery: we are missing an equals sign.
 										errors.push(SyntaxErr::ExpectedEqAfterLayoutIdent(
-											*current_span
+											kw_span.next_single_width()
 										));
-										break 'outer;
+										layouts.push_item(
+											layout_ident_token.to_layout_expr(
+												kw_span, None, None,
+											),
+										);
+										continue 'identifiers;
 									}
 
 									// Consume the next `expression` in `ident = expression`.
@@ -330,46 +415,83 @@ fn try_parse_qualifier_list(
 											e
 										}
 										(None, _) => {
+											// Error recovery: we are missing an expression.
 											errors.push(SyntaxErr::ExpectedValExprAfterLayoutIdent(
-												ident_span.next_single_width()
+												layout_ident_span.next_single_width()
 											));
-											break 'outer;
+											layouts.push_item(
+												layout_ident_token
+													.to_layout_expr(
+														kw_span,
+														Some(eq_span),
+														None,
+													),
+											);
+											continue 'identifiers;
 										}
 									};
-									let layout_end = expr.span.end;
-									layouts.push((
-										ident_token.to_layout_expr(
-											kw_span, eq_span, expr,
+
+									layouts.push_item(
+										layout_ident_token.to_layout_expr(
+											layout_ident_span,
+											Some(eq_span),
+											Some(expr),
 										),
-										Span::new(ident_span.start, layout_end),
-									));
+									);
 								}
 							}
 						}
 						None => {
-							// We found a token which can not be a valid layout identifier.
-							errors.push(SyntaxErr::InvalidLayoutIdentifier(
-								*current_span,
+							// We found a token which can not be a valid layout identifier. This may however be a
+							// different qualifier, such as `const`, so we don't consume the token and re-run the
+							// outer loop. If it's not another qualifier, the outer loop will just exit.
+
+							// Error recovery: we have a token which isn't a valid layout identifier. This means we
+							// have ended the layout qualifier but we are missing a closing parenthesis.
+							let node_last_span =
+								if let Some(span) = layouts.span() {
+									span
+								} else {
+									l_paren_span
+								};
+							errors.push(SyntaxErr::ExpectedParenAtEndOfLayout(
+								l_paren_span,
+								node_last_span.next_single_width(),
 							));
-							break 'outer;
+							qualifiers.push(Qualifier {
+								ty: QualifierTy::Layout {
+									kw: kw_span,
+									l_paren: Some(l_paren_span),
+									idents: layouts.wrap_in_option(),
+									r_paren: None,
+								},
+								span: Span::new(
+									node_span_start,
+									node_last_span.end,
+								),
+							});
+							continue 'outer;
 						}
 					}
-				}
+				};
 
-				qualifiers.push(Qualifier::Layout {
-					kw: kw_span,
-					l_paren: l_paren_span,
-					idents: layouts,
-					commas,
-					r_paren: r_paren_span,
-					span: Span::new(
-						kw_span.start,
-						walker.get_previous_span().end,
-					),
+				// TODO: Analyze list for syntax errors.
+
+				let node_span_end = r_paren_span.end;
+				qualifiers.push(Qualifier {
+					ty: QualifierTy::Layout {
+						kw: kw_span,
+						l_paren: Some(l_paren_span),
+						idents: layouts.wrap_in_option(),
+						r_paren: Some(r_paren_span),
+					},
+					span: Span::new(node_span_start, node_span_end),
 				});
+				continue 'outer;
 			}
 			// If we encounter anything other than a qualifier, that means we have reached the end of this list of
-			// qualifiers and can return to move onto the next parsing step without consuming the current token.
+			// qualifiers and can return out of this function to move onto the next parsing step without consuming
+			// the current token.
 			_ => break 'outer,
 		}
 
@@ -385,16 +507,17 @@ fn try_parse_qualifier_list(
 /// - `void fn(...`.
 ///
 /// This function makes no assumption as to what the current token is. This function does not produce a syntax
-/// error if the attempt failed. If successful, this function returns: `Some(nodes, has_consumed_end_semi_colon,
-/// syntax_errors)`. If unsuccessful, this function returns `None` which means that no tokens were consumed.
+/// error if no statement was found. If successful, this function returns: `Some(nodes,
+/// semi_colon_span, syntax_errors)`. If unsuccessful, this function returns `None` which means that no
+/// tokens were consumed.
 ///
-/// If the current token is `{`, this function treats it as a start to an initializer list. If you want to treat
-/// `{` as a beginning of a scope, the check must be performed *before* this function is called.
+/// Note that if the current token is `{`, this function treats it as a start to an initializer list. If you want
+/// to treat `{` as a beginning of a scope, the check must be performed *before* this function is called.
 fn try_parse_stmt_not_beginning_with_keyword(
 	walker: &mut Walker,
 	qualifiers: &Vec<Qualifier>,
 	end_tokens: &[Token],
-) -> Option<(Vec<Node>, bool, Vec<SyntaxErr>)> {
+) -> Option<(Vec<Node>, Option<Span>, Vec<SyntaxErr>)> {
 	let mut errors = Vec::new();
 
 	// Save the position of the cursor so that we can go back to it if our attempt fails.
@@ -447,15 +570,7 @@ fn try_parse_stmt_not_beginning_with_keyword(
 								l_paren_span,
 							);
 							errors.append(&mut errs);
-							return Some((
-								if let Some(ret) = ret {
-									vec![ret]
-								} else {
-									vec![]
-								},
-								false,
-								errors,
-							));
+							return Some((vec![ret], None, errors));
 						}
 						_ => {}
 					},
@@ -474,7 +589,7 @@ fn try_parse_stmt_not_beginning_with_keyword(
 						span: type_.span,
 						ty: NodeTy::Invalid,
 					}],
-					false,
+					None,
 					errors,
 				));
 			}
@@ -489,33 +604,32 @@ fn try_parse_stmt_not_beginning_with_keyword(
 				(None, _) => {
 					// We have a single expression followed by something that can't be parsed as an expression (or
 					// nothing), so we treat this as an expression statement instead.
-					//
-					// Error recovery: we are missing a semi-colon.
+
+					// Error recovery: we are missing a semi-colon after an expression statement.
 					errors.push(SyntaxErr::ExpectedStmtFoundExpr(
 						type_.span.next_single_width(),
 					));
 					return Some((
 						vec![Node {
 							span: type_.span,
-							ty: NodeTy::Expr {
+							ty: NodeTy::ExprStmt {
 								expr: type_,
 								semi: None,
 							},
 						}],
-						false,
+						None,
 						errors,
 					));
 				}
 			};
 
-		// Test to see if we can convert the expression into one or more identifiers. This is necessary
-		// because the expression can contain one or more identifiers, and these identifiers can also contain an
-		// array size.
+		// Test to see if we can convert the expression into a list of identifiers. This is necessary because the
+		// expression can contain one or more identifiers, and these identifiers can also contain an array size.
 		let ident_exprs = ident_expr.to_ident_list();
 		if ident_exprs.is_empty() {
 			// We could not convert the expression into multiple identifier sub-expressions. This could be
 			// something like `i + 5`.
-			//
+
 			// Error recovery: we are missing identifier expression(s) after the type expression.
 			errors.push(SyntaxErr::ExpectedIdentsAfterVarType(ident_expr.span));
 			let mut nodes = vec![
@@ -531,7 +645,7 @@ fn try_parse_stmt_not_beginning_with_keyword(
 
 			// Consume tokens until we come across a token which can unambiguously end this statement, this could
 			// be another semi-colon `;` or a keyword which starts a new statement.
-			let mut consumed_semi = false;
+			let mut consumed_semi = None;
 			loop {
 				let (current, current_span) = match walker.peek() {
 					Some(t) => t,
@@ -543,8 +657,8 @@ fn try_parse_stmt_not_beginning_with_keyword(
 						ty: NodeTy::Punctuation,
 						span: *current_span,
 					});
+					consumed_semi = Some(*current_span);
 					walker.advance();
-					consumed_semi = true;
 					break;
 				} else if current.starts_statement() {
 					break;
@@ -644,7 +758,7 @@ fn try_parse_stmt_not_beginning_with_keyword(
 						ident_count,
 						None,
 					)],
-					false,
+					None,
 					errors,
 				));
 			}
@@ -661,7 +775,7 @@ fn try_parse_stmt_not_beginning_with_keyword(
 					ident_count,
 					Some(current_span),
 				)],
-				true,
+				Some(current_span),
 				errors,
 			));
 		} else if *current == Token::Op(OpTy::Eq) {
@@ -689,7 +803,7 @@ fn try_parse_stmt_not_beginning_with_keyword(
 								None,
 								None,
 							)],
-							false,
+							None,
 							errors,
 						));
 					}
@@ -712,7 +826,7 @@ fn try_parse_stmt_not_beginning_with_keyword(
 							Some(value_expr),
 							None,
 						)],
-						false,
+						None,
 						errors,
 					));
 				}
@@ -731,7 +845,7 @@ fn try_parse_stmt_not_beginning_with_keyword(
 						Some(value_expr),
 						Some(current_span),
 					)],
-					true,
+					Some(current_span),
 					errors,
 				));
 			} else {
@@ -747,7 +861,7 @@ fn try_parse_stmt_not_beginning_with_keyword(
 
 				// Consume tokens until we come across a token which can unambiguously end this statement, this could
 				// be another semi-colon `;` or a keyword which starts a new statement.
-				let mut consumed_semi = false;
+				let mut consumed_semi = None;
 				loop {
 					let (current, current_span) = match walker.peek() {
 						Some(t) => t,
@@ -759,8 +873,8 @@ fn try_parse_stmt_not_beginning_with_keyword(
 							ty: NodeTy::Punctuation,
 							span: *current_span,
 						});
+						consumed_semi = Some(*current_span);
 						walker.advance();
-						consumed_semi = true;
 						break;
 					} else if current.starts_statement() {
 						break;
@@ -791,7 +905,7 @@ fn try_parse_stmt_not_beginning_with_keyword(
 
 			// Consume tokens until we come across a token which can unambiguously end this statement, this could
 			// be another semi-colon `;` or a keyword which starts a new statement.
-			let mut consumed_semi = false;
+			let mut consumed_semi = None;
 			loop {
 				let (current, current_span) = match walker.peek() {
 					Some(t) => t,
@@ -803,8 +917,8 @@ fn try_parse_stmt_not_beginning_with_keyword(
 						ty: NodeTy::Punctuation,
 						span: *current_span,
 					});
+					consumed_semi = Some(*current_span);
 					walker.advance();
-					consumed_semi = true;
 					break;
 				} else if current.starts_statement() {
 					break;
@@ -839,9 +953,9 @@ fn try_parse_stmt_not_beginning_with_keyword(
 			return Some((
 				vec![Node {
 					span: expr.span,
-					ty: NodeTy::Expr { expr, semi: None },
+					ty: NodeTy::ExprStmt { expr, semi: None },
 				}],
-				false,
+				None,
 				errors,
 			));
 		}
@@ -849,14 +963,15 @@ fn try_parse_stmt_not_beginning_with_keyword(
 	if *current == Token::Semi {
 		let node = Node {
 			span: Span::new(expr.span.start, current_span.end),
-			ty: NodeTy::Expr {
+			ty: NodeTy::ExprStmt {
 				expr,
 				semi: Some(*current_span),
 			},
 		};
+		let semi = Some(*current_span);
 		walker.advance();
 
-		Some((vec![node], true, errors))
+		Some((vec![node], semi, errors))
 	} else {
 		errors.push(SyntaxErr::ExpectedSemiAfterStmt(
 			expr.span.next_single_width(),
@@ -864,12 +979,12 @@ fn try_parse_stmt_not_beginning_with_keyword(
 
 		let mut nodes = vec![Node {
 			span: expr.span,
-			ty: NodeTy::Expr { expr, semi: None },
+			ty: NodeTy::ExprStmt { expr, semi: None },
 		}];
 
 		// Consume tokens until we come across a token which can unambiguously end this statement, this could
 		// be another semi-colon `;` or a keyword which starts a new statement.
-		let mut consumed_semi = false;
+		let mut consumed_semi = None;
 		loop {
 			let (current, current_span) = match walker.peek() {
 				Some(t) => t,
@@ -881,8 +996,8 @@ fn try_parse_stmt_not_beginning_with_keyword(
 					ty: NodeTy::Punctuation,
 					span: *current_span,
 				});
+				consumed_semi = Some(*current_span);
 				walker.advance();
-				consumed_semi = true;
 				break;
 			} else if current.starts_statement() {
 				break;
@@ -965,7 +1080,7 @@ fn parse_stmt(walker: &mut Walker, nodes: &mut Vec<Node>) -> Vec<SyntaxErr> {
 
 	let qualifier_span_end = if !qualifiers.is_empty() {
 		// Panics: There is at least one element so `last()` will return `Some`.
-		Some(qualifiers.last().unwrap().span().end_zero_width())
+		Some(qualifiers.last().unwrap().span.end_zero_width())
 	} else {
 		None
 	};
@@ -988,7 +1103,7 @@ fn parse_stmt(walker: &mut Walker, nodes: &mut Vec<Node>) -> Vec<SyntaxErr> {
 				qualifiers.into_iter().for_each(|q| {
 					nodes.push(Node {
 						ty: NodeTy::Keyword,
-						span: *q.span(),
+						span: q.span,
 					})
 				});
 				errors.push(SyntaxErr::ExpectedDefDeclAfterQualifiers(
@@ -1005,7 +1120,7 @@ fn parse_stmt(walker: &mut Walker, nodes: &mut Vec<Node>) -> Vec<SyntaxErr> {
 		Token::Semi => {
 			walker.advance();
 			nodes.push(Node {
-				ty: NodeTy::Empty,
+				ty: NodeTy::EmptyStmt,
 				span: token_span,
 			});
 		}
@@ -1015,12 +1130,8 @@ fn parse_stmt(walker: &mut Walker, nodes: &mut Vec<Node>) -> Vec<SyntaxErr> {
 
 			// Parse the first `if ...` branch.
 			let mut branches = Vec::new();
-			let (first, mut errs) = parse_if_header_body(
-				walker,
-				IfTy::If(kw_span),
-				token_span,
-				true,
-			);
+			let (first, mut errs) =
+				parse_if_header_body(walker, IfTy::If(kw_span), true);
 			errors.append(&mut errs);
 			branches.push(first);
 
@@ -1066,7 +1177,6 @@ fn parse_stmt(walker: &mut Walker, nodes: &mut Vec<Node>) -> Vec<SyntaxErr> {
 							let (branch, mut errs) = parse_if_header_body(
 								walker,
 								IfTy::ElseIf(else_span, if_span),
-								token_span,
 								true,
 							);
 							errors.append(&mut errs);
@@ -1077,7 +1187,6 @@ fn parse_stmt(walker: &mut Walker, nodes: &mut Vec<Node>) -> Vec<SyntaxErr> {
 							let (branch, mut errs) = parse_if_header_body(
 								walker,
 								IfTy::Else(else_span),
-								token_span,
 								false,
 							);
 							errors.append(&mut errs);
@@ -1119,6 +1228,7 @@ fn parse_stmt(walker: &mut Walker, nodes: &mut Vec<Node>) -> Vec<SyntaxErr> {
 				walker.advance();
 				Some(current_span)
 			} else if *current == Token::LBrace {
+				let l_brace_span = current_span;
 				walker.advance();
 
 				// We are completely missing the condition expression, but we treat this as "valid" for
@@ -1129,16 +1239,19 @@ fn parse_stmt(walker: &mut Walker, nodes: &mut Vec<Node>) -> Vec<SyntaxErr> {
 				)));
 
 				// Consume the body, including the closing `}` brace.
-				let (cases, mut errs) = parse_switch_body(walker, current_span);
+				let (cases, mut errs, r_brace) =
+					parse_switch_body(walker, current_span);
 				errors.append(&mut errs);
 
 				nodes.push(Node {
 					ty: NodeTy::Switch {
 						kw: kw_span,
 						l_paren: None,
-						expr: vec![],
+						expr: None,
 						r_paren: None,
+						l_brace: Some(l_brace_span),
 						cases,
+						r_brace,
 					},
 					span: Span::new(
 						token_span.start,
@@ -1160,15 +1273,15 @@ fn parse_stmt(walker: &mut Walker, nodes: &mut Vec<Node>) -> Vec<SyntaxErr> {
 				match expr_parser(walker, Mode::Default, &[Token::RParen]) {
 					(Some(e), mut errs) => {
 						errors.append(&mut errs);
-						vec![Node {
+						Some(Nodes::new_with(Node {
 							span: e.span,
 							ty: NodeTy::Expression(e),
-						}]
+						}))
 					}
 					(None, _) => {
 						// We found tokens which cannot even start an expression. We loop until we come
 						// across either a `)` or a `{`.
-						let mut invalid_expr_nodes = Vec::new();
+						let mut invalid_expr_nodes = Nodes::new();
 						'expr_4: loop {
 							let (current, current_span) = match walker.peek() {
 								Some(t) => (&t.0, t.1),
@@ -1191,7 +1304,7 @@ fn parse_stmt(walker: &mut Walker, nodes: &mut Vec<Node>) -> Vec<SyntaxErr> {
 											span: l_paren_span,
 										});
 									}
-									nodes.append(&mut invalid_expr_nodes);
+									nodes.append(&mut invalid_expr_nodes.inner);
 									return errors;
 								}
 							};
@@ -1223,8 +1336,11 @@ fn parse_stmt(walker: &mut Walker, nodes: &mut Vec<Node>) -> Vec<SyntaxErr> {
 								}
 							}
 						}
-
-						invalid_expr_nodes
+						if invalid_expr_nodes.is_empty() {
+							None
+						} else {
+							Some(invalid_expr_nodes)
+						}
 					}
 				};
 
@@ -1251,7 +1367,9 @@ fn parse_stmt(walker: &mut Walker, nodes: &mut Vec<Node>) -> Vec<SyntaxErr> {
 								span: l_paren_span,
 							});
 						}
-						nodes.append(&mut expr_nodes);
+						if let Some(mut expr_nodes) = expr_nodes {
+							nodes.append(&mut expr_nodes.inner);
+						}
 						return errors;
 					}
 				};
@@ -1273,10 +1391,17 @@ fn parse_stmt(walker: &mut Walker, nodes: &mut Vec<Node>) -> Vec<SyntaxErr> {
 						break 'r_paren_3 current_span.previous_single_width();
 					}
 					_ => {
-						expr_nodes.push(Node {
-							ty: NodeTy::Invalid,
-							span: *current_span,
-						});
+						if let Some(ref mut expr_nodes) = expr_nodes {
+							expr_nodes.push(Node {
+								ty: NodeTy::Invalid,
+								span: *current_span,
+							});
+						} else {
+							expr_nodes = Some(Nodes::new_with(Node {
+								ty: NodeTy::Invalid,
+								span: *current_span,
+							}));
+						}
 						walker.advance();
 						continue 'r_paren_3;
 					}
@@ -1299,7 +1424,9 @@ fn parse_stmt(walker: &mut Walker, nodes: &mut Vec<Node>) -> Vec<SyntaxErr> {
 							l_paren: l_paren_span,
 							expr: expr_nodes,
 							r_paren: r_paren_span,
+							l_brace: None,
 							cases: vec![],
+							r_brace: None,
 						},
 						span: Span::new(
 							token_span.start,
@@ -1309,8 +1436,9 @@ fn parse_stmt(walker: &mut Walker, nodes: &mut Vec<Node>) -> Vec<SyntaxErr> {
 					return errors;
 				}
 			};
-			if *current == Token::LBrace {
+			let l_brace_span = if *current == Token::LBrace {
 				walker.advance();
+				current_span
 			} else {
 				errors.push(SyntaxErr::ExpectedBraceAfterSwitchHeader(
 					span_after_header.next_single_width(),
@@ -1322,7 +1450,9 @@ fn parse_stmt(walker: &mut Walker, nodes: &mut Vec<Node>) -> Vec<SyntaxErr> {
 						l_paren: l_paren_span,
 						expr: expr_nodes,
 						r_paren: r_paren_span,
+						l_brace: None,
 						cases: vec![],
+						r_brace: None,
 					},
 					span: Span::new(
 						token_span.start,
@@ -1330,10 +1460,11 @@ fn parse_stmt(walker: &mut Walker, nodes: &mut Vec<Node>) -> Vec<SyntaxErr> {
 					),
 				});
 				return errors;
-			}
+			};
 
 			// Consume the body, including the closing `}` brace.
-			let (cases, mut errs) = parse_switch_body(walker, current_span);
+			let (cases, mut errs, r_brace_span) =
+				parse_switch_body(walker, current_span);
 			errors.append(&mut errs);
 
 			nodes.push(Node {
@@ -1342,7 +1473,9 @@ fn parse_stmt(walker: &mut Walker, nodes: &mut Vec<Node>) -> Vec<SyntaxErr> {
 					l_paren: l_paren_span,
 					expr: expr_nodes,
 					r_paren: r_paren_span,
+					l_brace: Some(l_brace_span),
 					cases,
+					r_brace: r_brace_span,
 				},
 				span: Span::new(
 					token_span.start,
@@ -1392,7 +1525,7 @@ fn parse_stmt(walker: &mut Walker, nodes: &mut Vec<Node>) -> Vec<SyntaxErr> {
 					ty: NodeTy::For {
 						kw: kw_span,
 						l_paren: None,
-						nodes: vec![],
+						nodes: None,
 						r_paren: None,
 						body: Some(body),
 					},
@@ -1407,12 +1540,15 @@ fn parse_stmt(walker: &mut Walker, nodes: &mut Vec<Node>) -> Vec<SyntaxErr> {
 				None
 			};
 
-			let mut args = Vec::new();
+			let mut args = List::new();
 			let mut r_paren_span = None;
-			let test_span_after = 'testing: loop {
+			'for_args: loop {
 				let (current, current_span) = match walker.peek() {
 					Some((t, s)) => (t, *s),
 					None => {
+						// We haven't found the closing `)` parenthesis yet, but we've reached the end of the
+						// token stream.
+
 						errors.push(SyntaxErr::ExpectedParenAfterForHeader(
 							l_paren_span,
 							walker.get_last_span().next_single_width(),
@@ -1435,79 +1571,64 @@ fn parse_stmt(walker: &mut Walker, nodes: &mut Vec<Node>) -> Vec<SyntaxErr> {
 
 				match current {
 					Token::Semi => {
-						args.push((None, Some(current_span)));
+						args.push_separator(current_span);
 						walker.advance();
-						continue 'testing;
+						continue 'for_args;
 					}
 					Token::RParen => {
 						walker.advance();
 						r_paren_span = Some(current_span);
-						break 'testing current_span;
+						break 'for_args;
 					}
 					Token::LBrace => {
-						break 'testing current_span;
+						break 'for_args;
 					}
 					_ => {}
 				}
 
-				let mut current_arg_val = None;
-				let mut current_arg_semi = None;
+				if let Some((nodes, semi, mut err)) =
+					try_parse_stmt_not_beginning_with_keyword(
+						walker,
+						&Vec::<Qualifier>::new(),
+						&[Token::RParen],
+					) {
+					errors.append(&mut err);
 
-				match expr_parser(
-					walker,
-					Mode::Default,
-					&[Token::Semi, Token::RParen],
-				) {
-					(Some(expr), mut errs) => {
-						if let Some(type_) = Type::parse(&expr) {}
-						current_arg_semi = Some(walker.get_previous_span());
+					args.push_item(Nodes::from_vec(nodes));
+					if let Some(semi) = semi {
+						args.push_separator(semi);
 					}
-					(None, _) => {
-						current_arg_val = Some(Node {
-							ty: NodeTy::Invalid,
-							span: current_span,
-						});
-						walker.advance();
-					}
-				}
 
-				let (current, current_span) = match walker.peek() {
-					Some((t, s)) => (t, *s),
-					None => {
-						errors.push(SyntaxErr::ExpectedParenAfterForHeader(
-							l_paren_span,
-							walker.get_last_span().next_single_width(),
-						));
+					continue 'for_args;
+				} else {
+					let mut invalid_nodes = Nodes::new();
+					'invalid_param: loop {
+						let (current, current_span) = match walker.peek() {
+							Some(t) => t,
+							None => {
+								return errors;
+							}
+						};
 
-						//TODO:
-						return errors;
-					}
-				};
-
-				match current {
-					Token::RParen => {
-						args.push((current_arg_val, current_arg_semi));
-						walker.advance();
-						r_paren_span = Some(current_span);
-						break 'testing current_span;
-					}
-					Token::LBrace => {
-						args.push((current_arg_val, current_arg_semi));
-						break 'testing current_span;
-					}
-					Token::Semi => {
-						if let Some(semi) = current_arg_semi {
-							args.push((current_arg_val, current_arg_semi));
-						} else {
-							args.push((current_arg_val, Some(current_span)));
-							walker.advance();
+						match current {
+							Token::Semi | Token::RParen | Token::LBrace => {
+								break 'invalid_param
+							}
+							_ => {
+								invalid_nodes.push(Node {
+									span: *current_span,
+									ty: NodeTy::Invalid,
+								});
+								walker.advance();
+							}
 						}
 					}
-					_ => {
-						args.push((current_arg_val, None));
-					}
+					args.push_item(invalid_nodes);
+					continue 'for_args;
 				}
-			};
+			}
+
+			// TODO: Analyze list for syntax errors.
 
 			// Consume the opening `{` scope brace.
 			let (current, current_span) = match walker.peek() {
@@ -1523,7 +1644,7 @@ fn parse_stmt(walker: &mut Walker, nodes: &mut Vec<Node>) -> Vec<SyntaxErr> {
 						ty: NodeTy::For {
 							kw: kw_span,
 							l_paren: l_paren_span,
-							nodes: args,
+							nodes: args.wrap_in_option(),
 							r_paren: r_paren_span,
 							body: None,
 						},
@@ -1548,7 +1669,7 @@ fn parse_stmt(walker: &mut Walker, nodes: &mut Vec<Node>) -> Vec<SyntaxErr> {
 					ty: NodeTy::For {
 						kw: kw_span,
 						l_paren: l_paren_span,
-						nodes: args,
+						nodes: args.wrap_in_option(),
 						r_paren: r_paren_span,
 						body: None,
 					},
@@ -1570,7 +1691,7 @@ fn parse_stmt(walker: &mut Walker, nodes: &mut Vec<Node>) -> Vec<SyntaxErr> {
 				ty: NodeTy::For {
 					kw: kw_span,
 					l_paren: l_paren_span,
-					nodes: args,
+					nodes: args.wrap_in_option(),
 					r_paren: r_paren_span,
 					body: Some(body),
 				},
@@ -1617,7 +1738,7 @@ fn parse_stmt(walker: &mut Walker, nodes: &mut Vec<Node>) -> Vec<SyntaxErr> {
 					ty: NodeTy::While {
 						kw: kw_span,
 						l_paren: None,
-						cond: vec![],
+						cond: None,
 						r_paren: None,
 						body: Some(body),
 					},
@@ -1637,15 +1758,15 @@ fn parse_stmt(walker: &mut Walker, nodes: &mut Vec<Node>) -> Vec<SyntaxErr> {
 				match expr_parser(walker, Mode::Default, &[Token::RParen]) {
 					(Some(e), mut errs) => {
 						errors.append(&mut errs);
-						vec![Node {
+						Nodes::new_with(Node {
 							span: e.span,
 							ty: NodeTy::Expression(e),
-						}]
+						})
 					}
 					(None, _) => {
 						// We found tokens which cannot even start an expression. We loop until we come
 						// across either a `)` or a `{`.
-						let mut invalid_cond_nodes = Vec::new();
+						let mut invalid_cond_nodes = Nodes::new();
 						'expr: loop {
 							let (current, current_span) = match walker.peek() {
 								Some(t) => (&t.0, t.1),
@@ -1668,7 +1789,7 @@ fn parse_stmt(walker: &mut Walker, nodes: &mut Vec<Node>) -> Vec<SyntaxErr> {
 											span: l_paren_span,
 										});
 									}
-									nodes.append(&mut invalid_cond_nodes);
+									nodes.append(&mut invalid_cond_nodes.inner);
 									return errors;
 								}
 							};
@@ -1728,7 +1849,7 @@ fn parse_stmt(walker: &mut Walker, nodes: &mut Vec<Node>) -> Vec<SyntaxErr> {
 								span: l_paren,
 							});
 						}
-						nodes.append(&mut cond_nodes);
+						nodes.append(&mut cond_nodes.inner);
 						return errors;
 					}
 				};
@@ -1758,6 +1879,12 @@ fn parse_stmt(walker: &mut Walker, nodes: &mut Vec<Node>) -> Vec<SyntaxErr> {
 						continue 'r_paren;
 					}
 				}
+			};
+
+			let cond_nodes = if !cond_nodes.is_empty() {
+				Some(cond_nodes)
+			} else {
+				None
 			};
 
 			// Consume the opening `{` scope brace.
@@ -1988,7 +2115,7 @@ fn parse_stmt(walker: &mut Walker, nodes: &mut Vec<Node>) -> Vec<SyntaxErr> {
 						body,
 						while_kw: while_kw_span,
 						l_paren: None,
-						cond: vec![],
+						cond: None,
 						r_paren: None,
 						semi: Some(current_span),
 					},
@@ -2018,15 +2145,15 @@ fn parse_stmt(walker: &mut Walker, nodes: &mut Vec<Node>) -> Vec<SyntaxErr> {
 			) {
 				(Some(e), mut errs) => {
 					errors.append(&mut errs);
-					vec![Node {
+					Nodes::new_with(Node {
 						span: e.span,
 						ty: NodeTy::Expression(e),
-					}]
+					})
 				}
 				(None, _) => {
 					// We found tokens which cannot even start an expression. We loop until we come
 					// across either a `)` or a `;`.
-					let mut invalid_cond_nodes = Vec::new();
+					let mut invalid_cond_nodes = Nodes::new();
 					'expr_2: loop {
 						let (current, current_span) = match walker.peek() {
 							Some(t) => (&t.0, t.1),
@@ -2061,7 +2188,7 @@ fn parse_stmt(walker: &mut Walker, nodes: &mut Vec<Node>) -> Vec<SyntaxErr> {
 										span: l_paren,
 									});
 								}
-								nodes.append(&mut invalid_cond_nodes);
+								nodes.append(&mut invalid_cond_nodes.inner);
 								return errors;
 							}
 						};
@@ -2134,7 +2261,11 @@ fn parse_stmt(walker: &mut Walker, nodes: &mut Vec<Node>) -> Vec<SyntaxErr> {
 								body,
 								while_kw: while_kw_span,
 								l_paren: l_paren_span,
-								cond: cond_nodes,
+								cond: if !cond_nodes.is_empty() {
+									Some(cond_nodes)
+								} else {
+									None
+								},
 								r_paren: None,
 								semi: None,
 							},
@@ -2172,6 +2303,12 @@ fn parse_stmt(walker: &mut Walker, nodes: &mut Vec<Node>) -> Vec<SyntaxErr> {
 						continue 'r_paren_2;
 					}
 				}
+			};
+
+			let cond_nodes = if !cond_nodes.is_empty() {
+				Some(cond_nodes)
+			} else {
+				None
 			};
 
 			// Consume the statement-ending `;` semicolon.
@@ -2229,6 +2366,7 @@ fn parse_stmt(walker: &mut Walker, nodes: &mut Vec<Node>) -> Vec<SyntaxErr> {
 			});
 		}
 		Token::Return => {
+			let kw_span = token_span;
 			walker.advance();
 
 			// Look for the optional return value expression.
@@ -2238,10 +2376,11 @@ fn parse_stmt(walker: &mut Walker, nodes: &mut Vec<Node>) -> Vec<SyntaxErr> {
 
 			// Consume the `;` to end the statement.
 			let semi_span = match walker.peek() {
-				Some((current, _)) => {
+				Some((current, current_span)) => {
 					if *current == Token::Semi {
+						let semi_span = *current_span;
 						walker.advance();
-						Some(token_span)
+						Some(semi_span)
 					} else {
 						None
 					}
@@ -2256,32 +2395,34 @@ fn parse_stmt(walker: &mut Walker, nodes: &mut Vec<Node>) -> Vec<SyntaxErr> {
 			}
 
 			nodes.push(Node {
+				span: Span::new(
+					kw_span.start,
+					if let Some(semi_span) = semi_span {
+						semi_span.end
+					} else if let Some(ref return_expr) = return_expr {
+						return_expr.span.end
+					} else {
+						kw_span.end
+					},
+				),
 				ty: NodeTy::Return {
-					kw: token_span,
+					kw: kw_span,
 					value: return_expr,
 					semi: semi_span,
 				},
-				span: Span::new(
-					token_span.start,
-					if let Some(semi_span) = semi_span {
-						semi_span.end
-					} else {
-						// If an expression was found, this will point to the end of the expression, otherwise
-						// it will point to the end of the `return` keyword.
-						walker.get_previous_span().end
-					},
-				),
 			});
 		}
 		Token::Break => {
+			let kw_span = token_span;
 			walker.advance();
 
 			// Consume the `;` to end the statement.
 			let semi_span = match walker.peek() {
-				Some((current, _)) => {
+				Some((current, current_span)) => {
 					if *current == Token::Semi {
+						let semi_span = *current_span;
 						walker.advance();
-						Some(token_span)
+						Some(semi_span)
 					} else {
 						None
 					}
@@ -2290,34 +2431,36 @@ fn parse_stmt(walker: &mut Walker, nodes: &mut Vec<Node>) -> Vec<SyntaxErr> {
 			};
 			if semi_span.is_none() {
 				errors.push(SyntaxErr::ExpectedSemiAfterBreakKw(
-					token_span.next_single_width(),
+					kw_span.next_single_width(),
 				));
 			}
 
 			nodes.push(Node {
-				ty: NodeTy::Break {
-					kw: token_span,
-					semi: semi_span,
-				},
 				span: Span::new(
-					token_span.start,
+					kw_span.start,
 					if let Some(semi_span) = semi_span {
 						semi_span.end
 					} else {
-						token_span.end
+						kw_span.end
 					},
 				),
+				ty: NodeTy::Break {
+					kw: kw_span,
+					semi: semi_span,
+				},
 			});
 		}
 		Token::Continue => {
+			let kw_span = token_span;
 			walker.advance();
 
 			// Consume the `;` to end the statement.
 			let semi_span = match walker.peek() {
-				Some((current, _)) => {
+				Some((current, current_span)) => {
 					if *current == Token::Semi {
+						let semi_span = *current_span;
 						walker.advance();
-						Some(token_span)
+						Some(semi_span)
 					} else {
 						None
 					}
@@ -2326,34 +2469,36 @@ fn parse_stmt(walker: &mut Walker, nodes: &mut Vec<Node>) -> Vec<SyntaxErr> {
 			};
 			if semi_span.is_none() {
 				errors.push(SyntaxErr::ExpectedSemiAfterContinueKw(
-					token_span.next_single_width(),
+					kw_span.next_single_width(),
 				));
 			}
 
 			nodes.push(Node {
-				ty: NodeTy::Continue {
-					kw: token_span,
-					semi: semi_span,
-				},
 				span: Span::new(
 					token_span.start,
 					if let Some(semi_span) = semi_span {
 						semi_span.end
 					} else {
-						token_span.end
+						kw_span.end
 					},
 				),
+				ty: NodeTy::Continue {
+					kw: kw_span,
+					semi: semi_span,
+				},
 			});
 		}
 		Token::Discard => {
+			let kw_span = token_span;
 			walker.advance();
 
 			// Consume the `;` to end the statement.
 			let semi_span = match walker.peek() {
-				Some((current, _)) => {
+				Some((current, current_span)) => {
 					if *current == Token::Semi {
+						let semi_span = *current_span;
 						walker.advance();
-						Some(token_span)
+						Some(semi_span)
 					} else {
 						None
 					}
@@ -2362,23 +2507,23 @@ fn parse_stmt(walker: &mut Walker, nodes: &mut Vec<Node>) -> Vec<SyntaxErr> {
 			};
 			if semi_span.is_none() {
 				errors.push(SyntaxErr::ExpectedSemiAfterDiscardKw(
-					token_span.next_single_width(),
+					kw_span.next_single_width(),
 				));
 			}
 
 			nodes.push(Node {
-				ty: NodeTy::Discard {
-					kw: token_span,
-					semi: semi_span,
-				},
 				span: Span::new(
 					token_span.start,
 					if let Some(semi_span) = semi_span {
 						semi_span.end
 					} else {
-						token_span.end
+						kw_span.end
 					},
 				),
+				ty: NodeTy::Discard {
+					kw: kw_span,
+					semi: semi_span,
+				},
 			});
 		}
 		Token::Directive(_) => {
@@ -2553,7 +2698,6 @@ fn parse_scope(
 fn parse_if_header_body(
 	walker: &mut Walker,
 	ty: IfTy,
-	kw_span: Span,
 	expects_condition: bool,
 ) -> (IfBranch, Vec<SyntaxErr>) {
 	let mut errors = Vec::new();
@@ -2564,7 +2708,7 @@ fn parse_if_header_body(
 			Some(t) => (&t.0, t.1),
 			None => {
 				errors.push(SyntaxErr::ExpectedParenAfterIfKw(
-					kw_span.next_single_width(),
+					ty.span().next_single_width(),
 				));
 				return (
 					IfBranch {
@@ -2573,6 +2717,7 @@ fn parse_if_header_body(
 						cond: None,
 						r_paren: None,
 						body: None,
+						span: ty.span(),
 					},
 					errors,
 				);
@@ -2583,7 +2728,7 @@ fn parse_if_header_body(
 			Some(current_span)
 		} else {
 			errors.push(SyntaxErr::ExpectedParenAfterIfKw(
-				kw_span.next_single_width(),
+				ty.span().next_single_width(),
 			));
 			None
 		};
@@ -2614,7 +2759,7 @@ fn parse_if_header_body(
 									if let Some(l_paren_span) = l_paren_span {
 										l_paren_span
 									} else {
-										kw_span
+										ty.span()
 									},
 									*current_span,
 								),
@@ -2644,6 +2789,16 @@ fn parse_if_header_body(
 				));
 				return (
 					IfBranch {
+						span: Span::new(
+							ty.span().start,
+							if let Some(cond_node) = &cond_node {
+								cond_node.span.end
+							} else if let Some(l_paren) = &l_paren_span {
+								l_paren.end
+							} else {
+								ty.span().end
+							},
+						),
 						ty,
 						l_paren: l_paren_span,
 						cond: cond_node,
@@ -2672,6 +2827,16 @@ fn parse_if_header_body(
 			));
 			return (
 				IfBranch {
+					span: Span::new(
+						ty.span().start,
+						if let Some(cond_node) = &cond_node {
+							cond_node.span.end
+						} else if let Some(l_paren) = &l_paren_span {
+							l_paren.end
+						} else {
+							ty.span().end
+						},
+					),
 					ty,
 					l_paren: l_paren_span,
 					cond: cond_node,
@@ -2698,6 +2863,18 @@ fn parse_if_header_body(
 			));
 			return (
 				IfBranch {
+					span: Span::new(
+						ty.span().start,
+						if let Some(r_paren) = &r_paren_span {
+							r_paren.end
+						} else if let Some(cond_node) = &cond_node {
+							cond_node.span.end
+						} else if let Some(l_paren) = &l_paren_span {
+							l_paren.end
+						} else {
+							ty.span().end
+						},
+					),
 					ty,
 					l_paren: l_paren_span,
 					cond: cond_node,
@@ -2750,6 +2927,20 @@ fn parse_if_header_body(
 
 	(
 		IfBranch {
+			span: Span::new(
+				ty.span().start,
+				if let Some(body) = &body {
+					body.span.end
+				} else if let Some(r_paren) = &r_paren_span {
+					r_paren.end
+				} else if let Some(cond_node) = &cond_node {
+					cond_node.span.end
+				} else if let Some(l_paren) = &l_paren_span {
+					l_paren.end
+				} else {
+					ty.span().end
+				},
+			),
 			ty,
 			l_paren: l_paren_span,
 			cond: cond_node,
@@ -2767,13 +2958,13 @@ fn parse_if_header_body(
 ///
 /// The return value represents the following:
 ///
-/// `((case expression, colon, body), syntax errors)`.
+/// `((case expression, colon, body), syntax errors, closing brace span)`.
 ///
 /// If `case expression` is `None`, that means it is a `default` case.
 fn parse_switch_body(
 	walker: &mut Walker,
 	l_brace_span: Span,
-) -> (Vec<SwitchBranch>, Vec<SyntaxErr>) {
+) -> (Vec<SwitchBranch>, Vec<SyntaxErr>, Option<Span>) {
 	let mut errors = Vec::new();
 
 	// Check if the body is empty.
@@ -2783,7 +2974,7 @@ fn parse_switch_body(
 				errors.push(SyntaxErr::FoundEmptySwitchBody(
 					Span::new_between(l_brace_span, *token_span),
 				));
-				return (vec![], errors);
+				return (vec![], errors, Some(*token_span));
 			}
 			_ => {}
 		},
@@ -2792,12 +2983,13 @@ fn parse_switch_body(
 				Some(l_brace_span),
 				walker.get_last_span().next_single_width(),
 			));
-			return (vec![], errors);
+			return (vec![], errors, None);
 		}
 	}
 
 	// Consume cases until we reach the end of the body.
 	let mut cases: Vec<SwitchBranch> = Vec::new();
+	let mut r_brace_span = None;
 	'cases: loop {
 		let (current, current_span) = match walker.peek() {
 			Some(t) => (&t.0, t.1),
@@ -2823,10 +3015,10 @@ fn parse_switch_body(
 				) {
 					(Some(e), mut errs) => {
 						errors.append(&mut errs);
-						vec![Node {
+						Some(Nodes::new_with(Node {
 							span: e.span,
 							ty: NodeTy::Expression(e),
-						}]
+						}))
 					}
 					(None, _) => {
 						// We found tokens which cannot even start an expression. We loop until we come
@@ -2834,7 +3026,7 @@ fn parse_switch_body(
 						errors.push(SyntaxErr::ExpectedExprAfterCaseKw(
 							kw_span.next_single_width(),
 						));
-						let mut invalid_expr_nodes = Vec::new();
+						let mut invalid_expr_nodes = Nodes::new();
 						'expr: loop {
 							let (current, current_span) = match walker.peek() {
 								Some(t) => t,
@@ -2859,9 +3051,19 @@ fn parse_switch_body(
 										),
 									);
 									cases.push(SwitchBranch {
+										span: Span::new(
+											kw_span.start,
+											if let Some(node) =
+												invalid_expr_nodes.last()
+											{
+												node.span.end
+											} else {
+												kw_span.end
+											},
+										),
 										kw: kw_span,
 										is_default: false,
-										expr: invalid_expr_nodes,
+										expr: Some(invalid_expr_nodes),
 										colon: None,
 										body: None,
 									});
@@ -2874,12 +3076,23 @@ fn parse_switch_body(
 										),
 									);
 									cases.push(SwitchBranch {
+										span: Span::new(
+											kw_span.start,
+											if let Some(node) =
+												invalid_expr_nodes.last()
+											{
+												node.span.end
+											} else {
+												kw_span.end
+											},
+										),
 										kw: kw_span,
 										is_default: false,
-										expr: invalid_expr_nodes,
+										expr: Some(invalid_expr_nodes),
 										colon: None,
 										body: None,
 									});
+									r_brace_span = Some(*current_span);
 									walker.advance();
 									break 'cases;
 								}
@@ -2894,7 +3107,7 @@ fn parse_switch_body(
 							}
 						}
 
-						invalid_expr_nodes
+						Some(invalid_expr_nodes)
 					}
 				};
 
@@ -2917,8 +3130,12 @@ fn parse_switch_body(
 					// Even though we are missing a necessary token, we treat this as "valid" for better error
 					// recovery.
 					errors.push(SyntaxErr::ExpectedColonAfterCase(
-						if let Some(last) = expr_nodes.last() {
-							last.span.next_single_width()
+						if let Some(expr_nodes) = &expr_nodes {
+							if let Some(last) = expr_nodes.last() {
+								last.span.next_single_width()
+							} else {
+								kw_span.next_single_width()
+							}
 						} else {
 							kw_span.next_single_width()
 						},
@@ -2935,6 +3152,7 @@ fn parse_switch_body(
 				errors.append(&mut errs);
 
 				cases.push(SwitchBranch {
+					span: Span::new(kw_span.start, body.span.end),
 					kw: kw_span,
 					is_default: false,
 					expr: expr_nodes,
@@ -2979,14 +3197,16 @@ fn parse_switch_body(
 				errors.append(&mut errs);
 
 				cases.push(SwitchBranch {
+					span: Span::new(kw_span.start, body.span.end),
 					kw: kw_span,
 					is_default: true,
-					expr: vec![],
+					expr: None,
 					colon: colon_span,
 					body: Some(body),
 				});
 			}
 			Token::RBrace => {
+				r_brace_span = Some(current_span);
 				walker.advance();
 				break 'cases;
 			}
@@ -3019,14 +3239,13 @@ fn parse_switch_body(
 		}
 	}
 
-	(cases, errors)
+	(cases, errors, r_brace_span)
 }
 
-/// Continue parsing a function definition or declaration beginning at the current position; (the return type, the
-/// identifier, and the opening parenthesis `(` should already be consumed).
+/// Continue parsing a function definition or declaration beginning at the current position; (the return type
+/// expression, the identifier expression and the opening `(` parenthesis should already be consumed).
 ///
 /// - `return_type` - the function return type,
-/// - `start_span - the span which starts the function def/decl, i.e. the span of the return type,
 /// - `ident` - the function identifier,
 /// - `qualifiers` - any already parsed qualifiers,
 /// - `l_paren_span` - the span of the opening parenthesis of the parameter list which follows the identifier.
@@ -3036,10 +3255,11 @@ fn parse_fn(
 	ident: Ident,
 	qualifiers: &Vec<Qualifier>,
 	l_paren_span: Span,
-) -> (Option<Node>, Vec<SyntaxErr>) {
+) -> (Node, Vec<SyntaxErr>) {
 	let mut errors = Vec::new();
 
-	let mut params = Vec::new();
+	let mut params = List::new();
+	let mut r_paren_span = None;
 
 	// If this is set to `true`, that means we have just started parsing the contents after the opening `(`.
 	let mut just_started = true;
@@ -3047,17 +3267,37 @@ fn parse_fn(
 	let mut just_finished_param = false;
 
 	// Consume tokens until we've reached the closing `)` parenthesis.
-	'param: loop {
+	'params: loop {
 		let (current, current_span) = match walker.peek() {
 			Some((t, s)) => (t, *s),
 			None => {
 				// Since we are still in this loop, that means we haven't found the closing `)` parenthesis yet,
 				// but we've now reached the end of the token stream.
+
+				// Error recovery: we are missing the closing parenthesis.
+				let node_end_span = walker.get_last_span();
 				errors.push(SyntaxErr::ExpectedParenAtEndOfParamList(
 					l_paren_span,
-					walker.get_last_span().next_single_width(),
+					node_end_span.next_single_width(),
 				));
-				return (None, errors);
+				return (
+					Node {
+						span: Span::new(
+							return_type.span.start,
+							node_end_span.end,
+						),
+						ty: NodeTy::FnDef {
+							qualifiers: qualifiers.to_vec(),
+							return_type,
+							ident,
+							l_paren: l_paren_span,
+							params,
+							r_paren: None,
+							semi: None,
+						},
+					},
+					errors,
+				);
 			}
 		};
 
@@ -3074,8 +3314,9 @@ fn parse_fn(
 					));
 				}
 				just_finished_param = false;
+				params.push_separator(current_span);
 				walker.advance();
-				continue 'param;
+				continue 'params;
 			}
 			// Consume the closing `)` parenthesis and stop looking for parameters.
 			Token::RParen => {
@@ -3088,8 +3329,9 @@ fn parse_fn(
 						),
 					));
 				}
+				r_paren_span = Some(current_span);
 				walker.advance();
-				break 'param;
+				break 'params;
 			}
 			// Even though we are missing a necessary token to make this a valid function definition, it still
 			// makes sense to just treat this as a "valid" function definition for analysis/goto/etc purposes. For
@@ -3101,19 +3343,21 @@ fn parse_fn(
 					current_span,
 				));
 				return (
-					Some(Node {
+					Node {
 						span: Span::new(
 							return_type.span.start,
 							current_span.end,
 						),
 						ty: NodeTy::FnDef {
+							qualifiers: qualifiers.to_vec(),
 							return_type,
 							ident,
+							l_paren: l_paren_span,
 							params,
-							qualifiers: qualifiers.to_vec(),
+							r_paren: None,
 							semi: Some(current_span),
 						},
-					}),
+					},
 					errors,
 				);
 			}
@@ -3126,7 +3370,7 @@ fn parse_fn(
 					l_paren_span,
 					current_span,
 				));
-				break 'param;
+				break 'params;
 			}
 			_ => {
 				if just_finished_param {
@@ -3169,7 +3413,7 @@ fn parse_fn(
 					None => {
 						errors.push(SyntaxErr::ExpectedType(e.span));
 						just_finished_param = true;
-						continue 'param;
+						continue 'params;
 					}
 				}
 			}
@@ -3183,21 +3427,22 @@ fn parse_fn(
 						match current {
 							// The check at the beginning of the 'param loop will produce the relevant error about
 							// the missing type identifier.
-							Token::Comma => continue 'param,
+							Token::Comma => continue 'params,
 							Token::RParen => {
 								// Since we are here, that means we have at least one parameter separated by a
 								// comma and we've now come across the closing `)` parenthesis, i.e. `int,)`.
 								errors.push(SyntaxErr::MissingTypeInParamList(
 									current_span.start_zero_width(),
 								));
+								r_paren_span = Some(*current_span);
 								walker.advance();
-								break 'param;
+								break 'params;
 							}
 							Token::Semi | Token::LBrace => {
 								errors.push(SyntaxErr::MissingTypeInParamList(
 									current_span.start_zero_width(),
 								));
-								continue 'param;
+								continue 'params;
 							}
 							_ => {
 								// We have something like a keyword which is illegal.
@@ -3205,14 +3450,20 @@ fn parse_fn(
 									*current_span,
 								));
 								walker.advance();
-								continue 'param;
+								continue 'params;
 							}
 						}
 					}
 					// The first check in the 'param loop deals with reaching the end-of-file.
-					None => continue 'param,
+					None => continue 'params,
 				};
 			}
+		};
+
+		let param_span_start = if let Some(qualifier) = qualifiers.last() {
+			qualifier.span.start
+		} else {
+			type_.span.start
 		};
 
 		// Look for an identifier.
@@ -3222,7 +3473,6 @@ fn parse_fn(
 			&[Token::LBrace, Token::Semi],
 		) {
 			(Some(e), mut errs) => {
-				// TODO: Check if this can be a valid identifier.
 				errors.append(&mut errs);
 				e
 			}
@@ -3232,20 +3482,22 @@ fn parse_fn(
 				// Note: We need to `peek()` again because we may have found qualifiers.
 				match walker.peek() {
 					Some((current, current_span)) => {
-						params.push(Param {
+						params.push_item(Param {
+							span: Span::new(param_span_start, type_.span.end),
 							qualifiers,
 							type_,
 							ident: None,
 						});
 
 						match current {
-							Token::Comma => continue 'param,
+							Token::Comma => continue 'params,
 							Token::RParen => {
+								r_paren_span = Some(*current_span);
 								walker.advance();
-								break 'param;
+								break 'params;
 							}
 							Token::Semi | Token::LBrace => {
-								continue 'param;
+								continue 'params;
 							}
 							_ => {
 								// We have something like a keyword which is illegal.
@@ -3253,23 +3505,26 @@ fn parse_fn(
 									*current_span,
 								));
 								walker.advance();
-								continue 'param;
+								continue 'params;
 							}
 						}
 					}
 					// The first check in the 'param loop deals with reaching the end-of-file.
-					None => continue 'param,
+					None => continue 'params,
 				}
 			}
 		};
 
-		params.push(Param {
+		params.push_item(Param {
+			span: Span::new(param_span_start, ident_expr.span.end),
 			qualifiers,
 			type_,
 			ident: Some(ident_expr),
 		});
 		just_finished_param = true;
 	}
+
+	// TODO: Analyze list for syntax errors.
 
 	// Consume either the `;` for a function definition, or a `{` for a function declaration.
 	let (current, current_span) = match walker.peek() {
@@ -3282,19 +3537,21 @@ fn parse_fn(
 				walker.get_last_span().next_single_width(),
 			));
 			return (
-				Some(Node {
+				Node {
 					span: Span::new(
 						return_type.span.start,
 						walker.get_last_span().end,
 					),
 					ty: NodeTy::FnDef {
+						qualifiers: qualifiers.to_vec(),
 						return_type,
 						ident,
+						l_paren: l_paren_span,
 						params,
-						qualifiers: qualifiers.to_vec(),
+						r_paren: r_paren_span,
 						semi: None,
 					},
-				}),
+				},
 				errors,
 			);
 		}
@@ -3302,16 +3559,18 @@ fn parse_fn(
 	if *current == Token::Semi {
 		walker.advance();
 		(
-			Some(Node {
+			Node {
 				span: Span::new(return_type.span.start, current_span.end),
 				ty: NodeTy::FnDef {
 					qualifiers: qualifiers.to_vec(),
 					return_type,
 					ident,
+					l_paren: l_paren_span,
 					params,
+					r_paren: r_paren_span,
 					semi: Some(current_span),
 				},
-			}),
+			},
 			errors,
 		)
 	} else if *current == Token::LBrace {
@@ -3323,16 +3582,18 @@ fn parse_fn(
 		errors.append(&mut errs);
 
 		(
-			Some(Node {
+			Node {
 				span: Span::new(return_type.span.start, body.span.end),
 				ty: NodeTy::FnDecl {
 					qualifiers: qualifiers.to_vec(),
 					return_type,
 					ident,
+					l_paren: l_paren_span,
 					params,
+					r_paren: r_paren_span,
 					body,
 				},
-			}),
+			},
 			errors,
 		)
 	} else {
@@ -3343,7 +3604,7 @@ fn parse_fn(
 			walker.get_previous_span().next_single_width(),
 		));
 		(
-			Some(Node {
+			Node {
 				span: Span::new(
 					return_type.span.start,
 					walker.get_previous_span().end,
@@ -3352,10 +3613,12 @@ fn parse_fn(
 					qualifiers: qualifiers.to_vec(),
 					return_type,
 					ident,
+					l_paren: l_paren_span,
 					params,
+					r_paren: r_paren_span,
 					semi: None,
 				},
-			}),
+			},
 			errors,
 		)
 	}
@@ -3607,7 +3870,7 @@ pub fn print_stmt(stmt: &Node, indent: usize) {
 			}
 			print!(")");
 		}
-		NodeTy::Empty => print!(
+		NodeTy::EmptyStmt => print!(
 			"\r\n{:indent$}\x1b[9m(Empty)\x1b[0m",
 			"",
 			indent = indent * 4
@@ -3691,7 +3954,7 @@ pub fn print_stmt(stmt: &Node, indent: usize) {
 				"",
 				indent = indent * 4
 			);
-			for Param {
+			/* for Param {
 				qualifiers,
 				type_,
 				ident,
@@ -3715,7 +3978,7 @@ pub fn print_stmt(stmt: &Node, indent: usize) {
 					}
 					(None, _) => print!("{type_}, "),
 				}
-			}
+			} */
 			print!("], qualifiers: [");
 			for qualifier in qualifiers {
 				print!("{qualifier}, ");
@@ -3728,13 +3991,14 @@ pub fn print_stmt(stmt: &Node, indent: usize) {
 			params,
 			body,
 			qualifiers,
+			..
 		} => {
 			print!(
 				"\r\n{:indent$}\x1b[34mFn\x1b[0m(return: {return_type}, ident: {ident}, params: [",
 				"",
 				indent = indent * 4
 			);
-			for Param {
+			/* for Param {
 				qualifiers,
 				type_,
 				ident,
@@ -3758,7 +4022,7 @@ pub fn print_stmt(stmt: &Node, indent: usize) {
 					}
 					(None, _) => print!("{type_}, "),
 				}
-			}
+			} */
 			print!("], qualifiers: [");
 			for qualifier in qualifiers {
 				print!("{qualifier}, ");
@@ -3807,7 +4071,7 @@ pub fn print_stmt(stmt: &Node, indent: usize) {
 				print!("])");
 			}
 		}
-		NodeTy::Expr { expr, .. } => {
+		NodeTy::ExprStmt { expr, .. } => {
 			print!("\r\n{:indent$}{expr}", "", indent = indent * 4);
 		}
 		NodeTy::Scope(scope) => {
@@ -3849,7 +4113,7 @@ pub fn print_stmt(stmt: &Node, indent: usize) {
 		NodeTy::Switch { expr, cases, .. } => {
 			print!("\r\n{:indent$}Switch(", "", indent = indent * 4);
 			for expr in expr {
-				print_stmt(expr, indent);
+				//print_stmt(expr, indent);
 			}
 			print!(") {{");
 			for SwitchBranch {
@@ -3871,9 +4135,9 @@ pub fn print_stmt(stmt: &Node, indent: usize) {
 						"",
 						indent = (indent + 1) * 4
 					);
-					for stmt in expr {
+					/* for stmt in expr {
 						print_stmt(stmt, indent);
-					}
+					} */
 					print!(") {{");
 				}
 
@@ -3888,11 +4152,11 @@ pub fn print_stmt(stmt: &Node, indent: usize) {
 		}
 		NodeTy::For { nodes, body, .. } => {
 			print!("\r\n{:indent$}For(", "", indent = indent * 4);
-			for (node, _) in nodes {
+			/* for (node, _) in nodes {
 				if let Some(node) = node {
 					print_stmt(node, indent);
 				}
-			}
+			} */
 			print!(") {{");
 			if let Some(body) = body {
 				for stmt in &body.inner {
@@ -3903,9 +4167,9 @@ pub fn print_stmt(stmt: &Node, indent: usize) {
 		}
 		NodeTy::While { cond, body, .. } => {
 			print!("\r\n{:indent$}While(", "", indent = indent * 4);
-			for expr in cond {
+			/* for expr in cond {
 				print_stmt(expr, indent);
-			}
+			} */
 			print!(") {{");
 			if let Some(body) = body {
 				for stmt in &body.inner {
@@ -3916,9 +4180,9 @@ pub fn print_stmt(stmt: &Node, indent: usize) {
 		}
 		NodeTy::DoWhile { cond, body, .. } => {
 			print!("\r\n{:indent$}Do-While(", "", indent = indent * 4);
-			for expr in cond {
+			/* for expr in cond {
 				print_stmt(expr, indent);
-			}
+			} */
 			print!(") {{");
 			if let Some(body) = body {
 				for stmt in &body.inner {

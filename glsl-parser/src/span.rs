@@ -13,8 +13,8 @@
 ///
 /// # Invariants
 /// If this type is manually constructed, the `end` position must be equal-to or greater than the `start` position.
-/// If this invariant is not upheld, converting such a `Span` to an LSP diagnostic will result in a logically wrong
-/// range.
+/// If this invariant is not upheld, interacting with this span, for example to resolve the cursor position, will
+/// result in logic bugs and incorrect behaviour, but it will never cause a panic or memory safety issue.
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub struct Span {
 	pub start: usize,
@@ -53,7 +53,7 @@ impl Span {
 		}
 	}
 
-	/// Constructs a zero-width `Span` from a position.
+	/// Constructs a zero-width `Span` at a position.
 	pub fn new_zero_width(position: usize) -> Self {
 		Self {
 			start: position,
@@ -81,21 +81,22 @@ impl Span {
 		self.start >= position
 	}
 
-	/// Returns a new `Span` which starts at the same poisition but ends at a previous position, i.e. `end:
+	/// Returns a new `Span` which starts at the same position but ends at a previous position, i.e. `end:
 	/// span.end - 1`.
 	pub fn end_at_previous(self) -> Self {
 		let new_end = self.end.saturating_sub(1);
-		let new_end = if self.end == 0 { 0 } else { new_end };
 
 		Self {
-			// If this span has the same start and end, we need to set the new start to be the value of the new
-			// end. Otherwise, we don't change anything.
+			// If this span has the same start and end positions, we need to set the new start to be the value of
+			// the new end. If we didn't, we would break the invariant that the start must be before the end.
 			start: usize::min(self.start, new_end),
 			end: new_end,
 		}
 	}
 
-	/// Returns a new `Span` which spans the first character of this span.
+	/// Returns a new `Span` over the first character of this span.
+	///
+	/// If this span is zero-width, the new span will be identical.
 	pub fn first_char(self) -> Self {
 		Self {
 			start: self.start,
@@ -103,7 +104,9 @@ impl Span {
 		}
 	}
 
-	/// Returns a new `Span` which spans the last character of this span.
+	/// Returns a new `Span` over the last character of this span.
+	///
+	/// If this span is zero-width, the new span will be identical.
 	pub fn last_char(self) -> Self {
 		Self {
 			start: usize::max(self.end.saturating_sub(1), self.start),
@@ -155,15 +158,15 @@ impl Span {
 	/// Returns a new `Span` one width long, ending at the beginning of this span.
 	pub fn previous_single_width(self) -> Self {
 		// Note: Unlike `next_single_width()`, this has a potential to overflow onto the previous line if the token
-		// starts at the beginning on the line. Since this is used comparatively much less often, I don't think
-		// it's worth fixing this.
+		// starts at the beginning on the line. Since this is used much less often, I don't think it's worth
+		// fixing/dealing with this.
 		Self {
 			start: self.start.saturating_sub(1),
 			end: self.start,
 		}
 	}
 
-	/// Returns whether a position lies within this `Span`.
+	/// Returns whether a position lies within this span.
 	pub fn contains_position(&self, position: usize) -> bool {
 		self.start <= position && position <= self.end
 	}

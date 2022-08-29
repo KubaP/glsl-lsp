@@ -95,10 +95,8 @@ pub fn parse(source: &str) -> (Cst, Vec<SyntaxErr>) {
 	};
 	let mut nodes = Vec::new();
 	let mut errors = Vec::new();
-
 	while walker.peek().is_some() {
-		let mut errs = parse_stmt(&mut walker, &mut nodes);
-		errors.append(&mut errs);
+		parse_stmt(&mut walker, &mut nodes, &mut errors);
 	}
 
 	(nodes, errors)
@@ -113,15 +111,14 @@ pub fn parse(source: &str) -> (Cst, Vec<SyntaxErr>) {
 /// error if no qualifiers were found.
 fn try_parse_qualifier_list(
 	walker: &mut Walker,
-) -> (Vec<Qualifier>, Vec<SyntaxErr>) {
-	let mut errors = Vec::new();
-
+	syntax_errors: &mut Vec<SyntaxErr>,
+) -> Vec<Qualifier> {
 	// Consume tokens until we've run out of qualifiers.
 	let mut qualifiers = Vec::new();
-	'outer: loop {
+	'qualifiers: loop {
 		let (current, current_span) = match walker.peek() {
 			Some(t) => t,
-			None => break 'outer,
+			None => break 'qualifiers,
 		};
 
 		use crate::cst::{
@@ -246,9 +243,11 @@ fn try_parse_qualifier_list(
 						// stream.
 
 						// Error recovery: we are missing the opening parenthesis.
-						errors.push(SyntaxErr::ExpectedParenAfterLayout(
-							kw_span.next_single_width(),
-						));
+						syntax_errors.push(
+							SyntaxErr::ExpectedParenAfterLayout(
+								kw_span.next_single_width(),
+							),
+						);
 						qualifiers.push(Qualifier {
 							ty: QualifierTy::Layout {
 								kw: kw_span,
@@ -258,7 +257,7 @@ fn try_parse_qualifier_list(
 							},
 							span: kw_span,
 						});
-						break 'outer;
+						break 'qualifiers;
 					}
 				};
 				let l_paren_span;
@@ -267,7 +266,7 @@ fn try_parse_qualifier_list(
 					walker.advance();
 				} else {
 					// Error recovery: we are missing the opening parenthesis.
-					errors.push(SyntaxErr::ExpectedParenAfterLayout(
+					syntax_errors.push(SyntaxErr::ExpectedParenAfterLayout(
 						kw_span.next_single_width(),
 					));
 					qualifiers.push(Qualifier {
@@ -279,13 +278,13 @@ fn try_parse_qualifier_list(
 						},
 						span: kw_span,
 					});
-					continue 'outer;
+					continue 'qualifiers;
 				};
 
 				// Consume layout identifiers (and optionally expressions) until we reach the closing `)`
 				// parenthesis.
 				let mut layouts = List::<Layout>::new();
-				let r_paren_span = 'identifiers: loop {
+				let r_paren_span = 'layouts: loop {
 					let (current, current_span) = match walker.peek() {
 						Some(t) => t,
 						None => {
@@ -294,10 +293,12 @@ fn try_parse_qualifier_list(
 
 							// Error recovery: we are missing the closing parenthesis.
 							let node_last_span = walker.get_last_span();
-							errors.push(SyntaxErr::ExpectedParenAtEndOfLayout(
-								l_paren_span,
-								node_last_span.next_single_width(),
-							));
+							syntax_errors.push(
+								SyntaxErr::ExpectedParenAtEndOfLayout(
+									l_paren_span,
+									node_last_span.next_single_width(),
+								),
+							);
 							qualifiers.push(Qualifier {
 								ty: QualifierTy::Layout {
 									kw: kw_span,
@@ -310,7 +311,7 @@ fn try_parse_qualifier_list(
 									node_last_span.end,
 								),
 							});
-							break 'outer;
+							break 'qualifiers;
 						}
 					};
 
@@ -319,13 +320,13 @@ fn try_parse_qualifier_list(
 							// Consume the `,` separator and continue looking for a layout identifier.
 							layouts.push_separator(*current_span);
 							walker.advance();
-							continue 'identifiers;
+							continue 'layouts;
 						}
 						Token::RParen => {
 							// Consume the closing `)` parenthesis and stop parsing this layout qualifier.
 							let r_paren_span = *current_span;
 							walker.advance();
-							break 'identifiers r_paren_span;
+							break 'layouts r_paren_span;
 						}
 						// Note: Any other tokens, such as `;`, will be detected in the `.to_layout()` method as
 						// invalid and will exit the layout loop.
@@ -370,7 +371,7 @@ fn try_parse_qualifier_list(
 											);
 											let node_last_span =
 												walker.get_last_span();
-											errors.push(SyntaxErr::ExpectedEqAfterLayoutIdent(
+											syntax_errors.push(SyntaxErr::ExpectedEqAfterLayoutIdent(
 												node_last_span.next_single_width()
 											));
 											qualifiers.push(Qualifier {
@@ -386,7 +387,7 @@ fn try_parse_qualifier_list(
 													node_last_span.end,
 												),
 											});
-											break 'outer;
+											break 'qualifiers;
 										}
 									};
 									let eq_span;
@@ -395,7 +396,7 @@ fn try_parse_qualifier_list(
 										walker.advance();
 									} else {
 										// Error recovery: we are missing an equals sign.
-										errors.push(SyntaxErr::ExpectedEqAfterLayoutIdent(
+										syntax_errors.push(SyntaxErr::ExpectedEqAfterLayoutIdent(
 											kw_span.next_single_width()
 										));
 										layouts.push_item(
@@ -403,7 +404,7 @@ fn try_parse_qualifier_list(
 												kw_span, None, None,
 											),
 										);
-										continue 'identifiers;
+										continue 'layouts;
 									}
 
 									// Consume the next `expression` in `ident = expression`.
@@ -413,12 +414,12 @@ fn try_parse_qualifier_list(
 										&[Token::Comma, Token::RParen],
 									) {
 										(Some(e), mut err) => {
-											errors.append(&mut err);
+											syntax_errors.append(&mut err);
 											e
 										}
 										(None, _) => {
 											// Error recovery: we are missing an expression.
-											errors.push(SyntaxErr::ExpectedValExprAfterLayoutIdent(
+											syntax_errors.push(SyntaxErr::ExpectedValExprAfterLayoutIdent(
 												layout_ident_span.next_single_width()
 											));
 											layouts.push_item(
@@ -429,7 +430,7 @@ fn try_parse_qualifier_list(
 														None,
 													),
 											);
-											continue 'identifiers;
+											continue 'layouts;
 										}
 									};
 
@@ -456,10 +457,12 @@ fn try_parse_qualifier_list(
 								} else {
 									l_paren_span
 								};
-							errors.push(SyntaxErr::ExpectedParenAtEndOfLayout(
-								l_paren_span,
-								node_last_span.next_single_width(),
-							));
+							syntax_errors.push(
+								SyntaxErr::ExpectedParenAtEndOfLayout(
+									l_paren_span,
+									node_last_span.next_single_width(),
+								),
+							);
 							qualifiers.push(Qualifier {
 								ty: QualifierTy::Layout {
 									kw: kw_span,
@@ -472,7 +475,7 @@ fn try_parse_qualifier_list(
 									node_last_span.end,
 								),
 							});
-							continue 'outer;
+							continue 'qualifiers;
 						}
 					}
 				};
@@ -489,18 +492,18 @@ fn try_parse_qualifier_list(
 					},
 					span: Span::new(node_span_start, node_span_end),
 				});
-				continue 'outer;
+				continue 'qualifiers;
 			}
 			// If we encounter anything other than a qualifier, that means we have reached the end of this list of
 			// qualifiers and can return out of this function to move onto the next parsing step without consuming
 			// the current token.
-			_ => break 'outer,
+			_ => break 'qualifiers,
 		}
 
 		walker.advance();
 	}
 
-	(qualifiers, errors)
+	qualifiers
 }
 
 /// Try to parse a single statement beginning at the current position which **doesn't** begin with a keyword. E.g.
@@ -522,9 +525,7 @@ fn try_parse_stmt_not_beginning_with_keyword(
 ) -> Option<(Vec<Node>, Option<Span>, Vec<SyntaxErr>)> {
 	let mut errors = Vec::new();
 
-	// Save the position of the cursor so that we can go back to it if our attempt fails.
-	let _cursor_before_attempting = walker.cursor;
-
+	// Test to see if we have an expression, as all statements in this parsing branch start with an expression.
 	let (start, mut errs) = match expr_parser(walker, Mode::Default, end_tokens)
 	{
 		(Some(e), errs) => (e, errs),
@@ -556,7 +557,7 @@ fn try_parse_stmt_not_beginning_with_keyword(
 				Token::Ident(i) => match walker.lookahead_1() {
 					Some((next, next_span)) => match next {
 						Token::LParen => {
-							// We have something like `int name (` which makes this a function.
+							// We have something like `int name (` which makes this a function def/decl.
 							let ident = Ident {
 								name: i.clone(),
 								span: *current_span,
@@ -581,15 +582,19 @@ fn try_parse_stmt_not_beginning_with_keyword(
 				_ => {}
 			},
 			None => {
-				// We have something like `int` on its own which means we are missing a semi-colon.
+				// We have something like `int` or `ident`, and we've reached the end of the token stream.
+
+				// Error recovery: we are missing a semi colon after an expression statement.
 				errors.push(SyntaxErr::ExpectedSemiAfterStmt(
 					walker.get_last_span().next_single_width(),
 				));
-
 				return Some((
 					vec![Node {
 						span: type_.span,
-						ty: NodeTy::Invalid,
+						ty: NodeTy::ExprStmt {
+							expr: type_,
+							semi: None,
+						},
 					}],
 					None,
 					errors,
@@ -599,13 +604,13 @@ fn try_parse_stmt_not_beginning_with_keyword(
 
 		// We don't have a function def/decl, so this can only be a variable def/decl and nothing else.
 
-		// Look for an identifier (or multiple) following the type.
+		// Look for an identifier(s) expression following the type expression.
 		let (ident_expr, mut errs) =
 			match expr_parser(walker, Mode::BreakAtEq, &[Token::Semi]) {
 				(Some(e), errs) => (e, errs),
 				(None, _) => {
 					// We have a single expression followed by something that can't be parsed as an expression (or
-					// nothing), so we treat this as an expression statement instead.
+					// nothing), so we treat this as an expression statement.
 
 					// Error recovery: we are missing a semi-colon after an expression statement.
 					errors.push(SyntaxErr::ExpectedStmtFoundExpr(
@@ -632,7 +637,8 @@ fn try_parse_stmt_not_beginning_with_keyword(
 			// We could not convert the expression into multiple identifier sub-expressions. This could be
 			// something like `i + 5`.
 
-			// Error recovery: we are missing identifier expression(s) after the type expression.
+			// Error recovery: we have an expression after the type expression that is not an identifier(s)
+			// expression. We don't try to save this.
 			errors.push(SyntaxErr::ExpectedIdentsAfterVarType(ident_expr.span));
 			let mut nodes = vec![
 				Node {
@@ -647,7 +653,7 @@ fn try_parse_stmt_not_beginning_with_keyword(
 
 			// Consume tokens until we come across a token which can unambiguously end this statement, this could
 			// be another semi-colon `;` or a keyword which starts a new statement.
-			let mut consumed_semi = None;
+			let mut ending_semi_span = None;
 			loop {
 				let (current, current_span) = match walker.peek() {
 					Some(t) => t,
@@ -659,7 +665,7 @@ fn try_parse_stmt_not_beginning_with_keyword(
 						ty: NodeTy::Punctuation,
 						span: *current_span,
 					});
-					consumed_semi = Some(*current_span);
+					ending_semi_span = Some(*current_span);
 					walker.advance();
 					break;
 				} else if current.starts_statement() {
@@ -674,7 +680,7 @@ fn try_parse_stmt_not_beginning_with_keyword(
 				}
 			}
 
-			return Some((nodes, consumed_semi, errors));
+			return Some((nodes, ending_semi_span, errors));
 		}
 
 		let ident_count = ident_exprs.len();
@@ -688,6 +694,18 @@ fn try_parse_stmt_not_beginning_with_keyword(
 			count: usize,
 			semi: Option<Span>,
 		) -> Node {
+			let start = if let Some(qualifier) = qualifiers.first() {
+				qualifier.span.start
+			} else {
+				type_.span.start
+			};
+			let end = if let Some(semi) = semi {
+				semi.end
+			} else {
+				idents.span.end
+			};
+			let span = Span::new(start, end);
+
 			match count {
 				1 => Node {
 					ty: NodeTy::VarDef {
@@ -696,7 +714,7 @@ fn try_parse_stmt_not_beginning_with_keyword(
 						ident: idents,
 						semi,
 					},
-					span: Span::empty(),
+					span,
 				},
 				_ => Node {
 					ty: NodeTy::VarDefs {
@@ -705,7 +723,7 @@ fn try_parse_stmt_not_beginning_with_keyword(
 						idents,
 						semi,
 					},
-					span: Span::empty(),
+					span,
 				},
 			}
 		}
@@ -718,6 +736,22 @@ fn try_parse_stmt_not_beginning_with_keyword(
 			value: Option<Expr>,
 			semi: Option<Span>,
 		) -> Node {
+			let start = if let Some(qualifier) = qualifiers.first() {
+				qualifier.span.start
+			} else {
+				type_.span.start
+			};
+			let end = if let Some(semi) = semi {
+				semi.end
+			} else if let Some(value) = &value {
+				value.span.end
+			} else if let Some(eq) = eq {
+				eq.end
+			} else {
+				idents.span.end
+			};
+			let span = Span::new(start, end);
+
 			match count {
 				1 => Node {
 					ty: NodeTy::VarDecl {
@@ -728,7 +762,7 @@ fn try_parse_stmt_not_beginning_with_keyword(
 						value,
 						semi,
 					},
-					span: Span::empty(),
+					span,
 				},
 				_ => Node {
 					ty: NodeTy::VarDecls {
@@ -739,16 +773,19 @@ fn try_parse_stmt_not_beginning_with_keyword(
 						value,
 						semi,
 					},
-					span: Span::empty(),
+					span,
 				},
 			}
 		}
 
 		// Consume either the `;` for a definition or a `=` for a declaration.
 		let (current, current_span) = match walker.peek() {
-			Some((t, s)) => (t, *s),
+			Some(t) => t,
 			None => {
-				// We are missing the necessary syntax to make this valid, but we still accept it anyway.
+				// We haven't found the semi colon `;` or the equals sign `=` yet, but we've reached the end of the
+				// token stream.
+
+				// Error recovery: we are missing the semi colon or equals sign.
 				errors.push(SyntaxErr::ExpectedSemiOrEqAfterVarDef(
 					walker.get_last_span().next_single_width(),
 				));
@@ -767,6 +804,7 @@ fn try_parse_stmt_not_beginning_with_keyword(
 		};
 		if *current == Token::Semi {
 			// We have a variable definition.
+			let semi_span = *current_span;
 			walker.advance();
 
 			return Some((
@@ -775,16 +813,17 @@ fn try_parse_stmt_not_beginning_with_keyword(
 					type_,
 					ident_expr,
 					ident_count,
-					Some(current_span),
+					Some(semi_span),
 				)],
-				Some(current_span),
+				Some(semi_span),
 				errors,
 			));
 		} else if *current == Token::Op(OpTy::Eq) {
 			// We have a variable declarations.
-			let eq_span = current_span;
+			let eq_span = *current_span;
 			walker.advance();
 
+			// Look for a value expression.
 			let value_expr =
 				match expr_parser(walker, Mode::Default, &[Token::Semi]) {
 					(Some(e), mut errs) => {
@@ -792,6 +831,7 @@ fn try_parse_stmt_not_beginning_with_keyword(
 						e
 					}
 					(None, _) => {
+						// Error recovery: we are missing the value expression.
 						errors.push(SyntaxErr::ExpectedExprAfterVarDeclEq(
 							eq_span.next_single_width(),
 						));
@@ -813,8 +853,9 @@ fn try_parse_stmt_not_beginning_with_keyword(
 
 			// Consume the `;` to end the declarations.
 			let (current, current_span) = match walker.peek() {
-				Some((t, s)) => (t, *s),
+				Some(t) => t,
 				None => {
+					// Error recovery: we are missing the semi colon.
 					errors.push(SyntaxErr::ExpectedSemiAfterVarDeclExpr(
 						walker.get_last_span().next_single_width(),
 					));
@@ -835,6 +876,7 @@ fn try_parse_stmt_not_beginning_with_keyword(
 			};
 
 			if *current == Token::Semi {
+				let semi_span = *current_span;
 				walker.advance();
 
 				return Some((
@@ -845,9 +887,9 @@ fn try_parse_stmt_not_beginning_with_keyword(
 						ident_count,
 						Some(eq_span),
 						Some(value_expr),
-						Some(current_span),
+						Some(semi_span),
 					)],
-					Some(current_span),
+					Some(semi_span),
 					errors,
 				));
 			} else {
@@ -893,9 +935,9 @@ fn try_parse_stmt_not_beginning_with_keyword(
 				return Some((nodes, consumed_semi, errors));
 			}
 		} else {
-			// Error recovery: we are missing a semi-colon or an equals-sign.
+			// Error recovery: we are missing the semi colon or equals sign.
 			errors.push(SyntaxErr::ExpectedSemiOrEqAfterVarDef(
-				walker.get_previous_span().next_single_width(),
+				ident_expr.span.next_single_width(),
 			));
 			let mut nodes = vec![var_def_constructor(
 				qualifiers,
@@ -938,8 +980,8 @@ fn try_parse_stmt_not_beginning_with_keyword(
 		}
 	}
 
-	// Whatever we have cannot be the start of a def/decl, hence it must just be an expression statement in its own
-	// right.
+	// Whatever we have cannot be the start of a variable/function def/decl, hence it must just be an expression
+	// statement in its own right.
 	let expr = start;
 	errors.append(&mut errs);
 
@@ -947,11 +989,12 @@ fn try_parse_stmt_not_beginning_with_keyword(
 	let (current, current_span) = match walker.peek() {
 		Some(t) => t,
 		None => {
-			// Error recovery: we are missing a semi-colon.
+			// We have an expression, and we've reached the end of the token stream.
+
+			// Error recovery: we are missing a semi-colon after the expression.
 			errors.push(SyntaxErr::ExpectedSemiAfterStmt(
 				expr.span.next_single_width(),
 			));
-
 			return Some((
 				vec![Node {
 					span: expr.span,
@@ -975,10 +1018,10 @@ fn try_parse_stmt_not_beginning_with_keyword(
 
 		Some((vec![node], semi, errors))
 	} else {
+		// Error recovery: we are missing a semi-colon after the expression.
 		errors.push(SyntaxErr::ExpectedSemiAfterStmt(
 			expr.span.next_single_width(),
 		));
-
 		let mut nodes = vec![Node {
 			span: expr.span,
 			ty: NodeTy::ExprStmt { expr, semi: None },
@@ -986,7 +1029,7 @@ fn try_parse_stmt_not_beginning_with_keyword(
 
 		// Consume tokens until we come across a token which can unambiguously end this statement, this could
 		// be another semi-colon `;` or a keyword which starts a new statement.
-		let mut consumed_semi = None;
+		let mut ending_semi_span = None;
 		loop {
 			let (current, current_span) = match walker.peek() {
 				Some(t) => t,
@@ -998,7 +1041,7 @@ fn try_parse_stmt_not_beginning_with_keyword(
 					ty: NodeTy::Punctuation,
 					span: *current_span,
 				});
-				consumed_semi = Some(*current_span);
+				ending_semi_span = Some(*current_span);
 				walker.advance();
 				break;
 			} else if current.starts_statement() {
@@ -1013,7 +1056,7 @@ fn try_parse_stmt_not_beginning_with_keyword(
 			}
 		}
 
-		Some((nodes, consumed_semi, errors))
+		Some((nodes, ending_semi_span, errors))
 	}
 }
 
@@ -1031,9 +1074,11 @@ fn try_parse_stmt_not_beginning_with_keyword(
 ///
 /// # Panics
 /// This function assumes that there is a current `Token` to peek.
-fn parse_stmt(walker: &mut Walker, nodes: &mut Vec<Node>) -> Vec<SyntaxErr> {
-	let mut errors = Vec::new();
-
+fn parse_stmt(
+	walker: &mut Walker,
+	nodes: &mut Vec<Node>,
+	syntax_errors: &mut Vec<SyntaxErr>,
+) {
 	// Panics: This is guaranteed to unwrap without panic because of the while-loop precondition.
 	let (current, current_span) = walker
 		.peek()
@@ -1048,20 +1093,19 @@ fn parse_stmt(walker: &mut Walker, nodes: &mut Vec<Node>) -> Vec<SyntaxErr> {
 
 		let (inner_scope, mut inner_errs) =
 			parse_scope(walker, BRACE_DELIMITER, l_brace_span);
-		errors.append(&mut inner_errs);
+		syntax_errors.append(&mut inner_errs);
 
 		nodes.push(Node {
 			span: Span::new(l_brace_span.start, inner_scope.span.end),
 			ty: NodeTy::Scope(inner_scope),
 		});
-		return errors;
+		return;
 	}
 
 	// TODO: Deal with comments?
 
 	// First, we look for any qualifiers because they are always located first in a statement.
-	let (qualifiers, mut errs) = try_parse_qualifier_list(walker);
-	errors.append(&mut errs);
+	let qualifiers = try_parse_qualifier_list(walker, syntax_errors);
 
 	// Next, we try to parse a statement that doesn't begin with a keyword, such as a variable declaration.
 	match try_parse_stmt_not_beginning_with_keyword(
@@ -1070,9 +1114,9 @@ fn parse_stmt(walker: &mut Walker, nodes: &mut Vec<Node>) -> Vec<SyntaxErr> {
 		&[Token::Semi],
 	) {
 		Some((mut inner, _, mut err)) => {
-			errors.append(&mut err);
+			syntax_errors.append(&mut err);
 			nodes.append(&mut inner);
-			return errors;
+			return;
 		}
 		None => {}
 	}
@@ -1091,9 +1135,10 @@ fn parse_stmt(walker: &mut Walker, nodes: &mut Vec<Node>) -> Vec<SyntaxErr> {
 		None => {
 			// We potentially parsed some qualifiers and have reached the EOF.
 			if let Some(span) = qualifier_span_end {
-				errors.push(SyntaxErr::ExpectedDefDeclAfterQualifiers(span));
+				syntax_errors
+					.push(SyntaxErr::ExpectedDefDeclAfterQualifiers(span));
 			}
-			return errors;
+			return;
 		}
 	};
 
@@ -1108,12 +1153,12 @@ fn parse_stmt(walker: &mut Walker, nodes: &mut Vec<Node>) -> Vec<SyntaxErr> {
 						span: q.span,
 					})
 				});
-				errors.push(SyntaxErr::ExpectedDefDeclAfterQualifiers(
+				syntax_errors.push(SyntaxErr::ExpectedDefDeclAfterQualifiers(
 					// Panics: This is assigned `Some` if `qualifiers` is not empty, and we currently have just
 					// checked for that condition.
 					qualifier_span_end.unwrap(),
 				));
-				return errors;
+				return;
 			}
 		}
 	}
@@ -1134,7 +1179,7 @@ fn parse_stmt(walker: &mut Walker, nodes: &mut Vec<Node>) -> Vec<SyntaxErr> {
 			let mut branches = Vec::new();
 			let (first, mut errs) =
 				parse_if_header_body(walker, IfTy::If(kw_span), true);
-			errors.append(&mut errs);
+			syntax_errors.append(&mut errs);
 			branches.push(first);
 
 			'branches: loop {
@@ -1148,7 +1193,7 @@ fn parse_stmt(walker: &mut Walker, nodes: &mut Vec<Node>) -> Vec<SyntaxErr> {
 								walker.get_last_span().end,
 							),
 						});
-						return errors;
+						return;
 					}
 				};
 
@@ -1160,14 +1205,14 @@ fn parse_stmt(walker: &mut Walker, nodes: &mut Vec<Node>) -> Vec<SyntaxErr> {
 						let (current, current_span) = match walker.peek() {
 							Some(t) => (&t.0, t.1),
 							None => {
-								errors.push(
+								syntax_errors.push(
 									SyntaxErr::ExpectedIfOrBodyAfterElseKw(
 										walker
 											.get_last_span()
 											.next_single_width(),
 									),
 								);
-								return errors;
+								return;
 							}
 						};
 
@@ -1181,7 +1226,7 @@ fn parse_stmt(walker: &mut Walker, nodes: &mut Vec<Node>) -> Vec<SyntaxErr> {
 								IfTy::ElseIf(else_span, if_span),
 								true,
 							);
-							errors.append(&mut errs);
+							syntax_errors.append(&mut errs);
 							branches.push(branch);
 						} else {
 							// We just have `else`.
@@ -1191,7 +1236,7 @@ fn parse_stmt(walker: &mut Walker, nodes: &mut Vec<Node>) -> Vec<SyntaxErr> {
 								IfTy::Else(else_span),
 								false,
 							);
-							errors.append(&mut errs);
+							syntax_errors.append(&mut errs);
 							branches.push(branch);
 						}
 					}
@@ -1215,7 +1260,7 @@ fn parse_stmt(walker: &mut Walker, nodes: &mut Vec<Node>) -> Vec<SyntaxErr> {
 			let (current, current_span) = match walker.peek() {
 				Some(t) => (&t.0, t.1),
 				None => {
-					errors.push(SyntaxErr::ExpectedParenAfterSwitchKw(
+					syntax_errors.push(SyntaxErr::ExpectedParenAfterSwitchKw(
 						token_span.next_single_width(),
 					));
 
@@ -1223,7 +1268,7 @@ fn parse_stmt(walker: &mut Walker, nodes: &mut Vec<Node>) -> Vec<SyntaxErr> {
 						ty: NodeTy::Keyword,
 						span: kw_span,
 					});
-					return errors;
+					return;
 				}
 			};
 			let l_paren_span = if *current == Token::LParen {
@@ -1235,15 +1280,14 @@ fn parse_stmt(walker: &mut Walker, nodes: &mut Vec<Node>) -> Vec<SyntaxErr> {
 
 				// We are completely missing the condition expression, but we treat this as "valid" for
 				// better recovery.
-				errors.push(SyntaxErr::MissingSwitchHeader(Span::new_between(
-					token_span,
-					current_span,
-				)));
+				syntax_errors.push(SyntaxErr::MissingSwitchHeader(
+					Span::new_between(token_span, current_span),
+				));
 
 				// Consume the body, including the closing `}` brace.
 				let (cases, mut errs, r_brace) =
 					parse_switch_body(walker, current_span);
-				errors.append(&mut errs);
+				syntax_errors.append(&mut errs);
 
 				nodes.push(Node {
 					ty: NodeTy::Switch {
@@ -1260,11 +1304,11 @@ fn parse_stmt(walker: &mut Walker, nodes: &mut Vec<Node>) -> Vec<SyntaxErr> {
 						walker.get_previous_span().end,
 					),
 				});
-				return errors;
+				return;
 			} else {
 				// Even though we are missing the token, we will still try to parse this syntax at
 				// least until we expect the body scope.
-				errors.push(SyntaxErr::ExpectedParenAfterWhileKw(
+				syntax_errors.push(SyntaxErr::ExpectedParenAfterWhileKw(
 					token_span.next_single_width(),
 				));
 				None
@@ -1274,7 +1318,7 @@ fn parse_stmt(walker: &mut Walker, nodes: &mut Vec<Node>) -> Vec<SyntaxErr> {
 			let mut expr_nodes =
 				match expr_parser(walker, Mode::Default, &[Token::RParen]) {
 					(Some(e), mut errs) => {
-						errors.append(&mut errs);
+						syntax_errors.append(&mut errs);
 						Some(Nodes::new_with(Node {
 							span: e.span,
 							ty: NodeTy::Expression(e),
@@ -1288,7 +1332,7 @@ fn parse_stmt(walker: &mut Walker, nodes: &mut Vec<Node>) -> Vec<SyntaxErr> {
 							let (current, current_span) = match walker.peek() {
 								Some(t) => (&t.0, t.1),
 								None => {
-									errors.push(
+									syntax_errors.push(
 										SyntaxErr::ExpectedExprInSwitchHeader(
 											walker
 												.get_last_span()
@@ -1307,20 +1351,20 @@ fn parse_stmt(walker: &mut Walker, nodes: &mut Vec<Node>) -> Vec<SyntaxErr> {
 										});
 									}
 									nodes.append(&mut invalid_expr_nodes.inner);
-									return errors;
+									return;
 								}
 							};
 
 							match current {
 								Token::RParen | Token::RBrace => {
 									if let Some(l_paren_span) = l_paren_span {
-										errors.push(
+										syntax_errors.push(
 											SyntaxErr::ExpectedExprInSwitchHeader(
 												Span::new_between(l_paren_span, current_span)
 											),
 										);
 									} else {
-										errors.push(
+										syntax_errors.push(
 											SyntaxErr::ExpectedExprInSwitchHeader(
 												current_span.previous_single_width()
 											),
@@ -1354,10 +1398,12 @@ fn parse_stmt(walker: &mut Walker, nodes: &mut Vec<Node>) -> Vec<SyntaxErr> {
 				let (current, current_span) = match walker.peek() {
 					Some(t) => t,
 					None => {
-						errors.push(SyntaxErr::ExpectedParenAfterSwitchHeader(
-							l_paren_span,
-							walker.get_last_span().next_single_width(),
-						));
+						syntax_errors.push(
+							SyntaxErr::ExpectedParenAfterSwitchHeader(
+								l_paren_span,
+								walker.get_last_span().next_single_width(),
+							),
+						);
 
 						nodes.push(Node {
 							ty: NodeTy::Keyword,
@@ -1372,7 +1418,7 @@ fn parse_stmt(walker: &mut Walker, nodes: &mut Vec<Node>) -> Vec<SyntaxErr> {
 						if let Some(mut expr_nodes) = expr_nodes {
 							nodes.append(&mut expr_nodes.inner);
 						}
-						return errors;
+						return;
 					}
 				};
 
@@ -1386,10 +1432,12 @@ fn parse_stmt(walker: &mut Walker, nodes: &mut Vec<Node>) -> Vec<SyntaxErr> {
 					Token::LBrace => {
 						// We don't do anything apart from creating a syntax error since the next check
 						// deals with the `{`.
-						errors.push(SyntaxErr::ExpectedParenAfterSwitchHeader(
-							l_paren_span,
-							current_span.previous_single_width(),
-						));
+						syntax_errors.push(
+							SyntaxErr::ExpectedParenAfterSwitchHeader(
+								l_paren_span,
+								current_span.previous_single_width(),
+							),
+						);
 						break 'r_paren_3 current_span.previous_single_width();
 					}
 					_ => {
@@ -1416,9 +1464,11 @@ fn parse_stmt(walker: &mut Walker, nodes: &mut Vec<Node>) -> Vec<SyntaxErr> {
 				None => {
 					// Even though switch statements without a body are illegal, we treat this as
 					// "valid" for better recovery.
-					errors.push(SyntaxErr::ExpectedBraceAfterSwitchHeader(
-						walker.get_last_span().next_single_width(),
-					));
+					syntax_errors.push(
+						SyntaxErr::ExpectedBraceAfterSwitchHeader(
+							walker.get_last_span().next_single_width(),
+						),
+					);
 
 					nodes.push(Node {
 						ty: NodeTy::Switch {
@@ -1435,14 +1485,14 @@ fn parse_stmt(walker: &mut Walker, nodes: &mut Vec<Node>) -> Vec<SyntaxErr> {
 							walker.get_last_span().end,
 						),
 					});
-					return errors;
+					return;
 				}
 			};
 			let l_brace_span = if *current == Token::LBrace {
 				walker.advance();
 				current_span
 			} else {
-				errors.push(SyntaxErr::ExpectedBraceAfterSwitchHeader(
+				syntax_errors.push(SyntaxErr::ExpectedBraceAfterSwitchHeader(
 					span_after_header.next_single_width(),
 				));
 
@@ -1461,13 +1511,13 @@ fn parse_stmt(walker: &mut Walker, nodes: &mut Vec<Node>) -> Vec<SyntaxErr> {
 						walker.get_previous_span().end,
 					),
 				});
-				return errors;
+				return;
 			};
 
 			// Consume the body, including the closing `}` brace.
 			let (cases, mut errs, r_brace_span) =
 				parse_switch_body(walker, current_span);
-			errors.append(&mut errs);
+			syntax_errors.append(&mut errs);
 
 			nodes.push(Node {
 				ty: NodeTy::Switch {
@@ -1493,7 +1543,7 @@ fn parse_stmt(walker: &mut Walker, nodes: &mut Vec<Node>) -> Vec<SyntaxErr> {
 			let (current, current_span) = match walker.peek() {
 				Some(t) => (&t.0, t.1),
 				None => {
-					errors.push(SyntaxErr::ExpectedParenAfterForKw(
+					syntax_errors.push(SyntaxErr::ExpectedParenAfterForKw(
 						kw_span.next_single_width(),
 					));
 
@@ -1501,7 +1551,7 @@ fn parse_stmt(walker: &mut Walker, nodes: &mut Vec<Node>) -> Vec<SyntaxErr> {
 						ty: NodeTy::Keyword,
 						span: kw_span,
 					});
-					return errors;
+					return;
 				}
 			};
 			let l_paren_span = if *current == Token::LParen {
@@ -1512,15 +1562,14 @@ fn parse_stmt(walker: &mut Walker, nodes: &mut Vec<Node>) -> Vec<SyntaxErr> {
 
 				// We are completely missing the header, but we treat this as "valid" for better
 				// recovery.
-				errors.push(SyntaxErr::MissingForHeader(Span::new_between(
-					kw_span,
-					current_span,
-				)));
+				syntax_errors.push(SyntaxErr::MissingForHeader(
+					Span::new_between(kw_span, current_span),
+				));
 
 				// Consume the body, including the closing `}` brace.
 				let (body, mut errs) =
 					parse_scope(walker, BRACE_DELIMITER, current_span);
-				errors.append(&mut errs);
+				syntax_errors.append(&mut errs);
 
 				nodes.push(Node {
 					span: Span::new(kw_span.start, body.span.end),
@@ -1532,11 +1581,11 @@ fn parse_stmt(walker: &mut Walker, nodes: &mut Vec<Node>) -> Vec<SyntaxErr> {
 						body: Some(body),
 					},
 				});
-				return errors;
+				return;
 			} else {
 				// Even though we are missing the token, we will still try to parse this syntax at
 				// least until we expect the body scope.
-				errors.push(SyntaxErr::ExpectedParenAfterForKw(
+				syntax_errors.push(SyntaxErr::ExpectedParenAfterForKw(
 					kw_span.next_single_width(),
 				));
 				None
@@ -1551,10 +1600,12 @@ fn parse_stmt(walker: &mut Walker, nodes: &mut Vec<Node>) -> Vec<SyntaxErr> {
 						// We haven't found the closing `)` parenthesis yet, but we've reached the end of the
 						// token stream.
 
-						errors.push(SyntaxErr::ExpectedParenAfterForHeader(
-							l_paren_span,
-							walker.get_last_span().next_single_width(),
-						));
+						syntax_errors.push(
+							SyntaxErr::ExpectedParenAfterForHeader(
+								l_paren_span,
+								walker.get_last_span().next_single_width(),
+							),
+						);
 
 						nodes.push(Node {
 							ty: NodeTy::Keyword,
@@ -1567,7 +1618,7 @@ fn parse_stmt(walker: &mut Walker, nodes: &mut Vec<Node>) -> Vec<SyntaxErr> {
 							});
 						}
 						// TODO:
-						return errors;
+						return;
 					}
 				};
 
@@ -1594,7 +1645,7 @@ fn parse_stmt(walker: &mut Walker, nodes: &mut Vec<Node>) -> Vec<SyntaxErr> {
 						&Vec::<Qualifier>::new(),
 						&[Token::RParen],
 					) {
-					errors.append(&mut err);
+					syntax_errors.append(&mut err);
 
 					args.push_item(Nodes::from_vec(nodes));
 					if let Some(semi) = semi {
@@ -1608,7 +1659,7 @@ fn parse_stmt(walker: &mut Walker, nodes: &mut Vec<Node>) -> Vec<SyntaxErr> {
 						let (current, current_span) = match walker.peek() {
 							Some(t) => t,
 							None => {
-								return errors;
+								return;
 							}
 						};
 
@@ -1638,7 +1689,7 @@ fn parse_stmt(walker: &mut Walker, nodes: &mut Vec<Node>) -> Vec<SyntaxErr> {
 				None => {
 					// Even though for loops without a body are illegal, we treat this as "valid" for
 					// better error recovery.
-					errors.push(SyntaxErr::ExpectedBraceAfterForHeader(
+					syntax_errors.push(SyntaxErr::ExpectedBraceAfterForHeader(
 						walker.get_last_span().next_single_width(),
 					));
 
@@ -1655,7 +1706,7 @@ fn parse_stmt(walker: &mut Walker, nodes: &mut Vec<Node>) -> Vec<SyntaxErr> {
 							walker.get_last_span().end,
 						),
 					});
-					return errors;
+					return;
 				}
 			};
 			if *current == Token::LBrace {
@@ -1680,13 +1731,13 @@ fn parse_stmt(walker: &mut Walker, nodes: &mut Vec<Node>) -> Vec<SyntaxErr> {
 						walker.get_previous_span().end,
 					),
 				});
-				return errors;
+				return;
 			}
 
 			// Consume the body, including the closing `}` brace.
 			let (body, mut errs) =
 				parse_scope(walker, BRACE_DELIMITER, current_span);
-			errors.append(&mut errs);
+			syntax_errors.append(&mut errs);
 
 			nodes.push(Node {
 				span: Span::new(token_span.start, body.span.end),
@@ -1707,7 +1758,7 @@ fn parse_stmt(walker: &mut Walker, nodes: &mut Vec<Node>) -> Vec<SyntaxErr> {
 			let (current, current_span) = match walker.peek() {
 				Some(t) => (&t.0, t.1),
 				None => {
-					errors.push(SyntaxErr::ExpectedParenAfterWhileKw(
+					syntax_errors.push(SyntaxErr::ExpectedParenAfterWhileKw(
 						kw_span.next_single_width(),
 					));
 
@@ -1715,7 +1766,7 @@ fn parse_stmt(walker: &mut Walker, nodes: &mut Vec<Node>) -> Vec<SyntaxErr> {
 						ty: NodeTy::Keyword,
 						span: kw_span,
 					});
-					return errors;
+					return;
 				}
 			};
 			let l_paren_span = if *current == Token::LParen {
@@ -1726,14 +1777,14 @@ fn parse_stmt(walker: &mut Walker, nodes: &mut Vec<Node>) -> Vec<SyntaxErr> {
 
 				// We are completely missing the condition expression, but we treat this as "valid" for
 				// better recovery.
-				errors.push(SyntaxErr::ExpectedCondExprAfterWhile(
+				syntax_errors.push(SyntaxErr::ExpectedCondExprAfterWhile(
 					Span::new_between(kw_span, current_span),
 				));
 
 				// Consume the body, including the closing `}` brace.
 				let (body, mut errs) =
 					parse_scope(walker, BRACE_DELIMITER, current_span);
-				errors.append(&mut errs);
+				syntax_errors.append(&mut errs);
 
 				nodes.push(Node {
 					span: Span::new(kw_span.start, body.span.end),
@@ -1745,11 +1796,11 @@ fn parse_stmt(walker: &mut Walker, nodes: &mut Vec<Node>) -> Vec<SyntaxErr> {
 						body: Some(body),
 					},
 				});
-				return errors;
+				return;
 			} else {
 				// Even though we are missing the token, we will still try to parse this syntax at
 				// least until we expect the body scope.
-				errors.push(SyntaxErr::ExpectedParenAfterWhileKw(
+				syntax_errors.push(SyntaxErr::ExpectedParenAfterWhileKw(
 					kw_span.next_single_width(),
 				));
 				None
@@ -1759,7 +1810,7 @@ fn parse_stmt(walker: &mut Walker, nodes: &mut Vec<Node>) -> Vec<SyntaxErr> {
 			let mut cond_nodes =
 				match expr_parser(walker, Mode::Default, &[Token::RParen]) {
 					(Some(e), mut errs) => {
-						errors.append(&mut errs);
+						syntax_errors.append(&mut errs);
 						Nodes::new_with(Node {
 							span: e.span,
 							ty: NodeTy::Expression(e),
@@ -1773,7 +1824,7 @@ fn parse_stmt(walker: &mut Walker, nodes: &mut Vec<Node>) -> Vec<SyntaxErr> {
 							let (current, current_span) = match walker.peek() {
 								Some(t) => (&t.0, t.1),
 								None => {
-									errors.push(
+									syntax_errors.push(
 										SyntaxErr::ExpectedCondExprAfterWhile(
 											walker
 												.get_last_span()
@@ -1792,20 +1843,20 @@ fn parse_stmt(walker: &mut Walker, nodes: &mut Vec<Node>) -> Vec<SyntaxErr> {
 										});
 									}
 									nodes.append(&mut invalid_cond_nodes.inner);
-									return errors;
+									return;
 								}
 							};
 
 							match current {
 								Token::RParen | Token::LBrace => {
 									if let Some(l_paren_span) = l_paren_span {
-										errors.push(
+										syntax_errors.push(
 											SyntaxErr::ExpectedCondExprAfterWhile(
 												Span::new_between(l_paren_span, current_span)
 											),
 										);
 									} else {
-										errors.push(
+										syntax_errors.push(
 											SyntaxErr::ExpectedCondExprAfterWhile(
 												current_span.previous_single_width()
 											),
@@ -1836,10 +1887,12 @@ fn parse_stmt(walker: &mut Walker, nodes: &mut Vec<Node>) -> Vec<SyntaxErr> {
 				let (current, current_span) = match walker.peek() {
 					Some(t) => t,
 					None => {
-						errors.push(SyntaxErr::ExpectedParenAfterWhileCond(
-							l_paren_span,
-							walker.get_last_span().next_single_width(),
-						));
+						syntax_errors.push(
+							SyntaxErr::ExpectedParenAfterWhileCond(
+								l_paren_span,
+								walker.get_last_span().next_single_width(),
+							),
+						);
 
 						nodes.push(Node {
 							ty: NodeTy::Keyword,
@@ -1852,7 +1905,7 @@ fn parse_stmt(walker: &mut Walker, nodes: &mut Vec<Node>) -> Vec<SyntaxErr> {
 							});
 						}
 						nodes.append(&mut cond_nodes.inner);
-						return errors;
+						return;
 					}
 				};
 
@@ -1866,10 +1919,12 @@ fn parse_stmt(walker: &mut Walker, nodes: &mut Vec<Node>) -> Vec<SyntaxErr> {
 					Token::LBrace => {
 						// We don't do anything apart from creating a syntax error since the next check
 						// deals with the `{`.
-						errors.push(SyntaxErr::ExpectedParenAfterWhileCond(
-							l_paren_span,
-							current_span.previous_single_width(),
-						));
+						syntax_errors.push(
+							SyntaxErr::ExpectedParenAfterWhileCond(
+								l_paren_span,
+								current_span.previous_single_width(),
+							),
+						);
 						break 'r_paren current_span.start_zero_width();
 					}
 					_ => {
@@ -1895,9 +1950,11 @@ fn parse_stmt(walker: &mut Walker, nodes: &mut Vec<Node>) -> Vec<SyntaxErr> {
 				None => {
 					// Even though while loops without a body are illegal, we treat this as "valid" for
 					// better recovery.
-					errors.push(SyntaxErr::ExpectedScopeAfterControlFlowExpr(
-						walker.get_last_span().next_single_width(),
-					));
+					syntax_errors.push(
+						SyntaxErr::ExpectedScopeAfterControlFlowExpr(
+							walker.get_last_span().next_single_width(),
+						),
+					);
 
 					nodes.push(Node {
 						ty: NodeTy::While {
@@ -1912,15 +1969,17 @@ fn parse_stmt(walker: &mut Walker, nodes: &mut Vec<Node>) -> Vec<SyntaxErr> {
 							walker.get_last_span().end,
 						),
 					});
-					return errors;
+					return;
 				}
 			};
 			if *current == Token::LBrace {
 				walker.advance();
 			} else {
-				errors.push(SyntaxErr::ExpectedScopeAfterControlFlowExpr(
-					span_before_body.next_single_width(),
-				));
+				syntax_errors.push(
+					SyntaxErr::ExpectedScopeAfterControlFlowExpr(
+						span_before_body.next_single_width(),
+					),
+				);
 
 				nodes.push(Node {
 					ty: NodeTy::While {
@@ -1935,13 +1994,13 @@ fn parse_stmt(walker: &mut Walker, nodes: &mut Vec<Node>) -> Vec<SyntaxErr> {
 						walker.get_previous_span().end,
 					),
 				});
-				return errors;
+				return;
 			}
 
 			// Consume the body, including the closing `}` brace.
 			let (body, mut errs) =
 				parse_scope(walker, BRACE_DELIMITER, current_span);
-			errors.append(&mut errs);
+			syntax_errors.append(&mut errs);
 
 			nodes.push(Node {
 				ty: NodeTy::While {
@@ -1965,7 +2024,7 @@ fn parse_stmt(walker: &mut Walker, nodes: &mut Vec<Node>) -> Vec<SyntaxErr> {
 			let (current, current_span) = match walker.peek() {
 				Some(t) => (&t.0, t.1),
 				None => {
-					errors.push(SyntaxErr::ExpectedBraceAfterDoKw(
+					syntax_errors.push(SyntaxErr::ExpectedBraceAfterDoKw(
 						token_span.next_single_width(),
 					));
 
@@ -1973,7 +2032,7 @@ fn parse_stmt(walker: &mut Walker, nodes: &mut Vec<Node>) -> Vec<SyntaxErr> {
 						ty: NodeTy::Keyword,
 						span: do_kw_span,
 					});
-					return errors;
+					return;
 				}
 			};
 			let (body, span_after_body) = if *current == Token::LBrace {
@@ -1982,19 +2041,19 @@ fn parse_stmt(walker: &mut Walker, nodes: &mut Vec<Node>) -> Vec<SyntaxErr> {
 				// Consume the body, including the closing `}` brace.
 				let (body, mut errs) =
 					parse_scope(walker, BRACE_DELIMITER, current_span);
-				errors.append(&mut errs);
+				syntax_errors.append(&mut errs);
 
 				(Some(body.clone()), body.span.end_zero_width())
 			} else if *current == Token::While {
 				// We are completely missing the body, but we treat this as "valid" for better error
 				// recovery; we still try to parse the condition. We do nothing because the next check
 				// deals with the `while` keyword.
-				errors.push(SyntaxErr::ExpectedScopeAfterDoKw(
+				syntax_errors.push(SyntaxErr::ExpectedScopeAfterDoKw(
 					token_span.next_single_width(),
 				));
 				(None, do_kw_span.end_zero_width())
 			} else {
-				errors.push(SyntaxErr::ExpectedBraceAfterDoKw(
+				syntax_errors.push(SyntaxErr::ExpectedBraceAfterDoKw(
 					token_span.next_single_width(),
 				));
 
@@ -2002,14 +2061,14 @@ fn parse_stmt(walker: &mut Walker, nodes: &mut Vec<Node>) -> Vec<SyntaxErr> {
 					ty: NodeTy::Keyword,
 					span: do_kw_span,
 				});
-				return errors;
+				return;
 			};
 
 			// Consume the `while` keyword.
 			let (current, current_span) = match walker.peek() {
 				Some(t) => (&t.0, t.1),
 				None => {
-					errors.push(SyntaxErr::ExpectedWhileKwAfterDoBody(
+					syntax_errors.push(SyntaxErr::ExpectedWhileKwAfterDoBody(
 						walker.get_last_span(),
 					));
 
@@ -2023,7 +2082,7 @@ fn parse_stmt(walker: &mut Walker, nodes: &mut Vec<Node>) -> Vec<SyntaxErr> {
 							ty: NodeTy::DelimitedScope(body),
 						})
 					}
-					return errors;
+					return;
 				}
 			};
 			let while_kw_span = if *current == Token::While {
@@ -2037,7 +2096,7 @@ fn parse_stmt(walker: &mut Walker, nodes: &mut Vec<Node>) -> Vec<SyntaxErr> {
 				// Since the position of a missing body and a missing `while` keyword can potentially
 				// overlap if both are missing, we avoid this error if we already have the first.
 				if let Some(_) = body {
-					errors.push(SyntaxErr::ExpectedWhileKwAfterDoBody(
+					syntax_errors.push(SyntaxErr::ExpectedWhileKwAfterDoBody(
 						span_after_body.next_single_width(),
 					));
 				}
@@ -2046,7 +2105,7 @@ fn parse_stmt(walker: &mut Walker, nodes: &mut Vec<Node>) -> Vec<SyntaxErr> {
 				// Since the position of a missing body and a missing `while` keyword can potentially
 				// overlap if both are missing, we avoid this error if we already have the first.
 				if let Some(_) = body {
-					errors.push(SyntaxErr::ExpectedWhileKwAfterDoBody(
+					syntax_errors.push(SyntaxErr::ExpectedWhileKwAfterDoBody(
 						span_after_body.next_single_width(),
 					));
 				}
@@ -2061,7 +2120,7 @@ fn parse_stmt(walker: &mut Walker, nodes: &mut Vec<Node>) -> Vec<SyntaxErr> {
 						ty: NodeTy::DelimitedScope(body),
 					})
 				}
-				return errors;
+				return;
 			};
 
 			// Consume the opening `(` parenthesis.
@@ -2072,9 +2131,11 @@ fn parse_stmt(walker: &mut Walker, nodes: &mut Vec<Node>) -> Vec<SyntaxErr> {
 					// potentially overlap if both are missing, we avoid this error if we already have
 					// the first error.
 					if let Some(while_kw_span) = while_kw_span {
-						errors.push(SyntaxErr::ExpectedParenAfterWhileKw(
-							while_kw_span.next_single_width(),
-						));
+						syntax_errors.push(
+							SyntaxErr::ExpectedParenAfterWhileKw(
+								while_kw_span.next_single_width(),
+							),
+						);
 					}
 
 					nodes.push(Node {
@@ -2093,7 +2154,7 @@ fn parse_stmt(walker: &mut Walker, nodes: &mut Vec<Node>) -> Vec<SyntaxErr> {
 							span: while_kw_span,
 						});
 					}
-					return errors;
+					return;
 				}
 			};
 			let l_paren_span = if *current == Token::LParen {
@@ -2106,7 +2167,7 @@ fn parse_stmt(walker: &mut Walker, nodes: &mut Vec<Node>) -> Vec<SyntaxErr> {
 				// potentially overlap if both are missing, we avoid this error if we already have the
 				// first error.
 				if let Some(while_kw_span) = while_kw_span {
-					errors.push(SyntaxErr::ExpectedCondExprAfterWhile(
+					syntax_errors.push(SyntaxErr::ExpectedCondExprAfterWhile(
 						Span::new_between(while_kw_span, current_span),
 					));
 				}
@@ -2126,13 +2187,13 @@ fn parse_stmt(walker: &mut Walker, nodes: &mut Vec<Node>) -> Vec<SyntaxErr> {
 						walker.get_previous_span().end,
 					),
 				});
-				return errors;
+				return;
 			} else {
 				// Since the position of a missing `while` keyword and a missing `(` token can
 				// potentially overlap if both are missing, we avoid this error if we already have the
 				// first error.
 				if let Some(while_kw_span) = while_kw_span {
-					errors.push(SyntaxErr::ExpectedParenAfterWhileKw(
+					syntax_errors.push(SyntaxErr::ExpectedParenAfterWhileKw(
 						while_kw_span.next_single_width(),
 					));
 				}
@@ -2146,7 +2207,7 @@ fn parse_stmt(walker: &mut Walker, nodes: &mut Vec<Node>) -> Vec<SyntaxErr> {
 				&[Token::RParen, Token::Semi],
 			) {
 				(Some(e), mut errs) => {
-					errors.append(&mut errs);
+					syntax_errors.append(&mut errs);
 					Nodes::new_with(Node {
 						span: e.span,
 						ty: NodeTy::Expression(e),
@@ -2160,7 +2221,7 @@ fn parse_stmt(walker: &mut Walker, nodes: &mut Vec<Node>) -> Vec<SyntaxErr> {
 						let (current, current_span) = match walker.peek() {
 							Some(t) => (&t.0, t.1),
 							None => {
-								errors.push(
+								syntax_errors.push(
 									SyntaxErr::ExpectedCondExprAfterWhile(
 										walker
 											.get_last_span()
@@ -2191,14 +2252,14 @@ fn parse_stmt(walker: &mut Walker, nodes: &mut Vec<Node>) -> Vec<SyntaxErr> {
 									});
 								}
 								nodes.append(&mut invalid_cond_nodes.inner);
-								return errors;
+								return;
 							}
 						};
 
 						match current {
 							Token::RParen => {
 								if let Some(l_paren_span) = l_paren_span {
-									errors.push(
+									syntax_errors.push(
 										SyntaxErr::ExpectedCondExprAfterWhile(
 											Span::new_between(
 												l_paren_span,
@@ -2207,7 +2268,7 @@ fn parse_stmt(walker: &mut Walker, nodes: &mut Vec<Node>) -> Vec<SyntaxErr> {
 										),
 									);
 								} else {
-									errors.push(
+									syntax_errors.push(
 										SyntaxErr::ExpectedCondExprAfterWhile(
 											current_span
 												.previous_single_width(),
@@ -2218,7 +2279,7 @@ fn parse_stmt(walker: &mut Walker, nodes: &mut Vec<Node>) -> Vec<SyntaxErr> {
 							}
 							Token::Semi => {
 								if let Some(l_paren_span) = l_paren_span {
-									errors.push(
+									syntax_errors.push(
 										SyntaxErr::ExpectedCondExprAfterWhile(
 											l_paren_span.next_single_width(),
 										),
@@ -2252,10 +2313,12 @@ fn parse_stmt(walker: &mut Walker, nodes: &mut Vec<Node>) -> Vec<SyntaxErr> {
 				let (current, current_span) = match walker.peek() {
 					Some(t) => t,
 					None => {
-						errors.push(SyntaxErr::ExpectedParenAfterWhileCond(
-							l_paren_span,
-							walker.get_last_span().next_single_width(),
-						));
+						syntax_errors.push(
+							SyntaxErr::ExpectedParenAfterWhileCond(
+								l_paren_span,
+								walker.get_last_span().next_single_width(),
+							),
+						);
 
 						nodes.push(Node {
 							ty: NodeTy::DoWhile {
@@ -2276,7 +2339,7 @@ fn parse_stmt(walker: &mut Walker, nodes: &mut Vec<Node>) -> Vec<SyntaxErr> {
 								walker.get_previous_span().end,
 							),
 						});
-						return errors;
+						return;
 					}
 				};
 
@@ -2290,10 +2353,12 @@ fn parse_stmt(walker: &mut Walker, nodes: &mut Vec<Node>) -> Vec<SyntaxErr> {
 					Token::Semi => {
 						// We don't do anything apart from creating a syntax error since the next check
 						// deals with the `;`.
-						errors.push(SyntaxErr::ExpectedParenAfterWhileCond(
-							l_paren_span,
-							current_span.previous_single_width(),
-						));
+						syntax_errors.push(
+							SyntaxErr::ExpectedParenAfterWhileCond(
+								l_paren_span,
+								current_span.previous_single_width(),
+							),
+						);
 						break 'r_paren_2 current_span.previous_single_width();
 					}
 					_ => {
@@ -2317,9 +2382,11 @@ fn parse_stmt(walker: &mut Walker, nodes: &mut Vec<Node>) -> Vec<SyntaxErr> {
 			let (current, current_span) = match walker.peek() {
 				Some(t) => (&t.0, t.1),
 				None => {
-					errors.push(SyntaxErr::ExpectedSemiAfterDoWhileStmt(
-						walker.get_last_span(),
-					));
+					syntax_errors.push(
+						SyntaxErr::ExpectedSemiAfterDoWhileStmt(
+							walker.get_last_span(),
+						),
+					);
 
 					nodes.push(Node {
 						ty: NodeTy::DoWhile {
@@ -2336,7 +2403,7 @@ fn parse_stmt(walker: &mut Walker, nodes: &mut Vec<Node>) -> Vec<SyntaxErr> {
 							walker.get_previous_span().end,
 						),
 					});
-					return errors;
+					return;
 				}
 			};
 			let semi_span = if *current == Token::Semi {
@@ -2345,7 +2412,7 @@ fn parse_stmt(walker: &mut Walker, nodes: &mut Vec<Node>) -> Vec<SyntaxErr> {
 			} else {
 				// Even though we are missing a necessary token, it still makes sense to just treat
 				// this as a "valid" loop for analysis. We do produce an error about the missing token.
-				errors.push(SyntaxErr::ExpectedSemiAfterDoWhileStmt(
+				syntax_errors.push(SyntaxErr::ExpectedSemiAfterDoWhileStmt(
 					span_after_while_header.next_single_width(),
 				));
 				None
@@ -2374,7 +2441,7 @@ fn parse_stmt(walker: &mut Walker, nodes: &mut Vec<Node>) -> Vec<SyntaxErr> {
 			// Look for the optional return value expression.
 			let (return_expr, mut errs) =
 				expr_parser(walker, Mode::Default, &[Token::Semi]);
-			errors.append(&mut errs);
+			syntax_errors.append(&mut errs);
 
 			// Consume the `;` to end the statement.
 			let semi_span = match walker.peek() {
@@ -2390,7 +2457,7 @@ fn parse_stmt(walker: &mut Walker, nodes: &mut Vec<Node>) -> Vec<SyntaxErr> {
 				None => None,
 			};
 			if semi_span.is_none() {
-				errors.push(SyntaxErr::ExpectedSemiAfterReturnKw(
+				syntax_errors.push(SyntaxErr::ExpectedSemiAfterReturnKw(
 					walker.get_previous_span().next_single_width(),
 					return_expr.is_some(),
 				));
@@ -2432,7 +2499,7 @@ fn parse_stmt(walker: &mut Walker, nodes: &mut Vec<Node>) -> Vec<SyntaxErr> {
 				None => None,
 			};
 			if semi_span.is_none() {
-				errors.push(SyntaxErr::ExpectedSemiAfterBreakKw(
+				syntax_errors.push(SyntaxErr::ExpectedSemiAfterBreakKw(
 					kw_span.next_single_width(),
 				));
 			}
@@ -2470,7 +2537,7 @@ fn parse_stmt(walker: &mut Walker, nodes: &mut Vec<Node>) -> Vec<SyntaxErr> {
 				None => None,
 			};
 			if semi_span.is_none() {
-				errors.push(SyntaxErr::ExpectedSemiAfterContinueKw(
+				syntax_errors.push(SyntaxErr::ExpectedSemiAfterContinueKw(
 					kw_span.next_single_width(),
 				));
 			}
@@ -2508,7 +2575,7 @@ fn parse_stmt(walker: &mut Walker, nodes: &mut Vec<Node>) -> Vec<SyntaxErr> {
 				None => None,
 			};
 			if semi_span.is_none() {
-				errors.push(SyntaxErr::ExpectedSemiAfterDiscardKw(
+				syntax_errors.push(SyntaxErr::ExpectedSemiAfterDiscardKw(
 					kw_span.next_single_width(),
 				));
 			}
@@ -2530,7 +2597,7 @@ fn parse_stmt(walker: &mut Walker, nodes: &mut Vec<Node>) -> Vec<SyntaxErr> {
 		}
 		Token::Directive(_) => {
 			walker.advance();
-			errors.push(SyntaxErr::DirectivesNotSupported(token_span));
+			syntax_errors.push(SyntaxErr::DirectivesNotSupported(token_span));
 			// TODO: Implement preprocessor stuff.
 			nodes.push(Node {
 				ty: NodeTy::Directive,
@@ -2541,7 +2608,7 @@ fn parse_stmt(walker: &mut Walker, nodes: &mut Vec<Node>) -> Vec<SyntaxErr> {
 			walker.advance();
 
 			let (node, mut errs) = parse_struct(walker, qualifiers, token_span);
-			errors.append(&mut errs);
+			syntax_errors.append(&mut errs);
 
 			if let Some(node) = node {
 				nodes.push(node);
@@ -2549,14 +2616,14 @@ fn parse_stmt(walker: &mut Walker, nodes: &mut Vec<Node>) -> Vec<SyntaxErr> {
 		}
 		Token::Reserved(_) => {
 			walker.advance();
-			errors.push(SyntaxErr::FoundIllegalReservedKw(token_span));
+			syntax_errors.push(SyntaxErr::FoundIllegalReservedKw(token_span));
 			nodes.push(Node {
 				ty: NodeTy::Keyword,
 				span: token_span,
 			});
 		}
 		Token::Invalid(c) => {
-			errors.push(SyntaxErr::FoundIllegalChar(token_span, *c));
+			syntax_errors.push(SyntaxErr::FoundIllegalChar(token_span, *c));
 			walker.advance();
 			nodes.push(Node {
 				ty: NodeTy::Invalid,
@@ -2565,7 +2632,7 @@ fn parse_stmt(walker: &mut Walker, nodes: &mut Vec<Node>) -> Vec<SyntaxErr> {
 		}
 		Token::RBrace => {
 			walker.advance();
-			errors.push(SyntaxErr::FoundLonelyRBrace(token_span));
+			syntax_errors.push(SyntaxErr::FoundLonelyRBrace(token_span));
 			nodes.push(Node {
 				ty: NodeTy::Punctuation,
 				span: token_span,
@@ -2573,7 +2640,8 @@ fn parse_stmt(walker: &mut Walker, nodes: &mut Vec<Node>) -> Vec<SyntaxErr> {
 		}
 		_ => {
 			if token.is_punctuation_for_stmt() {
-				errors.push(SyntaxErr::PunctuationCannotStartStmt(token_span));
+				syntax_errors
+					.push(SyntaxErr::PunctuationCannotStartStmt(token_span));
 				nodes.push(Node {
 					ty: NodeTy::Punctuation,
 					span: token_span,
@@ -2589,7 +2657,7 @@ fn parse_stmt(walker: &mut Walker, nodes: &mut Vec<Node>) -> Vec<SyntaxErr> {
 		}
 	}
 
-	return errors;
+	return;
 }
 
 /// A function, which given the current `walker`, determines whether to end parsing the current scope of
@@ -2654,23 +2722,20 @@ fn parse_scope(
 	let mut inner_nodes = Vec::new();
 	let mut errors = Vec::new();
 
-	// Invariant: Cannot `break` out of a while-loop with a value, but this variable is assigned-to in every branch
-	// that `break` is called in.
 	let mut ending_span = walker.get_last_span().end_zero_width();
 	let mut closing_delim = None;
 
-	'stmt: while let Some(_) = walker.peek() {
+	'stmts: while let Some(_) = walker.peek() {
 		// If we have reached a closing delimiter, break out of the loop and return the parsed statements.
 		if let Some(span) = exit_condition(walker, &mut errors, opening_delim) {
 			if !span.is_zero_width() {
 				closing_delim = Some(span)
 			}
 			ending_span = span;
-			break 'stmt;
+			break 'stmts;
 		}
 
-		let mut errs = parse_stmt(walker, &mut inner_nodes);
-		errors.append(&mut errs);
+		parse_stmt(walker, &mut inner_nodes, &mut errors);
 	}
 
 	(
@@ -2900,8 +2965,7 @@ fn parse_if_header_body(
 	} else {
 		// Since we are missing a `{`, we are expecting a single statement.
 		let mut nodes = Vec::new();
-		let mut errs = parse_stmt(walker, &mut nodes);
-		errors.append(&mut errs);
+		parse_stmt(walker, &mut nodes, &mut errors);
 
 		if !nodes.is_empty() {
 			// Panics: `nodes` is not empty, so `first()` and `last()` will return `Some`.
@@ -3392,8 +3456,7 @@ fn parse_fn(
 		just_started = false;
 
 		// Look for any optional qualifiers.
-		let (qualifiers, mut qualifier_errs) = try_parse_qualifier_list(walker);
-		errors.append(&mut qualifier_errs);
+		let qualifiers = try_parse_qualifier_list(walker, &mut errors);
 
 		// Look for a type.
 		let type_ = match expr_parser(
@@ -3845,7 +3908,7 @@ fn parse_struct(
 }
 
 /// Prints the concrete syntax tree.
-/// 
+///
 /// This function produces a formatted `String` which contains all of the information of the CST.
 #[allow(unused_must_use)]
 pub fn print_tree(cst: &Cst) -> String {

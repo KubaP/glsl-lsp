@@ -931,6 +931,15 @@ fn print_tree_qualifiers(
 					for node in idents.entry_iter() {
 						match node {
 							Either::Left(layout) => match &layout.ty {
+								LayoutTy::Invalid => {
+									write!(
+										f,
+										"\r\n{:indent$}INVALID@{}",
+										"",
+										layout.span,
+										indent = indent * 2
+									);
+								}
 								LayoutTy::Shared => {
 									write!(
 										f,

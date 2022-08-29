@@ -1,5 +1,6 @@
 use crate::{
 	ast::ArrSize,
+	error::SyntaxErr,
 	lexer::{NumType, OpTy, Token},
 	span::Span,
 	Either,
@@ -427,6 +428,7 @@ pub enum ExprTy {
 /// ```
 /// would be constructed like so:
 /// ```
+/// # use glsl_parser::{cst::List, span::Span};
 /// # let mut list = List::new();
 /// # let t = 1;
 /// # let comma_span = Span::new(0, 1);
@@ -543,7 +545,7 @@ impl List<Param> {
 				qualifiers,
 				type_,
 				ident,
-				span,
+				span: _,
 			}) = entry.0
 			{
 				for Qualifier { span, .. } in qualifiers {
@@ -569,6 +571,59 @@ impl List<Param> {
 					ty: NodeTy::Punctuation,
 				});
 			}
+		}
+	}
+
+	pub fn analyze_syntax_errors(
+		&self,
+		syntax_errors: &mut Vec<SyntaxErr>,
+		l_paren: Span,
+	) {
+		enum Prev {
+			None,
+			Item(Span),
+			Comma(Span),
+		}
+		let mut previous = Prev::None;
+		let mut cursor = 0;
+		while let Some((item, comma)) = self.entries.get(cursor) {
+			if let Some(item) = item {
+				match previous {
+					Prev::Item(span) => {
+						syntax_errors.push(SyntaxErr::ExpectedCommaAfterParam(
+							span.next_single_width(),
+						))
+					}
+					_ => {}
+				}
+
+				previous = Prev::Item(item.span);
+			}
+
+			if let Some(comma) = comma {
+				match previous {
+					Prev::Comma(span) => {
+						syntax_errors.push(SyntaxErr::ExpectedParamAfterComma(
+							span.next_single_width(),
+						))
+					}
+					Prev::None => syntax_errors.push(
+						SyntaxErr::ExpectedParamBetweenParenComma(
+							l_paren.next_single_width(),
+						),
+					),
+					_ => {}
+				}
+
+				previous = Prev::Comma(*comma);
+			}
+
+			cursor += 1;
+		}
+		if let Prev::Comma(span) = previous {
+			syntax_errors.push(SyntaxErr::ExpectedParamAfterComma(
+				span.next_single_width(),
+			));
 		}
 	}
 }
@@ -599,6 +654,145 @@ impl List<Layout> {
 		};
 
 		Some(Span::new(start, end))
+	}
+
+	/// Converts this list of [`Layout`]s into individual nodes. This is used in the scenario that the parsing
+	/// result for a qualifier list has been unused because it forms invalid syntax.
+	pub fn convert_into_failed_nodes(self, nodes: &mut Vec<Node>) {
+		for entry in self.entries {
+			if let Some(Layout { ty, span }) = entry.0 {
+				match ty {
+					LayoutTy::Invalid
+					| LayoutTy::Shared
+					| LayoutTy::Packed
+					| LayoutTy::Std140
+					| LayoutTy::Std430
+					| LayoutTy::RowMajor
+					| LayoutTy::ColumnMajor
+					| LayoutTy::Points
+					| LayoutTy::Lines
+					| LayoutTy::Isolines
+					| LayoutTy::Triangles
+					| LayoutTy::Quads
+					| LayoutTy::EqualSpacing
+					| LayoutTy::FractionalEvenSpacing
+					| LayoutTy::FractionalOddSpacing
+					| LayoutTy::Clockwise
+					| LayoutTy::CounterClockwise
+					| LayoutTy::PointMode
+					| LayoutTy::LinesAdjacency
+					| LayoutTy::TrianglesAdjacency
+					| LayoutTy::OriginUpperLeft
+					| LayoutTy::PixelCenterInteger
+					| LayoutTy::EarlyFragmentTests
+					| LayoutTy::LineStrip
+					| LayoutTy::TriangleStrip
+					| LayoutTy::DepthAny
+					| LayoutTy::DepthGreater
+					| LayoutTy::DepthLess
+					| LayoutTy::DepthUnchanged => nodes.push(Node {
+						span,
+						ty: NodeTy::Ident,
+					}),
+					LayoutTy::Binding { kw, eq, value }
+					| LayoutTy::Offset { kw, eq, value }
+					| LayoutTy::Align { kw, eq, value }
+					| LayoutTy::Location { kw, eq, value }
+					| LayoutTy::Component { kw, eq, value }
+					| LayoutTy::Index { kw, eq, value }
+					| LayoutTy::Invocations { kw, eq, value }
+					| LayoutTy::LocalSizeX { kw, eq, value }
+					| LayoutTy::LocalSizeY { kw, eq, value }
+					| LayoutTy::LocalSizeZ { kw, eq, value }
+					| LayoutTy::XfbBuffer { kw, eq, value }
+					| LayoutTy::XfbStride { kw, eq, value }
+					| LayoutTy::XfbOffset { kw, eq, value }
+					| LayoutTy::Vertices { kw, eq, value }
+					| LayoutTy::MaxVertices { kw, eq, value }
+					| LayoutTy::Stream { kw, eq, value } => {
+						nodes.push(Node {
+							span: kw,
+							ty: NodeTy::Ident,
+						});
+						if let Some(eq) = eq {
+							nodes.push(Node {
+								span: eq,
+								ty: NodeTy::Punctuation,
+							});
+						}
+						if let Some(value) = value {
+							nodes.push(Node {
+								span: value.span,
+								ty: NodeTy::Expression(value),
+							});
+						}
+					}
+				}
+			}
+			if let Some(separator) = entry.1 {
+				nodes.push(Node {
+					span: separator,
+					ty: NodeTy::Punctuation,
+				});
+			}
+		}
+	}
+
+	pub fn analyze_syntax_errors(
+		&self,
+		syntax_errors: &mut Vec<SyntaxErr>,
+		l_paren: Span,
+	) {
+		enum Prev {
+			None,
+			Item(Span),
+			Comma(Span),
+		}
+		let mut previous = Prev::None;
+		let mut cursor = 0;
+		while let Some((item, comma)) = self.entries.get(cursor) {
+			if let Some(item) = item {
+				match previous {
+					Prev::Item(span) => syntax_errors.push(
+						SyntaxErr::ExpectedCommaAfterLayoutIdentOrExpr(
+							span.next_single_width(),
+						),
+					),
+					_ => {}
+				}
+
+				previous = Prev::Item(item.span);
+			}
+
+			if let Some(comma) = comma {
+				match previous {
+					Prev::Comma(span) => syntax_errors.push(
+						SyntaxErr::ExpectedLayoutIdentAfterComma(
+							span.next_single_width(),
+						),
+					),
+					Prev::None => syntax_errors.push(
+						SyntaxErr::ExpectedLayoutIdentAfterParen(
+							l_paren.next_single_width(),
+						),
+					),
+					_ => {}
+				}
+
+				previous = Prev::Comma(*comma);
+			}
+
+			cursor += 1;
+		}
+		if let Prev::Comma(span) = previous {
+			syntax_errors.push(SyntaxErr::ExpectedLayoutIdentAfterComma(
+				span.next_single_width(),
+			));
+		} else if let Prev::None = previous {
+			syntax_errors.push(SyntaxErr::ExpectedLayoutIdentAfterParen(
+				l_paren.next_single_width(),
+			));
+		}
 	}
 }
 
@@ -1133,6 +1327,7 @@ pub struct Layout {
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum LayoutTy {
+	Invalid,
 	Shared,
 	Packed,
 	Std140,

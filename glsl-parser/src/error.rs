@@ -114,28 +114,43 @@ pub enum SyntaxErr {
 	/// Did not find an opening parenthesis (`(`) after the `layout` keyword. E.g. in `layout int`, we are missing
 	/// the parenthesis like so `layout(... int`
 	///
-	/// - `0` - the span where the opening parenthesis should be.
-	ExpectedParenAfterLayout(Span),
+	/// - `0` - the span where the opening parenthesis should be inserted.
+	ExpectedParenAfterLayoutKw(Span),
 	/// Did not find a closing parenthesis (`)`) after the layout contents. E.g. in `layout(location = 0`, we are
 	/// missing the closing parenthesis like so `layout(location = 0)`.
 	///
 	/// - `0` - the span of the opening parenthesis,
-	/// - `1` - the span where the closing parenthesis should be.
+	/// - `1` - the span where the closing parenthesis should be inserted.
 	ExpectedParenAtEndOfLayout(Span, Span),
+	/// Did not find a layout identifier after the opening parenthesis (`(`). E.g. in `layout( )`, we are missing
+	/// an identifier like so `layout(std140)`.
+	///
+	/// - `0` - the span where the identifier should be inserted.
+	ExpectedLayoutIdentAfterParen(Span),
+	/// Did not find a layout identifier after a comma. E.g. in `layout(std140, )`, we are missing an identifier
+	/// like so `layout(std140, std430)`.
+	///
+	/// - `0` - the span where the identifier should be inserted.
+	ExpectedLayoutIdentAfterComma(Span),
+	/// Did not find a comma (`,`) after a layout identifier/expression. E.g. in `layout(std140 std430)`, we are
+	/// missing a comma like so `layout(std140, std430)`.
+	///
+	/// - `0` - the span where the comma should be inserted.
+	ExpectedCommaAfterLayoutIdentOrExpr(Span),
 	/// Found a token which is not a valid layout identifier. E.g. `my_ident` is not a valid layout identifier.
 	///
 	/// - `0` - the span of the token.
 	InvalidLayoutIdentifier(Span),
-	/// Did not find an equals sign (`=`) after a layout identifier which takes a value expression. E.g. in
+	/// Did not find an equals sign (`=`) after a layout identifier that takes a value expression. E.g. in
 	/// `location`, we are missing the equals sign like so `location =`.
 	///
-	/// - `0` - the span where the equals sign should be.
+	/// - `0` - the span where the equals sign should be inserted.
 	ExpectedEqAfterLayoutIdent(Span),
-	/// Did not find an expression after a layout identifier which takes a value expression. E.g. in
-	/// `location = `, we are missing the value like so `location = 5`.
+	/// Did not find an expression after an equal sign after a layout identifier that takes a value expression.
+	/// E.g. in `location = `, we are missing the value like so `location = 5`.
 	///
-	/// - `0` - the span where the expression should be.
-	ExpectedValExprAfterLayoutIdent(Span),
+	/// - `0` - the span where the expression should be inserted.
+	ExpectedExprAfterLayoutEq(Span),
 
 	/* GENERAL */
 	/// Did not find a token which is a valid type identifier. E.g. in `fn(if,`, the `if` is not a valid type.
@@ -157,10 +172,6 @@ pub enum SyntaxErr {
 	///
 	/// - `0` - the span of the expression.
 	ExpectedStmtFoundExpr(Span),
-	/// Found a statement without a semi-colon (`;`) afterwards.
-	///
-	/// - `0` - the span where the semi-colon should be inserted.
-	ExpectedSemiAfterStmt(Span),
 
 	/* CONTROL FLOW */
 	/// Did not find an opening parenthesis (`(`) after a `if`/`switch`/`for`/`while` keyword. E.g. in
@@ -335,12 +346,14 @@ pub enum SyntaxErr {
 	/// - `0` - the position where the semi-colon should be inserted.
 	ExpectedSemiAfterDoWhileStmt(Span),
 	/* SINGLE-WORD */
-	/// Did not find a semi-colon (`;`) after the `return` keyword (or after the return expression if there is
-	/// one).
+	/// Did not find a semi-colon (`;`) or an expression after the `return` keyword.
 	///
-	/// - `0` - the position where the semi-colon should be inserted,
-	/// - `1` - whether there is a return expression.
-	ExpectedSemiAfterReturnKw(Span, bool),
+	/// - `0` - the position where the semi-colon or expression should be inserted,
+	ExpectedSemiOrExprAfterReturnKw(Span),
+	/// Did not find a semi-colon (`;`) after the `return` expression.
+	///
+	/// - `0` - the position where the semi-colon should be inserted.
+	ExpectedSemiAfterReturnExpr(Span),
 	/// Did not find a semi-colon (`;`) after the `break` keyword.
 	///
 	/// - `0` - the position where the semi-colon should be inserted.
@@ -384,14 +397,24 @@ pub enum SyntaxErr {
 	/// missing closing parenthesis like so `fn(void)`.
 	///
 	/// - `0` - the span of the opening parenthesis,
-	/// - `1` - the span where the closing parenthesis should be (i.e. between the last token of the parameter list
-	///   and the `;` or `{`, or `EOF`).
+	/// - `1` - the span where the closing parenthesis should be inserted.
 	ExpectedParenAtEndOfParamList(Span, Span),
-	/// Did not find a comma after a parameter definition. E.g. in `int v int...`, we are missing a comma like so
-	/// `int v, int...`.
+	/// Did not find a parameter between the opening parenthesis (`(`) and a comma (`,`). E.g. in `fn( , int)`, we
+	/// are missing a parameter like so `fn(float, int)`.
 	///
-	/// - `0` - the span where the comma should be.
-	ExpectedCommaAfterParamInParamList(Span),
+	/// - `0` - the span where the parameter should be inserted.
+	ExpectedParamBetweenParenComma(Span),
+	/// Did not find a parameter after a comma. E.g. in `fn(int, )`, we are missing a parameter like so `fn(int,
+	/// float)`.
+	///
+	/// - `0` the span where the parameter should be.
+	ExpectedParamAfterComma(Span),
+	/// Did not find a comma (`,`) after a parameter. E.g. in `fn(int v int)`, we are missing a comma like so
+	/// `fn(int v, int)`.
+	///
+	/// - `0` - the span where the comma should be inserted.
+	ExpectedCommaAfterParam(Span),
+
 	/// Found a token signifying the end of a parameter without encountering a type identifier.
 	/// E.g. in `int,)`, we are missing a type like so `int, float)`. Or in `, in)`, we are missing a type like so
 	/// `, in float)`. Or in `int, in;`, we are missing a type like so `int, in float);`.
@@ -401,15 +424,14 @@ pub enum SyntaxErr {
 	/// Did not find either a semi-colon (`;`) or the beginning of the function body (`{`) after the parameter
 	/// list. E.g. in `fn(...)`, we are missing a semi-colon like so `fn(...);`.
 	///
-	/// - `0` - the span where the semi-colon or opening brace should be (i.e. between the parameter list `)` and
-	/// the token which is not what we expected).
+	/// - `0` - the span where the semi-colon or opening brace should be inserted.
 	ExpectedSemiOrScopeAfterParamList(Span),
 
 	/* STRUCT DEF/DECL */
 	/// Did not find an identifier after the `struct` keyword. E.g. in `struct {`, we are missing an identifier
 	/// like so `struct Foo {`.
 	///
-	/// - `0` - the span where the identifier should be.
+	/// - `0` - the span where the identifier should be inserted.
 	ExpectedIdentAfterStructKw(Span),
 	/// Did not find the beginning of the struct body (`{`) after the identifier. E.g. in `struct A int`, we are
 	/// missing an opening brace like so `struct A { int`.
@@ -417,14 +439,8 @@ pub enum SyntaxErr {
 	/// Note that this error is not produced if a semi-colon (`;`) is encountered. In such a case,
 	/// [`Self::StructDefIsIllegal`] is produced instead.
 	///
-	/// - `0` - the span where the opening brace should be (i.e. between the identifier token and the token which
-	///   is not what we expected).
+	/// - `0` - the span where the opening brace should be inserted.
 	ExpectedScopeAfterStructIdent(Span),
-	/// Found a struct definition like so `struct A;`. This is illegal; GLSL only supports struct declarations.
-	///
-	/// - `0` - the span of the semi-colon,
-	/// - `1` - the span of the entire struct definition.
-	StructDefIsIllegal(Span, Span),
 	/// Found a statement other than a variable definition within a struct body. E.g. in `struct A { if...`, we
 	/// have an if-statement which is illegal.
 	///
@@ -438,11 +454,12 @@ pub enum SyntaxErr {
 	/// Did not find a semi-colon (`;`) after the struct declaration. E.g. in `struct A {...}`, we are missing a
 	/// semi-colon like so `struct A {...};`.
 	///
-	/// - `0` - the span where the semi-colon should be (i.e. between the declaration body and the token which is
-	///   not what we expected).
+	/// - `0` - the span where the semi-colon should be inserted.
 	ExpectedSemiAfterStructBody(Span),
 
 	/* ILLEGAL STATEMENTS */
+	/// Found a struct definition. This is not allowed in GLSL.
+	StructDefIsIllegal(Span),
 	/// Found a statement beginning with a reserved keyword.
 	///
 	/// - `0` - the span of the keyword.

@@ -106,8 +106,8 @@ pub fn to_diagnostic(
 			Some(("opening delimiter here", opening)),
 		),
 		/* LAYOUT QUALIFIER */
-		ExpectedParenAfterLayout(pos) => (
-			"Syntax error: expected an opening delimiter `(`",
+		ExpectedParenAfterLayoutKw(pos) => (
+			"Syntax error: expected an opening delimiter `(` after `layout`",
 			pos,
 			None
 		),
@@ -116,18 +116,33 @@ pub fn to_diagnostic(
 			expected,
 			Some(("opening delimiter here", opening)),
 		),
+		ExpectedLayoutIdentAfterParen(pos) => (
+			"Syntax error: expected a layout identifier after the opening parenthesis `(`",
+			pos,
+			None
+		),
+		ExpectedLayoutIdentAfterComma(pos) => (
+			"Syntax error: expected a layout identifier after the comma `,`",
+			pos,
+			None
+		),
+		ExpectedCommaAfterLayoutIdentOrExpr(pos) => (
+			"Syntax error: expected a comma `,` after a layout identifier/expression",
+			pos,
+			None
+		),
 		InvalidLayoutIdentifier(token) => (
 			"Syntax error: invalid layout identifier",
 			token,
 			None
 		),
 		ExpectedEqAfterLayoutIdent(pos) => (
-			"Syntax error: expected an equals-sign `=`",
+			"Syntax error: expected an equals sign `=` after a layout identifier",
 			pos,
 			None
 		),
-		ExpectedValExprAfterLayoutIdent(pos) => (
-			"Syntax error: expected an expression",
+		ExpectedExprAfterLayoutEq(pos) => (
+			"Syntax error: expected an expression after the equals sign `=`",
 			pos,
 			None
 		),
@@ -147,10 +162,10 @@ pub fn to_diagnostic(
 			expected,
 			Some(("opening delimiter here", opening))
 		),
-		ExpectedStmtFoundExpr(expr) => (
+		ExpectedStmtFoundExpr(span) => (
 			"Syntax error: expected a statement, found an expression",
-			expr,
-			Some(("consider adding a semi-colon `;` here", expr.next_single_width())),
+			span,
+			Some(("consider adding a semi-colon `;` here", span.next_single_width())),
 		),
 		/* CONTROL FLOW */
 		ExpectedParenAfterControlFlowKw(pos) => (
@@ -344,12 +359,13 @@ pub fn to_diagnostic(
 			None
 		),
 		/* SINGLE-WORD */
-		ExpectedSemiAfterReturnKw(pos, has_expr) => (
-			if has_expr {
-				"Syntax error: expected a semi-colon `;` after the return expression"
-			} else {
-				"Syntax error: expected a semi-colon `;` after `return`"
-			},
+		ExpectedSemiOrExprAfterReturnKw(pos) => (
+			"Syntax error: expected either a semi-colon `;` or an expression after `return`",
+			pos,
+			None
+		),
+		ExpectedSemiAfterReturnExpr(pos) => (
+			"Syntax error: expected a semi-colon `;` after the return expression",
 			pos,
 			None
 		),
@@ -395,38 +411,49 @@ pub fn to_diagnostic(
 			expected,
 			Some(("opening delimiter here", opening)),
 		),
-		ExpectedCommaAfterParamInParamList(pos) => {
-			("Syntax error: expected a comma `,`", pos, None)
+		ExpectedParamBetweenParenComma(pos) => (
+			"Syntax error: expected a parameter between the opening parenthesis `(` and the comma `,`",
+			pos,
+			None
+		),
+		ExpectedParamAfterComma(pos) => (
+			"Syntax error: expected a parameter after the comma `,`",
+			pos,
+			None
+		),
+		ExpectedCommaAfterParam(pos) => {
+			("Syntax error: expected a comma `,` after a parameter", pos, None)
 		}
 		MissingTypeInParamList(pos) => {
 			("Syntax error: expected a type", pos, None)
 		}
 		ExpectedSemiOrScopeAfterParamList(pos) => (
-			"Syntax error: expected either a semi-colon `;` or an opening delimiter `{`",
+			"Syntax error: expected either a semi-colon `;` or an opening delimiter `{` after the parameter list",
 			pos,
 			None
 		),
 		/* STRUCT DEF/DECL */
 		ExpectedIdentAfterStructKw(pos) => (
-			"Syntax error: expected a struct identifier", pos, None
+			"Syntax error: expected a struct identifier after `struct`", pos, None
 		),
 		ExpectedScopeAfterStructIdent(pos) => (
 			"Syntax error: expected an opening delimiter `{`", pos, None
 		),
-		StructDefIsIllegal(semi, def) => (
-			"Syntax error: struct definitions are illegal", def, 
-			Some(("illegal semi-colon here", semi))
-		),
 		ExpectedVarDefInStructBody(stmt) => (
-			"Syntax error: expected a variable definition", stmt, None
+			"Syntax error: expected a variable definition inside a struct body", stmt, None
 		),
 		ExpectedAtLeastOneMemberInStruct(decl) => (
-			"Syntax error: expected at least one variable definition", decl, None
+			"Syntax error: expected at least one variable definition inside a struct body", decl, None
 		),
 		ExpectedSemiAfterStructBody(pos) => (
-			"Syntax error: expected a semi-colon `;`", pos, None
+			"Syntax error: expected a semi-colon `;` after the struct body", pos, None
 		),
 		/* ILLEGAL STATEMENTS */
+		StructDefIsIllegal(span) => (
+			"Syntax error: struct definitions are illegal",
+			span,
+			None
+		),
 		FoundIllegalReservedKw(pos) => (
 			"Syntax error: found reserved keyword",
 			pos,
@@ -444,6 +471,11 @@ pub fn to_diagnostic(
 		),
 		FoundLonelyRBrace(pos) => (
 			"Syntax error: found un-opened closing brace `}`",
+			pos,
+			None
+		),
+		ExpectedDefDeclAfterQualifiers(pos) => (
+			"Syntax error: expected a variable or function definition/declaration after qualifier(s)",
 			pos,
 			None
 		),

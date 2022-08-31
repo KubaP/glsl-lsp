@@ -36,13 +36,14 @@
 					".fshader",
 					".f.glsl"
 				],
-				"configuration": "./language-configuration.json"
+				"configuration": "./glsl.language-configuration.json"
 			},
 			{
 				"id": "glsl_syntax_tree",
 				"extensions": [
 					".glsl.cst"
-				]
+				],
+				"configuration": "./glsl.cst.language-configuration.json"
 			}
 		],
 		"grammars": [

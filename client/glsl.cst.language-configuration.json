@@ -1,0 +1,5 @@
+{
+	// Pattern for node types, e.g. COLON, and for spans, e.g. 23..56.
+	// This improves the highlighting experience when the cursor is over a span.
+	"wordPattern": "(([a-z]|[A-Z]|\\_)([a-z]|[A-Z]|\\_|[0-9])*)|(\\d+\\.\\.\\d+)"
+}

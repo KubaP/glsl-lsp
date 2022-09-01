@@ -435,52 +435,6 @@ pub enum OpTy {
 	AndAnd,
 	OrOr,
 	XorXor,
-	//
-	// Shunting Yard
-	//
-	// The variants below are never constructed by the Lexer. They are constructed during the operation of the
-	// shunting yard and converted into either the operators above or to different `Expr` types when the shunting
-	// yard creates the AST.
-	//
-	// The reason these variants are in this type is because the shunting yard stores this type in its stack. It
-	// makes more sense to add these variants to this type rather than to create a new subtype which includes all
-	// of the above plus these variants.
-	AddAddPre,
-	AddAddPost,
-	SubSubPre,
-	SubSubPost,
-	/// Parenthesis group.
-	///
-	/// The `Span`s represent the spans for the left and right parenthesis. The reason this group has this but
-	/// other groups don't is for the following:
-	///
-	/// `Paren` groups may be closed as valid even if missing the closing `)`, hence when we collapse a parenthesis
-	/// group and emit this token onto the shunting yard stack, we need to figure out these spans there and then,
-	/// because afterwards this information gets lost. The only other group which can be collapsed at the end of
-	/// the parse is the `List` group, but that doesn't have any delimiters. All other groups get invalidated if
-	/// they're open so there's no need for extra tracking.
-	Paren(Span, Span),
-	/// Index operator. `bool` denotes whether there is a node within the `[...]` brackets.
-	Index(bool),
-	/// Object access operator.
-	ObjAccess,
-	/// Function call. Consumes the `usize` amount of nodes as arguments for the function call. The first node is
-	/// guaranteed to be an `Expr::Ident` which is the function identifier.
-	FnCall(usize),
-	/// Initializer list. Consumes the `usize` amount of nodes as arguments for the initializer list.
-	Init(usize),
-	/// Array constructor. Consumes the `usize` amount of nodes as arguments for the function call. The first node
-	/// is guaranteed to be a `Expr::Index` which is the array constructor type.
-	ArrInit(usize),
-	/// A list, e.g. `a, b`. Consumes the `usize` amount of nodes as arguments for the list.
-	List(usize),
-	// The following are never present in the intermediate output of the shunting yard; they are just stored
-	// temporarily on the stack.
-	ParenStart,
-	IndexStart,
-	FnStart,
-	InitStart,
-	ArrInitStart,
 }
 
 /// A lexer which allows stepping through a string character by character.

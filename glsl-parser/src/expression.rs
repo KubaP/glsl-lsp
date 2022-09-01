@@ -1,7 +1,7 @@
 use crate::{
-	cst::{Expr, ExprTy, Ident, Lit, Op},
+	cst::{BinOp, Expr, ExprTy, Ident, Lit, PostOp, PostOpTy, PreOp, PreOpTy},
 	error::SyntaxErr,
-	lexer::{OpTy, Token},
+	lexer::{self, Token},
 	log,
 	parser::Walker,
 	span::{span, Span},
@@ -91,6 +91,206 @@ https://matklad.github.io/2020/04/15/from-pratt-to-dijkstra.html
 	  different approach
 */
 
+#[derive(Debug, Clone, PartialEq)]
+struct Op {
+	ty: OpTy,
+	span: Span,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+enum OpTy {
+	/* BINARY OPERATORS */
+	Add(bool),
+	Sub(bool),
+	Mul(bool),
+	Div(bool),
+	Rem(bool),
+	And(bool),
+	Or(bool),
+	Xor(bool),
+	LShift(bool),
+	RShift(bool),
+	Eq(bool),
+	AddEq(bool),
+	SubEq(bool),
+	MulEq(bool),
+	DivEq(bool),
+	RemEq(bool),
+	AndEq(bool),
+	OrEq(bool),
+	XorEq(bool),
+	LShiftEq(bool),
+	RShiftEq(bool),
+	EqEq(bool),
+	NotEq(bool),
+	AndAnd(bool),
+	OrOr(bool),
+	XorXor(bool),
+	Gt(bool),
+	Lt(bool),
+	Ge(bool),
+	Le(bool),
+	/* PREFIX OPERATORS */
+	AddPre(bool),
+	SubPre(bool),
+	Neg(bool),
+	Flip(bool),
+	Not(bool),
+	/* POSTFIX OPERATORS */
+	AddPost,
+	SubPost,
+	/* GROUP BEGIN DELIMITERS */
+	ParenStart,
+	IndexStart,
+	FnStart,
+	InitStart,
+	ArrInitStart,
+	ObjAccess,
+	/* GROUPS */
+	/// A parenthesis group. `(node_count, l_paren_span, r_paren_span)`
+	Paren(usize, Span, Span),
+	/// A function call. `(arg_size)`; note that this includes a node for the function identifier
+	FnCall(usize),
+	/// An index operator. `(contains_i)`
+	Index(bool),
+	/// An initializer list. `(arg_size)`
+	Init(usize),
+	/// An array initializer. `(arg_size)`
+	ArrInit(usize),
+	/// A general list. `(arg_size)`
+	List(usize),
+}
+
+impl Op {
+	/// Converts from a lexer `OpTy` token to the `Op2` type used in this expression parser.
+	fn from_token(token: lexer::OpTy, span: Span) -> Self {
+		Self {
+			span,
+			ty: match token {
+				lexer::OpTy::Add => OpTy::Add(false),
+				lexer::OpTy::Sub => OpTy::Sub(false),
+				lexer::OpTy::Mul => OpTy::Mul(false),
+				lexer::OpTy::Div => OpTy::Div(false),
+				lexer::OpTy::Rem => OpTy::Rem(false),
+				lexer::OpTy::And => OpTy::And(false),
+				lexer::OpTy::Or => OpTy::Or(false),
+				lexer::OpTy::Xor => OpTy::Xor(false),
+				lexer::OpTy::LShift => OpTy::LShift(false),
+				lexer::OpTy::RShift => OpTy::RShift(false),
+				lexer::OpTy::Eq => OpTy::Eq(false),
+				lexer::OpTy::AddEq => OpTy::AddEq(false),
+				lexer::OpTy::SubEq => OpTy::SubEq(false),
+				lexer::OpTy::MulEq => OpTy::MulEq(false),
+				lexer::OpTy::DivEq => OpTy::DivEq(false),
+				lexer::OpTy::RemEq => OpTy::RemEq(false),
+				lexer::OpTy::AndEq => OpTy::AndEq(false),
+				lexer::OpTy::OrEq => OpTy::OrEq(false),
+				lexer::OpTy::XorEq => OpTy::XorEq(false),
+				lexer::OpTy::LShiftEq => OpTy::LShiftEq(false),
+				lexer::OpTy::RShiftEq => OpTy::RShiftEq(false),
+				lexer::OpTy::EqEq => OpTy::EqEq(false),
+				lexer::OpTy::NotEq => OpTy::NotEq(false),
+				lexer::OpTy::AndAnd => OpTy::AndAnd(false),
+				lexer::OpTy::OrOr => OpTy::OrOr(false),
+				lexer::OpTy::XorXor => OpTy::XorXor(false),
+				lexer::OpTy::Gt => OpTy::Gt(false),
+				lexer::OpTy::Lt => OpTy::Lt(false),
+				lexer::OpTy::Ge => OpTy::Ge(false),
+				lexer::OpTy::Le => OpTy::Le(false),
+				lexer::OpTy::Neg
+				| lexer::OpTy::Not
+				| lexer::OpTy::Flip
+				| lexer::OpTy::AddAdd
+				| lexer::OpTy::SubSub => {
+					// These tokens are handled by individual branches in the main parser loop.
+					unreachable!("[Op::from_token] Given a `token` which should never be handled by this function.")
+				}
+			},
+		}
+	}
+
+	/// Returns the precedence of this operator.
+	#[rustfmt::skip]
+	fn precedence(&self) -> usize {
+		match &self.ty {
+			OpTy::ObjAccess => 33,
+			OpTy::AddPost | OpTy::SubPost => 31,
+			OpTy::AddPre(_)
+			| OpTy::SubPre(_)
+			| OpTy::Neg(_)
+			| OpTy::Flip(_)
+			| OpTy::Not(_) => 29,
+			OpTy::Mul(_) | OpTy::Div(_) | OpTy::Rem(_) => 27,
+			OpTy::Add(_) | OpTy::Sub(_) => 25,
+			OpTy::LShift(_) | OpTy::RShift(_) => 23,
+			OpTy::Lt(_) | OpTy::Gt(_) | OpTy::Le(_) | OpTy::Ge(_) => 21,
+			OpTy::EqEq(_) | OpTy::NotEq(_) => 19,
+			OpTy::And(_) => 17,
+			OpTy::Xor(_) => 15,
+			OpTy::Or(_) => 13,
+			OpTy::AndAnd(_) => 11,
+			OpTy::XorXor(_) => 9,
+			OpTy::OrOr(_) => 7,
+			// TODO: Ternary
+			OpTy::Eq(_)
+			| OpTy::AddEq(_)
+			| OpTy::SubEq(_)
+			| OpTy::MulEq(_)
+			| OpTy::DivEq(_)
+			| OpTy::RemEq(_)
+			| OpTy::AndEq(_)
+			| OpTy::XorEq(_)
+			| OpTy::OrEq(_)
+			| OpTy::LShiftEq(_)
+			| OpTy::RShiftEq(_) => 3,
+			// These are never directly checked for precedence, but rather have special branches.
+			_ => panic!("The operator {self:?} does not have a precedence value because it should never be passed into this function. Something has gone wrong!"),
+		}
+	}
+}
+
+impl From<Op> for BinOp {
+	fn from(op: Op) -> Self {
+		use crate::cst::BinOpTy;
+		Self {
+			span: op.span,
+			ty: match op.ty {
+				OpTy::Add(_) => BinOpTy::Add,
+				OpTy::Sub(_) => BinOpTy::Sub,
+				OpTy::Mul(_) => BinOpTy::Mul,
+				OpTy::Div(_) => BinOpTy::Div,
+				OpTy::Rem(_) => BinOpTy::Rem,
+				OpTy::And(_) => BinOpTy::And,
+				OpTy::Or(_) => BinOpTy::Or,
+				OpTy::Xor(_) => BinOpTy::Xor,
+				OpTy::LShift(_) => BinOpTy::LShift,
+				OpTy::RShift(_) => BinOpTy::RShift,
+				OpTy::Eq(_) => BinOpTy::Eq,
+				OpTy::AddEq(_) => BinOpTy::AddEq,
+				OpTy::SubEq(_) => BinOpTy::SubEq,
+				OpTy::MulEq(_) => BinOpTy::MulEq,
+				OpTy::DivEq(_) => BinOpTy::DivEq,
+				OpTy::RemEq(_) => BinOpTy::RemEq,
+				OpTy::AndEq(_) => BinOpTy::AndEq,
+				OpTy::OrEq(_) => BinOpTy::OrEq,
+				OpTy::XorEq(_) => BinOpTy::XorEq,
+				OpTy::LShiftEq(_) => BinOpTy::LShiftEq,
+				OpTy::RShiftEq(_) => BinOpTy::RShiftEq,
+				OpTy::EqEq(_) => BinOpTy::EqEq,
+				OpTy::NotEq(_) => BinOpTy::NotEq,
+				OpTy::AndAnd(_) => BinOpTy::AndAnd,
+				OpTy::OrOr(_) => BinOpTy::OrOr,
+				OpTy::XorXor(_) => BinOpTy::XorXor,
+				OpTy::Gt(_) => BinOpTy::Gt,
+				OpTy::Lt(_) => BinOpTy::Lt,
+				OpTy::Ge(_) => BinOpTy::Ge,
+				OpTy::Le(_) => BinOpTy::Le,
+				_ => unreachable!("[BinOp::from::<Op>] Given an `op.ty` which should not be handled here.")
+			},
+		}
+	}
+}
+
 /// An open grouping of items.
 #[derive(Debug, PartialEq)]
 enum Group {
@@ -99,7 +299,7 @@ enum Group {
 	/// *Note:* Whilst there may currently be no real use to storing parenthesis groups in the AST, keeping track
 	/// of this in the shunting yard is necessary to correctly deal with lists within parenthesis, so this should
 	/// never be removed.
-	Paren,
+	Paren(usize),
 	/// An index operator `[...]`. `bool` notes whether there is an item within the `[...]` brackets.
 	///
 	/// If the preceding item was an `Expr::Ident`, then `Option<usize>` holds the start of that token. This
@@ -120,11 +320,9 @@ enum Group {
 	List(usize),
 }
 
-type Item = Either<Expr, Op>;
-
 struct ShuntingYard {
 	/// The final output stack in RPN.
-	stack: VecDeque<Item>,
+	stack: VecDeque<Either<Expr, Op>>,
 	/// Temporary stack to hold operators.
 	operators: VecDeque<Op>,
 	/// Temporary stack to hold item groups. The back-most entry is the group being currently parsed.
@@ -167,7 +365,7 @@ impl ShuntingYard {
 				break;
 			}
 
-			if op.ty.precedence() < back.ty.precedence() {
+			if op.precedence() < back.precedence() {
 				let moved = self.operators.pop_back().unwrap();
 				self.stack.push_back(Either::Right(moved));
 			} else {
@@ -187,7 +385,7 @@ impl ShuntingYard {
 	fn collapse_bracket(&mut self, end_span: Span, invalidate: bool) {
 		let (group, group_start, _) = self.groups.pop_back().unwrap();
 
-		if let Group::Paren = group {
+		if let Group::Paren(count) = group {
 			while self.operators.back().is_some() {
 				let op = self.operators.pop_back().unwrap();
 
@@ -204,8 +402,8 @@ impl ShuntingYard {
 
 				if op.ty == OpTy::ParenStart {
 					self.stack.push_back(Either::Right(Op {
-						ty: OpTy::Paren(op.span, end_span),
 						span: span(group_start, end_span.end),
+						ty: OpTy::Paren(count, op.span, end_span),
 					}));
 					break;
 				} else {
@@ -518,7 +716,7 @@ impl ShuntingYard {
 		};
 
 		match current_group {
-			Group::Paren | Group::Fn(_) | Group::ArrInit(_) => {}
+			Group::Paren(_) | Group::Fn(_) | Group::ArrInit(_) => {}
 			_ => {
 				// The current group is not a bracket/function/array constructor group, so we need to check whether
 				// there is one at all.
@@ -553,9 +751,9 @@ impl ShuntingYard {
 								end_span.end_at_previous().end,
 								false,
 							),
-							Group::Paren | Group::Fn(_) | Group::ArrInit(_) => {
-								break 'inner
-							}
+							Group::Paren(_)
+							| Group::Fn(_)
+							| Group::ArrInit(_) => break 'inner,
 						}
 					}
 				} else {
@@ -570,7 +768,7 @@ impl ShuntingYard {
 		}
 
 		match self.groups.back().unwrap().0 {
-			Group::Paren => self.collapse_bracket(end_span, false),
+			Group::Paren(_) => self.collapse_bracket(end_span, false),
 			Group::Fn(_) => self.collapse_fn(end_span.end, false),
 			Group::ArrInit(_) => self.collapse_arr_init(end_span.end, false),
 			// Either the inner-most group is already a parenthesis-delimited group, or we've closed all inner
@@ -616,7 +814,7 @@ impl ShuntingYard {
 					};
 
 					match current_group {
-						Group::Paren => {
+						Group::Paren(_) => {
 							log!("Unclosed `)` parenthesis found!");
 							self.collapse_bracket(
 								span(
@@ -709,7 +907,7 @@ impl ShuntingYard {
 					};
 
 					match current_group {
-						Group::Paren => {
+						Group::Paren(_) => {
 							log!("Unclosed `)` parenthesis found!");
 							self.collapse_bracket(
 								span(
@@ -800,7 +998,7 @@ impl ShuntingYard {
 						self.stack.push_back(Either::Right(moved));
 					}
 				}
-				Group::Paren | Group::Index(_, _) => {
+				Group::Paren(_) | Group::Index(_, _) => {
 					// Same as the branch above, but we do push a new list group. Since list groups don't have a
 					// start delimiter, we can only do it now that we've encountered a comma within these two
 					// groups.
@@ -839,7 +1037,8 @@ impl ShuntingYard {
 	fn increase_arity(&mut self) {
 		if let Some((current_group, _, _)) = self.groups.back_mut() {
 			match current_group {
-				Group::Fn(count)
+				Group::Paren(count)
+				| Group::Fn(count)
 				| Group::Init(count)
 				| Group::ArrInit(count)
 				| Group::List(count) => {
@@ -850,6 +1049,63 @@ impl ShuntingYard {
 		}
 		// TODO: Should this be unreachable?
 		log!("Found an incomplete function call, initializer list, array constructor or general list expression!");
+	}
+
+	/// Sets the toggle on the top-most operator that it has a right-hand side operand (if applicable).
+	fn set_op_rhs(&mut self) {
+		if let Some(op) = self.operators.back_mut() {
+			match &mut op.ty {
+				OpTy::Add(b)
+				| OpTy::Sub(b)
+				| OpTy::Mul(b)
+				| OpTy::Div(b)
+				| OpTy::Rem(b)
+				| OpTy::And(b)
+				| OpTy::Or(b)
+				| OpTy::Xor(b)
+				| OpTy::LShift(b)
+				| OpTy::RShift(b)
+				| OpTy::Eq(b)
+				| OpTy::AddEq(b)
+				| OpTy::SubEq(b)
+				| OpTy::MulEq(b)
+				| OpTy::DivEq(b)
+				| OpTy::RemEq(b)
+				| OpTy::AndEq(b)
+				| OpTy::OrEq(b)
+				| OpTy::XorEq(b)
+				| OpTy::LShiftEq(b)
+				| OpTy::RShiftEq(b)
+				| OpTy::EqEq(b)
+				| OpTy::NotEq(b)
+				| OpTy::AndAnd(b)
+				| OpTy::OrOr(b)
+				| OpTy::XorXor(b)
+				| OpTy::Gt(b)
+				| OpTy::Lt(b)
+				| OpTy::Ge(b)
+				| OpTy::Le(b)
+				| OpTy::AddPre(b)
+				| OpTy::SubPre(b)
+				| OpTy::Neg(b)
+				| OpTy::Flip(b)
+				| OpTy::Not(b) => *b = true,
+				OpTy::AddPost
+				| OpTy::SubPost
+				| OpTy::ParenStart
+				| OpTy::IndexStart
+				| OpTy::FnStart
+				| OpTy::InitStart
+				| OpTy::ArrInitStart
+				| OpTy::ObjAccess
+				| OpTy::Paren(_, _, _)
+				| OpTy::FnCall(_)
+				| OpTy::Index(_)
+				| OpTy::Init(_)
+				| OpTy::ArrInit(_)
+				| OpTy::List(_) => {}
+			}
+		}
 	}
 
 	/// Returns whether we have just started to parse a function, i.e. `..fn(<HERE>`
@@ -892,7 +1148,9 @@ impl ShuntingYard {
 	fn exists_paren_fn_group(&self) -> bool {
 		for (group, _, _) in self.groups.iter() {
 			match group {
-				Group::Paren | Group::Fn(_) | Group::ArrInit(_) => return true,
+				Group::Paren(_) | Group::Fn(_) | Group::ArrInit(_) => {
+					return true
+				}
 				_ => {}
 			}
 		}
@@ -1012,12 +1270,12 @@ impl ShuntingYard {
 					// `..10 + 5` instead of `..10 5`.
 					self.stack.push_back(match Lit::parse(token) {
 						Ok(l) => Either::Left(Expr {
-							ty: ExprTy::Lit(l),
 							span: *span,
+							ty: ExprTy::Lit(l),
 						}),
 						Err(_) => Either::Left(Expr {
-							ty: ExprTy::Invalid,
 							span: *span,
+							ty: ExprTy::Invalid,
 						}),
 					});
 					state = State::AfterOperand;
@@ -1028,16 +1286,17 @@ impl ShuntingYard {
 						self.increase_arity();
 						increase_arity = false;
 					}
+					self.set_op_rhs();
 				}
 				Token::Ident(s) if state == State::Operand => {
 					// We switch state since after an atom, we are expecting an operator, i.e.
 					// `..ident + i` instead of `..ident i`.
 					self.stack.push_back(Either::Left(Expr {
+						span: *span,
 						ty: ExprTy::Ident(Ident {
 							name: s.clone(),
 							span: *span,
 						}),
-						span: *span,
 					}));
 					state = State::AfterOperand;
 
@@ -1049,6 +1308,7 @@ impl ShuntingYard {
 						self.increase_arity();
 						increase_arity = false;
 					}
+					self.set_op_rhs();
 				}
 				Token::Num { .. } | Token::Bool(_) | Token::Ident(_)
 					if state == State::AfterOperand =>
@@ -1072,7 +1332,7 @@ impl ShuntingYard {
 					// If the parser is set to break at an `=`, do so.
 					if (self.mode == Mode::BreakAtEq
 						|| self.mode == Mode::TakeOneUnit)
-						&& *op == OpTy::Eq
+						&& *op == lexer::OpTy::Eq
 					{
 						// self.errors.push(SyntaxErr::FoundEq(*span));
 						break 'main;
@@ -1081,25 +1341,25 @@ impl ShuntingYard {
 					match op {
 						// If the operator is a valid prefix operator, we can move it to the stack. We don't switch
 						// state since after a prefix operator, we are still looking for an operand atom.
-						OpTy::Sub => self.push_operator(Op {
-							ty: OpTy::Neg,
+						lexer::OpTy::Sub => self.push_operator(Op {
 							span: *span,
+							ty: OpTy::Neg(false),
 						}),
-						OpTy::Not => self.push_operator(Op {
-							ty: OpTy::Not,
+						lexer::OpTy::Not => self.push_operator(Op {
 							span: *span,
+							ty: OpTy::Not(false),
 						}),
-						OpTy::Flip => self.push_operator(Op {
-							ty: OpTy::Flip,
+						lexer::OpTy::Flip => self.push_operator(Op {
 							span: *span,
+							ty: OpTy::Flip(false),
 						}),
-						OpTy::AddAdd => self.push_operator(Op {
-							ty: OpTy::AddAddPre,
+						lexer::OpTy::AddAdd => self.push_operator(Op {
 							span: *span,
+							ty: OpTy::AddPre(false),
 						}),
-						OpTy::SubSub => self.push_operator(Op {
-							ty: OpTy::SubSubPre,
+						lexer::OpTy::SubSub => self.push_operator(Op {
 							span: *span,
+							ty: OpTy::SubPre(false),
 						}),
 						_ => {
 							// This is an error, e.g. `..*1` instead of `..-1`.
@@ -1121,14 +1381,14 @@ impl ShuntingYard {
 					// If the parser is set to break at an `=`, do so.
 					if (self.mode == Mode::BreakAtEq
 						|| self.mode == Mode::TakeOneUnit)
-						&& *op == OpTy::Eq
+						&& *op == lexer::OpTy::Eq
 					{
 						//self.errors.push(SyntaxErr::FoundEq(*span));
 						break 'main;
 					}
 
 					match op {
-						OpTy::Flip | OpTy::Not => {
+						lexer::OpTy::Flip | lexer::OpTy::Not => {
 							// These operators cannot be directly after an atom, because they are prefix operators.
 							log!("Expected a postfix, index or binary operator, found a prefix operator instead!");
 							self.errors.push(
@@ -1139,25 +1399,22 @@ impl ShuntingYard {
 						// These operators are postfix operators. We don't switch state since after a postfix
 						// operator, we are still looking for a binary operator or the end of expression, i.e.
 						// `..i++ - i` rather than `..i++ i`.
-						OpTy::AddAdd => {
+						lexer::OpTy::AddAdd => {
 							self.push_operator(Op {
-								ty: OpTy::AddAddPost,
 								span: *span,
+								ty: OpTy::AddPost,
 							});
 						}
-						OpTy::SubSub => {
+						lexer::OpTy::SubSub => {
 							self.push_operator(Op {
-								ty: OpTy::SubSubPost,
 								span: *span,
+								ty: OpTy::SubPost,
 							});
 						}
 						// Any other operators can be part of a binary expression. We switch state since after a
 						// binary operator we are expecting an operand.
 						_ => {
-							self.push_operator(Op {
-								ty: *op,
-								span: *span,
-							});
+							self.push_operator(Op::from_token(*op, *span));
 							state = State::Operand;
 						}
 					}
@@ -1173,21 +1430,28 @@ impl ShuntingYard {
 						self.increase_arity();
 						increase_arity = false;
 					}
+					self.set_op_rhs();
 
 					self.operators.push_back(Op {
-						ty: OpTy::ParenStart,
 						span: *span,
+						ty: OpTy::ParenStart,
 					});
-					self.groups.push_back((Group::Paren, span.start, span.end));
+					self.groups.push_back((
+						Group::Paren(0),
+						span.start,
+						span.end,
+					));
 
 					can_start = Start::None;
+
+					increase_arity = true;
 				}
 				Token::LParen if state == State::AfterOperand => {
 					if can_start == Start::FnOrArr {
 						// We have `ident(` which makes this a function call.
 						self.operators.push_back(Op {
-							ty: OpTy::FnStart,
 							span: *span,
+							ty: OpTy::FnStart,
 						});
 						self.groups.push_back((
 							Group::Fn(0),
@@ -1207,8 +1471,8 @@ impl ShuntingYard {
 					} else if can_start == Start::ArrInit {
 						// We have `ident[...](` which makes this an array constructor.
 						self.operators.push_back(Op {
-							ty: OpTy::ArrInitStart,
 							span: *span,
+							ty: OpTy::ArrInitStart,
 						});
 						self.groups.push_back((
 							Group::ArrInit(0),
@@ -1318,8 +1582,8 @@ impl ShuntingYard {
 					// We switch state since after a `[`, we are expecting an operand, i.e.
 					// `i[5 +..` rather than `i[+..`.
 					self.operators.push_back(Op {
-						ty: OpTy::IndexStart,
 						span: *span,
+						ty: OpTy::IndexStart,
 					});
 					if can_start == Start::FnOrArr {
 						// Since we just had an `Expr::Ident` before, this `Index` may be part of a greater array
@@ -1457,10 +1721,11 @@ impl ShuntingYard {
 					if increase_arity {
 						self.increase_arity();
 					}
+					self.set_op_rhs();
 
 					self.operators.push_back(Op {
-						ty: OpTy::InitStart,
 						span: *span,
+						ty: OpTy::InitStart,
 					});
 					self.groups.push_back((
 						Group::Init(0),
@@ -1599,8 +1864,8 @@ impl ShuntingYard {
 					// We switch state since after an object access we are execting an operand, i.e.
 					// `ident.something` rather than `ident. +`.
 					self.push_operator(Op {
-						ty: OpTy::ObjAccess,
 						span: *span,
+						ty: OpTy::ObjAccess,
 					});
 					state = State::Operand;
 
@@ -1663,7 +1928,7 @@ impl ShuntingYard {
 				// ArrInit - same as above.
 				// List - a perfectly valid top-level grouping structure.
 				match group {
-					Group::Paren => {
+					Group::Paren(_) => {
 						self.errors.push(SyntaxErr::UnclosedParenthesis(
 							group_start,
 							group_end,
@@ -1728,114 +1993,149 @@ impl ShuntingYard {
 			match item {
 				Either::Left(e) => stack.push_back(e),
 				Either::Right(op) => match op.ty {
-					OpTy::AddAddPre => {
-						let expr = stack.pop_back().unwrap();
-						let span = span(op.span.start, expr.span.end);
+					OpTy::AddPre(has_operand) => {
+						let expr =
+							if has_operand { stack.pop_back() } else { None };
+						let span = if let Some(ref expr) = expr {
+							Span::new(op.span.start, expr.span.end)
+						} else {
+							op.span
+						};
 						stack.push_back(Expr {
-							ty: ExprTy::Prefix {
-								expr: Box::from(expr),
-								op: Op {
-									ty: OpTy::Add,
-									span: op.span,
-								},
-							},
 							span,
+							ty: ExprTy::Prefix {
+								op: PreOp {
+									span: op.span,
+									ty: PreOpTy::Add,
+								},
+								expr: expr.map(|e| Box::from(e)),
+							},
 						});
 					}
-					OpTy::SubSubPre => {
-						let expr = stack.pop_back().unwrap();
-						let span = span(op.span.start, expr.span.end);
+					OpTy::SubPre(has_operand) => {
+						let expr =
+							if has_operand { stack.pop_back() } else { None };
+						let span = if let Some(ref expr) = expr {
+							Span::new(op.span.start, expr.span.end)
+						} else {
+							op.span
+						};
 						stack.push_back(Expr {
-							ty: ExprTy::Prefix {
-								expr: Box::from(expr),
-								op: Op {
-									ty: OpTy::Sub,
-									span: op.span,
-								},
-							},
 							span,
+							ty: ExprTy::Prefix {
+								op: PreOp {
+									span: op.span,
+									ty: PreOpTy::Sub,
+								},
+								expr: expr.map(|e| Box::from(e)),
+							},
 						});
 					}
-					OpTy::AddAddPost => {
+					OpTy::AddPost => {
 						let expr = stack.pop_back().unwrap();
-						let span = span(expr.span.start, op.span.end);
+						let span = Span::new(expr.span.start, op.span.end);
 						stack.push_back(Expr {
+							span,
 							ty: ExprTy::Postfix {
 								expr: Box::from(expr),
-								op: Op {
-									ty: OpTy::Add,
+								op: PostOp {
+									ty: PostOpTy::Add,
 									span: op.span,
 								},
 							},
-							span,
 						});
 					}
-					OpTy::SubSubPost => {
+					OpTy::SubPost => {
 						let expr = stack.pop_back().unwrap();
-						let span = span(expr.span.start, op.span.end);
+						let span = Span::new(expr.span.start, op.span.end);
 						stack.push_back(Expr {
+							span,
 							ty: ExprTy::Postfix {
 								expr: Box::from(expr),
-								op: Op {
-									ty: OpTy::Sub,
+								op: PostOp {
+									ty: PostOpTy::Sub,
 									span: op.span,
 								},
 							},
-							span,
 						});
 					}
-					OpTy::Neg => {
-						let expr = stack.pop_back().unwrap();
-						let span = span(op.span.start, expr.span.end);
+					OpTy::Neg(has_operand) => {
+						let expr =
+							if has_operand { stack.pop_back() } else { None };
+						let span = if let Some(ref expr) = expr {
+							Span::new(op.span.start, expr.span.end)
+						} else {
+							op.span
+						};
 						stack.push_back(Expr {
-							ty: ExprTy::Prefix {
-								expr: Box::from(expr),
-								op: Op {
-									ty: OpTy::Neg,
-									span: op.span,
-								},
-							},
 							span,
+							ty: ExprTy::Prefix {
+								op: PreOp {
+									span: op.span,
+									ty: PreOpTy::Neg,
+								},
+								expr: expr.map(|e| Box::from(e)),
+							},
 						});
 					}
-					OpTy::Flip => {
-						let expr = stack.pop_back().unwrap();
-						let span = span(op.span.start, expr.span.end);
+					OpTy::Flip(has_operand) => {
+						let expr =
+							if has_operand { stack.pop_back() } else { None };
+						let span = if let Some(ref expr) = expr {
+							Span::new(op.span.start, expr.span.end)
+						} else {
+							op.span
+						};
 						stack.push_back(Expr {
-							ty: ExprTy::Prefix {
-								expr: Box::from(expr),
-								op: Op {
-									ty: OpTy::Flip,
-									span: op.span,
-								},
-							},
 							span,
+							ty: ExprTy::Prefix {
+								op: PreOp {
+									span: op.span,
+									ty: PreOpTy::Flip,
+								},
+								expr: expr.map(|e| Box::from(e)),
+							},
 						});
 					}
-					OpTy::Not => {
-						let expr = stack.pop_back().unwrap();
-						let span = span(op.span.start, expr.span.end);
+					OpTy::Not(has_operand) => {
+						let expr =
+							if has_operand { stack.pop_back() } else { None };
+						let span = if let Some(ref expr) = expr {
+							Span::new(op.span.start, expr.span.end)
+						} else {
+							op.span
+						};
 						stack.push_back(Expr {
-							ty: ExprTy::Prefix {
-								expr: Box::from(expr),
-								op: Op {
-									ty: OpTy::Not,
-									span: op.span,
-								},
-							},
 							span,
+							ty: ExprTy::Prefix {
+								op: PreOp {
+									span: op.span,
+									ty: PreOpTy::Not,
+								},
+								expr: expr.map(|e| Box::from(e)),
+							},
 						});
 					}
-					OpTy::Paren(l_span, r_span) => {
+					OpTy::Paren(count, l_span, r_span) => {
 						// Note: the span for `Op::Paren` is from the start of the `(` to the end of the `)`.
-						let expr = stack.pop_back().unwrap();
+						let expr = if count == 0 {
+							None
+						} else if count == 1 {
+							stack.pop_back()
+						} else {
+							panic!("[ShuntingYard::create_ast] `OpTy::Paren` has an argument count greater than 1.")
+						};
 						stack.push_back(Expr {
-							ty: ExprTy::Paren {
-								expr: Box::from(expr),
-								left: l_span,
-								right: r_span,
-							},
 							span: op.span,
+							ty: ExprTy::Paren {
+								expr: expr.map(|e| Box::from(e)),
+								left: l_span,
+								right: if r_span.is_zero_width() {
+									None
+								} else {
+									Some(r_span)
+								},
+							},
 						});
 					}
 					OpTy::Index(contains_i) => {
@@ -1932,50 +2232,59 @@ impl ShuntingYard {
 							span: op.span,
 						});
 					}
-					OpTy::Add
-					| OpTy::Sub
-					| OpTy::Mul
-					| OpTy::Div
-					| OpTy::Rem
-					| OpTy::And
-					| OpTy::Or
-					| OpTy::Xor
-					| OpTy::LShift
-					| OpTy::RShift
-					| OpTy::EqEq
-					| OpTy::NotEq
-					| OpTy::Gt
-					| OpTy::Lt
-					| OpTy::Ge
-					| OpTy::Le
-					| OpTy::AndAnd
-					| OpTy::OrOr
-					| OpTy::XorXor
-					| OpTy::Eq
-					| OpTy::AddEq
-					| OpTy::SubEq
-					| OpTy::MulEq
-					| OpTy::DivEq
-					| OpTy::RemEq
-					| OpTy::AndEq
-					| OpTy::OrEq
-					| OpTy::XorEq
-					| OpTy::LShiftEq
-					| OpTy::RShiftEq => {
-						let right = stack.pop_back().unwrap();
-						let left = stack.pop_back().unwrap();
-						let span = span(left.span.start, right.span.end);
+					OpTy::Add(has_rhs)
+					| OpTy::Sub(has_rhs)
+					| OpTy::Mul(has_rhs)
+					| OpTy::Div(has_rhs)
+					| OpTy::Rem(has_rhs)
+					| OpTy::And(has_rhs)
+					| OpTy::Or(has_rhs)
+					| OpTy::Xor(has_rhs)
+					| OpTy::LShift(has_rhs)
+					| OpTy::RShift(has_rhs)
+					| OpTy::EqEq(has_rhs)
+					| OpTy::NotEq(has_rhs)
+					| OpTy::Gt(has_rhs)
+					| OpTy::Lt(has_rhs)
+					| OpTy::Ge(has_rhs)
+					| OpTy::Le(has_rhs)
+					| OpTy::AndAnd(has_rhs)
+					| OpTy::OrOr(has_rhs)
+					| OpTy::XorXor(has_rhs)
+					| OpTy::Eq(has_rhs)
+					| OpTy::AddEq(has_rhs)
+					| OpTy::SubEq(has_rhs)
+					| OpTy::MulEq(has_rhs)
+					| OpTy::DivEq(has_rhs)
+					| OpTy::RemEq(has_rhs)
+					| OpTy::AndEq(has_rhs)
+					| OpTy::OrEq(has_rhs)
+					| OpTy::XorEq(has_rhs)
+					| OpTy::LShiftEq(has_rhs)
+					| OpTy::RShiftEq(has_rhs) => {
+						let last = stack.pop_back().unwrap();
+						let (left, right) = if has_rhs {
+							(stack.pop_back().unwrap(), Some(last))
+						} else {
+							(last, None)
+						};
+
+						let span = if let Some(ref right) = right {
+							Span::new(left.span.start, right.span.end)
+						} else {
+							Span::new(left.span.start, op.span.end)
+						};
 						stack.push_back(Expr {
 							ty: ExprTy::Binary {
 								left: Box::from(left),
-								op,
-								right: Box::from(right),
+								op: BinOp::from(op),
+								right: right.map(|e| Box::from(e)),
 							},
 							span,
 						});
 					}
 					_ => {
-						panic!("Invalid operator {op} in shunting yard stack. This operator should never be present in the final RPN output stack.");
+						panic!("Invalid operator {op:?} in shunting yard stack. This operator should never be present in the final RPN output stack.");
 					}
 				},
 			}
@@ -1991,140 +2300,20 @@ impl ShuntingYard {
 	}
 }
 
-#[rustfmt::skip]
-impl OpTy {
-	/// Returns the precedence of the operator.
-	fn precedence(&self) -> u8 {
-		match self {
-			Self::ObjAccess => 33,
-			Self::AddAddPost | Self::SubSubPost => 31,
-			Self::AddAddPre
-			| Self::SubSubPre
-			| Self::Neg
-			| Self::Flip
-			| Self::Not => 29,
-			Self::Mul | Self::Div | Self::Rem => 27,
-			Self::Add | Self::Sub => 25,
-			Self::LShift | Self::RShift => 23,
-			Self::Lt | Self::Gt | Self::Le | Self::Ge => 21,
-			Self::EqEq | Self::NotEq => 19,
-			Self::And => 17,
-			Self::Xor => 15,
-			Self::Or => 13,
-			Self::AndAnd => 11,
-			Self::XorXor => 9,
-			Self::OrOr => 7,
-			// TODO: Ternary
-			Self::Eq
-			| Self::AddEq
-			| Self::SubEq
-			| Self::MulEq
-			| Self::DivEq
-			| Self::RemEq
-			| Self::AndEq
-			| Self::XorEq
-			| Self::OrEq
-			| Self::LShiftEq
-			| Self::RShiftEq => 3,
-			// These two should always be converted to the *Pre or *Post versions in the shunting yard.
-			Self::AddAdd | Self::SubSub => panic!("OpType::AddAdd | OpType::SubSub do not have precedence values because they should never be passed into this function. Something has gone wrong!"),
-			// These are never directly checked for precedence, but rather have special branches.
-			Self::ParenStart
-			| Self::Paren(_, _)
-			| Self::FnStart 
-			| Self::FnCall(_) 
-			| Self::IndexStart 
-			| Self::Index(_) 
-			| Self::InitStart 
-			| Self::Init(_) 
-			| Self::ArrInitStart 
-			| Self::ArrInit(_)
-			| Self::List(_) => {
-				panic!("The operator {self:?} does not have a precedence value because it should never be passed into this function. Something has gone wrong!")
-			},
-		}
-	}
-}
-
 // Purely used for debugging the parsed expressions.
 impl std::fmt::Display for ShuntingYard {
 	fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
 		for item in self.stack.iter() {
 			match item {
 				Either::Left(e) => write!(f, "{e} ")?,
-				Either::Right(op) => write!(f, "{op} ")?,
+				Either::Right(op) => write!(f, "{op:?} ")?,
 			}
 		}
 		Ok(())
 	}
 }
 
-impl std::fmt::Display for Op {
-	fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-		match &self.ty {
-			// Maths
-			OpTy::Add => write!(f, "+"),
-			OpTy::Sub => write!(f, "-"),
-			OpTy::Mul => write!(f, "*"),
-			OpTy::Div => write!(f, "/"),
-			OpTy::Rem => write!(f, "%"),
-			OpTy::And => write!(f, "&"),
-			OpTy::Or => write!(f, "|"),
-			OpTy::Xor => write!(f, "^"),
-			OpTy::LShift => write!(f, "<<"),
-			OpTy::RShift => write!(f, ">>"),
-			OpTy::Eq => write!(f, "="),
-			OpTy::AddEq => write!(f, "+="),
-			OpTy::SubEq => write!(f, "-="),
-			OpTy::MulEq => write!(f, "*="),
-			OpTy::DivEq => write!(f, "/="),
-			OpTy::RemEq => write!(f, "%="),
-			OpTy::AndEq => write!(f, "&="),
-			OpTy::OrEq => write!(f, "|="),
-			OpTy::XorEq => write!(f, "^="),
-			OpTy::LShiftEq => write!(f, "<<="),
-			OpTy::RShiftEq => write!(f, ">>="),
-			OpTy::Neg => write!(f, "neg"),
-			OpTy::Flip => write!(f, "~"),
-			OpTy::AddAdd => write!(f, "NOP"),
-			OpTy::SubSub => write!(f, "NOP"),
-			//
-			// Comparison
-			OpTy::EqEq => write!(f, "=="),
-			OpTy::NotEq => write!(f, "!="),
-			OpTy::Gt => write!(f, ">"),
-			OpTy::Lt => write!(f, "<"),
-			OpTy::Ge => write!(f, ">="),
-			OpTy::Le => write!(f, "<="),
-			OpTy::AndAnd => write!(f, "&&"),
-			OpTy::OrOr => write!(f, "||"),
-			OpTy::XorXor => write!(f, "^^"),
-			OpTy::Not => write!(f, "!"),
-			//
-			// Shunting Yard
-			OpTy::AddAddPre => write!(f, "++pre"),
-			OpTy::AddAddPost => write!(f, "++post"),
-			OpTy::SubSubPre => write!(f, "--pre"),
-			OpTy::SubSubPost => write!(f, "--post"),
-			OpTy::ParenStart
-			| OpTy::FnStart
-			| OpTy::IndexStart
-			| OpTy::InitStart
-			| OpTy::ArrInitStart => {
-				write!(f, "")
-			}
-			OpTy::Paren(_, _) => write!(f, ""),
-			OpTy::Index(true) => write!(f, "index"),
-			OpTy::Index(false) => write!(f, "empty_index"),
-			OpTy::ObjAccess => write!(f, "access"),
-			OpTy::FnCall(count) => write!(f, "FN:{count}"),
-			OpTy::Init(count) => write!(f, "INIT:{count}"),
-			OpTy::ArrInit(count) => write!(f, "ARR_INIT:{count}"),
-			OpTy::List(count) => write!(f, "LIST:{count}"),
-		}
-	}
-}
-
+/*
 #[cfg(test)]
 use crate::lexer::lexer;
 
@@ -2926,7 +3115,7 @@ fn complex() {
 					},
 					span: span(11, 19),
 				}
-				
+
 			]
 		},
 		span: span(0, 20),
@@ -3121,3 +3310,4 @@ fn incomplete() {
 	assert_expr!("{5, 1", Expr{ty: ExprTy::Incomplete, span: span(0, 5)});
 	assert_expr!("int[5](1, 2", Expr{ty: ExprTy::Incomplete, span: span(0, 11)});
 }
+ */

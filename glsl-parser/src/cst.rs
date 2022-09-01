@@ -1,7 +1,7 @@
 use crate::{
 	ast::ArrSize,
 	error::SyntaxErr,
-	lexer::{NumType, OpTy, Token},
+	lexer::{NumType, Token},
 	span::Span,
 	Either,
 };
@@ -172,13 +172,6 @@ impl Ident {
 	}
 }
 
-/// An operator, which is part of an expression.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct Op {
-	pub ty: OpTy,
-	pub span: Span,
-}
-
 /// An expression, which is part of a larger statement.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Expr {
@@ -195,13 +188,16 @@ impl std::fmt::Display for Expr {
 			ExprTy::Lit(l) => write!(f, "LITERAL"),
 			ExprTy::Ident(i) => write!(f, "IDENT"),
 			ExprTy::Prefix { expr, op } => {
-				write!(f, "\x1b[36mPre\x1b[0m({expr} \x1b[36m{op}\x1b[0m)")
+				//write!(f, "\x1b[36mPre\x1b[0m({expr} \x1b[36m{op}\x1b[0m)")
+				Ok(())
 			}
 			ExprTy::Postfix { expr, op } => {
-				write!(f, "\x1b[36mPost\x1b[0m({expr} \x1b[36m{op}\x1b[0m)")
+				//write!(f, "\x1b[36mPost\x1b[0m({expr} \x1b[36m{op}\x1b[0m)")
+				Ok(())
 			}
 			ExprTy::Binary { left, op, right } => {
-				write!(f, "({left} \x1b[36m{op}\x1b[0m {right})")
+				//write!(f, "({left} \x1b[36m{op}\x1b[0m {right})")
+				Ok(())
 			}
 			ExprTy::Ternary {
 				cond,
@@ -212,7 +208,7 @@ impl std::fmt::Display for Expr {
 				expr,
 				left: _,
 				right: _,
-			} => write!(f, "({expr})"),
+			} => Ok(()),
 			ExprTy::Index { item, i, op: _ } => {
 				write!(
 					f,
@@ -311,6 +307,75 @@ impl Expr {
 	}
 }
 
+/// A binary operator.
+#[derive(Debug, Clone, PartialEq)]
+pub struct BinOp {
+	pub ty: BinOpTy,
+	pub span: Span,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub enum BinOpTy {
+	Add,
+	Sub,
+	Mul,
+	Div,
+	Rem,
+	And,
+	Or,
+	Xor,
+	LShift,
+	RShift,
+	Eq,
+	AddEq,
+	SubEq,
+	MulEq,
+	DivEq,
+	RemEq,
+	AndEq,
+	OrEq,
+	XorEq,
+	LShiftEq,
+	RShiftEq,
+	EqEq,
+	NotEq,
+	AndAnd,
+	OrOr,
+	XorXor,
+	Gt,
+	Lt,
+	Ge,
+	Le,
+}
+
+/// A prefix operator.
+#[derive(Debug, Clone, PartialEq)]
+pub struct PreOp {
+	pub ty: PreOpTy,
+	pub span: Span,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub enum PreOpTy {
+	Add,
+	Sub,
+	Neg,
+	Flip,
+	Not,
+}
+
+/// A postfix operator.
+#[derive(Debug, Clone, PartialEq)]
+pub struct PostOp {
+	pub ty: PostOpTy,
+	pub span: Span,
+}
+#[derive(Debug, Clone, PartialEq)]
+pub enum PostOpTy {
+	Add,
+	Sub,
+}
+
 #[derive(Debug, Clone, PartialEq)]
 pub enum ExprTy {
 	/// A placeholder expression for one that is missing.
@@ -365,23 +430,22 @@ pub enum ExprTy {
 	/// is placed it will not affect the analysis; either the types match or they don't. (It will affect the result
 	/// of the evaluation but that is irrelevant to our analysis).
 	Incomplete,
-	/// An expression which is invalid when converted from a token, e.g.
-	///
-	/// - A token number `1.0B` cannot be converted to a valid `Lit` because `B` is not a valid numerical suffix,.
+	/// A number token which could not be parsed as a valid number, e.g. `1.0B` cannot be converted to a valid
+	/// `Lit` because `B` is not a valid numerical suffix.
 	Invalid,
 	/// A literal value; either a number or a boolean.
 	Lit(Lit),
 	/// An identifier; could be a variable name, function name, type name, etc.
 	Ident(Ident),
 	/// A prefix operation.
-	Prefix { expr: Box<Expr>, op: Op },
+	Prefix { op: PreOp, expr: Option<Box<Expr>> },
 	/// A postfix operation.
-	Postfix { expr: Box<Expr>, op: Op },
+	Postfix { expr: Box<Expr>, op: PostOp },
 	/// A binary expression with a left and right hand-side.
 	Binary {
 		left: Box<Expr>,
-		op: Op,
-		right: Box<Expr>,
+		op: BinOp,
+		right: Option<Box<Expr>>,
 	},
 	/// A ternary condition.
 	Ternary {
@@ -391,9 +455,9 @@ pub enum ExprTy {
 	},
 	/// A parenthesis group.
 	Paren {
-		expr: Box<Expr>,
 		left: Span,
-		right: Span,
+		expr: Option<Box<Expr>>,
+		right: Option<Span>,
 	},
 	/// An index operator, e.g. `item[i]`.
 	Index {

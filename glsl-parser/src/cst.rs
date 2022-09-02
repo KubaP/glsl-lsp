@@ -139,7 +139,7 @@ impl Ident {
 	) -> Option<Either<Ident, (Ident, Vec<ArrSize>)>> {
 		match expr {
 			ExprTy::Ident(i) => Some(Either::Left(i.clone())),
-			ExprTy::Index { item, i, op: _ } => {
+			ExprTy::Index { item, i, .. } => {
 				let mut current_item = item;
 				let mut stack = Vec::new();
 				stack.push(i.as_deref());
@@ -149,7 +149,7 @@ impl Ident {
 						ExprTy::Ident(i) => {
 							break i.clone();
 						}
-						ExprTy::Index { item, i, op: _ } => {
+						ExprTy::Index { item, i, .. } => {
 							stack.push(i.as_deref());
 							current_item = item;
 						}
@@ -177,82 +177,6 @@ impl Ident {
 pub struct Expr {
 	pub ty: ExprTy,
 	pub span: Span,
-}
-
-impl std::fmt::Display for Expr {
-	fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-		match &self.ty {
-			ExprTy::Missing => write!(f, "\x1b[31;4mMISSING\x1b[0m"),
-			ExprTy::Incomplete => write!(f, "\x1b[31;4mINCOMPLETE\x1b[0m"),
-			ExprTy::Invalid => write!(f, "\x1b[31;4mINVALID\x1b[0m"),
-			ExprTy::Lit(l) => write!(f, "LITERAL"),
-			ExprTy::Ident(i) => write!(f, "IDENT"),
-			ExprTy::Prefix { expr, op } => {
-				//write!(f, "\x1b[36mPre\x1b[0m({expr} \x1b[36m{op}\x1b[0m)")
-				Ok(())
-			}
-			ExprTy::Postfix { expr, op } => {
-				//write!(f, "\x1b[36mPost\x1b[0m({expr} \x1b[36m{op}\x1b[0m)")
-				Ok(())
-			}
-			ExprTy::Binary { left, op, right } => {
-				//write!(f, "({left} \x1b[36m{op}\x1b[0m {right})")
-				Ok(())
-			}
-			ExprTy::Ternary {
-				cond,
-				true_,
-				false_,
-			} => write!(f, "IF({cond}) {{ {true_} }} ELSE {{ {false_} }}"),
-			ExprTy::Paren {
-				expr,
-				left: _,
-				right: _,
-			} => Ok(()),
-			ExprTy::Index { item, i, op: _ } => {
-				write!(
-					f,
-					"\x1b[36mIndex\x1b[0m({item}, i: {})",
-					if let Some(e) = i {
-						format!("{e}")
-					} else {
-						format!("_")
-					}
-				)
-			}
-			ExprTy::ObjAccess { obj, leaf } => {
-				write!(f, "\x1b[36mAccess\x1b[0m({obj} -> {leaf})")
-			}
-			ExprTy::Fn { ident, args } => {
-				write!(f, "\x1b[34mCall\x1b[0m(ident: IDENT, args: [")?;
-				for arg in args {
-					write!(f, "{arg}, ")?;
-				}
-				write!(f, "])")
-			}
-			ExprTy::Init(args) => {
-				write!(f, "\x1b[34mInit\x1b[0m{{")?;
-				for arg in args {
-					write!(f, "{arg}, ")?;
-				}
-				write!(f, "}}")
-			}
-			ExprTy::ArrInit { arr, args } => {
-				write!(f, "\x1b[34mArr\x1b[0m(arr: {arr} args: [")?;
-				for arg in args {
-					write!(f, "{arg}, ")?;
-				}
-				write!(f, "])")
-			}
-			ExprTy::List(exprs) => {
-				write!(f, "{{")?;
-				for expr in exprs {
-					write!(f, "{expr}, ")?;
-				}
-				write!(f, "}}")
-			}
-		}
-	}
 }
 
 impl Expr {
@@ -455,15 +379,16 @@ pub enum ExprTy {
 	},
 	/// A parenthesis group.
 	Paren {
-		left: Span,
+		l_paren: Span,
 		expr: Option<Box<Expr>>,
-		right: Option<Span>,
+		r_paren: Option<Span>,
 	},
 	/// An index operator, e.g. `item[i]`.
 	Index {
 		item: Box<Expr>,
+		l_bracket: Span,
 		i: Option<Box<Expr>>,
-		op: Span,
+		r_bracket: Option<Span>,
 	},
 	/// Object access.
 	ObjAccess { obj: Box<Expr>, leaf: Box<Expr> },

@@ -91,6 +91,7 @@ https://matklad.github.io/2020/04/15/from-pratt-to-dijkstra.html
 	  different approach
 */
 
+/// A node operator.
 #[derive(Debug, Clone, PartialEq)]
 struct Op {
 	ty: OpTy,
@@ -100,6 +101,7 @@ struct Op {
 #[derive(Debug, Clone, PartialEq)]
 enum OpTy {
 	/* BINARY OPERATORS */
+	/* The `bool` represents whether to consume a node for the right-hand side expression. */
 	Add(bool),
 	Sub(bool),
 	Mul(bool),
@@ -131,6 +133,7 @@ enum OpTy {
 	Ge(bool),
 	Le(bool),
 	/* PREFIX OPERATORS */
+	/* The `bool` represents whether to consume a node for the expression. */
 	AddPre(bool),
 	SubPre(bool),
 	Neg(bool),
@@ -139,25 +142,44 @@ enum OpTy {
 	/* POSTFIX OPERATORS */
 	AddPost,
 	SubPost,
-	/* GROUP BEGIN DELIMITERS */
+	/* GROUP BEGINNING DELIMITERS */
+	/// The `(` token.
 	ParenStart,
+	/// The `[` token.
 	IndexStart,
 	FnStart,
 	InitStart,
 	ArrInitStart,
 	ObjAccess,
 	/* GROUPS */
-	/// A parenthesis group. `(node_count, l_paren_span, r_paren_span)`
-	Paren(usize, Span, Span),
-	/// A function call. `(arg_size)`; note that this includes a node for the function identifier
+	/// A parenthesis group.
+	///
+	/// - `0` - Whether to consume a node for the inner expression within the `(...)` parenthesis.
+	/// - `1` - The opening span for this group. If this is zero-width, that means there is no `(` token present.
+	/// - `2` - The closing span for this group. If this is zero-width, that means there is no `)` token present.
+	Paren(bool, Span, Span),
+	/// A function call.
+	///
+	/// - `0` The number of nodes to consume for the arguments; this includes the function identifier node, so it
+	///   will always be `1` or greater.
 	FnCall(usize),
-	/// An index operator. `(contains_i)`
-	Index(bool),
-	/// An initializer list. `(arg_size)`
+	/// An index operator.
+	///
+	/// - `0` - Whether to consume a node for the expression within the `[...]` brackets.
+	/// - `1` - The span of the opening bracket.
+	/// - `2` - The span of the closing bracket. If this is zero-width, that means there is no `]` token present.
+	Index(bool, Span, Span),
+	/// An initializer list.
+	///
+	/// - `0` - The number of nodes to consume for the arguments.
 	Init(usize),
-	/// An array initializer. `(arg_size)`
+	/// An array initializer.
+	///
+	/// - `0` - The number of nodes to consume for the arguments.
 	ArrInit(usize),
-	/// A general list. `(arg_size)`
+	/// A general list.
+	///
+	/// - `0` - The number of nodes to consume for the arguments.
 	List(usize),
 }
 
@@ -299,7 +321,7 @@ enum Group {
 	/// *Note:* Whilst there may currently be no real use to storing parenthesis groups in the AST, keeping track
 	/// of this in the shunting yard is necessary to correctly deal with lists within parenthesis, so this should
 	/// never be removed.
-	Paren(usize),
+	Paren(bool),
 	/// An index operator `[...]`. `bool` notes whether there is an item within the `[...]` brackets.
 	///
 	/// If the preceding item was an `Expr::Ident`, then `Option<usize>` holds the start of that token. This
@@ -378,10 +400,10 @@ impl ShuntingYard {
 	}
 
 	/// # Invariants
-	/// Assumes that `self.group.back()` is of type [`Group::Bracket`].
+	/// Assumes that `self.group.back()` is of type [`Group::Paren`].
 	///
-	/// `end_span` is the span which marks the end of this parenthesis group. It may be a span covering the `)`, or
-	/// it may be a zero-width span if this group is collapsed without a matching closing delimiter.
+	/// `end_span` is the span which marks the end of this index group. It may be a span of the `)` token, or it
+	/// may be a zero-width span if this group was collapsed without a matching closing delimiter.
 	fn collapse_bracket(&mut self, end_span: Span, invalidate: bool) {
 		let (group, group_start, _) = self.groups.pop_back().unwrap();
 
@@ -402,7 +424,7 @@ impl ShuntingYard {
 
 				if op.ty == OpTy::ParenStart {
 					self.stack.push_back(Either::Right(Op {
-						span: span(group_start, end_span.end),
+						span: Span::new(group_start, end_span.end),
 						ty: OpTy::Paren(count, op.span, end_span),
 					}));
 					break;
@@ -414,7 +436,7 @@ impl ShuntingYard {
 			}
 
 			if invalidate {
-				self.invalidate_range(group_start, end_span.end, false);
+				self.invalidate_range(group_start, end_span.end, None);
 			}
 		} else {
 			unreachable!()
@@ -459,7 +481,7 @@ impl ShuntingYard {
 			}
 
 			if invalidate {
-				self.invalidate_range(group_start, span_end, false);
+				self.invalidate_range(group_start, span_end, None);
 			}
 		} else {
 			unreachable!()
@@ -469,11 +491,13 @@ impl ShuntingYard {
 	/// # Invariants
 	/// Assumes that `self.group.back()` is of type [`Group::Index`].
 	///
-	/// `span_end` is the position which marks the end of this index operator.
-	fn collapse_index(&mut self, span_end: usize, invalidate: bool) {
+	/// `end_span` is the span which marks the end of this index group. It may be a span of the `]` token, or it
+	/// may be a zero-width span if this group was collapsed without a matching closing delimiter.
+	fn collapse_index(&mut self, end_span: Span, invalidate: bool) {
 		let (group, group_start, _) = self.groups.pop_back().unwrap();
 
 		if let Group::Index(contains_i, _) = group {
+			let mut opening = Span::empty();
 			while self.operators.back().is_some() {
 				let op = self.operators.pop_back().unwrap();
 
@@ -489,9 +513,10 @@ impl ShuntingYard {
 				}
 
 				if op.ty == OpTy::IndexStart {
+					opening = op.span;
 					self.stack.push_back(Either::Right(Op {
-						ty: OpTy::Index(contains_i),
-						span: span(group_start, span_end),
+						span: Span::new(group_start, end_span.end),
+						ty: OpTy::Index(contains_i, op.span, end_span),
 					}));
 					break;
 				} else {
@@ -502,7 +527,11 @@ impl ShuntingYard {
 			}
 
 			if invalidate {
-				self.invalidate_range(group_start, span_end, true);
+				self.invalidate_range(
+					group_start,
+					end_span.end,
+					Some((opening, end_span)),
+				);
 			}
 		} else {
 			unreachable!()
@@ -543,7 +572,7 @@ impl ShuntingYard {
 			}
 
 			if invalidate {
-				self.invalidate_range(group_start, span_end, false);
+				self.invalidate_range(group_start, span_end, None);
 			}
 		} else {
 			unreachable!()
@@ -586,7 +615,7 @@ impl ShuntingYard {
 			}
 
 			if invalidate {
-				self.invalidate_range(group_start, span_end, false);
+				self.invalidate_range(group_start, span_end, None);
 			}
 		} else {
 			unreachable!()
@@ -634,7 +663,7 @@ impl ShuntingYard {
 			}));
 
 			if invalidate {
-				self.invalidate_range(group_start, span_end, false);
+				self.invalidate_range(group_start, span_end, None);
 			}
 		} else {
 			unreachable!()
@@ -649,7 +678,7 @@ impl ShuntingYard {
 		&mut self,
 		start_pos: usize,
 		end_pos: usize,
-		invalidating_index: bool,
+		invalidating_index: Option<(Span, Span)>,
 	) {
 		while self.stack.back().is_some() {
 			let span = match self.stack.back().unwrap() {
@@ -692,9 +721,9 @@ impl ShuntingYard {
 		// Hence, what we must do is something like this instead:
 		//  <SOME_EXPR> <INCOMPLETE> <INDEX>
 		// which will collapse into a singular `Expr` node.
-		if invalidating_index {
+		if let Some((opening, closing)) = invalidating_index {
 			self.stack.push_back(Either::Right(Op {
-				ty: OpTy::Index(true),
+				ty: OpTy::Index(true, opening, closing),
 				span: span(start_pos, end_pos),
 			}));
 		}
@@ -743,7 +772,7 @@ impl ShuntingYard {
 							Group::Index(_, _) => {
 								log!("Unclosed `]` index operator found!");
 								self.collapse_index(
-									end_span.end_at_previous().end,
+									end_span.start_zero_width(),
 									true,
 								)
 							}
@@ -871,7 +900,7 @@ impl ShuntingYard {
 			_ => unreachable!(),
 		};
 
-		self.collapse_index(end_span.end, false);
+		self.collapse_index(end_span, false);
 		Ok(can_start_arr_init)
 	}
 
@@ -920,7 +949,7 @@ impl ShuntingYard {
 						Group::Index(_, _) => {
 							log!("Unclosed `]` index operator found!");
 							self.collapse_index(
-								end_span.end_at_previous().end,
+								end_span.start_zero_width(),
 								true,
 							);
 						}
@@ -1037,8 +1066,11 @@ impl ShuntingYard {
 	fn increase_arity(&mut self) {
 		if let Some((current_group, _, _)) = self.groups.back_mut() {
 			match current_group {
-				Group::Paren(count)
-				| Group::Fn(count)
+				Group::Paren(has_inner) => {
+					debug_assert!(!*has_inner, "[ShuntingYard::increase_arity] Increasing the arity on a `Group::Paren` which is already at `1`.");
+					*has_inner = true;
+				}
+				Group::Fn(count)
 				| Group::Init(count)
 				| Group::ArrInit(count)
 				| Group::List(count) => {
@@ -1051,8 +1083,8 @@ impl ShuntingYard {
 		log!("Found an incomplete function call, initializer list, array constructor or general list expression!");
 	}
 
-	/// Sets the toggle on the top-most operator that it has a right-hand side operand (if applicable).
-	fn set_op_rhs(&mut self) {
+	/// Sets the toggle on the last operator that it has a right-hand side operand (if applicable).
+	fn set_op_rhs_toggle(&mut self) {
 		if let Some(op) = self.operators.back_mut() {
 			match &mut op.ty {
 				OpTy::Add(b)
@@ -1090,20 +1122,7 @@ impl ShuntingYard {
 				| OpTy::Neg(b)
 				| OpTy::Flip(b)
 				| OpTy::Not(b) => *b = true,
-				OpTy::AddPost
-				| OpTy::SubPost
-				| OpTy::ParenStart
-				| OpTy::IndexStart
-				| OpTy::FnStart
-				| OpTy::InitStart
-				| OpTy::ArrInitStart
-				| OpTy::ObjAccess
-				| OpTy::Paren(_, _, _)
-				| OpTy::FnCall(_)
-				| OpTy::Index(_)
-				| OpTy::Init(_)
-				| OpTy::ArrInit(_)
-				| OpTy::List(_) => {}
+				_ => {}
 			}
 		}
 	}
@@ -1286,7 +1305,7 @@ impl ShuntingYard {
 						self.increase_arity();
 						increase_arity = false;
 					}
-					self.set_op_rhs();
+					self.set_op_rhs_toggle();
 				}
 				Token::Ident(s) if state == State::Operand => {
 					// We switch state since after an atom, we are expecting an operator, i.e.
@@ -1308,7 +1327,7 @@ impl ShuntingYard {
 						self.increase_arity();
 						increase_arity = false;
 					}
-					self.set_op_rhs();
+					self.set_op_rhs_toggle();
 				}
 				Token::Num { .. } | Token::Bool(_) | Token::Ident(_)
 					if state == State::AfterOperand =>
@@ -1336,6 +1355,15 @@ impl ShuntingYard {
 					{
 						// self.errors.push(SyntaxErr::FoundEq(*span));
 						break 'main;
+					}
+
+					match op {
+						lexer::OpTy::Sub
+						| lexer::OpTy::Not
+						| lexer::OpTy::Flip
+						| lexer::OpTy::AddAdd
+						| lexer::OpTy::SubSub => self.set_op_rhs_toggle(),
+						_ => {}
 					}
 
 					match op {
@@ -1430,14 +1458,14 @@ impl ShuntingYard {
 						self.increase_arity();
 						increase_arity = false;
 					}
-					self.set_op_rhs();
+					self.set_op_rhs_toggle();
 
 					self.operators.push_back(Op {
 						span: *span,
 						ty: OpTy::ParenStart,
 					});
 					self.groups.push_back((
-						Group::Paren(0),
+						Group::Paren(false),
 						span.start,
 						span.end,
 					));
@@ -1721,7 +1749,7 @@ impl ShuntingYard {
 					if increase_arity {
 						self.increase_arity();
 					}
-					self.set_op_rhs();
+					self.set_op_rhs_toggle();
 
 					self.operators.push_back(Op {
 						span: *span,
@@ -1940,7 +1968,7 @@ impl ShuntingYard {
 							group_start,
 							group_end,
 						));
-						self.collapse_index(group_end.end, true)
+						self.collapse_index(group_end, true)
 					}
 					Group::Fn(_) => {
 						self.errors.push(SyntaxErr::UnclosedFunctionCall(
@@ -2116,21 +2144,16 @@ impl ShuntingYard {
 							},
 						});
 					}
-					OpTy::Paren(count, l_span, r_span) => {
+					OpTy::Paren(has_inner, l_span, r_span) => {
 						// Note: the span for `Op::Paren` is from the start of the `(` to the end of the `)`.
-						let expr = if count == 0 {
-							None
-						} else if count == 1 {
-							stack.pop_back()
-						} else {
-							panic!("[ShuntingYard::create_ast] `OpTy::Paren` has an argument count greater than 1.")
-						};
+						let expr =
+							if has_inner { stack.pop_back() } else { None };
 						stack.push_back(Expr {
 							span: op.span,
 							ty: ExprTy::Paren {
 								expr: expr.map(|e| Box::from(e)),
-								left: l_span,
-								right: if r_span.is_zero_width() {
+								l_paren: l_span,
+								r_paren: if r_span.is_zero_width() {
 									None
 								} else {
 									Some(r_span)
@@ -2138,7 +2161,7 @@ impl ShuntingYard {
 							},
 						});
 					}
-					OpTy::Index(contains_i) => {
+					OpTy::Index(contains_i, l_span, r_span) => {
 						// Note: the span for `Op::Index` is from the start of the `[` to the end of the `]`.
 						let i = if contains_i {
 							Some(Box::from(stack.pop_back().unwrap()))
@@ -2150,8 +2173,13 @@ impl ShuntingYard {
 						stack.push_back(Expr {
 							ty: ExprTy::Index {
 								item: Box::from(expr),
+								l_bracket: l_span,
 								i,
-								op: op.span,
+								r_bracket: if r_span.is_zero_width() {
+									None
+								} else {
+									Some(r_span)
+								},
 							},
 							span,
 						});
@@ -2268,6 +2296,9 @@ impl ShuntingYard {
 						} else {
 							(last, None)
 						};
+						dbg!(has_rhs);
+						dbg!(&left);
+						dbg!(&right);
 
 						let span = if let Some(ref right) = right {
 							Span::new(left.span.start, right.span.end)
@@ -2297,19 +2328,6 @@ impl ShuntingYard {
 
 		// Return the one root expression.
 		Some(stack.pop_back().unwrap())
-	}
-}
-
-// Purely used for debugging the parsed expressions.
-impl std::fmt::Display for ShuntingYard {
-	fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-		for item in self.stack.iter() {
-			match item {
-				Either::Left(e) => write!(f, "{e} ")?,
-				Either::Right(op) => write!(f, "{op:?} ")?,
-			}
-		}
-		Ok(())
 	}
 }
 

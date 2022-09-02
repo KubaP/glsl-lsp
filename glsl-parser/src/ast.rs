@@ -240,7 +240,7 @@ impl Type {
 	pub fn parse(expr: &Expr) -> Option<Self> {
 		match &expr.ty {
 			ExprTy::Ident(i) => Some(Self::Basic(Primitive::parse(i))),
-			ExprTy::Index { item, i, op: _ } => {
+			ExprTy::Index { item, i, .. } => {
 				let mut current_item = item;
 				let mut stack = Vec::new();
 				stack.push(i.as_deref());
@@ -250,7 +250,7 @@ impl Type {
 						ExprTy::Ident(i) => {
 							break Primitive::parse(i);
 						}
-						ExprTy::Index { item, i, op: _ } => {
+						ExprTy::Index { item, i, .. } => {
 							stack.push(i.as_deref());
 							current_item = item;
 						}

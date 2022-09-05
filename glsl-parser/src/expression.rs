@@ -423,13 +423,11 @@ impl ShuntingYard {
 	}
 
 	/// # Invariants
-	/// Assumes that `self.group.back()` is of type [`Group::Paren`].
+	/// Assumes that `group` is of type [`Group::Paren`].
 	///
 	/// `end_span` is the span which marks the end of this parenthesis group. It may be the span of the `)` token,
 	/// or it may be a zero-width span if this group was collapsed without a matching closing delimiter.
-	fn collapse_bracket(&mut self, end_span: Span) {
-		let group = self.groups.pop_back().unwrap();
-
+	fn collapse_bracket(&mut self, group: Group, end_span: Span) {
 		if let Group::Paren(has_inner, l_paren) = group {
 			while self.operators.back().is_some() {
 				let op = self.operators.pop_back().unwrap();
@@ -463,13 +461,11 @@ impl ShuntingYard {
 	}
 
 	/// # Invariants
-	/// Assumes that `self.group.back()` is of type [`Group::Fn`].
+	/// Assumes that `group` is of type [`Group::Fn`].
 	///
 	/// `end_span` is the span which marks the end of this function call group. It may be the span of the `)` token,
 	/// or it may be a zero-width span if this group was collapsed without a matching closing delimiter.
-	fn collapse_fn(&mut self, end_span: Span) {
-		let group = self.groups.pop_back().unwrap();
-
+	fn collapse_fn(&mut self, group: Group, end_span: Span) {
 		if let Group::FnCall(count, l_paren) = group {
 			while self.operators.back().is_some() {
 				let op = self.operators.pop_back().unwrap();
@@ -505,13 +501,11 @@ impl ShuntingYard {
 	}
 
 	/// # Invariants
-	/// Assumes that `self.group.back()` is of type [`Group::Index`].
+	/// Assumes that `group` is of type [`Group::Index`].
 	///
 	/// `end_span` is the span which marks the end of this index group. It may be a span of the `]` token, or it
 	/// may be a zero-width span if this group was collapsed without a matching closing delimiter.
-	fn collapse_index(&mut self, end_span: Span) {
-		let group = self.groups.pop_back().unwrap();
-
+	fn collapse_index(&mut self, group: Group, end_span: Span) {
 		if let Group::Index(contains_i, l_bracket) = group {
 			while self.operators.back().is_some() {
 				let op = self.operators.pop_back().unwrap();
@@ -545,13 +539,11 @@ impl ShuntingYard {
 	}
 
 	/// # Invariants
-	/// Assumes that `self.group.back()` is of type [`Group::Init`].
+	/// Assumes that `group` is of type [`Group::Init`].
 	///
 	/// `end_span` is the span which marks the end of this initializer list group. It may be a span of the `}`
 	/// token, or it may be a zero-width span if this group was collapsed without a matching closing delimiter.
-	fn collapse_init(&mut self, end_span: Span) {
-		let group = self.groups.pop_back().unwrap();
-
+	fn collapse_init(&mut self, group: Group, end_span: Span) {
 		if let Group::Init(count, l_brace) = group {
 			while self.operators.back().is_some() {
 				let op = self.operators.pop_back().unwrap();
@@ -585,13 +577,11 @@ impl ShuntingYard {
 	}
 
 	/// # Invariants
-	/// Assumes that `self.group.back()` is of type [`Group::ArrInit`].
+	/// Assumes that `group` is of type [`Group::ArrInit`].
 	///
 	/// `end_span` is the span which marks the end of this array constructor group. It may be a span of the `)`
 	/// token, or it may be a zero-width span if this group was collapsed without a matching closing delimiter.
-	fn collapse_arr_init(&mut self, end_span: Span) {
-		let group = self.groups.pop_back().unwrap();
-
+	fn collapse_arr_init(&mut self, group: Group, end_span: Span) {
 		if let Group::ArrInit(count, l_paren) = group {
 			while self.operators.back().is_some() {
 				let op = self.operators.pop_back().unwrap();
@@ -627,10 +617,10 @@ impl ShuntingYard {
 	}
 
 	/// # Invariants
-	/// Assumes that `self.group.back()` is of type [`Group::List`].
-	fn collapse_list(&mut self, span_end: usize) {
-		let group = self.groups.pop_back().unwrap();
-
+	/// Assumes that `group` is of type [`Group::List`].
+	///
+	/// `span_end` is the position which marks the end of this list group.
+	fn collapse_list(&mut self, group: Group, span_end: usize) {
 		if let Group::List(count, start_pos) = group {
 			while self.operators.back().is_some() {
 				let op = self.operators.back().unwrap();
@@ -650,10 +640,6 @@ impl ShuntingYard {
 				// Since lists cannnot exist within a `Group::FnCall|Init|ArrInit`, we don't check for those start
 				// delimiters.
 				if op.ty == OpTy::ParenStart || op.ty == OpTy::IndexStart {
-					self.stack.push_back(Either::Right(Op {
-						span: Span::new(start_pos, span_end),
-						ty: OpTy::List(count),
-					}));
 					break;
 				} else {
 					// Any other operators get moved, since we are moving everything until we hit the start
@@ -662,6 +648,10 @@ impl ShuntingYard {
 					self.stack.push_back(Either::Right(moved));
 				}
 			}
+			self.stack.push_back(Either::Right(Op {
+				span: Span::new(start_pos, span_end),
+				ty: OpTy::List(count),
+			}));
 		} else {
 			unreachable!()
 		}
@@ -692,28 +682,31 @@ impl ShuntingYard {
 				if self.exists_paren_fn_group() {
 					// We have at least one other group to close before we can close the bracket/function/array
 					// constructor group.
-					'inner: loop {
-						let current_group = match self.groups.back() {
-							Some(g) => g,
-							// PERF: Since we've already checked that there is a `Group::Index`, we know this will
-							// never return `None` before we break out of the loop.
-							None => break 'inner,
-						};
-
+					'inner: while let Some(current_group) =
+						self.groups.pop_back()
+					{
 						match current_group {
 							Group::Init(_, _) => {
 								log!("Unclosed `}}` initializer list found!");
-								self.collapse_init(span(
-									end_span.end_at_previous().end,
-									end_span.end_at_previous().end,
-								));
+								self.collapse_init(
+									current_group,
+									span(
+										end_span.end_at_previous().end,
+										end_span.end_at_previous().end,
+									),
+								);
 							}
 							Group::Index(_, _) => {
 								log!("Unclosed `]` index operator found!");
-								self.collapse_index(end_span.start_zero_width())
+								self.collapse_index(
+									current_group,
+									end_span.start_zero_width(),
+								)
 							}
-							Group::List(_, _) => self
-								.collapse_list(end_span.end_at_previous().end),
+							Group::List(_, _) => self.collapse_list(
+								current_group,
+								end_span.end_at_previous().end,
+							),
 							Group::Paren(_, _)
 							| Group::FnCall(_, _)
 							| Group::ArrInit(_, _) => break 'inner,
@@ -730,10 +723,11 @@ impl ShuntingYard {
 			}
 		}
 
-		match self.groups.back().unwrap() {
-			Group::Paren(_, _) => self.collapse_bracket(end_span),
-			Group::FnCall(_, _) => self.collapse_fn(end_span),
-			Group::ArrInit(_, _) => self.collapse_arr_init(end_span),
+		let group = self.groups.pop_back().unwrap();
+		match group {
+			Group::Paren(_, _) => self.collapse_bracket(group, end_span),
+			Group::FnCall(_, _) => self.collapse_fn(group, end_span),
+			Group::ArrInit(_, _) => self.collapse_arr_init(group, end_span),
 			// Either the inner-most group is already a parenthesis-delimited group, or we've closed all inner
 			// groups and are now at a parenthesis-delimited group, hence this branch will never occur.
 			_ => unreachable!(),
@@ -768,46 +762,52 @@ impl ShuntingYard {
 
 			if self.exists_index_group() {
 				// We have at least one other group to close before we can close the index group.
-				'inner: loop {
-					let current_group = match self.groups.back() {
-						Some(g) => g,
-						// PERF: Since we've already checked that there is a `Group::Index`, we know this will
-						// never return `None` before we break out of the loop.
-						None => break 'inner,
-					};
-
+				'inner: while let Some(current_group) = self.groups.pop_back() {
 					match current_group {
 						Group::Paren(_, _) => {
 							log!("Unclosed `)` parenthesis found!");
-							self.collapse_bracket(span(
-								end_span.end_at_previous().end,
-								end_span.end_at_previous().end,
-							));
+							self.collapse_bracket(
+								current_group,
+								span(
+									end_span.end_at_previous().end,
+									end_span.end_at_previous().end,
+								),
+							);
 						}
 						Group::FnCall(_, _) => {
 							log!("Unclosed `)` function call found!");
-							self.collapse_fn(span(
-								end_span.end_at_previous().end,
-								end_span.end_at_previous().end,
-							));
+							self.collapse_fn(
+								current_group,
+								span(
+									end_span.end_at_previous().end,
+									end_span.end_at_previous().end,
+								),
+							);
 						}
 						Group::Init(_, _) => {
 							log!("Unclosed `}}` initializer list found!");
-							self.collapse_init(span(
-								end_span.end_at_previous().end,
-								end_span.end_at_previous().end,
-							));
+							self.collapse_init(
+								current_group,
+								span(
+									end_span.end_at_previous().end,
+									end_span.end_at_previous().end,
+								),
+							);
 						}
 						Group::ArrInit(_, _) => {
 							log!("Unclosed `)` array constructor found!");
-							self.collapse_arr_init(span(
-								end_span.end_at_previous().end,
-								end_span.end_at_previous().end,
-							));
+							self.collapse_arr_init(
+								current_group,
+								span(
+									end_span.end_at_previous().end,
+									end_span.end_at_previous().end,
+								),
+							);
 						}
-						Group::List(_, _) => {
-							self.collapse_list(end_span.end_at_previous().end)
-						}
+						Group::List(_, _) => self.collapse_list(
+							current_group,
+							end_span.end_at_previous().end,
+						),
 						Group::Index(_, _) => break 'inner,
 					}
 				}
@@ -830,7 +830,8 @@ impl ShuntingYard {
 			_ => unreachable!(),
 		};
 
-		self.collapse_index(end_span);
+		let group = self.groups.pop_back().unwrap();
+		self.collapse_index(group, end_span);
 		Ok(Some(0))
 	}
 
@@ -857,39 +858,44 @@ impl ShuntingYard {
 
 			if self.exists_init_group() {
 				// We have at least one other group to close before we can close the initializer group.
-				'inner: loop {
-					let current_group = match self.groups.back() {
-						Some(g) => g,
-						// PERF: Since we've already checked that there is a `Group::Index`, we know this will
-						// never return `None` before we break out of the loop.
-						None => break 'inner,
-					};
-
+				'inner: while let Some(current_group) = self.groups.pop_back() {
 					match current_group {
 						Group::Paren(_, _) => {
 							log!("Unclosed `)` parenthesis found!");
-							self.collapse_bracket(span(
-								end_span.end_at_previous().end,
-								end_span.end_at_previous().end,
-							));
+							self.collapse_bracket(
+								current_group,
+								span(
+									end_span.end_at_previous().end,
+									end_span.end_at_previous().end,
+								),
+							);
 						}
 						Group::Index(_, _) => {
 							log!("Unclosed `]` index operator found!");
-							self.collapse_index(end_span.start_zero_width());
+							self.collapse_index(
+								current_group,
+								end_span.start_zero_width(),
+							);
 						}
 						Group::FnCall(_, _) => {
 							log!("Unclosed `)` function call found!");
-							self.collapse_fn(span(
-								end_span.end_at_previous().end,
-								end_span.end_at_previous().end,
-							));
+							self.collapse_fn(
+								current_group,
+								span(
+									end_span.end_at_previous().end,
+									end_span.end_at_previous().end,
+								),
+							);
 						}
 						Group::ArrInit(_, _) => {
 							log!("Unclosed `)` array constructor found!");
-							self.collapse_arr_init(span(
-								end_span.end_at_previous().end,
-								end_span.end_at_previous().end,
-							));
+							self.collapse_arr_init(
+								current_group,
+								span(
+									end_span.end_at_previous().end,
+									end_span.end_at_previous().end,
+								),
+							);
 						}
 						// See `List` documentation.
 						Group::List(_, _) => unreachable!(),
@@ -908,7 +914,8 @@ impl ShuntingYard {
 			}
 		}
 
-		self.collapse_init(end_span);
+		let group = self.groups.pop_back().unwrap();
+		self.collapse_init(group, end_span);
 		Ok(())
 	}
 
@@ -1828,6 +1835,8 @@ impl ShuntingYard {
 			let group_end = self.get_previous_span().unwrap().end_zero_width();
 
 			// Close any open groups.
+			//
+			// We don't take ownership of the group because the individual `collapse_*()` methods do that.
 			while let Some(group) = self.groups.pop_back() {
 				log!("Found an unclosed: {group:?}");
 
@@ -1847,33 +1856,35 @@ impl ShuntingYard {
 						self.errors.push(SyntaxErr::UnclosedParenthesis(
 							l_paren, group_end,
 						));
-						self.collapse_bracket(group_end);
+						self.collapse_bracket(group, group_end);
 					}
 					Group::Index(_, l_bracket) => {
 						self.errors.push(SyntaxErr::UnclosedIndexOperator(
 							l_bracket, group_end,
 						));
-						self.collapse_index(group_end)
+						self.collapse_index(group, group_end)
 					}
 					Group::FnCall(_, l_paren) => {
 						self.errors.push(SyntaxErr::UnclosedFunctionCall(
 							l_paren, group_end,
 						));
-						self.collapse_fn(group_end)
+						self.collapse_fn(group, group_end)
 					}
 					Group::Init(_, l_brace) => {
 						self.errors.push(SyntaxErr::UnclosedInitializerList(
 							l_brace, group_end,
 						));
-						self.collapse_init(group_end)
+						self.collapse_init(group, group_end)
 					}
 					Group::ArrInit(_, l_paren) => {
 						self.errors.push(SyntaxErr::UnclosedArrayConstructor(
 							l_paren, group_end,
 						));
-						self.collapse_arr_init(group_end)
+						self.collapse_arr_init(group, group_end)
 					}
-					Group::List(_, _) => self.collapse_list(group_end.end),
+					Group::List(_, _) => {
+						self.collapse_list(group, group_end.end)
+					}
 				}
 			}
 		}

@@ -393,15 +393,26 @@ pub enum ExprTy {
 	/// Object access.
 	ObjAccess { obj: Box<Expr>, leaf: Box<Expr> },
 	/// A function call.
-	Fn { ident: Ident, args: Vec<Expr> },
+	Fn {
+		ident: Ident,
+		l_paren: Span,
+		args: Vec<Expr>,
+		r_paren: Option<Span>,
+	},
 	/// An initializer list.
-	Init(Vec<Expr>),
+	Init {
+		l_brace: Span,
+		args: Vec<Expr>,
+		r_brace: Option<Span>,
+	},
 	/// An array constructor.
 	ArrInit {
 		/// Contains the first part of an array constructor, e.g. `int[3]`.
 		arr: Box<Expr>,
+		l_paren: Span,
 		/// Contains the expressions within the brackets i.e. `..](a, b, ...)`.
 		args: Vec<Expr>,
+		r_paren: Option<Span>,
 	},
 	/// A general list expression, e.g. `a, b`.
 	List(Vec<Expr>),

@@ -1,5 +1,7 @@
 use crate::{
-	cst::{BinOp, Expr, ExprTy, Ident, Lit, PostOp, PostOpTy, PreOp, PreOpTy},
+	cst::{
+		BinOp, Expr, ExprTy, Ident, List, Lit, PostOp, PostOpTy, PreOp, PreOpTy,
+	},
 	error::SyntaxErr,
 	lexer::{self, Token},
 	log,
@@ -145,39 +147,55 @@ enum OpTy {
 	/* GROUP BEGINNING DELIMITERS */
 	/// The `(` token.
 	ParenStart,
+	/// The `(` token.
+	FnCallStart,
 	/// The `[` token.
 	IndexStart,
-	FnStart,
+	/// The `{` token.
 	InitStart,
+	/// The `(` token.
 	ArrInitStart,
+	/* TODO */
+	/// The `,` token within a variable argument group.
+	Comma,
 	ObjAccess,
 	/* GROUPS */
-	/// A parenthesis group.
+	/// A parenthesis group. This operator spans from the opening parenthesis to the closing parenthesis.
 	///
-	/// - `0` - Whether to consume a node for the inner expression within the `(...)` parenthesis.
-	/// - `1` - The opening span for this group. If this is zero-width, that means there is no `(` token present.
-	/// - `2` - The closing span for this group. If this is zero-width, that means there is no `)` token present.
+	/// - `0` - Whether to consume a node for the inner expression within the `(...)` parenthesis,
+	/// - `1` - The span of the opening parenthesis,
+	/// - `2` - The span of the closing parenthesis. If this is zero-width, that means there is no `)` token
+	///   present.
 	Paren(bool, Span, Span),
-	/// A function call.
+	/// A function call. This operator spans from the opening parenthesis to the closing parenthesis.
 	///
-	/// - `0` The number of nodes to consume for the arguments; this includes the function identifier node, so it
-	///   will always be `1` or greater.
-	FnCall(usize),
-	/// An index operator.
+	/// - `0` - The number of nodes to consume for the arguments; this includes the function identifier node, so it
+	///   will always be `1` or greater,
+	/// - `1` - The span of the opening parenthesis.
+	/// - `2` - The span of the closing parenthesis. If this is zero-width, that means there is no `)` token
+	///   present.
+	FnCall(usize, Span, Span),
+	/// An index operator. This operator spans from the opening bracket to the closing bracket.
 	///
-	/// - `0` - Whether to consume a node for the expression within the `[...]` brackets.
-	/// - `1` - The span of the opening bracket.
+	/// - `0` - Whether to consume a node for the expression within the `[...]` brackets,
+	/// - `1` - The span of the opening bracket,
 	/// - `2` - The span of the closing bracket. If this is zero-width, that means there is no `]` token present.
 	Index(bool, Span, Span),
-	/// An initializer list.
+	/// An initializer list. This operator spans from the opening brace to the closing brace.
 	///
-	/// - `0` - The number of nodes to consume for the arguments.
-	Init(usize),
-	/// An array initializer.
+	/// - `0` - The number of nodes to consume for the arguments,
+	/// - `1` - The span of the opening brace,
+	/// - `2` - The span of the closing brace. If this is zero-width, that means there is no `}` token present.
+	Init(usize, Span, Span),
+	/// An array initializer. This operator spans from the opening parenthesis to the closing parenthesis.
 	///
-	/// - `0` - The number of nodes to consume for the arguments.
-	ArrInit(usize),
-	/// A general list.
+	/// - `0` - The number of nodes to consume for the arguments; this includes the index expression node, so it
+	///   will always be `1` or greater.
+	/// - `1` - The span of the opening parenthesis,
+	/// - `2` - The span of the closing parenthesis. If this is zero-width, that means there is no `)` token
+	///   present.
+	ArrInit(usize, Span, Span),
+	/// A general list **outside** of function calls, initializer lists and array constructors.
 	///
 	/// - `0` - The number of nodes to consume for the arguments.
 	List(usize),
@@ -316,30 +334,41 @@ impl From<Op> for BinOp {
 /// An open grouping of items.
 #[derive(Debug, PartialEq)]
 enum Group {
-	/// A parenthesis group `(...)`.
+	/// A parenthesis group.
 	///
-	/// *Note:* Whilst there may currently be no real use to storing parenthesis groups in the AST, keeping track
-	/// of this in the shunting yard is necessary to correctly deal with lists within parenthesis, so this should
-	/// never be removed.
-	Paren(bool),
-	/// An index operator `[...]`. `bool` notes whether there is an item within the `[...]` brackets.
+	/// - `0` - Whether this group has an inner expression within the parenthesis,
+	/// - `1` - The span of the opening parenthesis.
+	Paren(bool, Span),
+	/// A function call.
 	///
-	/// If the preceding item was an `Expr::Ident`, then `Option<usize>` holds the start of that token. This
-	/// starting position is later used if we encounter an array constructor to define the start of that group.
-	Index(bool, Option<usize>),
-	/// A function call `fn(...)`.
-	Fn(usize),
-	/// An initializer list `{...}`.
-	Init(usize),
-	/// An array constructor `type[...](...)`.
-	ArrInit(usize),
-	/// A comma-seperated list **outside** of function calls, initializer lists and array constructors.
+	/// - `0` - The number of expressions to consume for the arguments,
+	/// - `1` - The span of the opening parenthesis.
+	FnCall(usize, Span),
+	/// An index operator.
+	///
+	/// - `0` - Whether this group has an inner expression within the brackets.
+	/// - `1` - The span of the opening bracket.
+	Index(bool, Span),
+	/// An initializer list.
+	///
+	/// - `0` - The number of expressions to consume for the arguments,
+	/// - `1` - The span of the opening brace.
+	Init(usize, Span),
+	/// An array constructor.
+	///
+	/// - `0` - The number of expressions to consume for the arguments,
+	/// - `1` - The span of the opening parenthesis.
+	ArrInit(usize, Span),
+	/// A general list **outside** of function calls, initializer lists and array constructors.
+	///
+	/// - `0` - The number of expressions to consume for the arguments,
+	/// - `1` - The starting position of this list.
 	///
 	/// # Invariants
-	/// This only exists if the outer `Group` is not of type `Group::Fn|Init|ArrInit|List`. (You can't have
-	/// a list within a list since there are no delimiters, and commas within the other groups won't create an
+	/// This group only exists if the outer `Group` is not of type `Group::FnCall|Init|ArrInit|List`. (You can't
+	/// have a list within a list since there are no delimiters, and commas within the other groups won't create an
 	/// inner list but rather increase the arity).
-	List(usize),
+	List(usize, usize),
 }
 
 struct ShuntingYard {
@@ -347,14 +376,8 @@ struct ShuntingYard {
 	stack: VecDeque<Either<Expr, Op>>,
 	/// Temporary stack to hold operators.
 	operators: VecDeque<Op>,
-	/// Temporary stack to hold item groups. The back-most entry is the group being currently parsed.
-	///
-	/// The two `usize` values represent the start and end positions of the opening delimiter, i.e.
-	/// ```text
-	///   func( a ...      { a ...
-	///  ^     ^          ^ ^  
-	/// ```
-	groups: VecDeque<(Group, usize, usize)>,
+	/// Temporary stack to hold item groups. The top-most entry is the group being currently parsed.
+	groups: VecDeque<Group>,
 	/// The start position of the first item in this expression.
 	start_position: usize,
 	/// The behavioural mode of the parser.
@@ -372,7 +395,7 @@ impl ShuntingYard {
 
 			if back.ty == OpTy::ParenStart
 				|| back.ty == OpTy::IndexStart
-				|| back.ty == OpTy::FnStart
+				|| back.ty == OpTy::FnCallStart
 				|| back.ty == OpTy::InitStart
 			{
 				// Group delimiter start operators always have the highest precedence, so we don't need to check
@@ -402,30 +425,30 @@ impl ShuntingYard {
 	/// # Invariants
 	/// Assumes that `self.group.back()` is of type [`Group::Paren`].
 	///
-	/// `end_span` is the span which marks the end of this index group. It may be a span of the `)` token, or it
-	/// may be a zero-width span if this group was collapsed without a matching closing delimiter.
-	fn collapse_bracket(&mut self, end_span: Span, invalidate: bool) {
-		let (group, group_start, _) = self.groups.pop_back().unwrap();
+	/// `end_span` is the span which marks the end of this parenthesis group. It may be the span of the `)` token,
+	/// or it may be a zero-width span if this group was collapsed without a matching closing delimiter.
+	fn collapse_bracket(&mut self, end_span: Span) {
+		let group = self.groups.pop_back().unwrap();
 
-		if let Group::Paren(count) = group {
+		if let Group::Paren(has_inner, l_paren) = group {
 			while self.operators.back().is_some() {
 				let op = self.operators.pop_back().unwrap();
 
 				#[cfg(debug_assertions)]
 				{
 					match op.ty {
-						OpTy::FnStart => log!("Mismatch between operator stack (Op::FnStart) and group stack (Group::Bracket)!"),
-						OpTy::IndexStart => log!("Mismatch between operator stack (Op::IndexStart) and group stack (Group::Bracket)!"),
-						OpTy::InitStart => log!("Mismatch between operator stack (Op::InitStart) and group stack (Group::Bracket)!"),
-						OpTy::ArrInitStart => log!("Mismatch between operator stack (Op::ArrInitStart) and group stack (Group::Bracket)!"),
+						OpTy::FnCallStart => log!("Mismatch between operator stack (Op::FnCallStart) and group stack (Group::Paren)!"),
+						OpTy::IndexStart => log!("Mismatch between operator stack (Op::IndexStart) and group stack (Group::Paren)!"),
+						OpTy::InitStart => log!("Mismatch between operator stack (Op::InitStart) and group stack (Group::Paren)!"),
+						OpTy::ArrInitStart => log!("Mismatch between operator stack (Op::ArrInitStart) and group stack (Group::Paren)!"),
 						_ => {}
 					}
 				}
 
 				if op.ty == OpTy::ParenStart {
 					self.stack.push_back(Either::Right(Op {
-						span: Span::new(group_start, end_span.end),
-						ty: OpTy::Paren(count, op.span, end_span),
+						span: Span::new(l_paren.start, end_span.end),
+						ty: OpTy::Paren(has_inner, l_paren, end_span),
 					}));
 					break;
 				} else {
@@ -433,10 +456,6 @@ impl ShuntingYard {
 					// delimiter.
 					self.stack.push_back(Either::Right(op));
 				}
-			}
-
-			if invalidate {
-				self.invalidate_range(group_start, end_span.end, None);
 			}
 		} else {
 			unreachable!()
@@ -446,18 +465,19 @@ impl ShuntingYard {
 	/// # Invariants
 	/// Assumes that `self.group.back()` is of type [`Group::Fn`].
 	///
-	/// `span_end` is the position which marks the end of this function call.
-	fn collapse_fn(&mut self, span_end: usize, invalidate: bool) {
-		let (group, group_start, _) = self.groups.pop_back().unwrap();
+	/// `end_span` is the span which marks the end of this function call group. It may be the span of the `)` token,
+	/// or it may be a zero-width span if this group was collapsed without a matching closing delimiter.
+	fn collapse_fn(&mut self, end_span: Span) {
+		let group = self.groups.pop_back().unwrap();
 
-		if let Group::Fn(count) = group {
+		if let Group::FnCall(count, l_paren) = group {
 			while self.operators.back().is_some() {
 				let op = self.operators.pop_back().unwrap();
 
 				#[cfg(debug_assertions)]
 				{
 					match op.ty {
-						OpTy::ParenStart => log!("Mismatch between operator stack (Op::BracketStart) and group stack (Group::Fn)!"),
+						OpTy::ParenStart => log!("Mismatch between operator stack (Op::ParenStart) and group stack (Group::Fn)!"),
 						OpTy::IndexStart => log!("Mismatch between operator stack (Op::IndexStart) and group stack (Group::Fn)!"),
 						OpTy::InitStart => log!("Mismatch between operator stack (Op::InitStart) and group stack (Group::Fn)!"),
 						OpTy::ArrInitStart => log!("Mismatch between operator stack (Op::ArrInitStart) and group stack (Group::Fn)!"),
@@ -465,12 +485,12 @@ impl ShuntingYard {
 					}
 				}
 
-				if op.ty == OpTy::FnStart {
+				if op.ty == OpTy::FnCallStart {
 					// The first expression will always be the `Expr::Ident` containing the function identifier,
 					// hence the `count + 1`.
 					self.stack.push_back(Either::Right(Op {
-						ty: OpTy::FnCall(count + 1),
-						span: span(group_start, span_end),
+						span: Span::new(l_paren.start, end_span.end),
+						ty: OpTy::FnCall(count + 1, l_paren, end_span),
 					}));
 					break;
 				} else {
@@ -478,10 +498,6 @@ impl ShuntingYard {
 					// delimiter.
 					self.stack.push_back(Either::Right(op));
 				}
-			}
-
-			if invalidate {
-				self.invalidate_range(group_start, span_end, None);
 			}
 		} else {
 			unreachable!()
@@ -493,19 +509,18 @@ impl ShuntingYard {
 	///
 	/// `end_span` is the span which marks the end of this index group. It may be a span of the `]` token, or it
 	/// may be a zero-width span if this group was collapsed without a matching closing delimiter.
-	fn collapse_index(&mut self, end_span: Span, invalidate: bool) {
-		let (group, group_start, _) = self.groups.pop_back().unwrap();
+	fn collapse_index(&mut self, end_span: Span) {
+		let group = self.groups.pop_back().unwrap();
 
-		if let Group::Index(contains_i, _) = group {
-			let mut opening = Span::empty();
+		if let Group::Index(contains_i, l_bracket) = group {
 			while self.operators.back().is_some() {
 				let op = self.operators.pop_back().unwrap();
 
 				#[cfg(debug_assertions)]
 				{
 					match op .ty{
-						OpTy::ParenStart => log!("Mismatch between operator stack (Op::BracketStart) and group stack (Group::Index)!"),
-						OpTy::FnStart => log!("Mismatch between operator stack (Op::FnStart) and group stack (Group::Index)!"),
+						OpTy::ParenStart => log!("Mismatch between operator stack (Op::ParenStart) and group stack (Group::Index)!"),
+						OpTy::FnCallStart => log!("Mismatch between operator stack (Op::FnCallStart) and group stack (Group::Index)!"),
 						OpTy::InitStart => log!("Mismatch between operator stack (Op::InitStart) and group stack (Group::Index)!"),
 						OpTy::ArrInitStart => log!("Mismatch between operator stack (Op::ArrInitStart) and group stack (Group::Index)!"),
 						_ => {}
@@ -513,10 +528,9 @@ impl ShuntingYard {
 				}
 
 				if op.ty == OpTy::IndexStart {
-					opening = op.span;
 					self.stack.push_back(Either::Right(Op {
-						span: Span::new(group_start, end_span.end),
-						ty: OpTy::Index(contains_i, op.span, end_span),
+						span: Span::new(l_bracket.start, end_span.end),
+						ty: OpTy::Index(contains_i, l_bracket, end_span),
 					}));
 					break;
 				} else {
@@ -524,14 +538,6 @@ impl ShuntingYard {
 					// delimiter.
 					self.stack.push_back(Either::Right(op));
 				}
-			}
-
-			if invalidate {
-				self.invalidate_range(
-					group_start,
-					end_span.end,
-					Some((opening, end_span)),
-				);
 			}
 		} else {
 			unreachable!()
@@ -540,19 +546,22 @@ impl ShuntingYard {
 
 	/// # Invariants
 	/// Assumes that `self.group.back()` is of type [`Group::Init`].
-	fn collapse_init(&mut self, span_end: usize, invalidate: bool) {
-		let (group, group_start, _) = self.groups.pop_back().unwrap();
+	///
+	/// `end_span` is the span which marks the end of this initializer list group. It may be a span of the `}`
+	/// token, or it may be a zero-width span if this group was collapsed without a matching closing delimiter.
+	fn collapse_init(&mut self, end_span: Span) {
+		let group = self.groups.pop_back().unwrap();
 
-		if let Group::Init(count) = group {
+		if let Group::Init(count, l_brace) = group {
 			while self.operators.back().is_some() {
 				let op = self.operators.pop_back().unwrap();
 
 				#[cfg(debug_assertions)]
 				{
 					match op.ty {
-						OpTy::ParenStart => log!("Mismatch between operator stack (Op::BracketStart) and group stack (Group::Init)!"),
+						OpTy::ParenStart => log!("Mismatch between operator stack (Op::ParenStart) and group stack (Group::Init)!"),
 						OpTy::IndexStart => log!("Mismatch between operator stack (Op::IndexStart) and group stack (Group::Init)!"),
-						OpTy::FnStart => log!("Mismatch between operator stack (Op::FnStart) and group stack (Group::Init)!"),
+						OpTy::FnCallStart => log!("Mismatch between operator stack (Op::FnCallStart) and group stack (Group::Init)!"),
 						OpTy::ArrInitStart => log!("Mismatch between operator stack (Op::ArrInitStart) and group stack (Group::Init)!"),
 						_ => {}
 					}
@@ -560,8 +569,8 @@ impl ShuntingYard {
 
 				if op.ty == OpTy::InitStart {
 					self.stack.push_back(Either::Right(Op {
-						ty: OpTy::Init(count),
-						span: span(group_start, span_end),
+						span: Span::new(l_brace.start, end_span.end),
+						ty: OpTy::Init(count, l_brace, end_span),
 					}));
 					break;
 				} else {
@@ -570,10 +579,6 @@ impl ShuntingYard {
 					self.stack.push_back(Either::Right(op));
 				}
 			}
-
-			if invalidate {
-				self.invalidate_range(group_start, span_end, None);
-			}
 		} else {
 			unreachable!()
 		}
@@ -581,19 +586,22 @@ impl ShuntingYard {
 
 	/// # Invariants
 	/// Assumes that `self.group.back()` is of type [`Group::ArrInit`].
-	fn collapse_arr_init(&mut self, span_end: usize, invalidate: bool) {
-		let (group, group_start, _) = self.groups.pop_back().unwrap();
+	///
+	/// `end_span` is the span which marks the end of this array constructor group. It may be a span of the `)`
+	/// token, or it may be a zero-width span if this group was collapsed without a matching closing delimiter.
+	fn collapse_arr_init(&mut self, end_span: Span) {
+		let group = self.groups.pop_back().unwrap();
 
-		if let Group::ArrInit(count) = group {
+		if let Group::ArrInit(count, l_paren) = group {
 			while self.operators.back().is_some() {
 				let op = self.operators.pop_back().unwrap();
 
 				#[cfg(debug_assertions)]
 				{
 					match op.ty {
-						OpTy::ParenStart => log!("Mismatch between operator stack (Op::BracketStart) and group stack (Group::ArrInit)!"),
+						OpTy::ParenStart => log!("Mismatch between operator stack (Op::ParenStart) and group stack (Group::ArrInit)!"),
 						OpTy::IndexStart => log!("Mismatch between operator stack (Op::IndexStart) and group stack (Group::ArrInit)!"),
-						OpTy::FnStart => log!("Mismatch between operator stack (Op::FnStart) and group stack (Group::ArrInit)!"),
+						OpTy::FnCallStart => log!("Mismatch between operator stack (Op::FnCallStart) and group stack (Group::ArrInit)!"),
 						OpTy::InitStart => log!("Mismatch between operator stack (Op::InitStart) and group stack (Group::ArrInit)!"),
 						_ => {}
 					}
@@ -603,8 +611,8 @@ impl ShuntingYard {
 					// The first expression will always be the `Expr::Index` containing the identifier/item and the
 					// array index, hence the `count + 1`.
 					self.stack.push_back(Either::Right(Op {
-						ty: OpTy::ArrInit(count + 1),
-						span: span(group_start, span_end),
+						span: Span::new(l_paren.start, end_span.end),
+						ty: OpTy::ArrInit(count + 1, l_paren, end_span),
 					}));
 					break;
 				} else {
@@ -613,10 +621,6 @@ impl ShuntingYard {
 					self.stack.push_back(Either::Right(op));
 				}
 			}
-
-			if invalidate {
-				self.invalidate_range(group_start, span_end, None);
-			}
 		} else {
 			unreachable!()
 		}
@@ -624,18 +628,17 @@ impl ShuntingYard {
 
 	/// # Invariants
 	/// Assumes that `self.group.back()` is of type [`Group::List`].
-	fn collapse_list(&mut self, span_end: usize, invalidate: bool) {
-		let (group, group_start, _) = self.groups.pop_back().unwrap();
+	fn collapse_list(&mut self, span_end: usize) {
+		let group = self.groups.pop_back().unwrap();
 
-		if let Group::List(count) = group {
-			let mut start_span = self.start_position;
+		if let Group::List(count, start_pos) = group {
 			while self.operators.back().is_some() {
 				let op = self.operators.back().unwrap();
 
 				#[cfg(debug_assertions)]
 				{
 					match op.ty {
-						OpTy::FnStart => log!("Mismatch between operator stack (Op::FnStart) and group stack (Group::List)!"),
+						OpTy::FnCallStart => log!("Mismatch between operator stack (Op::FnCallStart) and group stack (Group::List)!"),
 						OpTy::InitStart => log!("Mismatch between operator stack (Op::InitStart) and group stack (Group::List)!"),
 						OpTy::ArrInitStart => log!("Mismatch between operator stack (Op::ArrInitStart) and group stack (Group::List)!"),
 						_ => {}
@@ -644,10 +647,13 @@ impl ShuntingYard {
 
 				// Lists don't have a starting delimiter, so we consume until we encounter another group-start
 				// delimiter (and if there are none, we just end up consuming the rest of the operator stack).
-				// Since lists cannnot exist within a `Group::Fn|Init|ArrInit`, we don't check for those start
+				// Since lists cannnot exist within a `Group::FnCall|Init|ArrInit`, we don't check for those start
 				// delimiters.
 				if op.ty == OpTy::ParenStart || op.ty == OpTy::IndexStart {
-					start_span = op.span.end;
+					self.stack.push_back(Either::Right(Op {
+						span: Span::new(start_pos, span_end),
+						ty: OpTy::List(count),
+					}));
 					break;
 				} else {
 					// Any other operators get moved, since we are moving everything until we hit the start
@@ -656,83 +662,15 @@ impl ShuntingYard {
 					self.stack.push_back(Either::Right(moved));
 				}
 			}
-
-			self.stack.push_back(Either::Right(Op {
-				ty: OpTy::List(count),
-				span: span(start_span, span_end),
-			}));
-
-			if invalidate {
-				self.invalidate_range(group_start, span_end, None);
-			}
 		} else {
 			unreachable!()
-		}
-	}
-
-	/// Invalidates the stack between the given start and end positions.
-	///
-	/// `invalidating_index` should be `true` if the item, encompassing the range, being invalidated is
-	/// `Group::Index`.
-	fn invalidate_range(
-		&mut self,
-		start_pos: usize,
-		end_pos: usize,
-		invalidating_index: Option<(Span, Span)>,
-	) {
-		while self.stack.back().is_some() {
-			let span = match self.stack.back().unwrap() {
-				Either::Left(e) => &e.span,
-				Either::Right(op) => &op.span,
-			};
-
-			if span.starts_at_or_after(start_pos) {
-				self.stack.pop_back();
-			} else {
-				break;
-			}
-		}
-
-		self.stack.push_back(Either::Left(Expr {
-			ty: ExprTy::Incomplete,
-			span: span(start_pos, end_pos),
-		}));
-
-		// Index groups are a bit different than other groups, so we must treat them differently; hence the extra
-		// bool parameter in this function.
-		//
-		// With all other groups, the start span includes all of the relevant expression nodes like so:
-		//
-		//  func( 1, 2
-		// ^     ^
-		//
-		// However, the index start span only starts at the beginning of the `[` bracket. This is because the
-		// expression before the index can be arbitrary like so, (this is because unlike the other groups, the
-		// index group is a postfix operator):
-		//
-		//  obj.fun() [ 0 ]
-		//           ^ ^     : current span
-		// ^           ^     : ideal span, pretty much impossible to keep track of
-		//
-		// If we just placed an `Expr::Incomplete` in such a case, we'd get a stack which looks something like:
-		//  <SOME_EXPR> <INCOMPLETE>
-		// which in turn would not result in a singular `Expr` node once collapsed down.
-		//
-		// Hence, what we must do is something like this instead:
-		//  <SOME_EXPR> <INCOMPLETE> <INDEX>
-		// which will collapse into a singular `Expr` node.
-		if let Some((opening, closing)) = invalidating_index {
-			self.stack.push_back(Either::Right(Op {
-				ty: OpTy::Index(true, opening, closing),
-				span: span(start_pos, end_pos),
-			}));
 		}
 	}
 
 	/// Registers the end of a bracket, function call or array constructor group, popping any operators until the
 	/// start of the group is reached.
 	fn end_bracket_fn(&mut self, end_span: Span) -> Result<(), SyntaxErr> {
-		let (current_group, _, _) = match self.groups.back() {
+		let current_group = match self.groups.back() {
 			Some(t) => t,
 			None => {
 				// Since we have no groups, that means we have a lonely `)`. This means we want to stop parsing
@@ -745,7 +683,8 @@ impl ShuntingYard {
 		};
 
 		match current_group {
-			Group::Paren(_) | Group::Fn(_) | Group::ArrInit(_) => {}
+			Group::Paren(_, _) | Group::FnCall(_, _) | Group::ArrInit(_, _) => {
+			}
 			_ => {
 				// The current group is not a bracket/function/array constructor group, so we need to check whether
 				// there is one at all.
@@ -755,34 +694,29 @@ impl ShuntingYard {
 					// constructor group.
 					'inner: loop {
 						let current_group = match self.groups.back() {
-							Some((g, _, _)) => g,
+							Some(g) => g,
 							// PERF: Since we've already checked that there is a `Group::Index`, we know this will
 							// never return `None` before we break out of the loop.
 							None => break 'inner,
 						};
 
 						match current_group {
-							Group::Init(_) => {
+							Group::Init(_, _) => {
 								log!("Unclosed `}}` initializer list found!");
-								self.collapse_init(
+								self.collapse_init(span(
 									end_span.end_at_previous().end,
-									true,
-								);
+									end_span.end_at_previous().end,
+								));
 							}
 							Group::Index(_, _) => {
 								log!("Unclosed `]` index operator found!");
-								self.collapse_index(
-									end_span.start_zero_width(),
-									true,
-								)
+								self.collapse_index(end_span.start_zero_width())
 							}
-							Group::List(_) => self.collapse_list(
-								end_span.end_at_previous().end,
-								false,
-							),
-							Group::Paren(_)
-							| Group::Fn(_)
-							| Group::ArrInit(_) => break 'inner,
+							Group::List(_, _) => self
+								.collapse_list(end_span.end_at_previous().end),
+							Group::Paren(_, _)
+							| Group::FnCall(_, _)
+							| Group::ArrInit(_, _) => break 'inner,
 						}
 					}
 				} else {
@@ -796,10 +730,10 @@ impl ShuntingYard {
 			}
 		}
 
-		match self.groups.back().unwrap().0 {
-			Group::Paren(_) => self.collapse_bracket(end_span, false),
-			Group::Fn(_) => self.collapse_fn(end_span.end, false),
-			Group::ArrInit(_) => self.collapse_arr_init(end_span.end, false),
+		match self.groups.back().unwrap() {
+			Group::Paren(_, _) => self.collapse_bracket(end_span),
+			Group::FnCall(_, _) => self.collapse_fn(end_span),
+			Group::ArrInit(_, _) => self.collapse_arr_init(end_span),
 			// Either the inner-most group is already a parenthesis-delimited group, or we've closed all inner
 			// groups and are now at a parenthesis-delimited group, hence this branch will never occur.
 			_ => unreachable!(),
@@ -815,7 +749,7 @@ impl ShuntingYard {
 		&mut self,
 		end_span: Span,
 	) -> Result<Option<usize>, SyntaxErr> {
-		let (current_group, _, _) = match self.groups.back() {
+		let current_group = match self.groups.back() {
 			Some(t) => t,
 			None => {
 				// Since we have no groups, that means we have a lonely `]`. This means we want to stop parsing
@@ -828,7 +762,7 @@ impl ShuntingYard {
 		};
 
 		if std::mem::discriminant(current_group)
-			!= std::mem::discriminant(&Group::Index(false, None))
+			!= std::mem::discriminant(&Group::Index(false, Span::empty()))
 		{
 			// The current group is not an index group, so we need to check whether there is one at all.
 
@@ -836,48 +770,44 @@ impl ShuntingYard {
 				// We have at least one other group to close before we can close the index group.
 				'inner: loop {
 					let current_group = match self.groups.back() {
-						Some((g, _, _)) => g,
+						Some(g) => g,
 						// PERF: Since we've already checked that there is a `Group::Index`, we know this will
 						// never return `None` before we break out of the loop.
 						None => break 'inner,
 					};
 
 					match current_group {
-						Group::Paren(_) => {
+						Group::Paren(_, _) => {
 							log!("Unclosed `)` parenthesis found!");
-							self.collapse_bracket(
-								span(
-									end_span.end_at_previous().end,
-									end_span.end_at_previous().end,
-								),
-								true,
-							);
+							self.collapse_bracket(span(
+								end_span.end_at_previous().end,
+								end_span.end_at_previous().end,
+							));
 						}
-						Group::Fn(_) => {
+						Group::FnCall(_, _) => {
 							log!("Unclosed `)` function call found!");
-							self.collapse_fn(
+							self.collapse_fn(span(
 								end_span.end_at_previous().end,
-								true,
-							);
+								end_span.end_at_previous().end,
+							));
 						}
-						Group::Init(_) => {
+						Group::Init(_, _) => {
 							log!("Unclosed `}}` initializer list found!");
-							self.collapse_init(
+							self.collapse_init(span(
 								end_span.end_at_previous().end,
-								true,
-							);
+								end_span.end_at_previous().end,
+							));
 						}
-						Group::ArrInit(_) => {
+						Group::ArrInit(_, _) => {
 							log!("Unclosed `)` array constructor found!");
-							self.collapse_arr_init(
+							self.collapse_arr_init(span(
 								end_span.end_at_previous().end,
-								true,
-							);
+								end_span.end_at_previous().end,
+							));
 						}
-						Group::List(_) => self.collapse_list(
-							end_span.end_at_previous().end,
-							false,
-						),
+						Group::List(_, _) => {
+							self.collapse_list(end_span.end_at_previous().end)
+						}
 						Group::Index(_, _) => break 'inner,
 					}
 				}
@@ -895,19 +825,19 @@ impl ShuntingYard {
 		//
 		//   ident[...]
 		//  ^
-		let can_start_arr_init = match self.groups.back().unwrap().0 {
+		let can_start_arr_init = match self.groups.back().unwrap() {
 			Group::Index(_, possible_start) => possible_start,
 			_ => unreachable!(),
 		};
 
-		self.collapse_index(end_span, false);
-		Ok(can_start_arr_init)
+		self.collapse_index(end_span);
+		Ok(Some(0))
 	}
 
 	/// Registers the end of an initializer list group, popping any operators until the start of the group is
 	/// reached.
 	fn end_init(&mut self, end_span: Span) -> Result<(), SyntaxErr> {
-		let (current_group, _, _) =
+		let current_group =
 			match self.groups.back() {
 				Some(t) => t,
 				None => {
@@ -921,7 +851,7 @@ impl ShuntingYard {
 			};
 
 		if std::mem::discriminant(current_group)
-			!= std::mem::discriminant(&Group::Init(0))
+			!= std::mem::discriminant(&Group::Init(0, Span::empty()))
 		{
 			// The current group is not an initializer group, so we need to check whether there is one at all.
 
@@ -929,47 +859,41 @@ impl ShuntingYard {
 				// We have at least one other group to close before we can close the initializer group.
 				'inner: loop {
 					let current_group = match self.groups.back() {
-						Some((g, _, _)) => g,
+						Some(g) => g,
 						// PERF: Since we've already checked that there is a `Group::Index`, we know this will
 						// never return `None` before we break out of the loop.
 						None => break 'inner,
 					};
 
 					match current_group {
-						Group::Paren(_) => {
+						Group::Paren(_, _) => {
 							log!("Unclosed `)` parenthesis found!");
-							self.collapse_bracket(
-								span(
-									end_span.end_at_previous().end,
-									end_span.end_at_previous().end,
-								),
-								true,
-							);
+							self.collapse_bracket(span(
+								end_span.end_at_previous().end,
+								end_span.end_at_previous().end,
+							));
 						}
 						Group::Index(_, _) => {
 							log!("Unclosed `]` index operator found!");
-							self.collapse_index(
-								end_span.start_zero_width(),
-								true,
-							);
+							self.collapse_index(end_span.start_zero_width());
 						}
-						Group::Fn(_) => {
+						Group::FnCall(_, _) => {
 							log!("Unclosed `)` function call found!");
-							self.collapse_fn(
+							self.collapse_fn(span(
 								end_span.end_at_previous().end,
-								true,
-							);
+								end_span.end_at_previous().end,
+							));
 						}
-						Group::ArrInit(_) => {
+						Group::ArrInit(_, _) => {
 							log!("Unclosed `)` array constructor found!");
-							self.collapse_arr_init(
+							self.collapse_arr_init(span(
 								end_span.end_at_previous().end,
-								true,
-							);
+								end_span.end_at_previous().end,
+							));
 						}
 						// See `List` documentation.
-						Group::List(_) => unreachable!(),
-						Group::Init(_) => break 'inner,
+						Group::List(_, _) => unreachable!(),
+						Group::Init(_, _) => break 'inner,
 					}
 				}
 			} else {
@@ -984,23 +908,23 @@ impl ShuntingYard {
 			}
 		}
 
-		self.collapse_init(end_span.end, false);
+		self.collapse_init(end_span);
 		Ok(())
 	}
 
 	/// Registers the end of a sub-expression, popping any operators until the start of the group (or expression)
 	/// is reached.
 	fn end_comma(&mut self) {
-		if let Some((current_group, _, current_group_delim_end)) =
-			self.groups.back_mut()
-		{
-			match current_group {
-				Group::Fn(_) | Group::Init(_) | Group::ArrInit(_) => {
+		if let Some(group) = self.groups.back_mut() {
+			match group {
+				Group::FnCall(_, _)
+				| Group::Init(_, _)
+				| Group::ArrInit(_, _) => {
 					// We want to move all existing operators up to the function call, initializer list, or array
 					// constructor start delimiter to the stack, to clear it for the next expression.
 					while self.operators.back().is_some() {
 						let back = self.operators.back().unwrap();
-						if back.ty == OpTy::FnStart
+						if back.ty == OpTy::FnCallStart
 							|| back.ty == OpTy::InitStart
 							|| back.ty == OpTy::ArrInitStart
 						{
@@ -1011,7 +935,7 @@ impl ShuntingYard {
 						self.stack.push_back(Either::Right(moved));
 					}
 				}
-				Group::List(_) => {
+				Group::List(_, _) => {
 					// We want to move all existing operators up to the bracket or index start delimiter, or to the
 					// beginning of the expression. We don't push a new list group since we are already within a
 					// list group, and it accepts a variable amount of arguments.
@@ -1027,23 +951,24 @@ impl ShuntingYard {
 						self.stack.push_back(Either::Right(moved));
 					}
 				}
-				Group::Paren(_) | Group::Index(_, _) => {
+				Group::Paren(_, _) | Group::Index(_, _) => {
 					// Same as the branch above, but we do push a new list group. Since list groups don't have a
 					// start delimiter, we can only do it now that we've encountered a comma within these two
 					// groups.
+					let mut list_start_pos = self.start_position;
 					while self.operators.back().is_some() {
 						let back = self.operators.back().unwrap();
 						if back.ty == OpTy::ParenStart
 							|| back.ty == OpTy::IndexStart
 						{
+							list_start_pos = back.span.end;
 							break;
 						}
 
 						let moved = self.operators.pop_back().unwrap();
 						self.stack.push_back(Either::Right(moved));
 					}
-					let start = *current_group_delim_end;
-					self.groups.push_back((Group::List(1), start, start));
+					self.groups.push_back(Group::List(1, list_start_pos));
 				}
 			}
 		} else {
@@ -1054,26 +979,22 @@ impl ShuntingYard {
 				let moved = self.operators.pop_back().unwrap();
 				self.stack.push_back(Either::Right(moved));
 			}
-			self.groups.push_back((
-				Group::List(1),
-				self.start_position,
-				self.start_position,
-			));
+			self.groups.push_back(Group::List(1, self.start_position))
 		}
 	}
 
 	/// Increases the arity of the current function.
 	fn increase_arity(&mut self) {
-		if let Some((current_group, _, _)) = self.groups.back_mut() {
+		if let Some(current_group) = self.groups.back_mut() {
 			match current_group {
-				Group::Paren(has_inner) => {
+				Group::Paren(has_inner, _) => {
 					debug_assert!(!*has_inner, "[ShuntingYard::increase_arity] Increasing the arity on a `Group::Paren` which is already at `1`.");
 					*has_inner = true;
 				}
-				Group::Fn(count)
-				| Group::Init(count)
-				| Group::ArrInit(count)
-				| Group::List(count) => {
+				Group::FnCall(count, _)
+				| Group::Init(count, _)
+				| Group::ArrInit(count, _)
+				| Group::List(count, _) => {
 					*count += 1;
 				}
 				_ => {}
@@ -1129,9 +1050,9 @@ impl ShuntingYard {
 
 	/// Returns whether we have just started to parse a function, i.e. `..fn(<HERE>`
 	fn just_started_fn(&self) -> bool {
-		if let Some((current_group, _, _)) = self.groups.back() {
+		if let Some(current_group) = self.groups.back() {
 			match current_group {
-				Group::Fn(count) => *count == 0,
+				Group::FnCall(count, _) => *count == 0,
 				_ => false,
 			}
 		} else {
@@ -1141,9 +1062,9 @@ impl ShuntingYard {
 
 	/// Returns whether we have just started to parse an initializer list, i.e. `..{<HERE>`
 	fn just_started_init(&self) -> bool {
-		if let Some((current_group, _, _)) = self.groups.back() {
+		if let Some(current_group) = self.groups.back() {
 			match current_group {
-				Group::Init(count) => *count == 0,
+				Group::Init(count, _) => *count == 0,
 				_ => false,
 			}
 		} else {
@@ -1153,9 +1074,9 @@ impl ShuntingYard {
 
 	/// Returns whether we are currently in an initializer list parsing group, i.e. `{..<HERE>`
 	fn is_in_init(&self) -> bool {
-		if let Some((current_group, _, _)) = self.groups.back() {
+		if let Some(current_group) = self.groups.back() {
 			match current_group {
-				Group::Init(_) => true,
+				Group::Init(_, _) => true,
 				_ => false,
 			}
 		} else {
@@ -1165,11 +1086,11 @@ impl ShuntingYard {
 
 	/// Returns whether an open parenthesis, function call or array constructor group exists.
 	fn exists_paren_fn_group(&self) -> bool {
-		for (group, _, _) in self.groups.iter() {
+		for group in self.groups.iter() {
 			match group {
-				Group::Paren(_) | Group::Fn(_) | Group::ArrInit(_) => {
-					return true
-				}
+				Group::Paren(_, _)
+				| Group::FnCall(_, _)
+				| Group::ArrInit(_, _) => return true,
 				_ => {}
 			}
 		}
@@ -1178,7 +1099,7 @@ impl ShuntingYard {
 
 	/// Returns whether an open index operator group exists.
 	fn exists_index_group(&self) -> bool {
-		for (group, _, _) in self.groups.iter() {
+		for group in self.groups.iter() {
 			if let Group::Index(_, _) = group {
 				return true;
 			}
@@ -1188,8 +1109,8 @@ impl ShuntingYard {
 
 	/// Returns whether an open initializer list group exists.
 	fn exists_init_group(&self) -> bool {
-		for (group, _, _) in self.groups.iter() {
-			if let Group::Init(_) = group {
+		for group in self.groups.iter() {
+			if let Group::Init(_, _) = group {
 				return true;
 			}
 		}
@@ -1464,11 +1385,7 @@ impl ShuntingYard {
 						span: *span,
 						ty: OpTy::ParenStart,
 					});
-					self.groups.push_back((
-						Group::Paren(false),
-						span.start,
-						span.end,
-					));
+					self.groups.push_back(Group::Paren(false, *span));
 
 					can_start = Start::None;
 
@@ -1479,13 +1396,9 @@ impl ShuntingYard {
 						// We have `ident(` which makes this a function call.
 						self.operators.push_back(Op {
 							span: *span,
-							ty: OpTy::FnStart,
+							ty: OpTy::FnCallStart,
 						});
-						self.groups.push_back((
-							Group::Fn(0),
-							possible_delim_start,
-							span.end,
-						));
+						self.groups.push_back(Group::FnCall(0, *span));
 
 						// We switch state since after a `(` we are expecting an operand, i.e.
 						// `fn( 1..` rather than`fn( +..`.1
@@ -1502,11 +1415,7 @@ impl ShuntingYard {
 							span: *span,
 							ty: OpTy::ArrInitStart,
 						});
-						self.groups.push_back((
-							Group::ArrInit(0),
-							possible_delim_start,
-							span.end,
-						));
+						self.groups.push_back(Group::ArrInit(0, *span));
 
 						// We switch state since after a `(` we are expecting an operand, i.e.
 						// `int[]( 1,..` rather than`int[]( +1,..`.
@@ -1616,19 +1525,11 @@ impl ShuntingYard {
 					if can_start == Start::FnOrArr {
 						// Since we just had an `Expr::Ident` before, this `Index` may be part of a greater array
 						// constructor, so we want to store the starting position in case it is needed later.
-						self.groups.push_back((
-							Group::Index(true, Some(possible_delim_start)),
-							span.start,
-							span.end,
-						));
+						self.groups.push_back(Group::Index(true, *span));
 					} else {
 						// We had something other than an `Expr::Ident` beforehand, so don't bother storing the
 						// position.
-						self.groups.push_back((
-							Group::Index(true, None),
-							span.start,
-							span.end,
-						));
+						self.groups.push_back(Group::Index(true, *span));
 					}
 					state = State::Operand;
 
@@ -1679,7 +1580,7 @@ impl ShuntingYard {
 						// `..[] + 5` rather than `..[] 5`.
 
 						match self.groups.back_mut() {
-							Some((g, _, _)) => match g {
+							Some(g) => match g {
 								Group::Index(contains_i, _) => {
 									*contains_i = false
 								}
@@ -1755,11 +1656,7 @@ impl ShuntingYard {
 						span: *span,
 						ty: OpTy::InitStart,
 					});
-					self.groups.push_back((
-						Group::Init(0),
-						span.start,
-						span.end,
-					));
+					self.groups.push_back(Group::Init(0, *span));
 
 					increase_arity = true;
 
@@ -1928,23 +1825,13 @@ impl ShuntingYard {
 
 		if !self.groups.is_empty() {
 			// The end position of this expression will be the end position of the last parsed item.
-			let end_position = self.get_previous_span().unwrap();
+			let group_end = self.get_previous_span().unwrap().end_zero_width();
 
 			// Close any open groups.
-			while self.groups.back().is_some() {
-				let (group, _, group_delim_end) = self.groups.back().unwrap();
+			while let Some(group) = self.groups.pop_back() {
 				log!("Found an unclosed: {group:?}");
 
-				// Construct a span of the last character in the group start delimiter, e.g. the `[`, or the `(` in
-				// `fn(`, or the `(` in `int[](`. Note that in the case of a top-level list which starts at the
-				// beginning, we don't want to underflow.
-				let group_start = Span::new(
-					group_delim_end.saturating_sub(1),
-					*group_delim_end,
-				);
-				// The span for the ending of the group is zero-width since there is no end delimiter character.
-				let group_end = Span::new_zero_width(end_position.end);
-
+				// TODO: No invalidation anymore, still syntax errors though.
 				// Reasoning about what gets invalidated and what doesn't: will it potentially produce semantic errors
 				//
 				// Brackets - no matter where the closing parenthesis is located, it won't change whether the
@@ -1956,42 +1843,37 @@ impl ShuntingYard {
 				// ArrInit - same as above.
 				// List - a perfectly valid top-level grouping structure.
 				match group {
-					Group::Paren(_) => {
+					Group::Paren(_, l_paren) => {
 						self.errors.push(SyntaxErr::UnclosedParenthesis(
-							group_start,
-							group_end,
+							l_paren, group_end,
 						));
-						self.collapse_bracket(group_end, false);
+						self.collapse_bracket(group_end);
 					}
-					Group::Index(_, _) => {
+					Group::Index(_, l_bracket) => {
 						self.errors.push(SyntaxErr::UnclosedIndexOperator(
-							group_start,
-							group_end,
+							l_bracket, group_end,
 						));
-						self.collapse_index(group_end, true)
+						self.collapse_index(group_end)
 					}
-					Group::Fn(_) => {
+					Group::FnCall(_, l_paren) => {
 						self.errors.push(SyntaxErr::UnclosedFunctionCall(
-							group_start,
-							group_end,
+							l_paren, group_end,
 						));
-						self.collapse_fn(group_end.end, true)
+						self.collapse_fn(group_end)
 					}
-					Group::Init(_) => {
+					Group::Init(_, l_brace) => {
 						self.errors.push(SyntaxErr::UnclosedInitializerList(
-							group_start,
-							group_end,
+							l_brace, group_end,
 						));
-						self.collapse_init(group_end.end, true)
+						self.collapse_init(group_end)
 					}
-					Group::ArrInit(_) => {
+					Group::ArrInit(_, l_paren) => {
 						self.errors.push(SyntaxErr::UnclosedArrayConstructor(
-							group_start,
-							group_end,
+							l_paren, group_end,
 						));
-						self.collapse_arr_init(group_end.end, true)
+						self.collapse_arr_init(group_end)
 					}
-					Group::List(_) => self.collapse_list(group_end.end, false),
+					Group::List(_, _) => self.collapse_list(group_end.end),
 				}
 			}
 		}
@@ -2144,8 +2026,7 @@ impl ShuntingYard {
 							},
 						});
 					}
-					OpTy::Paren(has_inner, l_span, r_span) => {
-						// Note: the span for `Op::Paren` is from the start of the `(` to the end of the `)`.
+					OpTy::Paren(has_inner, l_span, end) => {
 						let expr =
 							if has_inner { stack.pop_back() } else { None };
 						stack.push_back(Expr {
@@ -2153,52 +2034,15 @@ impl ShuntingYard {
 							ty: ExprTy::Paren {
 								expr: expr.map(|e| Box::from(e)),
 								l_paren: l_span,
-								r_paren: if r_span.is_zero_width() {
+								r_paren: if end.is_zero_width() {
 									None
 								} else {
-									Some(r_span)
+									Some(end)
 								},
 							},
 						});
 					}
-					OpTy::Index(contains_i, l_span, r_span) => {
-						// Note: the span for `Op::Index` is from the start of the `[` to the end of the `]`.
-						let i = if contains_i {
-							Some(Box::from(stack.pop_back().unwrap()))
-						} else {
-							None
-						};
-						let expr = stack.pop_back().unwrap();
-						let span = span(expr.span.start, op.span.end);
-						stack.push_back(Expr {
-							ty: ExprTy::Index {
-								item: Box::from(expr),
-								l_bracket: l_span,
-								i,
-								r_bracket: if r_span.is_zero_width() {
-									None
-								} else {
-									Some(r_span)
-								},
-							},
-							span,
-						});
-					}
-					OpTy::ObjAccess => {
-						let access = stack.pop_back().unwrap();
-						let obj = stack.pop_back().unwrap();
-						let span = span(obj.span.start, access.span.end);
-						stack.push_back(Expr {
-							ty: ExprTy::ObjAccess {
-								obj: Box::from(obj),
-								leaf: Box::from(access),
-							},
-							span,
-						});
-					}
-					OpTy::FnCall(count) => {
-						// Note: the span for `Op::FnCall` is from the start of the identifier `fn(` to the end of
-						// the `)`.
+					OpTy::FnCall(count, l_paren, end) => {
 						let mut args = VecDeque::new();
 						for _ in 0..count {
 							args.push_front(stack.pop_back().unwrap());
@@ -2209,14 +2053,41 @@ impl ShuntingYard {
 							_ => panic!("The first expression of a function call operator is not an identifier!")
 						};
 						stack.push_back(Expr {
+							span: Span::new(ident.span.start, end.end),
 							ty: ExprTy::Fn {
 								ident,
+								l_paren,
 								args: args.into(),
+								r_paren: if end.is_zero_width() {
+									None
+								} else {
+									Some(end)
+								},
 							},
-							span: op.span,
 						});
 					}
-					OpTy::Init(count) => {
+					OpTy::Index(contains_i, l_bracket, end) => {
+						let i = if contains_i {
+							stack.pop_back().map(|e| Box::from(e))
+						} else {
+							None
+						};
+						let expr = stack.pop_back().unwrap();
+						stack.push_back(Expr {
+							span: Span::new(expr.span.start, end.end),
+							ty: ExprTy::Index {
+								item: Box::from(expr),
+								l_bracket,
+								i,
+								r_bracket: if end.is_zero_width() {
+									None
+								} else {
+									Some(end)
+								},
+							},
+						});
+					}
+					OpTy::Init(count, l_brace, r_brace) => {
 						// Note: the span for `Op::Init` is from the start of the `{` to the end of the `}`.
 						let mut args = Vec::new();
 						for _ in 0..count {
@@ -2224,11 +2095,19 @@ impl ShuntingYard {
 						}
 						args.reverse();
 						stack.push_back(Expr {
-							ty: ExprTy::Init(args),
+							ty: ExprTy::Init {
+								l_brace,
+								args,
+								r_brace: if r_brace.is_zero_width() {
+									None
+								} else {
+									Some(r_brace)
+								},
+							},
 							span: op.span,
 						});
 					}
-					OpTy::ArrInit(count) => {
+					OpTy::ArrInit(count, l_paren, end) => {
 						let mut args = VecDeque::new();
 						for _ in 0..count {
 							args.push_front(stack.pop_back().unwrap());
@@ -2242,11 +2121,17 @@ impl ShuntingYard {
 							}
 						}
 						stack.push_back(Expr {
+							span: Span::new(arr.span.start, end.end),
 							ty: ExprTy::ArrInit {
 								arr: Box::from(arr),
+								l_paren,
 								args: args.into(),
+								r_paren: if end.is_zero_width() {
+									None
+								} else {
+									Some(end)
+								},
 							},
-							span: op.span,
 						});
 					}
 					OpTy::List(count) => {
@@ -2258,6 +2143,18 @@ impl ShuntingYard {
 						stack.push_back(Expr {
 							ty: ExprTy::List(args),
 							span: op.span,
+						});
+					}
+					OpTy::ObjAccess => {
+						let access = stack.pop_back().unwrap();
+						let obj = stack.pop_back().unwrap();
+						let span = span(obj.span.start, access.span.end);
+						stack.push_back(Expr {
+							ty: ExprTy::ObjAccess {
+								obj: Box::from(obj),
+								leaf: Box::from(access),
+							},
+							span,
 						});
 					}
 					OpTy::Add(has_rhs)
@@ -2296,9 +2193,9 @@ impl ShuntingYard {
 						} else {
 							(last, None)
 						};
-						dbg!(has_rhs);
-						dbg!(&left);
-						dbg!(&right);
+						//dbg!(has_rhs);
+						//dbg!(&left);
+						//dbg!(&right);
 
 						let span = if let Some(ref right) = right {
 							Span::new(left.span.start, right.span.end)

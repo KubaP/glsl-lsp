@@ -1,6 +1,7 @@
 use crate::{
 	cst::{
-		BinOp, Expr, ExprTy, Ident, List, Lit, PostOp, PostOpTy, PreOp, PreOpTy,
+		BinOp, BinOpTy, Expr, ExprTy, Ident, List, Lit, PostOp, PostOpTy,
+		PreOp, PreOpTy,
 	},
 	error::SyntaxErr,
 	lexer::{self, Token},
@@ -919,8 +920,8 @@ impl ShuntingYard {
 
 	/// Registers the end of a sub-expression, popping any operators until the start of the group (or expression)
 	/// is reached.
-	fn register_arity_argument(&mut self) {
-		if let Some(group) = self.groups.back_mut() {
+	fn register_arity_argument(&mut self, end_span: Span) {
+		while let Some(group) = self.groups.back_mut() {
 			match group {
 				Group::FnCall(count, _)
 				| Group::Init(count, _)
@@ -941,55 +942,41 @@ impl ShuntingYard {
 					}
 
 					*count += 1;
+					return;
 				}
 				Group::List(count, _) => {
-					// We want to move all existing operators up to the bracket or index start delimiter, or to the
-					// beginning of the expression. We don't push a new list group since we are already within a
-					// list group, and it accepts a variable amount of arguments.
 					while self.operators.back().is_some() {
-						let back = self.operators.back().unwrap();
-						if back.ty == OpTy::ParenStart
-							|| back.ty == OpTy::IndexStart
-						{
-							break;
-						}
-
 						let moved = self.operators.pop_back().unwrap();
 						self.stack.push_back(Either::Right(moved));
 					}
 
 					*count += 1;
+					return;
 				}
-				Group::Paren(_, _) | Group::Index(_, _) => {
-					// Same as the branch above, but we do push a new list group. Since list groups don't have a
-					// start delimiter, we can only do it now that we've encountered a comma within these two
-					// groups.
-					let mut list_start_pos = self.start_position;
-					while self.operators.back().is_some() {
-						let back = self.operators.back().unwrap();
-						if back.ty == OpTy::ParenStart
-							|| back.ty == OpTy::IndexStart
-						{
-							list_start_pos = back.span.end;
-							break;
-						}
-
-						let moved = self.operators.pop_back().unwrap();
-						self.stack.push_back(Either::Right(moved));
-					}
-					self.groups.push_back(Group::List(1, list_start_pos));
+				// We collapse the entire group since commas aren't allowed within parenthesis or index
+				// operators. We continue looping until we either come across a delimited arity group, such as
+				// a function call, or if have no such group we create a top-level list group.
+				// We want to move all existing operators up to the function call, initializer list, or array
+				// constructor start delimiter to the stack, to clear it for the next expression.
+				Group::Paren(_, _) => {
+					let group = self.groups.pop_back().unwrap();
+					self.collapse_bracket(group, end_span);
+				}
+				Group::Index(_, _) => {
+					let group = self.groups.pop_back().unwrap();
+					self.collapse_index(group, end_span);
 				}
 			}
-		} else {
-			// Since we are outside of any group, we can just push all the operators to the stack to clear it for
-			// the next expression. We also push a new list group. Since list groups don't have a start delimiter,
-			// we can only do it now that we've encountered a comma in an otherwise ungrouped expression.
-			while self.operators.back().is_some() {
-				let moved = self.operators.pop_back().unwrap();
-				self.stack.push_back(Either::Right(moved));
-			}
-			self.groups.push_back(Group::List(1, self.start_position))
 		}
+
+		// Since we are outside of any group, we can just push all the operators to the stack to clear it for
+		// the next expression. We also push a new list group. Since list groups don't have a start delimiter,
+		// we can only do it now that we've encountered a comma in an otherwise ungrouped expression.
+		while self.operators.back().is_some() {
+			let moved = self.operators.pop_back().unwrap();
+			self.stack.push_back(Either::Right(moved));
+		}
+		self.groups.push_back(Group::List(1, self.start_position))
 	}
 
 	/// Increases the arity of the current function.
@@ -1262,7 +1249,7 @@ impl ShuntingYard {
 					if self.is_in_fn_init_arr_init_group()
 						&& arity_state == Arity::PotentialEnd
 					{
-						self.register_arity_argument();
+						self.register_arity_argument(span.start_zero_width());
 					}
 					arity_state = Arity::PotentialEnd;
 
@@ -1305,7 +1292,7 @@ impl ShuntingYard {
 					if self.is_in_fn_init_arr_init_group()
 						&& arity_state == Arity::PotentialEnd
 					{
-						self.register_arity_argument();
+						self.register_arity_argument(span.start_zero_width());
 					} else {
 						// We are not in a delimited arity group. We don't perform error recovery because in this
 						// situation it's not as obvious what the behaviour should be, so we avoid anything
@@ -1339,7 +1326,7 @@ impl ShuntingYard {
 					if self.is_in_fn_init_arr_init_group()
 						&& arity_state == Arity::PotentialEnd
 					{
-						self.register_arity_argument();
+						self.register_arity_argument(span.start_zero_width());
 					}
 					arity_state = Arity::PotentialEnd;
 
@@ -1379,7 +1366,7 @@ impl ShuntingYard {
 					if self.is_in_fn_init_arr_init_group()
 						&& arity_state == Arity::PotentialEnd
 					{
-						self.register_arity_argument();
+						self.register_arity_argument(span.start_zero_width());
 					} else {
 						// We are not in a delimited arity group. We don't perform error recovery because in this
 						// situation it's not as obvious what the behaviour should be, so we avoid anything
@@ -1527,7 +1514,7 @@ impl ShuntingYard {
 					if self.is_in_fn_init_arr_init_group()
 						&& arity_state == Arity::PotentialEnd
 					{
-						self.register_arity_argument();
+						self.register_arity_argument(span.start_zero_width());
 					}
 					arity_state = Arity::Operator;
 
@@ -1598,7 +1585,7 @@ impl ShuntingYard {
 				}
 				Token::RParen if state == State::AfterOperand => {
 					if self.is_in_fn_init_arr_init_group() {
-						self.register_arity_argument();
+						self.register_arity_argument(span.start_zero_width());
 					}
 					arity_state = Arity::PotentialEnd;
 
@@ -1621,7 +1608,7 @@ impl ShuntingYard {
 					if self.is_in_fn_init_arr_init_group()
 						&& !just_started_arity_group
 					{
-						self.register_arity_argument();
+						self.register_arity_argument(span.start_zero_width());
 					}
 					arity_state = Arity::PotentialEnd;
 
@@ -1735,10 +1722,10 @@ impl ShuntingYard {
 						}
 					}
 
-					arity_state = Arity::Operator;
+					arity_state = Arity::PotentialEnd;
 				}
 				Token::RBracket if state == State::Operand => {
-					arity_state = Arity::Operator;
+					arity_state = Arity::PotentialEnd;
 					if can_start == Start::EmptyIndex {
 						// We switch state since after a `]`, we are expecting an operator, i.e.
 						// `..[] + 5` rather than `..[] 5`.
@@ -1815,7 +1802,7 @@ impl ShuntingYard {
 					if self.is_in_fn_init_arr_init_group()
 						&& arity_state == Arity::PotentialEnd
 					{
-						self.register_arity_argument();
+						self.register_arity_argument(span.start_zero_width());
 					}
 					arity_state = Arity::Operator;
 
@@ -1842,7 +1829,7 @@ impl ShuntingYard {
 					if self.is_in_fn_init_arr_init_group()
 						&& arity_state == Arity::PotentialEnd
 					{
-						self.register_arity_argument();
+						self.register_arity_argument(span.start_zero_width());
 					}
 					arity_state = Arity::Operator;
 
@@ -1865,7 +1852,7 @@ impl ShuntingYard {
 				}
 				Token::RBrace if state == State::AfterOperand => {
 					if self.is_in_fn_init_arr_init_group() {
-						self.register_arity_argument();
+						self.register_arity_argument(span.start_zero_width());
 					}
 					arity_state = Arity::PotentialEnd;
 
@@ -1888,7 +1875,7 @@ impl ShuntingYard {
 					if self.is_in_fn_init_arr_init_group()
 						&& !just_started_arity_group
 					{
-						self.register_arity_argument();
+						self.register_arity_argument(span.start_zero_width());
 					}
 					arity_state = Arity::PotentialEnd;
 
@@ -1956,7 +1943,7 @@ impl ShuntingYard {
 					// `.., 5 + 6` instead of `.., + 6`.
 
 					if arity_state == Arity::PotentialEnd {
-						self.register_arity_argument();
+						self.register_arity_argument(span.start_zero_width());
 					}
 					arity_state = Arity::PotentialEnd;
 
@@ -1973,8 +1960,20 @@ impl ShuntingYard {
 					// This is an error, e.g. `..+ ,` instead of `..+ 1,`.
 					log!("Expected an atom or a prefix operator, found `,` instead!");
 
+					if can_start == Start::EmptyIndex {
+						match self.groups.back_mut() {
+							Some(g) => match g {
+								Group::Index(contains_i, _) => {
+									*contains_i = false;
+								}
+								_ => unreachable!(),
+							},
+							_ => unreachable!(),
+						}
+					}
+
 					if !just_started_arity_group {
-						self.register_arity_argument();
+						self.register_arity_argument(span.start_zero_width());
 					}
 					arity_state = Arity::PotentialEnd;
 
@@ -2057,7 +2056,7 @@ impl ShuntingYard {
 					| Group::Init(_, _)
 					| Group::ArrInit(_, _) => {
 						if !just_started_arity_group {
-							self.register_arity_argument();
+							self.register_arity_argument(group_end);
 						}
 					}
 					_ => {}
@@ -2489,6 +2488,544 @@ impl ShuntingYard {
 		// Return the one root expression.
 		Some(stack.pop_back().unwrap())
 	}
+}
+
+#[cfg(test)]
+use crate::lexer::lexer;
+
+#[cfg(test)]
+macro_rules! assert_expr {
+	($source:expr, $rest:expr) => {
+		let mut walker = Walker {
+			token_stream: lexer($source),
+			cursor: 0,
+		};
+		assert_eq!(
+			expr_parser(&mut walker, Mode::Default, &[]).0.unwrap(),
+			$rest
+		);
+	};
+}
+
+#[test]
+fn functions() {
+	assert_expr!(
+		"fn()",
+		Expr {
+			ty: ExprTy::Fn {
+				ident: Ident {
+					name: "fn".into(),
+					span: span(0, 2)
+				},
+				l_paren: span(2, 3),
+				args: List::new(),
+				r_paren: Some(span(3, 4)),
+			},
+			span: span(0, 4),
+		}
+	);
+	let mut args = List::new();
+	args.push_item(Expr {
+		ty: ExprTy::Lit(Lit::Int(1)),
+		span: span(3, 4),
+	});
+	assert_expr!(
+		"fn(1)",
+		Expr {
+			ty: ExprTy::Fn {
+				ident: Ident {
+					name: "fn".into(),
+					span: span(0, 2)
+				},
+				l_paren: span(2, 3),
+				args,
+				r_paren: Some(span(4, 5)),
+			},
+			span: span(0, 5),
+		}
+	);
+	let mut args = List::new();
+	args.push_item(Expr {
+		ty: ExprTy::Lit(Lit::Int(1)),
+		span: span(3, 4),
+	});
+	args.push_separator(span(4, 5));
+	args.push_item(Expr {
+		ty: ExprTy::Lit(Lit::Float(5.0)),
+		span: span(6, 9),
+	});
+	args.push_separator(span(9, 10));
+	args.push_item(Expr {
+		ty: ExprTy::Ident(Ident {
+			name: "ident".into(),
+			span: span(11, 16),
+		}),
+		span: span(11, 16),
+	});
+	assert_expr!(
+		"fn(1, 5.0, ident)",
+		Expr {
+			ty: ExprTy::Fn {
+				ident: Ident {
+					name: "fn".into(),
+					span: span(0, 2)
+				},
+				l_paren: span(2, 3),
+				args,
+				r_paren: Some(span(16, 17)),
+			},
+			span: span(0, 17),
+		}
+	);
+	let mut args = List::new();
+	args.push_item(Expr {
+		ty: ExprTy::Lit(Lit::Int(1)),
+		span: span(3, 4),
+	});
+	args.push_separator(span(4, 5));
+	args.push_item(Expr {
+		ty: ExprTy::Lit(Lit::Float(5.0)),
+		span: span(6, 9),
+	});
+	args.push_separator(span(9, 10));
+	assert_expr!(
+		"fn(1, 5.0, )",
+		Expr {
+			ty: ExprTy::Fn {
+				ident: Ident {
+					name: "fn".into(),
+					span: span(0, 2)
+				},
+				l_paren: span(2, 3),
+				args,
+				r_paren: Some(span(11, 12)),
+			},
+			span: span(0, 12),
+		}
+	);
+	let mut args = List::new();
+	args.push_item(Expr {
+		ty: ExprTy::Lit(Lit::Int(1)),
+		span: span(3, 4),
+	});
+	args.push_item(Expr {
+		ty: ExprTy::Lit(Lit::Float(5.0)),
+		span: span(5, 8),
+	});
+	assert_expr!(
+		"fn(1 5.0)",
+		Expr {
+			ty: ExprTy::Fn {
+				ident: Ident {
+					name: "fn".into(),
+					span: span(0, 2)
+				},
+				l_paren: span(2, 3),
+				args,
+				r_paren: Some(span(8, 9)),
+			},
+			span: span(0, 9),
+		}
+	);
+	let mut args = List::new();
+	args.push_item(Expr {
+		ty: ExprTy::Lit(Lit::Int(1)),
+		span: span(3, 4),
+	});
+	args.push_item(Expr {
+		ty: ExprTy::Lit(Lit::Float(5.0)),
+		span: span(5, 8),
+	});
+	args.push_separator(span(8, 9));
+	args.push_item(Expr {
+		ty: ExprTy::Ident(Ident {
+			name: "ident".into(),
+			span: span(10, 15),
+		}),
+		span: span(10, 15),
+	});
+	assert_expr!(
+		"fn(1 5.0, ident)",
+		Expr {
+			ty: ExprTy::Fn {
+				ident: Ident {
+					name: "fn".into(),
+					span: span(0, 2)
+				},
+				l_paren: span(2, 3),
+				args,
+				r_paren: Some(span(15, 16)),
+			},
+			span: span(0, 16),
+		}
+	);
+	let mut args = List::new();
+	args.push_item(Expr {
+		ty: ExprTy::Lit(Lit::Int(1)),
+		span: span(3, 4),
+	});
+	args.push_item(Expr {
+		ty: ExprTy::Lit(Lit::Float(5.0)),
+		span: span(5, 8),
+	});
+	args.push_separator(span(8, 9));
+	args.push_separator(span(10, 11));
+	args.push_separator(span(12, 13));
+	assert_expr!(
+		"fn(1 5.0, , ,)",
+		Expr {
+			ty: ExprTy::Fn {
+				ident: Ident {
+					name: "fn".into(),
+					span: span(0, 2)
+				},
+				l_paren: span(2, 3),
+				args,
+				r_paren: Some(span(13, 14)),
+			},
+			span: span(0, 14),
+		}
+	);
+	let mut args = List::new();
+	args.push_separator(span(3, 4));
+	args.push_item(Expr {
+		ty: ExprTy::Lit(Lit::Int(1)),
+		span: span(5, 6),
+	});
+	args.push_separator(span(7, 8));
+	args.push_item(Expr {
+		ty: ExprTy::Lit(Lit::Float(5.0)),
+		span: span(8, 11),
+	});
+	assert_expr!(
+		"fn(, 1 ,5.0)",
+		Expr {
+			ty: ExprTy::Fn {
+				ident: Ident {
+					name: "fn".into(),
+					span: span(0, 2)
+				},
+				l_paren: span(2, 3),
+				args,
+				r_paren: Some(span(11, 12)),
+			},
+			span: span(0, 12),
+		}
+	);
+	let mut args = List::new();
+	args.push_separator(span(3, 4));
+	assert_expr!(
+		"fn(,)",
+		Expr {
+			ty: ExprTy::Fn {
+				ident: Ident {
+					name: "fn".into(),
+					span: span(0, 2)
+				},
+				l_paren: span(2, 3),
+				args,
+				r_paren: Some(span(4, 5)),
+			},
+			span: span(0, 5),
+		}
+	);
+	let mut args = List::new();
+	args.push_separator(span(3, 4));
+	args.push_separator(span(4, 5));
+	args.push_separator(span(5, 6));
+	assert_expr!(
+		"fn(,,,)",
+		Expr {
+			ty: ExprTy::Fn {
+				ident: Ident {
+					name: "fn".into(),
+					span: span(0, 2)
+				},
+				l_paren: span(2, 3),
+				args,
+				r_paren: Some(span(6, 7)),
+			},
+			span: span(0, 7),
+		}
+	);
+	let mut args = List::new();
+	args.push_item(Expr {
+		ty: ExprTy::Binary {
+			left: Box::from(Expr {
+				ty: ExprTy::Lit(Lit::Int(5)),
+				span: span(3, 4),
+			}),
+			op: BinOp {
+				ty: BinOpTy::Add,
+				span: span(5, 6),
+			},
+			right: None,
+		},
+		span: span(3, 6),
+	});
+	args.push_separator(span(6, 7));
+	args.push_item(Expr {
+		ty: ExprTy::Lit(Lit::Int(1)),
+		span: span(8, 9),
+	});
+	assert_expr!(
+		"fn(5 +, 1)",
+		Expr {
+			ty: ExprTy::Fn {
+				ident: Ident {
+					name: "fn".into(),
+					span: span(0, 2)
+				},
+				l_paren: span(2, 3),
+				args,
+				r_paren: Some(span(9, 10)),
+			},
+			span: span(0, 10),
+		}
+	);
+}
+
+#[test]
+fn functions_missing_r_paren() {
+	assert_expr!(
+		"fn(",
+		Expr {
+			ty: ExprTy::Fn {
+				ident: Ident {
+					name: "fn".into(),
+					span: span(0, 2)
+				},
+				l_paren: span(2, 3),
+				args: List::new(),
+				r_paren: None,
+			},
+			span: span(0, 3),
+		}
+	);
+	let mut args = List::new();
+	args.push_item(Expr {
+		ty: ExprTy::Lit(Lit::Int(1)),
+		span: span(3, 4),
+	});
+	assert_expr!(
+		"fn(1",
+		Expr {
+			ty: ExprTy::Fn {
+				ident: Ident {
+					name: "fn".into(),
+					span: span(0, 2)
+				},
+				l_paren: span(2, 3),
+				args,
+				r_paren: None,
+			},
+			span: span(0, 4),
+		}
+	);
+	let mut args = List::new();
+	args.push_item(Expr {
+		ty: ExprTy::Lit(Lit::Int(1)),
+		span: span(3, 4),
+	});
+	args.push_separator(span(4, 5));
+	args.push_item(Expr {
+		ty: ExprTy::Lit(Lit::Float(5.0)),
+		span: span(6, 9),
+	});
+	args.push_separator(span(9, 10));
+	args.push_item(Expr {
+		ty: ExprTy::Ident(Ident {
+			name: "ident".into(),
+			span: span(11, 16),
+		}),
+		span: span(11, 16),
+	});
+	assert_expr!(
+		"fn(1, 5.0, ident",
+		Expr {
+			ty: ExprTy::Fn {
+				ident: Ident {
+					name: "fn".into(),
+					span: span(0, 2)
+				},
+				l_paren: span(2, 3),
+				args,
+				r_paren: None,
+			},
+			span: span(0, 16),
+		}
+	);
+	let mut args = List::new();
+	args.push_item(Expr {
+		ty: ExprTy::Lit(Lit::Int(1)),
+		span: span(3, 4),
+	});
+	args.push_separator(span(4, 5));
+	args.push_item(Expr {
+		ty: ExprTy::Lit(Lit::Float(5.0)),
+		span: span(6, 9),
+	});
+	args.push_separator(span(9, 10));
+	assert_expr!(
+		"fn(1, 5.0,",
+		Expr {
+			ty: ExprTy::Fn {
+				ident: Ident {
+					name: "fn".into(),
+					span: span(0, 2)
+				},
+				l_paren: span(2, 3),
+				args,
+				r_paren: None,
+			},
+			span: span(0, 10),
+		}
+	);
+	let mut args = List::new();
+	args.push_item(Expr {
+		ty: ExprTy::Lit(Lit::Int(1)),
+		span: span(3, 4),
+	});
+	args.push_item(Expr {
+		ty: ExprTy::Lit(Lit::Float(5.0)),
+		span: span(5, 8),
+	});
+	assert_expr!(
+		"fn(1 5.0",
+		Expr {
+			ty: ExprTy::Fn {
+				ident: Ident {
+					name: "fn".into(),
+					span: span(0, 2)
+				},
+				l_paren: span(2, 3),
+				args,
+				r_paren: None,
+			},
+			span: span(0, 8),
+		}
+	);
+	let mut args = List::new();
+	args.push_item(Expr {
+		ty: ExprTy::Lit(Lit::Int(1)),
+		span: span(3, 4),
+	});
+	args.push_item(Expr {
+		ty: ExprTy::Lit(Lit::Float(5.0)),
+		span: span(5, 8),
+	});
+	args.push_separator(span(8, 9));
+	args.push_item(Expr {
+		ty: ExprTy::Ident(Ident {
+			name: "ident".into(),
+			span: span(10, 15),
+		}),
+		span: span(10, 15),
+	});
+	assert_expr!(
+		"fn(1 5.0, ident",
+		Expr {
+			ty: ExprTy::Fn {
+				ident: Ident {
+					name: "fn".into(),
+					span: span(0, 2)
+				},
+				l_paren: span(2, 3),
+				args,
+				r_paren: None,
+			},
+			span: span(0, 15),
+		}
+	);
+	let mut args = List::new();
+	args.push_item(Expr {
+		ty: ExprTy::Lit(Lit::Int(1)),
+		span: span(3, 4),
+	});
+	args.push_item(Expr {
+		ty: ExprTy::Lit(Lit::Float(5.0)),
+		span: span(5, 8),
+	});
+	args.push_separator(span(8, 9));
+	args.push_separator(span(10, 11));
+	args.push_separator(span(12, 13));
+	assert_expr!(
+		"fn(1 5.0, , ,",
+		Expr {
+			ty: ExprTy::Fn {
+				ident: Ident {
+					name: "fn".into(),
+					span: span(0, 2)
+				},
+				l_paren: span(2, 3),
+				args,
+				r_paren: None,
+			},
+			span: span(0, 13),
+		}
+	);
+	let mut args = List::new();
+	args.push_separator(span(3, 4));
+	args.push_item(Expr {
+		ty: ExprTy::Lit(Lit::Int(1)),
+		span: span(5, 6),
+	});
+	args.push_separator(span(7, 8));
+	args.push_item(Expr {
+		ty: ExprTy::Lit(Lit::Float(5.0)),
+		span: span(8, 11),
+	});
+	assert_expr!(
+		"fn(, 1 ,5.0",
+		Expr {
+			ty: ExprTy::Fn {
+				ident: Ident {
+					name: "fn".into(),
+					span: span(0, 2)
+				},
+				l_paren: span(2, 3),
+				args,
+				r_paren: None,
+			},
+			span: span(0, 11),
+		}
+	);
+	let mut args = List::new();
+	args.push_separator(span(3, 4));
+	assert_expr!(
+		"fn(,",
+		Expr {
+			ty: ExprTy::Fn {
+				ident: Ident {
+					name: "fn".into(),
+					span: span(0, 2)
+				},
+				l_paren: span(2, 3),
+				args,
+				r_paren: None,
+			},
+			span: span(0, 4),
+		}
+	);
+	let mut args = List::new();
+	args.push_separator(span(3, 4));
+	args.push_separator(span(4, 5));
+	args.push_separator(span(5, 6));
+	assert_expr!(
+		"fn(,,,",
+		Expr {
+			ty: ExprTy::Fn {
+				ident: Ident {
+					name: "fn".into(),
+					span: span(0, 2)
+				},
+				l_paren: span(2, 3),
+				args,
+				r_paren: None,
+			},
+			span: span(0, 6),
+		}
+	);
 }
 
 /*

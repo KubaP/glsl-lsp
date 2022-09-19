@@ -156,8 +156,6 @@ enum OpTy {
 	/// The `(` token.
 	ArrInitStart,
 	/* TODO */
-	/// The `,` token within a variable argument group.
-	Comma,
 	ObjAccess,
 	/* GROUPS */
 	/// A parenthesis group. This operator spans from the opening parenthesis to the closing parenthesis.
@@ -673,8 +671,8 @@ impl ShuntingYard {
 		};
 
 		match current_group {
-			Group::Paren(_, _) | Group::FnCall(_, _) | Group::ArrInit(_, _) => {
-			}
+			Group::Paren(_, _) => {}
+			Group::FnCall(_, _) | Group::ArrInit(_, _) => {}
 			_ => {
 				// The current group is not a bracket/function/array constructor group, so we need to check whether
 				// there is one at all.
@@ -921,12 +919,12 @@ impl ShuntingYard {
 
 	/// Registers the end of a sub-expression, popping any operators until the start of the group (or expression)
 	/// is reached.
-	fn end_comma(&mut self) {
+	fn register_arity_argument(&mut self) {
 		if let Some(group) = self.groups.back_mut() {
 			match group {
-				Group::FnCall(_, _)
-				| Group::Init(_, _)
-				| Group::ArrInit(_, _) => {
+				Group::FnCall(count, _)
+				| Group::Init(count, _)
+				| Group::ArrInit(count, _) => {
 					// We want to move all existing operators up to the function call, initializer list, or array
 					// constructor start delimiter to the stack, to clear it for the next expression.
 					while self.operators.back().is_some() {
@@ -941,8 +939,10 @@ impl ShuntingYard {
 						let moved = self.operators.pop_back().unwrap();
 						self.stack.push_back(Either::Right(moved));
 					}
+
+					*count += 1;
 				}
-				Group::List(_, _) => {
+				Group::List(count, _) => {
 					// We want to move all existing operators up to the bracket or index start delimiter, or to the
 					// beginning of the expression. We don't push a new list group since we are already within a
 					// list group, and it accepts a variable amount of arguments.
@@ -957,6 +957,8 @@ impl ShuntingYard {
 						let moved = self.operators.pop_back().unwrap();
 						self.stack.push_back(Either::Right(moved));
 					}
+
+					*count += 1;
 				}
 				Group::Paren(_, _) | Group::Index(_, _) => {
 					// Same as the branch above, but we do push a new list group. Since list groups don't have a
@@ -1091,6 +1093,20 @@ impl ShuntingYard {
 		}
 	}
 
+	/// Returns whether we are currently in a function call, initializer list or array constructor group.
+	fn is_in_fn_init_arr_init_group(&self) -> bool {
+		if let Some(current_group) = self.groups.back() {
+			match current_group {
+				Group::FnCall(_, _)
+				| Group::Init(_, _)
+				| Group::ArrInit(_, _) => true,
+				_ => false,
+			}
+		} else {
+			false
+		}
+	}
+
 	/// Returns whether an open parenthesis, function call or array constructor group exists.
 	fn exists_paren_fn_group(&self) -> bool {
 		for group in self.groups.iter() {
@@ -1174,14 +1190,39 @@ impl ShuntingYard {
 			EmptyIndex,
 		}
 		let mut can_start = Start::None;
+		let mut just_started_arity_group = false;
 
 		// The start position of a potential delimiter, i.e. an `Ident` which may become a function call or an
 		// array constructor.
 		let mut possible_delim_start = 0;
 
-		// Whether to increase the arity on the next iteration. If set to `true`, on the next iteration, if we have
-		// a valid State::Operand, we increase the arity and reset the flag back to `false`.
-		let mut increase_arity = false;
+		#[derive(PartialEq)]
+		enum Arity {
+			/// On the first iteration of the parsing loop.
+			None,
+			/// Signifies that the previous token can end an argument in an arity group, for example:
+			/// ```text
+			/// fn( 1+1, 5
+			///        ^ signifies the end
+			/// ```
+			/// Or when dealing with error recovery of missing commas:
+			/// ```text
+			/// { 1+1 5
+			///     ^ signifies the end, (missing comma afterwards though)
+			/// ```
+			PotentialEnd,
+			/// Signifies that the previous token cannot end an argument in an arity group, for example:
+			/// ```text
+			/// fn( 1 + 6
+			///       ^ expects a rhs,
+			///           so the 6 is treated as part of the same argument
+			/// ```
+			/// The only exception is if the current token is a comma (`,`), in which case it always ends the
+			/// argument in an arity group.
+			Operator,
+		}
+		// The state of arity manipulation set in the previous iteration of the loop.
+		let mut arity_state = Arity::None;
 
 		'main: while !walker.is_done() {
 			let (token, span) = match walker.peek() {
@@ -1213,8 +1254,18 @@ impl ShuntingYard {
 				Token::Num { .. } | Token::Bool(_)
 					if state == State::Operand =>
 				{
-					// We switch state since after an atom, we are expecting an operator, i.e.
-					// `..10 + 5` instead of `..10 5`.
+					// If we previously had a token which can end an argument of an arity group, and we are in a
+					// delimited arity group, we want to increase the arity, for example:
+					// `fn(10, 5` or `fn(10 5` or `{1+1  100`
+					// but not:
+					// `10 5` or `fn(10 + 5`
+					if self.is_in_fn_init_arr_init_group()
+						&& arity_state == Arity::PotentialEnd
+					{
+						self.register_arity_argument();
+					}
+					arity_state = Arity::PotentialEnd;
+
 					self.stack.push_back(match Lit::parse(token) {
 						Ok(l) => Either::Left(Expr {
 							span: *span,
@@ -1225,19 +1276,73 @@ impl ShuntingYard {
 							ty: ExprTy::Invalid,
 						}),
 					});
+
+					// We switch state since after an operand, we are expecting an operator, i.e.
+					// `..10 + 5` instead of `..10 5`.
 					state = State::AfterOperand;
 
 					can_start = Start::None;
 
-					if increase_arity {
-						self.increase_arity();
-						increase_arity = false;
-					}
 					self.set_op_rhs_toggle();
 				}
+				Token::Num { .. } | Token::Bool(_)
+					if state == State::AfterOperand =>
+				{
+					if self.mode == Mode::TakeOneUnit {
+						break 'main;
+					}
+
+					self.errors.push(SyntaxErr::FoundOperandAfterOperand(
+						self.get_previous_span().unwrap(),
+						*span,
+					));
+
+					// If we previously had a token which can end an argument of an arity group, and we are in a
+					// delimited arity group, we want to increase the arity, for example:
+					// `fn(10, 5` or `fn(10 5` or `{1+1  100`
+					// but not:
+					// `a b` or `fn(10 + 5`
+					if self.is_in_fn_init_arr_init_group()
+						&& arity_state == Arity::PotentialEnd
+					{
+						self.register_arity_argument();
+					} else {
+						// We are not in a delimited arity group. We don't perform error recovery because in this
+						// situation it's not as obvious what the behaviour should be, so we avoid anything
+						// creating a surprise.
+						break 'main;
+					}
+					arity_state = Arity::PotentialEnd;
+
+					self.stack.push_back(match Lit::parse(token) {
+						Ok(l) => Either::Left(Expr {
+							span: *span,
+							ty: ExprTy::Lit(l),
+						}),
+						Err(_) => Either::Left(Expr {
+							span: *span,
+							ty: ExprTy::Invalid,
+						}),
+					});
+
+					can_start = Start::None;
+
+					// We don't change state since even though we found an operand instead of an operator, after
+					// this operand we will still be expecting an operator.
+				}
 				Token::Ident(s) if state == State::Operand => {
-					// We switch state since after an atom, we are expecting an operator, i.e.
-					// `..ident + i` instead of `..ident i`.
+					// If we previously had a token which can end an argument of an arity group, and we are in a
+					// delimited arity group, we want to increase the arity, for example:
+					// `fn(10, i` or `fn(10 i` or `{1+1  i`
+					// but not:
+					// `a i` or `fn(10 + i`
+					if self.is_in_fn_init_arr_init_group()
+						&& arity_state == Arity::PotentialEnd
+					{
+						self.register_arity_argument();
+					}
+					arity_state = Arity::PotentialEnd;
+
 					self.stack.push_back(Either::Left(Expr {
 						span: *span,
 						ty: ExprTy::Ident(Ident {
@@ -1245,35 +1350,58 @@ impl ShuntingYard {
 							span: *span,
 						}),
 					}));
+
+					// We switch state since after an operand, we are expecting an operator, i.e.
+					// `..10 + i` instead of `..10 i`.
 					state = State::AfterOperand;
 
 					// After an identifier, we may start a function call.
 					can_start = Start::FnOrArr;
 					possible_delim_start = span.start;
 
-					if increase_arity {
-						self.increase_arity();
-						increase_arity = false;
-					}
 					self.set_op_rhs_toggle();
 				}
-				Token::Num { .. } | Token::Bool(_) | Token::Ident(_)
-					if state == State::AfterOperand =>
-				{
-					if self.mode != Mode::TakeOneUnit {
-						// This is an error, e.g. `..1 1` instead of `..1 + 1`.
-						log!("Expected a postfix, index or binary operator, or the end of expression, found an atom instead!");
-
-						// Panic: Since the state starts with `State::Operand` and we are in now
-						// `State::AfterOperand`, we can be certain at least one item is on the stack.
-						let prev_operand_span =
-							self.get_previous_span().unwrap();
-						self.errors.push(SyntaxErr::FoundOperandAfterOperand(
-							prev_operand_span,
-							*span,
-						));
+				Token::Ident(s) if state == State::AfterOperand => {
+					if self.mode == Mode::TakeOneUnit {
+						break 'main;
 					}
-					break 'main;
+
+					self.errors.push(SyntaxErr::FoundOperandAfterOperand(
+						self.get_previous_span().unwrap(),
+						*span,
+					));
+
+					// If we previously had a token which can end an argument of an arity group, and we are in a
+					// delimited arity group, we want to increase the arity, for example:
+					// `fn(10, 5` or `fn(10 5` or `{1+1  100`
+					// but not:
+					// `a b` or `fn(10 + 5`
+					if self.is_in_fn_init_arr_init_group()
+						&& arity_state == Arity::PotentialEnd
+					{
+						self.register_arity_argument();
+					} else {
+						// We are not in a delimited arity group. We don't perform error recovery because in this
+						// situation it's not as obvious what the behaviour should be, so we avoid anything
+						// creating a surprise.
+						break 'main;
+					}
+					arity_state = Arity::PotentialEnd;
+
+					self.stack.push_back(Either::Left(Expr {
+						span: *span,
+						ty: ExprTy::Ident(Ident {
+							name: s.clone(),
+							span: *span,
+						}),
+					}));
+
+					// After an identifier, we may start a function call.
+					can_start = Start::FnOrArr;
+					possible_delim_start = span.start;
+
+					// We don't change state since even though we found an operand instead of an operator, after
+					// this operand we will still be expecting an operator.
 				}
 				Token::Op(op) if state == State::Operand => {
 					// If the parser is set to break at an `=`, do so.
@@ -1290,8 +1418,28 @@ impl ShuntingYard {
 						| lexer::OpTy::Not
 						| lexer::OpTy::Flip
 						| lexer::OpTy::AddAdd
-						| lexer::OpTy::SubSub => self.set_op_rhs_toggle(),
-						_ => {}
+						| lexer::OpTy::SubSub => {
+							self.set_op_rhs_toggle();
+
+							// If we previously had a token which can end an argument of an arity group, and we are
+							// in a delimited arity group, we want to increase the arity, for example:
+							// `fn(10, !true` or `fn(10 !true` or `{1+1  !true`
+							// but not:
+							// `a !true` or `fn(10 + !true`
+							if self.is_in_fn_init_arr_init_group()
+								&& arity_state == Arity::PotentialEnd
+							{
+								self.increase_arity();
+								arity_state = Arity::Operator;
+							}
+						}
+						_ => {
+							// This is an error, e.g. `..*1` instead of `..-1`.
+							log!("Expected an atom or a prefix operator, found a non-prefix operator instead!");
+							self.errors
+								.push(SyntaxErr::InvalidPrefixOperator(*span));
+							break 'main;
+						}
 					}
 
 					match op {
@@ -1318,20 +1466,11 @@ impl ShuntingYard {
 							ty: OpTy::SubPre(false),
 						}),
 						_ => {
-							// This is an error, e.g. `..*1` instead of `..-1`.
-							log!("Expected an atom or a prefix operator, found a non-prefix operator instead!");
-							self.errors
-								.push(SyntaxErr::InvalidPrefixOperator(*span));
-							break 'main;
+							unreachable!()
 						}
 					}
 
 					can_start = Start::None;
-
-					if increase_arity {
-						self.increase_arity();
-						increase_arity = false;
-					}
 				}
 				Token::Op(op) if state == State::AfterOperand => {
 					// If the parser is set to break at an `=`, do so.
@@ -1375,17 +1514,23 @@ impl ShuntingYard {
 						}
 					}
 
+					arity_state = Arity::Operator;
+
 					can_start = Start::None;
 				}
 				Token::LParen if state == State::Operand => {
-					// We don't switch state since after a `(`, we are expecting an operand, i.e.
-					// `..+ (1 *` rather than `..+ (*`.
-
-					// First increment the arity, since we are creating a new group.
-					if increase_arity {
-						self.increase_arity();
-						increase_arity = false;
+					// If we previously had a token which can end an argument of an arity group, and we are in a
+					// delimited arity group, we want to increase the arity, for example:
+					// `fn(10, (` or `fn(10 (` or `{1+1  (`
+					// but not:
+					// `a (` or `fn(10 + (`
+					if self.is_in_fn_init_arr_init_group()
+						&& arity_state == Arity::PotentialEnd
+					{
+						self.register_arity_argument();
 					}
+					arity_state = Arity::Operator;
+
 					self.set_op_rhs_toggle();
 
 					self.operators.push_back(Op {
@@ -1396,9 +1541,11 @@ impl ShuntingYard {
 
 					can_start = Start::None;
 
-					increase_arity = true;
+					// We don't switch state since after a `(`, we are expecting an operand, i.e.
+					// `..+ ( 1 *` rather than `..+ ( *`.
 				}
 				Token::LParen if state == State::AfterOperand => {
+					arity_state = Arity::Operator;
 					if can_start == Start::FnOrArr {
 						// We have `ident(` which makes this a function call.
 						self.operators.push_back(Op {
@@ -1414,8 +1561,7 @@ impl ShuntingYard {
 						// We unset the flag, since this flag is only used to detect the `ident` -> `(` token
 						// chain.
 						can_start = Start::None;
-
-						increase_arity = true;
+						just_started_arity_group = true;
 					} else if can_start == Start::ArrInit {
 						// We have `ident[...](` which makes this an array constructor.
 						self.operators.push_back(Op {
@@ -1430,8 +1576,7 @@ impl ShuntingYard {
 
 						// We unset the flag, since this flag is only used to detect the `..]` -> `(` token chain.
 						can_start = Start::None;
-
-						increase_arity = true;
+						just_started_arity_group = true;
 					} else {
 						if self.mode != Mode::TakeOneUnit {
 							// This is an error. e.g. `..1 (` instead of `..1 + (`.
@@ -1452,8 +1597,11 @@ impl ShuntingYard {
 					}
 				}
 				Token::RParen if state == State::AfterOperand => {
-					// We don't switch state since after a `)`, we are expecting an operator, i.e.
-					// `..) + 5` rather than `..) 5`.
+					if self.is_in_fn_init_arr_init_group() {
+						self.register_arity_argument();
+					}
+					arity_state = Arity::PotentialEnd;
+
 					match self.end_bracket_fn(*span) {
 						Ok(_) => {}
 						Err(e) => {
@@ -1465,51 +1613,45 @@ impl ShuntingYard {
 					}
 
 					can_start = Start::None;
+
+					// We don't switch state since after a `)`, we are expecting an operator, i.e.
+					// `..) + 5` rather than `..) 5`.
 				}
 				Token::RParen if state == State::Operand => {
-					if self.just_started_fn() {
-						// This is valid, i.e. `fn()`.
-						match self.end_bracket_fn(*span) {
-							Ok(_) => {}
-							Err(e) => {
-								if self.mode != Mode::TakeOneUnit {
-									self.errors.push(e);
-								}
-								break 'main;
+					if self.is_in_fn_init_arr_init_group()
+						&& !just_started_arity_group
+					{
+						self.register_arity_argument();
+					}
+					arity_state = Arity::PotentialEnd;
+
+					match self.end_bracket_fn(*span) {
+						Ok(_) => {}
+						Err(e) => {
+							if self.mode != Mode::TakeOneUnit {
+								self.errors.push(e);
 							}
+							break 'main;
 						}
+					}
 
-						// We switch state since after a function call we are expecting an operator, i.e.
-						// `..fn() + 5` rather than `..fn() 5`.
-						state = State::AfterOperand;
+					state = State::AfterOperand;
 
-						increase_arity = false;
+					can_start = Start::None;
 
-						can_start = Start::None;
-					} else {
-						// This is an error, e.g. `..+ )` instead of `..+ 1)`,
-						// or `fn(..,)` instead of `fn(.., 1)`.
-						log!("Expected an atom or a prefix operator, found `)` instead!");
-						match self.get_previous_span() {
-							Some(prev_op_span) => {
-								if self.exists_paren_fn_group() {
-									self.errors.push(
+					// This is an error, e.g. `..+ )` instead of `..+ 1)`,
+					// or `fn(..,)` instead of `fn(.., 1)`.
+					log!("Expected an atom or a prefix operator, found `)` instead!");
+					match self.get_previous_span() {
+						Some(prev_op_span) => {
+							if self.exists_paren_fn_group() {
+								self.errors.push(
 										SyntaxErr::FoundClosingDelimInsteadOfOperand(
 											prev_op_span,
 											*span,
 										),
 									);
-								} else {
-									if self.mode != Mode::TakeOneUnit {
-										self.errors.push(
-											SyntaxErr::FoundUnmatchedClosingDelim(
-												*span, false,
-											),
-										);
-									}
-								}
-							}
-							None => {
+							} else {
 								if self.mode != Mode::TakeOneUnit {
 									self.errors.push(
 										SyntaxErr::FoundUnmatchedClosingDelim(
@@ -1519,7 +1661,15 @@ impl ShuntingYard {
 								}
 							}
 						}
-						break 'main;
+						None => {
+							if self.mode != Mode::TakeOneUnit {
+								self.errors.push(
+									SyntaxErr::FoundUnmatchedClosingDelim(
+										*span, false,
+									),
+								);
+							}
+						}
 					}
 				}
 				Token::LBracket if state == State::AfterOperand => {
@@ -1540,6 +1690,8 @@ impl ShuntingYard {
 					}
 					state = State::Operand;
 
+					arity_state = Arity::Operator;
+
 					can_start = Start::EmptyIndex;
 				}
 				Token::LBracket if state == State::Operand => {
@@ -1559,6 +1711,8 @@ impl ShuntingYard {
 						}
 					}
 					break 'main;
+
+					arity_state = Arity::Operator;
 				}
 				Token::RBracket if state == State::AfterOperand => {
 					// We don't switch state since after a `]`, we are expecting an operator, i.e.
@@ -1580,8 +1734,11 @@ impl ShuntingYard {
 							break 'main;
 						}
 					}
+
+					arity_state = Arity::Operator;
 				}
 				Token::RBracket if state == State::Operand => {
+					arity_state = Arity::Operator;
 					if can_start == Start::EmptyIndex {
 						// We switch state since after a `]`, we are expecting an operator, i.e.
 						// `..[] + 5` rather than `..[] 5`.
@@ -1650,13 +1807,18 @@ impl ShuntingYard {
 					}
 				}
 				Token::LBrace if state == State::Operand => {
-					// We don't switch state since after a `{`, we are expecting an operand, i.e.
-					// `..+ {1,` rather than `..+ {,`.
-
-					// First increase the arity, since we are creating a new group with its own arity.
-					if increase_arity {
-						self.increase_arity();
+					// If we previously had a token which can end an argument of an arity group, and we are in a
+					// delimited arity group, we want to increase the arity, for example:
+					// `{10, {` or `{10 {` or `{1+1  {`
+					// but not:
+					// `a {` or `fn{10 + {`
+					if self.is_in_fn_init_arr_init_group()
+						&& arity_state == Arity::PotentialEnd
+					{
+						self.register_arity_argument();
 					}
+					arity_state = Arity::Operator;
+
 					self.set_op_rhs_toggle();
 
 					self.operators.push_back(Op {
@@ -1665,29 +1827,48 @@ impl ShuntingYard {
 					});
 					self.groups.push_back(Group::Init(0, *span));
 
-					increase_arity = true;
-
 					can_start = Start::None;
+					just_started_arity_group = true;
+
+					// We don't switch state since after a `{`, we are expecting an operand, i.e.
+					// `..+ {1,` rather than `..+ {,`.
 				}
 				Token::LBrace if state == State::AfterOperand => {
-					if self.mode != Mode::TakeOneUnit {
-						// This is an error, e.g. `.. {` instead of `.. + {`.
-						log!("Expected an operator or the end of expression, found `{{` instead!");
-
-						// Panic: Since the state starts with `State::Operand` and we are in now `State::AfterOperand`,
-						// we can be certain at least one item is on the stack.
-						let prev_operand_span =
-							self.get_previous_span().unwrap();
-						self.errors.push(SyntaxErr::FoundOperandAfterOperand(
-							prev_operand_span,
-							*span,
-						));
+					// If we previously had a token which can end an argument of an arity group, and we are in a
+					// delimited arity group, we want to increase the arity, for example:
+					// `{10, {` or `{10 {` or `{1+1  {`
+					// but not:
+					// `a {` or `fn{10 + {`
+					if self.is_in_fn_init_arr_init_group()
+						&& arity_state == Arity::PotentialEnd
+					{
+						self.register_arity_argument();
 					}
-					break 'main;
+					arity_state = Arity::Operator;
+
+					if self.mode == Mode::TakeOneUnit {
+						break 'main;
+					}
+
+					// This is an error, e.g. `.. {` instead of `.. + {`.
+					log!("Expected an operator or the end of expression, found `{{` instead!");
+
+					// Panic: Since the state starts with `State::Operand` and we are in now `State::AfterOperand`,
+					// we can be certain at least one item is on the stack.
+					let prev_operand_span = self.get_previous_span().unwrap();
+					self.errors.push(SyntaxErr::FoundOperandAfterOperand(
+						prev_operand_span,
+						*span,
+					));
+
+					just_started_arity_group = true;
 				}
 				Token::RBrace if state == State::AfterOperand => {
-					// We don't switch state since after a `}`, we are expecting an operator, i.e.
-					// `..}, {..` rather than `..} {..`.
+					if self.is_in_fn_init_arr_init_group() {
+						self.register_arity_argument();
+					}
+					arity_state = Arity::PotentialEnd;
+
 					match self.end_init(*span) {
 						Ok(_) => {}
 						Err(e) => {
@@ -1699,50 +1880,46 @@ impl ShuntingYard {
 					}
 
 					can_start = Start::None;
+
+					// We don't switch state since after a `}`, we are expecting an operator, i.e.
+					// `..}, {..` rather than `..} {..`.
 				}
 				Token::RBrace if state == State::Operand => {
-					if self.just_started_init() || self.is_in_init() {
-						// This is valid, i.e. `{}`, or `{1, }`.
-						match self.end_init(*span) {
-							Ok(_) => {}
-							Err(e) => {
-								if self.mode != Mode::TakeOneUnit {
-									self.errors.push(e);
-								}
-								break 'main;
+					if self.is_in_fn_init_arr_init_group()
+						&& !just_started_arity_group
+					{
+						self.register_arity_argument();
+					}
+					arity_state = Arity::PotentialEnd;
+
+					// This is valid, i.e. `{}`, or `{1, }`.
+					match self.end_init(*span) {
+						Ok(_) => {}
+						Err(e) => {
+							if self.mode != Mode::TakeOneUnit {
+								self.errors.push(e);
 							}
+							break 'main;
 						}
+					}
 
-						// We switch state since after an init list we are expecting an operator, i.e.
-						// `..}, {..` rather than `..} {..`.
-						state = State::AfterOperand;
+					// We switch state since after an init list we are expecting an operator, i.e.
+					// `..}, {..` rather than `..} {..`.
+					state = State::AfterOperand;
 
-						increase_arity = false;
-
-						can_start = Start::None;
-					} else {
-						// This is an error, e.g. `..+ }` instead of `..+ 1}`.
-						log!("Expected an atom or a prefix operator, found `}}` instead!");
-						match self.get_previous_span() {
-							Some(prev_op_span) => {
-								if self.exists_init_group() {
-									self.errors.push(
+					can_start = Start::None;
+					// This is an error, e.g. `..+ }` instead of `..+ 1}`.
+					log!("Expected an atom or a prefix operator, found `}}` instead!");
+					match self.get_previous_span() {
+						Some(prev_op_span) => {
+							if self.exists_init_group() {
+								self.errors.push(
 										SyntaxErr::FoundClosingDelimInsteadOfOperand(
 											prev_op_span,
 											*span,
 										),
 									);
-								} else {
-									if self.mode != Mode::TakeOneUnit {
-										self.errors.push(
-											SyntaxErr::FoundUnmatchedClosingDelim(
-												*span, true,
-											),
-										);
-									}
-								}
-							}
-							None => {
+							} else {
 								if self.mode != Mode::TakeOneUnit {
 									self.errors.push(
 										SyntaxErr::FoundUnmatchedClosingDelim(
@@ -1752,7 +1929,15 @@ impl ShuntingYard {
 								}
 							}
 						}
-						break 'main;
+						None => {
+							if self.mode != Mode::TakeOneUnit {
+								self.errors.push(
+									SyntaxErr::FoundUnmatchedClosingDelim(
+										*span, true,
+									),
+								);
+							}
+						}
 					}
 				}
 				Token::Comma if state == State::AfterOperand => {
@@ -1769,28 +1954,36 @@ impl ShuntingYard {
 					// We switch state since after a comma (which delineates an expression), we're effectively
 					// starting a new expression which must start with an operand, i.e.
 					// `.., 5 + 6` instead of `.., + 6`.
-					self.end_comma();
+
+					if arity_state == Arity::PotentialEnd {
+						self.register_arity_argument();
+					}
+					arity_state = Arity::PotentialEnd;
+
+					self.stack.push_back(Either::Left(Expr {
+						span: *span,
+						ty: ExprTy::Separator,
+					}));
+
 					state = State::Operand;
 
 					can_start = Start::None;
-
-					increase_arity = true;
 				}
 				Token::Comma if state == State::Operand => {
 					// This is an error, e.g. `..+ ,` instead of `..+ 1,`.
 					log!("Expected an atom or a prefix operator, found `,` instead!");
-					match self.get_previous_span() {
-						Some(prev_op_span) => self.errors.push(
-							SyntaxErr::FoundCommaInsteadOfOperand(
-								prev_op_span,
-								*span,
-							),
-						),
-						None => self
-							.errors
-							.push(SyntaxErr::FoundCommaFirstThing(*span)),
+
+					if !just_started_arity_group {
+						self.register_arity_argument();
 					}
-					break 'main;
+					arity_state = Arity::PotentialEnd;
+
+					self.stack.push_back(Either::Left(Expr {
+						span: *span,
+						ty: ExprTy::Separator,
+					}));
+
+					can_start = Start::None;
 				}
 				Token::Dot if state == State::AfterOperand => {
 					// We switch state since after an object access we are execting an operand, i.e.
@@ -1827,6 +2020,13 @@ impl ShuntingYard {
 				}
 			}
 
+			// Reset the flag. This is a separate statement because otherwise this assignment would have to be in
+			// _every_ single branch other than the l_paren branch and this is just cleaner/more maintainable.
+			match token {
+				Token::LParen | Token::LBrace => {}
+				_ => just_started_arity_group = false,
+			}
+
 			walker.advance();
 		}
 
@@ -1837,7 +2037,7 @@ impl ShuntingYard {
 			// Close any open groups.
 			//
 			// We don't take ownership of the group because the individual `collapse_*()` methods do that.
-			while let Some(group) = self.groups.pop_back() {
+			while let Some(group) = self.groups.back_mut() {
 				log!("Found an unclosed: {group:?}");
 
 				// TODO: No invalidation anymore, still syntax errors though.
@@ -1851,6 +2051,23 @@ impl ShuntingYard {
 				// Init - same as above.
 				// ArrInit - same as above.
 				// List - a perfectly valid top-level grouping structure.
+
+				match group {
+					Group::FnCall(_, _)
+					| Group::Init(_, _)
+					| Group::ArrInit(_, _) => {
+						if !just_started_arity_group {
+							self.register_arity_argument();
+						}
+					}
+					_ => {}
+				}
+
+				// After the first iteration, reset to false because if there are more groups, then they definitely
+				// have at least one argument; this empty group.
+				just_started_arity_group = false;
+
+				let group = self.groups.pop_back().unwrap();
 				match group {
 					Group::Paren(_, l_paren) => {
 						self.errors.push(SyntaxErr::UnclosedParenthesis(
@@ -2054,21 +2271,33 @@ impl ShuntingYard {
 						});
 					}
 					OpTy::FnCall(count, l_paren, end) => {
-						let mut args = VecDeque::new();
+						let mut temp = VecDeque::new();
 						for _ in 0..count {
-							args.push_front(stack.pop_back().unwrap());
+							temp.push_front(stack.pop_back().unwrap());
 						}
 						// Get the identifier (which is the first expression).
-						let ident = match args.pop_front().unwrap().ty {
+						let ident = match temp.pop_front().unwrap().ty {
 							ExprTy::Ident(i) => i,
 							_ => panic!("The first expression of a function call operator is not an identifier!")
 						};
+
+						// Construct a proper comma-separated list.
+						let mut args = List::new();
+						while let Some(arg) = temp.pop_front() {
+							match &arg.ty {
+								ExprTy::Separator => {
+									args.push_separator(arg.span)
+								}
+								_ => args.push_item(arg),
+							}
+						}
+
 						stack.push_back(Expr {
 							span: Span::new(ident.span.start, end.end),
 							ty: ExprTy::Fn {
 								ident,
 								l_paren,
-								args: args.into(),
+								args,
 								r_paren: if end.is_zero_width() {
 									None
 								} else {
@@ -2099,12 +2328,22 @@ impl ShuntingYard {
 						});
 					}
 					OpTy::Init(count, l_brace, r_brace) => {
-						// Note: the span for `Op::Init` is from the start of the `{` to the end of the `}`.
-						let mut args = Vec::new();
+						let mut temp = VecDeque::new();
 						for _ in 0..count {
-							args.push(stack.pop_back().unwrap());
+							temp.push_front(stack.pop_back().unwrap());
 						}
-						args.reverse();
+
+						// Construct a proper comma-separated list.
+						let mut args = List::new();
+						while let Some(arg) = temp.pop_front() {
+							match &arg.ty {
+								ExprTy::Separator => {
+									args.push_separator(arg.span)
+								}
+								_ => args.push_item(arg),
+							}
+						}
+
 						stack.push_back(Expr {
 							ty: ExprTy::Init {
 								l_brace,
@@ -2119,24 +2358,37 @@ impl ShuntingYard {
 						});
 					}
 					OpTy::ArrInit(count, l_paren, end) => {
-						let mut args = VecDeque::new();
+						let mut temp = VecDeque::new();
 						for _ in 0..count {
-							args.push_front(stack.pop_back().unwrap());
+							temp.push_front(stack.pop_back().unwrap());
 						}
+
 						// Get the index operator (which is the first expression).
-						let arr = args.pop_front().unwrap();
+						let arr = temp.pop_front().unwrap();
 						match arr.ty {
 							ExprTy::Index { .. } => {}
 							_ => {
 								panic!("The first expression of an array constructor operator is not an `Expr::Index`!");
 							}
 						}
+
+						// Construct a proper comma-separated list.
+						let mut args = List::new();
+						while let Some(arg) = temp.pop_front() {
+							match &arg.ty {
+								ExprTy::Separator => {
+									args.push_separator(arg.span)
+								}
+								_ => args.push_item(arg),
+							}
+						}
+
 						stack.push_back(Expr {
 							span: Span::new(arr.span.start, end.end),
 							ty: ExprTy::ArrInit {
 								arr: Box::from(arr),
 								l_paren,
-								args: args.into(),
+								args,
 								r_paren: if end.is_zero_width() {
 									None
 								} else {

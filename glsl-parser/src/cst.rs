@@ -357,14 +357,21 @@ pub enum ExprTy {
 	/// A number token which could not be parsed as a valid number, e.g. `1.0B` cannot be converted to a valid
 	/// `Lit` because `B` is not a valid numerical suffix.
 	Invalid,
+	Separator,
 	/// A literal value; either a number or a boolean.
 	Lit(Lit),
 	/// An identifier; could be a variable name, function name, type name, etc.
 	Ident(Ident),
 	/// A prefix operation.
-	Prefix { op: PreOp, expr: Option<Box<Expr>> },
+	Prefix {
+		op: PreOp,
+		expr: Option<Box<Expr>>,
+	},
 	/// A postfix operation.
-	Postfix { expr: Box<Expr>, op: PostOp },
+	Postfix {
+		expr: Box<Expr>,
+		op: PostOp,
+	},
 	/// A binary expression with a left and right hand-side.
 	Binary {
 		left: Box<Expr>,
@@ -391,18 +398,21 @@ pub enum ExprTy {
 		r_bracket: Option<Span>,
 	},
 	/// Object access.
-	ObjAccess { obj: Box<Expr>, leaf: Box<Expr> },
+	ObjAccess {
+		obj: Box<Expr>,
+		leaf: Box<Expr>,
+	},
 	/// A function call.
 	Fn {
 		ident: Ident,
 		l_paren: Span,
-		args: Vec<Expr>,
+		args: List<Expr>,
 		r_paren: Option<Span>,
 	},
 	/// An initializer list.
 	Init {
 		l_brace: Span,
-		args: Vec<Expr>,
+		args: List<Expr>,
 		r_brace: Option<Span>,
 	},
 	/// An array constructor.
@@ -411,7 +421,7 @@ pub enum ExprTy {
 		arr: Box<Expr>,
 		l_paren: Span,
 		/// Contains the expressions within the brackets i.e. `..](a, b, ...)`.
-		args: Vec<Expr>,
+		args: List<Expr>,
 		r_paren: Option<Span>,
 	},
 	/// A general list expression, e.g. `a, b`.

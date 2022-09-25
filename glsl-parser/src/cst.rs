@@ -192,7 +192,7 @@ impl Expr {
 
 		match &self.ty {
 			ExprTy::List(v) => {
-				for expr in v {
+				for expr in v.item_iter() {
 					match Ident::from_expr(&expr.ty) {
 						Some(result) => idents.push(result),
 						None => {}
@@ -214,7 +214,7 @@ impl Expr {
 		match &self.ty {
 			// TODO: Track comma spans.
 			ExprTy::List(v) => {
-				for expr in v {
+				for expr in v.item_iter() {
 					match Ident::from_expr(&expr.ty) {
 						Some(_) => idents.push_item(expr.clone()),
 						None => {}
@@ -400,7 +400,8 @@ pub enum ExprTy {
 	/// Object access.
 	ObjAccess {
 		obj: Box<Expr>,
-		leaf: Box<Expr>,
+		dot: Span,
+		leaf: Option<Box<Expr>>,
 	},
 	/// A function call.
 	Fn {
@@ -425,7 +426,7 @@ pub enum ExprTy {
 		r_paren: Option<Span>,
 	},
 	/// A general list expression, e.g. `a, b`.
-	List(Vec<Expr>),
+	List(List<Expr>),
 }
 
 /// A symbol-seperated list of items of type `T`.
@@ -515,6 +516,162 @@ impl<T> List<T> {
 		ListItemIterator {
 			items: &self.entries,
 			cursor: 0,
+		}
+	}
+}
+
+impl List<Expr> {
+	pub fn analyze_syntax_errors_fn_arr_init(
+		&self,
+		syntax_errors: &mut Vec<SyntaxErr>,
+		l_paren: Span,
+	) {
+		enum Prev {
+			None,
+			Item(Span),
+			Comma(Span),
+		}
+		let mut previous = Prev::None;
+		let mut cursor = 0;
+		while let Some((item, comma)) = self.entries.get(cursor) {
+			if let Some(item) = item {
+				match previous {
+					Prev::Item(span) => syntax_errors.push(
+						SyntaxErr::ExprExpectedCommaAfterArg(
+							span.next_single_width(),
+						),
+					),
+					_ => {}
+				}
+
+				previous = Prev::Item(item.span);
+			}
+
+			if let Some(comma) = comma {
+				match previous {
+					Prev::Comma(span) => syntax_errors.push(
+						SyntaxErr::ExprExpectedArgAfterComma(
+							span.next_single_width(),
+						),
+					),
+					Prev::None => syntax_errors.push(
+						SyntaxErr::ExprExpectedArgBetweenParenComma(
+							l_paren.next_single_width(),
+						),
+					),
+					_ => {}
+				}
+
+				previous = Prev::Comma(*comma);
+			}
+
+			cursor += 1;
+		}
+		if let Prev::Comma(span) = previous {
+			syntax_errors.push(SyntaxErr::ExprExpectedArgAfterComma(
+				span.next_single_width(),
+			));
+		}
+	}
+
+	pub fn analyze_syntax_errors_init(
+		&self,
+		syntax_errors: &mut Vec<SyntaxErr>,
+		l_brace: Span,
+	) {
+		enum Prev {
+			None,
+			Item(Span),
+			Comma(Span),
+		}
+		let mut previous = Prev::None;
+		let mut cursor = 0;
+		while let Some((item, comma)) = self.entries.get(cursor) {
+			if let Some(item) = item {
+				match previous {
+					Prev::Item(span) => syntax_errors.push(
+						SyntaxErr::ExprExpectedCommaAfterArg(
+							span.next_single_width(),
+						),
+					),
+					_ => {}
+				}
+
+				previous = Prev::Item(item.span);
+			}
+
+			if let Some(comma) = comma {
+				match previous {
+					Prev::Comma(span) => syntax_errors.push(
+						SyntaxErr::ExprExpectedArgAfterComma(
+							span.next_single_width(),
+						),
+					),
+					Prev::None => syntax_errors.push(
+						SyntaxErr::ExprExpectedArgBetweenBraceComma(
+							l_brace.next_single_width(),
+						),
+					),
+					_ => {}
+				}
+
+				previous = Prev::Comma(*comma);
+			}
+
+			cursor += 1;
+		}
+		// We don't check for a trailing comma because that is legal in an initializer list.
+	}
+
+	pub fn analyze_syntax_errors_list(
+		&self,
+		syntax_errors: &mut Vec<SyntaxErr>,
+	) {
+		enum Prev {
+			None,
+			Item(Span),
+			Comma(Span),
+		}
+		let mut previous = Prev::None;
+		let mut cursor = 0;
+		while let Some((item, comma)) = self.entries.get(cursor) {
+			if let Some(item) = item {
+				match previous {
+					Prev::Item(span) => syntax_errors.push(
+						SyntaxErr::ExprExpectedExprAfterComma(
+							span.next_single_width(),
+						),
+					),
+					_ => {}
+				}
+
+				previous = Prev::Item(item.span);
+			}
+
+			if let Some(comma) = comma {
+				match previous {
+					Prev::Comma(span) => syntax_errors.push(
+						SyntaxErr::ExprExpectedExprAfterComma(
+							span.next_single_width(),
+						),
+					),
+					Prev::None => syntax_errors.push(
+						SyntaxErr::ExprExpectedExprBeforeComma(
+							comma.previous_single_width(),
+						),
+					),
+					_ => {}
+				}
+
+				previous = Prev::Comma(*comma);
+			}
+
+			cursor += 1;
+		}
+		if let Prev::Comma(span) = previous {
+			syntax_errors.push(SyntaxErr::ExprExpectedExprAfterComma(
+				span.next_single_width(),
+			));
 		}
 	}
 }

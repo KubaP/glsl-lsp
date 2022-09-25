@@ -135,6 +135,8 @@ enum OpTy {
 	Lt(bool),
 	Ge(bool),
 	Le(bool),
+	/// The `bool` represents whether to consume a node for the leaf expression (after the dot).
+	ObjAccess(bool),
 	/* PREFIX OPERATORS */
 	/* The `bool` represents whether to consume a node for the expression. */
 	AddPre(bool),
@@ -156,8 +158,6 @@ enum OpTy {
 	InitStart,
 	/// The `(` token.
 	ArrInitStart,
-	/* TODO */
-	ObjAccess,
 	/* GROUPS */
 	/// A parenthesis group. This operator spans from the opening parenthesis to the closing parenthesis.
 	///
@@ -252,7 +252,7 @@ impl Op {
 	#[rustfmt::skip]
 	fn precedence(&self) -> usize {
 		match &self.ty {
-			OpTy::ObjAccess => 33,
+			OpTy::ObjAccess(_) => 33,
 			OpTy::AddPost | OpTy::SubPost => 31,
 			OpTy::AddPre(_)
 			| OpTy::SubPre(_)
@@ -290,7 +290,6 @@ impl Op {
 
 impl From<Op> for BinOp {
 	fn from(op: Op) -> Self {
-		use crate::cst::BinOpTy;
 		Self {
 			span: op.span,
 			ty: match op.ty {
@@ -396,6 +395,7 @@ impl ShuntingYard {
 				|| back.ty == OpTy::IndexStart
 				|| back.ty == OpTy::FnCallStart
 				|| back.ty == OpTy::InitStart
+				|| back.ty == OpTy::ArrInitStart
 			{
 				// Group delimiter start operators always have the highest precedence, so we don't need to check
 				// further.
@@ -403,10 +403,13 @@ impl ShuntingYard {
 			}
 
 			// This is done to make `ObjAccess` right-associative.
-			if op.ty == OpTy::ObjAccess && back.ty == OpTy::ObjAccess {
-				let moved = self.operators.pop_back().unwrap();
-				self.stack.push_back(Either::Right(moved));
-				break;
+			match (&op.ty, &back.ty) {
+				(OpTy::ObjAccess(_), OpTy::ObjAccess(_)) => {
+					let moved = self.operators.pop_back().unwrap();
+					self.stack.push_back(Either::Right(moved));
+					break;
+				}
+				(_, _) => {}
 			}
 
 			if op.precedence() < back.precedence() {
@@ -658,16 +661,13 @@ impl ShuntingYard {
 
 	/// Registers the end of a bracket, function call or array constructor group, popping any operators until the
 	/// start of the group is reached.
-	fn end_bracket_fn(&mut self, end_span: Span) -> Result<(), SyntaxErr> {
+	fn end_bracket_fn(&mut self, end_span: Span) -> Result<(), ()> {
 		let current_group = match self.groups.back() {
 			Some(t) => t,
 			None => {
 				// Since we have no groups, that means we have a lonely `)`. This means we want to stop parsing
 				// further tokens.
-				log!("Found a `)` delimiter without a starting `(` delimiter!");
-				return Err(SyntaxErr::FoundUnmatchedClosingDelim(
-					end_span, false,
-				));
+				return Err(());
 			}
 		};
 
@@ -714,10 +714,7 @@ impl ShuntingYard {
 				} else {
 					// Since we don't have a parenthesis/function/array constructor group at all, that means we
 					// have a lonely `)`. This means we want to stop parsing further tokens.
-					log!("Found a `)` delimiter without a starting `(` delimiter!");
-					return Err(SyntaxErr::FoundUnmatchedClosingDelim(
-						end_span, false,
-					));
+					return Err(());
 				}
 			}
 		}
@@ -738,19 +735,13 @@ impl ShuntingYard {
 	/// reached.
 	///
 	/// `end_span` is a span which ends at the end of this index operator. (The start value is irrelevant).
-	fn end_index(
-		&mut self,
-		end_span: Span,
-	) -> Result<Option<usize>, SyntaxErr> {
+	fn end_index(&mut self, end_span: Span) -> Result<(), ()> {
 		let current_group = match self.groups.back() {
 			Some(t) => t,
 			None => {
 				// Since we have no groups, that means we have a lonely `]`. This means we want to stop parsing
 				// further tokens.
-				log!("Found a `]` delimiter without a starting `[` delimiter!");
-				return Err(SyntaxErr::FoundUnmatchedClosingDelim(
-					end_span, false,
-				));
+				return Err(());
 			}
 		};
 
@@ -813,42 +804,26 @@ impl ShuntingYard {
 			} else {
 				// Since we don't have an index group at all, that means we have a lonely `]`. This means we want
 				// to stop parsing further tokens.
-				log!("Found a `]` delimiter without a starting `[` delimiter!");
-				return Err(SyntaxErr::FoundUnmatchedClosingDelim(
-					end_span, false,
-				));
+				return Err(());
 			}
 		}
 
-		// If this `Index` can start an array constructor, return the start of the identifier token, i.e.
-		//
-		//   ident[...]
-		//  ^
-		let can_start_arr_init = match self.groups.back().unwrap() {
-			Group::Index(_, possible_start) => possible_start,
-			_ => unreachable!(),
-		};
-
 		let group = self.groups.pop_back().unwrap();
 		self.collapse_index(group, end_span);
-		Ok(Some(0))
+		Ok(())
 	}
 
 	/// Registers the end of an initializer list group, popping any operators until the start of the group is
 	/// reached.
-	fn end_init(&mut self, end_span: Span) -> Result<(), SyntaxErr> {
-		let current_group =
-			match self.groups.back() {
-				Some(t) => t,
-				None => {
-					// Since we have no groups, that means we have a lonely `}`. This means we want to stop parsing
-					// further tokens.
-					log!("Found a `}}` delimiter without a starting `{{` delimiter!");
-					return Err(SyntaxErr::FoundUnmatchedClosingDelim(
-						end_span, true,
-					));
-				}
-			};
+	fn end_init(&mut self, end_span: Span) -> Result<(), ()> {
+		let current_group = match self.groups.back() {
+			Some(t) => t,
+			None => {
+				// Since we have no groups, that means we have a lonely `}`. This means we want to stop parsing
+				// further tokens.
+				return Err(());
+			}
+		};
 
 		if std::mem::discriminant(current_group)
 			!= std::mem::discriminant(&Group::Init(0, Span::empty()))
@@ -904,12 +879,7 @@ impl ShuntingYard {
 			} else {
 				// Since we don't have an initializer group at all, that means we have a lonely `}`. This means we
 				// want to stop parsing further tokens.
-				log!(
-					"Found a `}}` delimiter without a starting `{{` delimiter!"
-				);
-				return Err(SyntaxErr::FoundUnmatchedClosingDelim(
-					end_span, true,
-				));
+				return Err(());
 			}
 		}
 
@@ -976,7 +946,14 @@ impl ShuntingYard {
 			let moved = self.operators.pop_back().unwrap();
 			self.stack.push_back(Either::Right(moved));
 		}
-		self.groups.push_back(Group::List(1, self.start_position))
+		self.groups.push_back(Group::List(
+			if self.stack.is_empty() && self.operators.is_empty() {
+				0
+			} else {
+				1
+			},
+			self.start_position,
+		))
 	}
 
 	/// Increases the arity of the current function.
@@ -1038,7 +1015,14 @@ impl ShuntingYard {
 				| OpTy::SubPre(b)
 				| OpTy::Neg(b)
 				| OpTy::Flip(b)
-				| OpTy::Not(b) => *b = true,
+				| OpTy::Not(b)
+				| OpTy::ObjAccess(b) => *b = true,
+				_ => {}
+			}
+		}
+		if let Some(group) = self.groups.back_mut() {
+			match group {
+				Group::Paren(b, _) | Group::Index(b, _) => *b = true,
 				_ => {}
 			}
 		}
@@ -1068,6 +1052,17 @@ impl ShuntingYard {
 		}
 	}
 
+	fn just_started_paren(&self) -> bool {
+		if let Some(current_group) = self.groups.back() {
+			match current_group {
+				Group::Paren(has_inner, _) => *has_inner == false,
+				_ => false,
+			}
+		} else {
+			false
+		}
+	}
+
 	/// Returns whether we are currently in an initializer list parsing group, i.e. `{..<HERE>`
 	fn is_in_init(&self) -> bool {
 		if let Some(current_group) = self.groups.back() {
@@ -1081,12 +1076,13 @@ impl ShuntingYard {
 	}
 
 	/// Returns whether we are currently in a function call, initializer list or array constructor group.
-	fn is_in_fn_init_arr_init_group(&self) -> bool {
+	fn is_in_variable_arg_group(&self) -> bool {
 		if let Some(current_group) = self.groups.back() {
 			match current_group {
 				Group::FnCall(_, _)
 				| Group::Init(_, _)
-				| Group::ArrInit(_, _) => true,
+				| Group::ArrInit(_, _)
+				| Group::List(_, _) => true,
 				_ => false,
 			}
 		} else {
@@ -1177,11 +1173,6 @@ impl ShuntingYard {
 			EmptyIndex,
 		}
 		let mut can_start = Start::None;
-		let mut just_started_arity_group = false;
-
-		// The start position of a potential delimiter, i.e. an `Ident` which may become a function call or an
-		// array constructor.
-		let mut possible_delim_start = 0;
 
 		#[derive(PartialEq)]
 		enum Arity {
@@ -1210,6 +1201,11 @@ impl ShuntingYard {
 		}
 		// The state of arity manipulation set in the previous iteration of the loop.
 		let mut arity_state = Arity::None;
+
+		// Whether we have just started an arity group. This is set to `true` right after we have an opening
+		// delimiter to an arity group, such as `(` or `{`. This is also set to `true` at the beginning here, in
+		// order to correctly handle the case where we encounter a comma `,` as the first token in this expression.
+		let mut just_started_arity_group = true;
 
 		'main: while !walker.is_done() {
 			let (token, span) = match walker.peek() {
@@ -1246,7 +1242,7 @@ impl ShuntingYard {
 					// `fn(10, 5` or `fn(10 5` or `{1+1  100`
 					// but not:
 					// `10 5` or `fn(10 + 5`
-					if self.is_in_fn_init_arr_init_group()
+					if self.is_in_variable_arg_group()
 						&& arity_state == Arity::PotentialEnd
 					{
 						self.register_arity_argument(span.start_zero_width());
@@ -1279,24 +1275,24 @@ impl ShuntingYard {
 						break 'main;
 					}
 
-					self.errors.push(SyntaxErr::FoundOperandAfterOperand(
-						self.get_previous_span().unwrap(),
-						*span,
-					));
-
 					// If we previously had a token which can end an argument of an arity group, and we are in a
 					// delimited arity group, we want to increase the arity, for example:
 					// `fn(10, 5` or `fn(10 5` or `{1+1  100`
 					// but not:
 					// `a b` or `fn(10 + 5`
-					if self.is_in_fn_init_arr_init_group()
+					if self.is_in_variable_arg_group()
 						&& arity_state == Arity::PotentialEnd
 					{
 						self.register_arity_argument(span.start_zero_width());
 					} else {
 						// We are not in a delimited arity group. We don't perform error recovery because in this
-						// situation it's not as obvious what the behaviour should be, so we avoid anything
-						// creating a surprise.
+						// situation it's not as obvious what the behaviour should be, so we avoid any surprises.
+						self.errors.push(
+							SyntaxErr::ExprFoundOperandAfterOperand(
+								self.get_previous_span().unwrap(),
+								*span,
+							),
+						);
 						break 'main;
 					}
 					arity_state = Arity::PotentialEnd;
@@ -1323,7 +1319,7 @@ impl ShuntingYard {
 					// `fn(10, i` or `fn(10 i` or `{1+1  i`
 					// but not:
 					// `a i` or `fn(10 + i`
-					if self.is_in_fn_init_arr_init_group()
+					if self.is_in_variable_arg_group()
 						&& arity_state == Arity::PotentialEnd
 					{
 						self.register_arity_argument(span.start_zero_width());
@@ -1342,9 +1338,8 @@ impl ShuntingYard {
 					// `..10 + i` instead of `..10 i`.
 					state = State::AfterOperand;
 
-					// After an identifier, we may start a function call.
+					// After an identifier, we may start a function call, or eventually an array constructor.
 					can_start = Start::FnOrArr;
-					possible_delim_start = span.start;
 
 					self.set_op_rhs_toggle();
 				}
@@ -1353,24 +1348,24 @@ impl ShuntingYard {
 						break 'main;
 					}
 
-					self.errors.push(SyntaxErr::FoundOperandAfterOperand(
-						self.get_previous_span().unwrap(),
-						*span,
-					));
-
 					// If we previously had a token which can end an argument of an arity group, and we are in a
 					// delimited arity group, we want to increase the arity, for example:
 					// `fn(10, 5` or `fn(10 5` or `{1+1  100`
 					// but not:
 					// `a b` or `fn(10 + 5`
-					if self.is_in_fn_init_arr_init_group()
+					if self.is_in_variable_arg_group()
 						&& arity_state == Arity::PotentialEnd
 					{
 						self.register_arity_argument(span.start_zero_width());
 					} else {
 						// We are not in a delimited arity group. We don't perform error recovery because in this
-						// situation it's not as obvious what the behaviour should be, so we avoid anything
-						// creating a surprise.
+						// situation it's not as obvious what the behaviour should be, so we avoid any surprises.
+						self.errors.push(
+							SyntaxErr::ExprFoundOperandAfterOperand(
+								self.get_previous_span().unwrap(),
+								*span,
+							),
+						);
 						break 'main;
 					}
 					arity_state = Arity::PotentialEnd;
@@ -1385,18 +1380,15 @@ impl ShuntingYard {
 
 					// After an identifier, we may start a function call.
 					can_start = Start::FnOrArr;
-					possible_delim_start = span.start;
 
 					// We don't change state since even though we found an operand instead of an operator, after
 					// this operand we will still be expecting an operator.
 				}
 				Token::Op(op) if state == State::Operand => {
-					// If the parser is set to break at an `=`, do so.
 					if (self.mode == Mode::BreakAtEq
 						|| self.mode == Mode::TakeOneUnit)
 						&& *op == lexer::OpTy::Eq
 					{
-						// self.errors.push(SyntaxErr::FoundEq(*span));
 						break 'main;
 					}
 
@@ -1406,25 +1398,24 @@ impl ShuntingYard {
 						| lexer::OpTy::Flip
 						| lexer::OpTy::AddAdd
 						| lexer::OpTy::SubSub => {
-							self.set_op_rhs_toggle();
-
 							// If we previously had a token which can end an argument of an arity group, and we are
 							// in a delimited arity group, we want to increase the arity, for example:
 							// `fn(10, !true` or `fn(10 !true` or `{1+1  !true`
 							// but not:
 							// `a !true` or `fn(10 + !true`
-							if self.is_in_fn_init_arr_init_group()
+							if self.is_in_variable_arg_group()
 								&& arity_state == Arity::PotentialEnd
 							{
 								self.increase_arity();
 								arity_state = Arity::Operator;
 							}
+
+							self.set_op_rhs_toggle();
 						}
 						_ => {
-							// This is an error, e.g. `..*1` instead of `..-1`.
-							log!("Expected an atom or a prefix operator, found a non-prefix operator instead!");
-							self.errors
-								.push(SyntaxErr::InvalidPrefixOperator(*span));
+							self.errors.push(
+								SyntaxErr::ExprInvalidPrefixOperator(*span),
+							);
 							break 'main;
 						}
 					}
@@ -1460,21 +1451,17 @@ impl ShuntingYard {
 					can_start = Start::None;
 				}
 				Token::Op(op) if state == State::AfterOperand => {
-					// If the parser is set to break at an `=`, do so.
 					if (self.mode == Mode::BreakAtEq
 						|| self.mode == Mode::TakeOneUnit)
 						&& *op == lexer::OpTy::Eq
 					{
-						//self.errors.push(SyntaxErr::FoundEq(*span));
 						break 'main;
 					}
 
 					match op {
 						lexer::OpTy::Flip | lexer::OpTy::Not => {
-							// These operators cannot be directly after an atom, because they are prefix operators.
-							log!("Expected a postfix, index or binary operator, found a prefix operator instead!");
 							self.errors.push(
-								SyntaxErr::FoundPrefixInsteadOfPostfix(*span),
+								SyntaxErr::ExprInvalidBinOrPostOperator(*span),
 							);
 							break 'main;
 						}
@@ -1511,7 +1498,7 @@ impl ShuntingYard {
 					// `fn(10, (` or `fn(10 (` or `{1+1  (`
 					// but not:
 					// `a (` or `fn(10 + (`
-					if self.is_in_fn_init_arr_init_group()
+					if self.is_in_variable_arg_group()
 						&& arity_state == Arity::PotentialEnd
 					{
 						self.register_arity_argument(span.start_zero_width());
@@ -1532,7 +1519,6 @@ impl ShuntingYard {
 					// `..+ ( 1 *` rather than `..+ ( *`.
 				}
 				Token::LParen if state == State::AfterOperand => {
-					arity_state = Arity::Operator;
 					if can_start == Start::FnOrArr {
 						// We have `ident(` which makes this a function call.
 						self.operators.push_back(Op {
@@ -1545,9 +1531,10 @@ impl ShuntingYard {
 						// `fn( 1..` rather than`fn( +..`.1
 						state = State::Operand;
 
-						// We unset the flag, since this flag is only used to detect the `ident` -> `(` token
+						// We unset this flag, since this flag is only used to detect the `ident` -> `(` token
 						// chain.
 						can_start = Start::None;
+
 						just_started_arity_group = true;
 					} else if can_start == Start::ArrInit {
 						// We have `ident[...](` which makes this an array constructor.
@@ -1561,40 +1548,56 @@ impl ShuntingYard {
 						// `int[]( 1,..` rather than`int[]( +1,..`.
 						state = State::Operand;
 
-						// We unset the flag, since this flag is only used to detect the `..]` -> `(` token chain.
+						// We unset this flag, since this flag is only used to detect the `..]` -> `(` token chain.
 						can_start = Start::None;
+
 						just_started_arity_group = true;
 					} else {
-						if self.mode != Mode::TakeOneUnit {
-							// This is an error. e.g. `..1 (` instead of `..1 + (`.
-							log!("Expected an operator or the end of expression, found `(` instead!");
-
-							// Panic: Since the state starts with `State::Operand` and we are in now `State::AfterOperand`,
-							// we can be certain at least one item is on the stack.
-							let prev_operand_span =
-								self.get_previous_span().unwrap();
-							self.errors.push(
-								SyntaxErr::FoundOperandAfterOperand(
-									prev_operand_span,
-									*span,
-								),
+						// We have something like `..5 (`.
+						if self.is_in_variable_arg_group()
+							&& arity_state == Arity::PotentialEnd
+						{
+							self.register_arity_argument(
+								span.start_zero_width(),
 							);
+						} else {
+							// We are not in a delimited arity group. We don't perform error recovery because in
+							// this situation it's not as obvious what the behaviour should be, so we avoid any
+							// surprises.
+							if self.mode != Mode::TakeOneUnit {
+								self.errors.push(
+									SyntaxErr::ExprFoundOperandAfterOperand(
+										self.get_previous_span().unwrap(),
+										*span,
+									),
+								);
+							}
+							break 'main;
 						}
-						break 'main;
+
+						self.set_op_rhs_toggle();
+
+						self.operators.push_back(Op {
+							span: *span,
+							ty: OpTy::ParenStart,
+						});
+						self.groups.push_back(Group::Paren(false, *span));
+
+						state = State::Operand;
+
+						can_start = Start::None;
 					}
+					arity_state = Arity::Operator;
 				}
 				Token::RParen if state == State::AfterOperand => {
-					if self.is_in_fn_init_arr_init_group() {
+					if self.is_in_variable_arg_group() {
 						self.register_arity_argument(span.start_zero_width());
 					}
 					arity_state = Arity::PotentialEnd;
 
 					match self.end_bracket_fn(*span) {
 						Ok(_) => {}
-						Err(e) => {
-							if self.mode != Mode::TakeOneUnit {
-								self.errors.push(e);
-							}
+						Err(_) => {
 							break 'main;
 						}
 					}
@@ -1605,59 +1608,38 @@ impl ShuntingYard {
 					// `..) + 5` rather than `..) 5`.
 				}
 				Token::RParen if state == State::Operand => {
-					if self.is_in_fn_init_arr_init_group()
+					if self.is_in_variable_arg_group()
 						&& !just_started_arity_group
 					{
 						self.register_arity_argument(span.start_zero_width());
 					}
 					arity_state = Arity::PotentialEnd;
 
+					let prev_op_span = self.get_previous_span();
+					let empty_group = self.just_started_paren();
+
 					match self.end_bracket_fn(*span) {
 						Ok(_) => {}
-						Err(e) => {
-							if self.mode != Mode::TakeOneUnit {
-								self.errors.push(e);
-							}
+						Err(_) => {
 							break 'main;
 						}
 					}
 
+					self.errors.push(if empty_group {
+						SyntaxErr::ExprFoundEmptyParenGroup(Span::new_between(
+							prev_op_span.unwrap(),
+							*span,
+						))
+					} else {
+						SyntaxErr::ExprFoundRParenInsteadOfOperand(
+							prev_op_span.unwrap(),
+							*span,
+						)
+					});
+
 					state = State::AfterOperand;
 
 					can_start = Start::None;
-
-					// This is an error, e.g. `..+ )` instead of `..+ 1)`,
-					// or `fn(..,)` instead of `fn(.., 1)`.
-					log!("Expected an atom or a prefix operator, found `)` instead!");
-					match self.get_previous_span() {
-						Some(prev_op_span) => {
-							if self.exists_paren_fn_group() {
-								self.errors.push(
-										SyntaxErr::FoundClosingDelimInsteadOfOperand(
-											prev_op_span,
-											*span,
-										),
-									);
-							} else {
-								if self.mode != Mode::TakeOneUnit {
-									self.errors.push(
-										SyntaxErr::FoundUnmatchedClosingDelim(
-											*span, false,
-										),
-									);
-								}
-							}
-						}
-						None => {
-							if self.mode != Mode::TakeOneUnit {
-								self.errors.push(
-									SyntaxErr::FoundUnmatchedClosingDelim(
-										*span, false,
-									),
-								);
-							}
-						}
-					}
 				}
 				Token::LBracket if state == State::AfterOperand => {
 					// We switch state since after a `[`, we are expecting an operand, i.e.
@@ -1666,15 +1648,8 @@ impl ShuntingYard {
 						span: *span,
 						ty: OpTy::IndexStart,
 					});
-					if can_start == Start::FnOrArr {
-						// Since we just had an `Expr::Ident` before, this `Index` may be part of a greater array
-						// constructor, so we want to store the starting position in case it is needed later.
-						self.groups.push_back(Group::Index(true, *span));
-					} else {
-						// We had something other than an `Expr::Ident` beforehand, so don't bother storing the
-						// position.
-						self.groups.push_back(Group::Index(true, *span));
-					}
+					self.groups.push_back(Group::Index(false, *span));
+
 					state = State::Operand;
 
 					arity_state = Arity::Operator;
@@ -1683,115 +1658,60 @@ impl ShuntingYard {
 				}
 				Token::LBracket if state == State::Operand => {
 					if self.mode != Mode::TakeOneUnit {
-						// This is an error, e.g. `..+ [` instead of `..+ i[`.
-						log!("Expected an atom or a prefix operator, found `[` instead!");
-						match self.get_previous_span() {
-							Some(prev_op_span) => self.errors.push(
-								SyntaxErr::FoundOperatorInsteadOfOperand(
-									prev_op_span,
-									*span,
-								),
+						self.errors.push(
+							SyntaxErr::ExprFoundLBracketInsteadOfOperand(
+								self.get_previous_span(),
+								*span,
 							),
-							None => self.errors.push(
-								SyntaxErr::FoundOperatorFirstThing(*span),
-							),
-						}
+						);
 					}
 					break 'main;
-
-					arity_state = Arity::Operator;
 				}
 				Token::RBracket if state == State::AfterOperand => {
 					// We don't switch state since after a `]`, we are expecting an operator, i.e.
 					// `..] + 5` instead of `..] 5`.
 					match self.end_index(*span) {
-						Ok(can_start_arr_init) => {
-							if let Some(delim_start) = can_start_arr_init {
-								// After an index `ident[..]` we may have an array constructor.
-								can_start = Start::ArrInit;
-								// We want to set the possible start value to the one provided by the index, so
-								// that if we encounter a `(`, we create an `ArrInit` with the correct span.
-								possible_delim_start = delim_start;
-							}
-						}
-						Err(e) => {
-							if self.mode != Mode::TakeOneUnit {
-								self.errors.push(e);
-							}
+						Ok(_) => {}
+						Err(_) => {
 							break 'main;
 						}
 					}
 
+					// After an index `ident[..]` we may have an array constructor.
+					can_start = Start::ArrInit;
+
 					arity_state = Arity::PotentialEnd;
 				}
 				Token::RBracket if state == State::Operand => {
-					arity_state = Arity::PotentialEnd;
 					if can_start == Start::EmptyIndex {
-						// We switch state since after a `]`, we are expecting an operator, i.e.
-						// `..[] + 5` rather than `..[] 5`.
-
-						match self.groups.back_mut() {
-							Some(g) => match g {
-								Group::Index(contains_i, _) => {
-									*contains_i = false
-								}
-								_ => unreachable!(),
-							},
-							None => unreachable!(),
-						}
-
 						match self.end_index(*span) {
-							Ok(can_start_arr_init) => {
-								if let Some(delim_start) = can_start_arr_init {
-									// After an index `ident[]` we may have an array constructor.
-									can_start = Start::ArrInit;
-									// We want to set the possible start value to the one provided by the index, so
-									// that if we encounter a `(`, we create an `ArrInit` with the correct span.
-									possible_delim_start = delim_start;
-								}
-							}
-							Err(e) => {
-								if self.mode != Mode::TakeOneUnit {
-									self.errors.push(e);
-								}
+							Ok(_) => {}
+							Err(_) => {
 								break 'main;
 							}
 						}
-						state = State::AfterOperand;
 					} else {
-						// This is an error, e.g. `..+ ]` instead of `..+ 1]`.
-						log!("Expected an atom or a prefix operator, found `]` instead!");
-						match self.get_previous_span() {
-							Some(prev_op_span) => {
-								if self.exists_index_group() {
-									self.errors.push(
-										SyntaxErr::FoundClosingDelimInsteadOfOperand(
-											prev_op_span,
-											*span,
-										),
-									);
-								} else {
-									if self.mode != Mode::TakeOneUnit {
-										self.errors.push(
-											SyntaxErr::FoundUnmatchedClosingDelim(
-												*span, false,
-											),
-										);
-									}
-								}
-							}
-							None => {
-								if self.mode != Mode::TakeOneUnit {
-									self.errors.push(
-										SyntaxErr::FoundUnmatchedClosingDelim(
-											*span, false,
-										),
-									);
-								}
+						let prev_op_span = self.get_previous_span();
+
+						match self.end_index(*span) {
+							Ok(_) => {}
+							Err(_) => {
+								break 'main;
 							}
 						}
-						break 'main;
+
+						self.errors.push(
+							SyntaxErr::ExprFoundRBracketInsteadOfOperand(
+								prev_op_span.unwrap(),
+								*span,
+							),
+						);
 					}
+					// We switch state since after a `]`, we are expecting an operator, i.e.
+					// `..[] + 5` rather than `..[] 5`.
+					state = State::AfterOperand;
+
+					arity_state = Arity::PotentialEnd;
 				}
 				Token::LBrace if state == State::Operand => {
 					// If we previously had a token which can end an argument of an arity group, and we are in a
@@ -1799,7 +1719,7 @@ impl ShuntingYard {
 					// `{10, {` or `{10 {` or `{1+1  {`
 					// but not:
 					// `a {` or `fn{10 + {`
-					if self.is_in_fn_init_arr_init_group()
+					if self.is_in_variable_arg_group()
 						&& arity_state == Arity::PotentialEnd
 					{
 						self.register_arity_argument(span.start_zero_width());
@@ -1815,6 +1735,7 @@ impl ShuntingYard {
 					self.groups.push_back(Group::Init(0, *span));
 
 					can_start = Start::None;
+
 					just_started_arity_group = true;
 
 					// We don't switch state since after a `{`, we are expecting an operand, i.e.
@@ -1826,42 +1747,46 @@ impl ShuntingYard {
 					// `{10, {` or `{10 {` or `{1+1  {`
 					// but not:
 					// `a {` or `fn{10 + {`
-					if self.is_in_fn_init_arr_init_group()
+					if self.is_in_variable_arg_group()
 						&& arity_state == Arity::PotentialEnd
 					{
 						self.register_arity_argument(span.start_zero_width());
+					} else {
+						if self.mode != Mode::TakeOneUnit {
+							self.errors.push(
+								SyntaxErr::ExprFoundOperandAfterOperand(
+									self.get_previous_span().unwrap(),
+									*span,
+								),
+							);
+						}
+						break 'main;
 					}
 					arity_state = Arity::Operator;
 
-					if self.mode == Mode::TakeOneUnit {
-						break 'main;
-					}
+					self.set_op_rhs_toggle();
 
-					// This is an error, e.g. `.. {` instead of `.. + {`.
-					log!("Expected an operator or the end of expression, found `{{` instead!");
+					self.operators.push_back(Op {
+						span: *span,
+						ty: OpTy::InitStart,
+					});
+					self.groups.push_back(Group::Init(0, *span));
 
-					// Panic: Since the state starts with `State::Operand` and we are in now `State::AfterOperand`,
-					// we can be certain at least one item is on the stack.
-					let prev_operand_span = self.get_previous_span().unwrap();
-					self.errors.push(SyntaxErr::FoundOperandAfterOperand(
-						prev_operand_span,
-						*span,
-					));
+					state = State::Operand;
+
+					can_start = Start::None;
 
 					just_started_arity_group = true;
 				}
 				Token::RBrace if state == State::AfterOperand => {
-					if self.is_in_fn_init_arr_init_group() {
+					if self.is_in_variable_arg_group() {
 						self.register_arity_argument(span.start_zero_width());
 					}
 					arity_state = Arity::PotentialEnd;
 
 					match self.end_init(*span) {
 						Ok(_) => {}
-						Err(e) => {
-							if self.mode != Mode::TakeOneUnit {
-								self.errors.push(e);
-							}
+						Err(_) => {
 							break 'main;
 						}
 					}
@@ -1872,75 +1797,48 @@ impl ShuntingYard {
 					// `..}, {..` rather than `..} {..`.
 				}
 				Token::RBrace if state == State::Operand => {
-					if self.is_in_fn_init_arr_init_group()
+					if self.is_in_variable_arg_group()
 						&& !just_started_arity_group
 					{
 						self.register_arity_argument(span.start_zero_width());
 					}
 					arity_state = Arity::PotentialEnd;
 
+					let prev_op_span = self.get_previous_span();
+					let empty_group = self.just_started_init();
+
 					// This is valid, i.e. `{}`, or `{1, }`.
 					match self.end_init(*span) {
 						Ok(_) => {}
-						Err(e) => {
-							if self.mode != Mode::TakeOneUnit {
-								self.errors.push(e);
-							}
+						Err(_) => {
 							break 'main;
 						}
 					}
+
+					self.errors.push(if empty_group {
+						SyntaxErr::ExprFoundEmptyInitializerGroup(
+							Span::new_between(prev_op_span.unwrap(), *span),
+						)
+					} else {
+						SyntaxErr::ExprFoundRBraceInsteadOfOperand(
+							prev_op_span.unwrap(),
+							*span,
+						)
+					});
 
 					// We switch state since after an init list we are expecting an operator, i.e.
 					// `..}, {..` rather than `..} {..`.
 					state = State::AfterOperand;
 
 					can_start = Start::None;
-					// This is an error, e.g. `..+ }` instead of `..+ 1}`.
-					log!("Expected an atom or a prefix operator, found `}}` instead!");
-					match self.get_previous_span() {
-						Some(prev_op_span) => {
-							if self.exists_init_group() {
-								self.errors.push(
-										SyntaxErr::FoundClosingDelimInsteadOfOperand(
-											prev_op_span,
-											*span,
-										),
-									);
-							} else {
-								if self.mode != Mode::TakeOneUnit {
-									self.errors.push(
-										SyntaxErr::FoundUnmatchedClosingDelim(
-											*span, true,
-										),
-									);
-								}
-							}
-						}
-						None => {
-							if self.mode != Mode::TakeOneUnit {
-								self.errors.push(
-									SyntaxErr::FoundUnmatchedClosingDelim(
-										*span, true,
-									),
-								);
-							}
-						}
-					}
 				}
 				Token::Comma if state == State::AfterOperand => {
 					if (self.mode == Mode::DisallowTopLevelList
 						|| self.mode == Mode::TakeOneUnit)
 						&& self.groups.is_empty()
 					{
-						log!("Found a `,` outside of a group, with `Mode::DisallowTopLevelList`!");
-						//self.errors
-						//	.push(SyntaxErr::FoundCommaAtTopLevel(*span));
 						break 'main;
 					}
-
-					// We switch state since after a comma (which delineates an expression), we're effectively
-					// starting a new expression which must start with an operand, i.e.
-					// `.., 5 + 6` instead of `.., + 6`.
 
 					if arity_state == Arity::PotentialEnd {
 						self.register_arity_argument(span.start_zero_width());
@@ -1952,13 +1850,47 @@ impl ShuntingYard {
 						ty: ExprTy::Separator,
 					}));
 
+					// We switch state since after a comma (which delineates an expression), we're effectively
+					// starting a new expression which must start with an operand, i.e.
+					// `.., 5 + 6` instead of `.., + 6`.
 					state = State::Operand;
 
 					can_start = Start::None;
 				}
 				Token::Comma if state == State::Operand => {
+					if (self.mode == Mode::DisallowTopLevelList
+						|| self.mode == Mode::TakeOneUnit)
+						&& self.groups.is_empty()
+					{
+						break 'main;
+					}
+
 					// This is an error, e.g. `..+ ,` instead of `..+ 1,`.
-					log!("Expected an atom or a prefix operator, found `,` instead!");
+					// We only create this error if there is something before this comma, because if there isn't,
+					// the list analysis will produce an error anyway, and we don't want two errors for the same
+					// incorrect syntax.
+					if !self.operators.is_empty() {
+						self.errors.push(
+							SyntaxErr::ExprFoundCommaInsteadOfOperand(
+								self.get_previous_span().unwrap(),
+								*span,
+							),
+						);
+					} else if !self.stack.is_empty() {
+						if let Some(Either::Left(Expr {
+							ty: ExprTy::Separator,
+							span: _,
+						})) = self.stack.back()
+						{
+						} else {
+							self.errors.push(
+								SyntaxErr::ExprFoundCommaInsteadOfOperand(
+									self.get_previous_span().unwrap(),
+									*span,
+								),
+							);
+						}
+					}
 
 					if can_start == Start::EmptyIndex {
 						match self.groups.back_mut() {
@@ -1972,7 +1904,9 @@ impl ShuntingYard {
 						}
 					}
 
-					if !just_started_arity_group {
+					if !just_started_arity_group
+						|| self.is_in_variable_arg_group() == false
+					{
 						self.register_arity_argument(span.start_zero_width());
 					}
 					arity_state = Arity::PotentialEnd;
@@ -1985,36 +1919,37 @@ impl ShuntingYard {
 					can_start = Start::None;
 				}
 				Token::Dot if state == State::AfterOperand => {
-					// We switch state since after an object access we are execting an operand, i.e.
-					// `ident.something` rather than `ident. +`.
+					// We don't need to consider arity because a dot after an operand will always be a valid object
+					// access notation, and in the alternate branch we don't recover from the error.
+
 					self.push_operator(Op {
 						span: *span,
-						ty: OpTy::ObjAccess,
+						ty: OpTy::ObjAccess(false),
 					});
+
+					// We switch state since after an object access we are execting an operand, such as:
+					// `foo. bar()`.
 					state = State::Operand;
 
 					can_start = Start::None;
 				}
 				Token::Dot if state == State::Operand => {
-					// This is an error, e.g. `ident.+` instead of `ident.something`.
-					log!("Expected an atom or a prefix operator, found `.` instead!");
-					match self.get_previous_span() {
-						Some(prev_op_span) => self.errors.push(
-							SyntaxErr::FoundDotInsteadOfOperand(
-								prev_op_span,
-								*span,
-							),
-						),
-						None => self
-							.errors
-							.push(SyntaxErr::FoundDotFirstThing(*span)),
-					}
+					// We have encountered something like: `foo + . ` or `foo.bar(). . `.
+					//
+					// We do not recover from this error because we currently mandate that the `ExprTy::ObjAccess`
+					// node has a left-hand side.
+					//
+					// MAYBE: Should we make this a recoverable situation? (If so we need to consider arity)
+
+					self.errors.push(SyntaxErr::ExprFoundDotInsteadOfOperand(
+						self.get_previous_span(),
+						*span,
+					));
 					break 'main;
 				}
 				_ => {
-					// We have a token that's not allowed to be part of an expression.
-					log!("Unexpected token found: {token:?}");
-					self.errors.push(SyntaxErr::FoundInvalidToken(*span));
+					// We have encountered an unexpected token that's not allowed to be part of an expression.
+					self.errors.push(SyntaxErr::ExprFoundInvalidToken(*span));
 					break 'main;
 				}
 			}
@@ -2035,22 +1970,8 @@ impl ShuntingYard {
 
 			// Close any open groups.
 			//
-			// We don't take ownership of the group because the individual `collapse_*()` methods do that.
+			// Note: we don't take ownership of the group because the individual `collapse_*()` methods do that.
 			while let Some(group) = self.groups.back_mut() {
-				log!("Found an unclosed: {group:?}");
-
-				// TODO: No invalidation anymore, still syntax errors though.
-				// Reasoning about what gets invalidated and what doesn't: will it potentially produce semantic errors
-				//
-				// Brackets - no matter where the closing parenthesis is located, it won't change whether the
-				// 	 expression type checks or not.
-				// Index - depending on where the closing bracket is placed, it can change whether the expression
-				// 	 type checks or not.
-				// Fn - depending on where the closing parenthesis is, it can change the number of arguments.
-				// Init - same as above.
-				// ArrInit - same as above.
-				// List - a perfectly valid top-level grouping structure.
-
 				match group {
 					Group::FnCall(_, _)
 					| Group::Init(_, _)
@@ -2059,6 +1980,9 @@ impl ShuntingYard {
 							self.register_arity_argument(group_end);
 						}
 					}
+					// A list always goes to the end of the expression, so we never increment the counter in the
+					// main loop, hence we must always do it here.
+					Group::List(count, _) => *count += 1,
 					_ => {}
 				}
 
@@ -2069,33 +1993,37 @@ impl ShuntingYard {
 				let group = self.groups.pop_back().unwrap();
 				match group {
 					Group::Paren(_, l_paren) => {
-						self.errors.push(SyntaxErr::UnclosedParenthesis(
+						self.errors.push(SyntaxErr::ExprUnclosedParenthesis(
 							l_paren, group_end,
 						));
 						self.collapse_bracket(group, group_end);
 					}
 					Group::Index(_, l_bracket) => {
-						self.errors.push(SyntaxErr::UnclosedIndexOperator(
+						self.errors.push(SyntaxErr::ExprUnclosedIndexOperator(
 							l_bracket, group_end,
 						));
 						self.collapse_index(group, group_end)
 					}
 					Group::FnCall(_, l_paren) => {
-						self.errors.push(SyntaxErr::UnclosedFunctionCall(
+						self.errors.push(SyntaxErr::ExprUnclosedFunctionCall(
 							l_paren, group_end,
 						));
 						self.collapse_fn(group, group_end)
 					}
 					Group::Init(_, l_brace) => {
-						self.errors.push(SyntaxErr::UnclosedInitializerList(
-							l_brace, group_end,
-						));
+						self.errors.push(
+							SyntaxErr::ExprUnclosedInitializerList(
+								l_brace, group_end,
+							),
+						);
 						self.collapse_init(group, group_end)
 					}
 					Group::ArrInit(_, l_paren) => {
-						self.errors.push(SyntaxErr::UnclosedArrayConstructor(
-							l_paren, group_end,
-						));
+						self.errors.push(
+							SyntaxErr::ExprUnclosedArrayConstructor(
+								l_paren, group_end,
+							),
+						);
 						self.collapse_arr_init(group, group_end)
 					}
 					Group::List(_, _) => {
@@ -2256,6 +2184,7 @@ impl ShuntingYard {
 					OpTy::Paren(has_inner, l_span, end) => {
 						let expr =
 							if has_inner { stack.pop_back() } else { None };
+
 						stack.push_back(Expr {
 							span: op.span,
 							ty: ExprTy::Paren {
@@ -2290,6 +2219,11 @@ impl ShuntingYard {
 								_ => args.push_item(arg),
 							}
 						}
+
+						args.analyze_syntax_errors_fn_arr_init(
+							&mut self.errors,
+							l_paren,
+						);
 
 						stack.push_back(Expr {
 							span: Span::new(ident.span.start, end.end),
@@ -2343,6 +2277,11 @@ impl ShuntingYard {
 							}
 						}
 
+						args.analyze_syntax_errors_init(
+							&mut self.errors,
+							l_brace,
+						);
+
 						stack.push_back(Expr {
 							ty: ExprTy::Init {
 								l_brace,
@@ -2382,6 +2321,11 @@ impl ShuntingYard {
 							}
 						}
 
+						args.analyze_syntax_errors_fn_arr_init(
+							&mut self.errors,
+							l_paren,
+						);
+
 						stack.push_back(Expr {
 							span: Span::new(arr.span.start, end.end),
 							ty: ExprTy::ArrInit {
@@ -2397,24 +2341,48 @@ impl ShuntingYard {
 						});
 					}
 					OpTy::List(count) => {
-						let mut args = Vec::new();
+						let mut temp = VecDeque::new();
 						for _ in 0..count {
-							args.push(stack.pop_back().unwrap());
+							temp.push_front(stack.pop_back().unwrap());
 						}
-						args.reverse();
+
+						// Construct a proper comma-separated list.
+						let mut args = List::new();
+						while let Some(arg) = temp.pop_front() {
+							match &arg.ty {
+								ExprTy::Separator => {
+									args.push_separator(arg.span)
+								}
+								_ => args.push_item(arg),
+							}
+						}
+
+						args.analyze_syntax_errors_list(&mut self.errors);
+
 						stack.push_back(Expr {
 							ty: ExprTy::List(args),
 							span: op.span,
 						});
 					}
-					OpTy::ObjAccess => {
-						let access = stack.pop_back().unwrap();
-						let obj = stack.pop_back().unwrap();
-						let span = span(obj.span.start, access.span.end);
+					OpTy::ObjAccess(has_rhs) => {
+						let last = stack.pop_back().unwrap();
+						let (left, right) = if has_rhs {
+							(stack.pop_back().unwrap(), Some(last))
+						} else {
+							(last, None)
+						};
+
+						let span = if let Some(ref right) = right {
+							Span::new(left.span.start, right.span.end)
+						} else {
+							Span::new(left.span.start, op.span.end)
+						};
+
 						stack.push_back(Expr {
 							ty: ExprTy::ObjAccess {
-								obj: Box::from(obj),
-								leaf: Box::from(access),
+								obj: Box::from(left),
+								dot: op.span,
+								leaf: right.map(|e| Box::from(e)),
 							},
 							span,
 						});
@@ -2455,9 +2423,6 @@ impl ShuntingYard {
 						} else {
 							(last, None)
 						};
-						//dbg!(has_rhs);
-						//dbg!(&left);
-						//dbg!(&right);
 
 						let span = if let Some(ref right) = right {
 							Span::new(left.span.start, right.span.end)
@@ -2490,563 +2455,7 @@ impl ShuntingYard {
 	}
 }
 
-#[cfg(test)]
-use crate::lexer::lexer;
-
-#[cfg(test)]
-macro_rules! assert_expr {
-	($source:expr, $rest:expr) => {
-		let mut walker = Walker {
-			token_stream: lexer($source),
-			cursor: 0,
-		};
-		assert_eq!(
-			expr_parser(&mut walker, Mode::Default, &[]).0.unwrap(),
-			$rest
-		);
-	};
-}
-
-#[test]
-fn functions() {
-	assert_expr!(
-		"fn()",
-		Expr {
-			ty: ExprTy::Fn {
-				ident: Ident {
-					name: "fn".into(),
-					span: span(0, 2)
-				},
-				l_paren: span(2, 3),
-				args: List::new(),
-				r_paren: Some(span(3, 4)),
-			},
-			span: span(0, 4),
-		}
-	);
-	let mut args = List::new();
-	args.push_item(Expr {
-		ty: ExprTy::Lit(Lit::Int(1)),
-		span: span(3, 4),
-	});
-	assert_expr!(
-		"fn(1)",
-		Expr {
-			ty: ExprTy::Fn {
-				ident: Ident {
-					name: "fn".into(),
-					span: span(0, 2)
-				},
-				l_paren: span(2, 3),
-				args,
-				r_paren: Some(span(4, 5)),
-			},
-			span: span(0, 5),
-		}
-	);
-	let mut args = List::new();
-	args.push_item(Expr {
-		ty: ExprTy::Lit(Lit::Int(1)),
-		span: span(3, 4),
-	});
-	args.push_separator(span(4, 5));
-	args.push_item(Expr {
-		ty: ExprTy::Lit(Lit::Float(5.0)),
-		span: span(6, 9),
-	});
-	args.push_separator(span(9, 10));
-	args.push_item(Expr {
-		ty: ExprTy::Ident(Ident {
-			name: "ident".into(),
-			span: span(11, 16),
-		}),
-		span: span(11, 16),
-	});
-	assert_expr!(
-		"fn(1, 5.0, ident)",
-		Expr {
-			ty: ExprTy::Fn {
-				ident: Ident {
-					name: "fn".into(),
-					span: span(0, 2)
-				},
-				l_paren: span(2, 3),
-				args,
-				r_paren: Some(span(16, 17)),
-			},
-			span: span(0, 17),
-		}
-	);
-	let mut args = List::new();
-	args.push_item(Expr {
-		ty: ExprTy::Lit(Lit::Int(1)),
-		span: span(3, 4),
-	});
-	args.push_separator(span(4, 5));
-	args.push_item(Expr {
-		ty: ExprTy::Lit(Lit::Float(5.0)),
-		span: span(6, 9),
-	});
-	args.push_separator(span(9, 10));
-	assert_expr!(
-		"fn(1, 5.0, )",
-		Expr {
-			ty: ExprTy::Fn {
-				ident: Ident {
-					name: "fn".into(),
-					span: span(0, 2)
-				},
-				l_paren: span(2, 3),
-				args,
-				r_paren: Some(span(11, 12)),
-			},
-			span: span(0, 12),
-		}
-	);
-	let mut args = List::new();
-	args.push_item(Expr {
-		ty: ExprTy::Lit(Lit::Int(1)),
-		span: span(3, 4),
-	});
-	args.push_item(Expr {
-		ty: ExprTy::Lit(Lit::Float(5.0)),
-		span: span(5, 8),
-	});
-	assert_expr!(
-		"fn(1 5.0)",
-		Expr {
-			ty: ExprTy::Fn {
-				ident: Ident {
-					name: "fn".into(),
-					span: span(0, 2)
-				},
-				l_paren: span(2, 3),
-				args,
-				r_paren: Some(span(8, 9)),
-			},
-			span: span(0, 9),
-		}
-	);
-	let mut args = List::new();
-	args.push_item(Expr {
-		ty: ExprTy::Lit(Lit::Int(1)),
-		span: span(3, 4),
-	});
-	args.push_item(Expr {
-		ty: ExprTy::Lit(Lit::Float(5.0)),
-		span: span(5, 8),
-	});
-	args.push_separator(span(8, 9));
-	args.push_item(Expr {
-		ty: ExprTy::Ident(Ident {
-			name: "ident".into(),
-			span: span(10, 15),
-		}),
-		span: span(10, 15),
-	});
-	assert_expr!(
-		"fn(1 5.0, ident)",
-		Expr {
-			ty: ExprTy::Fn {
-				ident: Ident {
-					name: "fn".into(),
-					span: span(0, 2)
-				},
-				l_paren: span(2, 3),
-				args,
-				r_paren: Some(span(15, 16)),
-			},
-			span: span(0, 16),
-		}
-	);
-	let mut args = List::new();
-	args.push_item(Expr {
-		ty: ExprTy::Lit(Lit::Int(1)),
-		span: span(3, 4),
-	});
-	args.push_item(Expr {
-		ty: ExprTy::Lit(Lit::Float(5.0)),
-		span: span(5, 8),
-	});
-	args.push_separator(span(8, 9));
-	args.push_separator(span(10, 11));
-	args.push_separator(span(12, 13));
-	assert_expr!(
-		"fn(1 5.0, , ,)",
-		Expr {
-			ty: ExprTy::Fn {
-				ident: Ident {
-					name: "fn".into(),
-					span: span(0, 2)
-				},
-				l_paren: span(2, 3),
-				args,
-				r_paren: Some(span(13, 14)),
-			},
-			span: span(0, 14),
-		}
-	);
-	let mut args = List::new();
-	args.push_separator(span(3, 4));
-	args.push_item(Expr {
-		ty: ExprTy::Lit(Lit::Int(1)),
-		span: span(5, 6),
-	});
-	args.push_separator(span(7, 8));
-	args.push_item(Expr {
-		ty: ExprTy::Lit(Lit::Float(5.0)),
-		span: span(8, 11),
-	});
-	assert_expr!(
-		"fn(, 1 ,5.0)",
-		Expr {
-			ty: ExprTy::Fn {
-				ident: Ident {
-					name: "fn".into(),
-					span: span(0, 2)
-				},
-				l_paren: span(2, 3),
-				args,
-				r_paren: Some(span(11, 12)),
-			},
-			span: span(0, 12),
-		}
-	);
-	let mut args = List::new();
-	args.push_separator(span(3, 4));
-	assert_expr!(
-		"fn(,)",
-		Expr {
-			ty: ExprTy::Fn {
-				ident: Ident {
-					name: "fn".into(),
-					span: span(0, 2)
-				},
-				l_paren: span(2, 3),
-				args,
-				r_paren: Some(span(4, 5)),
-			},
-			span: span(0, 5),
-		}
-	);
-	let mut args = List::new();
-	args.push_separator(span(3, 4));
-	args.push_separator(span(4, 5));
-	args.push_separator(span(5, 6));
-	assert_expr!(
-		"fn(,,,)",
-		Expr {
-			ty: ExprTy::Fn {
-				ident: Ident {
-					name: "fn".into(),
-					span: span(0, 2)
-				},
-				l_paren: span(2, 3),
-				args,
-				r_paren: Some(span(6, 7)),
-			},
-			span: span(0, 7),
-		}
-	);
-	let mut args = List::new();
-	args.push_item(Expr {
-		ty: ExprTy::Binary {
-			left: Box::from(Expr {
-				ty: ExprTy::Lit(Lit::Int(5)),
-				span: span(3, 4),
-			}),
-			op: BinOp {
-				ty: BinOpTy::Add,
-				span: span(5, 6),
-			},
-			right: None,
-		},
-		span: span(3, 6),
-	});
-	args.push_separator(span(6, 7));
-	args.push_item(Expr {
-		ty: ExprTy::Lit(Lit::Int(1)),
-		span: span(8, 9),
-	});
-	assert_expr!(
-		"fn(5 +, 1)",
-		Expr {
-			ty: ExprTy::Fn {
-				ident: Ident {
-					name: "fn".into(),
-					span: span(0, 2)
-				},
-				l_paren: span(2, 3),
-				args,
-				r_paren: Some(span(9, 10)),
-			},
-			span: span(0, 10),
-		}
-	);
-}
-
-#[test]
-fn functions_missing_r_paren() {
-	assert_expr!(
-		"fn(",
-		Expr {
-			ty: ExprTy::Fn {
-				ident: Ident {
-					name: "fn".into(),
-					span: span(0, 2)
-				},
-				l_paren: span(2, 3),
-				args: List::new(),
-				r_paren: None,
-			},
-			span: span(0, 3),
-		}
-	);
-	let mut args = List::new();
-	args.push_item(Expr {
-		ty: ExprTy::Lit(Lit::Int(1)),
-		span: span(3, 4),
-	});
-	assert_expr!(
-		"fn(1",
-		Expr {
-			ty: ExprTy::Fn {
-				ident: Ident {
-					name: "fn".into(),
-					span: span(0, 2)
-				},
-				l_paren: span(2, 3),
-				args,
-				r_paren: None,
-			},
-			span: span(0, 4),
-		}
-	);
-	let mut args = List::new();
-	args.push_item(Expr {
-		ty: ExprTy::Lit(Lit::Int(1)),
-		span: span(3, 4),
-	});
-	args.push_separator(span(4, 5));
-	args.push_item(Expr {
-		ty: ExprTy::Lit(Lit::Float(5.0)),
-		span: span(6, 9),
-	});
-	args.push_separator(span(9, 10));
-	args.push_item(Expr {
-		ty: ExprTy::Ident(Ident {
-			name: "ident".into(),
-			span: span(11, 16),
-		}),
-		span: span(11, 16),
-	});
-	assert_expr!(
-		"fn(1, 5.0, ident",
-		Expr {
-			ty: ExprTy::Fn {
-				ident: Ident {
-					name: "fn".into(),
-					span: span(0, 2)
-				},
-				l_paren: span(2, 3),
-				args,
-				r_paren: None,
-			},
-			span: span(0, 16),
-		}
-	);
-	let mut args = List::new();
-	args.push_item(Expr {
-		ty: ExprTy::Lit(Lit::Int(1)),
-		span: span(3, 4),
-	});
-	args.push_separator(span(4, 5));
-	args.push_item(Expr {
-		ty: ExprTy::Lit(Lit::Float(5.0)),
-		span: span(6, 9),
-	});
-	args.push_separator(span(9, 10));
-	assert_expr!(
-		"fn(1, 5.0,",
-		Expr {
-			ty: ExprTy::Fn {
-				ident: Ident {
-					name: "fn".into(),
-					span: span(0, 2)
-				},
-				l_paren: span(2, 3),
-				args,
-				r_paren: None,
-			},
-			span: span(0, 10),
-		}
-	);
-	let mut args = List::new();
-	args.push_item(Expr {
-		ty: ExprTy::Lit(Lit::Int(1)),
-		span: span(3, 4),
-	});
-	args.push_item(Expr {
-		ty: ExprTy::Lit(Lit::Float(5.0)),
-		span: span(5, 8),
-	});
-	assert_expr!(
-		"fn(1 5.0",
-		Expr {
-			ty: ExprTy::Fn {
-				ident: Ident {
-					name: "fn".into(),
-					span: span(0, 2)
-				},
-				l_paren: span(2, 3),
-				args,
-				r_paren: None,
-			},
-			span: span(0, 8),
-		}
-	);
-	let mut args = List::new();
-	args.push_item(Expr {
-		ty: ExprTy::Lit(Lit::Int(1)),
-		span: span(3, 4),
-	});
-	args.push_item(Expr {
-		ty: ExprTy::Lit(Lit::Float(5.0)),
-		span: span(5, 8),
-	});
-	args.push_separator(span(8, 9));
-	args.push_item(Expr {
-		ty: ExprTy::Ident(Ident {
-			name: "ident".into(),
-			span: span(10, 15),
-		}),
-		span: span(10, 15),
-	});
-	assert_expr!(
-		"fn(1 5.0, ident",
-		Expr {
-			ty: ExprTy::Fn {
-				ident: Ident {
-					name: "fn".into(),
-					span: span(0, 2)
-				},
-				l_paren: span(2, 3),
-				args,
-				r_paren: None,
-			},
-			span: span(0, 15),
-		}
-	);
-	let mut args = List::new();
-	args.push_item(Expr {
-		ty: ExprTy::Lit(Lit::Int(1)),
-		span: span(3, 4),
-	});
-	args.push_item(Expr {
-		ty: ExprTy::Lit(Lit::Float(5.0)),
-		span: span(5, 8),
-	});
-	args.push_separator(span(8, 9));
-	args.push_separator(span(10, 11));
-	args.push_separator(span(12, 13));
-	assert_expr!(
-		"fn(1 5.0, , ,",
-		Expr {
-			ty: ExprTy::Fn {
-				ident: Ident {
-					name: "fn".into(),
-					span: span(0, 2)
-				},
-				l_paren: span(2, 3),
-				args,
-				r_paren: None,
-			},
-			span: span(0, 13),
-		}
-	);
-	let mut args = List::new();
-	args.push_separator(span(3, 4));
-	args.push_item(Expr {
-		ty: ExprTy::Lit(Lit::Int(1)),
-		span: span(5, 6),
-	});
-	args.push_separator(span(7, 8));
-	args.push_item(Expr {
-		ty: ExprTy::Lit(Lit::Float(5.0)),
-		span: span(8, 11),
-	});
-	assert_expr!(
-		"fn(, 1 ,5.0",
-		Expr {
-			ty: ExprTy::Fn {
-				ident: Ident {
-					name: "fn".into(),
-					span: span(0, 2)
-				},
-				l_paren: span(2, 3),
-				args,
-				r_paren: None,
-			},
-			span: span(0, 11),
-		}
-	);
-	let mut args = List::new();
-	args.push_separator(span(3, 4));
-	assert_expr!(
-		"fn(,",
-		Expr {
-			ty: ExprTy::Fn {
-				ident: Ident {
-					name: "fn".into(),
-					span: span(0, 2)
-				},
-				l_paren: span(2, 3),
-				args,
-				r_paren: None,
-			},
-			span: span(0, 4),
-		}
-	);
-	let mut args = List::new();
-	args.push_separator(span(3, 4));
-	args.push_separator(span(4, 5));
-	args.push_separator(span(5, 6));
-	assert_expr!(
-		"fn(,,,",
-		Expr {
-			ty: ExprTy::Fn {
-				ident: Ident {
-					name: "fn".into(),
-					span: span(0, 2)
-				},
-				l_paren: span(2, 3),
-				args,
-				r_paren: None,
-			},
-			span: span(0, 6),
-		}
-	);
-}
-
 /*
-#[cfg(test)]
-use crate::lexer::lexer;
-
-/// Asserts whether the expression output of the `expr_parser()` matches the right hand side.
-#[cfg(test)]
-macro_rules! assert_expr {
-	($source:expr, $rest:expr) => {
-		let mut walker = Walker {
-			token_stream: lexer($source),
-			cursor: 0,
-		};
-		assert_eq!(
-			expr_parser(&mut walker, Mode::Default, &[]).0.unwrap(),
-			$rest
-		);
-	};
-}
-
 #[test]
 #[rustfmt::skip]
 fn binaries() {

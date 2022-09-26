@@ -135,8 +135,12 @@ enum OpTy {
 	Lt(bool),
 	Ge(bool),
 	Le(bool),
-	/// The `bool` represents whether to consume a node for the leaf expression (after the dot).
+	/// The `bool` represents whether to consume a node for the leaf expression (after the `.`).
 	ObjAccess(bool),
+	/// The `bool` represents whether to consume a node for the if expression (after the `?`).
+	TernaryQ(bool),
+	/// The `bool` represents whether to consume a node for the else expression (after the `:`).
+	TernaryC(bool),
 	/* PREFIX OPERATORS */
 	/* The `bool` represents whether to consume a node for the expression. */
 	AddPre(bool),
@@ -270,7 +274,8 @@ impl Op {
 			OpTy::AndAnd(_) => 11,
 			OpTy::XorXor(_) => 9,
 			OpTy::OrOr(_) => 7,
-			// TODO: Ternary
+			OpTy::TernaryQ(_) => 5,
+			OpTy::TernaryC(_) => 3,
 			OpTy::Eq(_)
 			| OpTy::AddEq(_)
 			| OpTy::SubEq(_)
@@ -281,7 +286,7 @@ impl Op {
 			| OpTy::XorEq(_)
 			| OpTy::OrEq(_)
 			| OpTy::LShiftEq(_)
-			| OpTy::RShiftEq(_) => 3,
+			| OpTy::RShiftEq(_) => 1,
 			// These are never directly checked for precedence, but rather have special branches.
 			_ => panic!("The operator {self:?} does not have a precedence value because it should never be passed into this function. Something has gone wrong!"),
 		}
@@ -367,6 +372,8 @@ enum Group {
 	/// have a list within a list since there are no delimiters, and commas within the other groups won't create an
 	/// inner list but rather increase the arity).
 	List(usize, usize),
+	/// A ternary expression.
+	Ternary,
 }
 
 struct ShuntingYard {
@@ -388,6 +395,17 @@ impl ShuntingYard {
 	/// Pushes an operator onto the stack, potentially popping any operators which have a greater precedence than
 	/// the operator being pushed.
 	fn push_operator(&mut self, op: Op) {
+		if let OpTy::TernaryC(_) = op.ty {
+			// This completes the ternary.
+			match self.groups.pop_back() {
+				Some(group) => match group {
+					Group::Ternary => {}
+					_ => panic!("Should be in ternary group"),
+				},
+				None => panic!("Should be in ternary group"),
+			};
+		}
+
 		while self.operators.back().is_some() {
 			let back = self.operators.back().unwrap();
 
@@ -402,12 +420,24 @@ impl ShuntingYard {
 				break;
 			}
 
-			// This is done to make `ObjAccess` right-associative.
 			match (&op.ty, &back.ty) {
+				// This is done to make `ObjAccess` right-associative.
 				(OpTy::ObjAccess(_), OpTy::ObjAccess(_)) => {
 					let moved = self.operators.pop_back().unwrap();
 					self.stack.push_back(Either::Right(moved));
 					break;
+				}
+				// These are done to make the ternary operator right-associate correctly. This is slightly more
+				// complex since the ternary is made of two distinct "operators", the `?` and `:`.
+				(OpTy::TernaryC(_), OpTy::TernaryQ(_)) => {
+					let moved = self.operators.pop_back().unwrap();
+					self.stack.push_back(Either::Right(moved));
+					break;
+				}
+				(OpTy::TernaryC(_), OpTy::TernaryC(_)) => {
+					let moved = self.operators.pop_back().unwrap();
+					self.stack.push_back(Either::Right(moved));
+					continue;
 				}
 				(_, _) => {}
 			}
@@ -681,12 +711,12 @@ impl ShuntingYard {
 				if self.exists_paren_fn_group() {
 					// We have at least one other group to close before we can close the bracket/function/array
 					// constructor group.
-					'inner: while let Some(current_group) =
-						self.groups.pop_back()
-					{
+					'inner: while let Some(current_group) = self.groups.back() {
 						match current_group {
 							Group::Init(_, _) => {
 								log!("Unclosed `}}` initializer list found!");
+								let current_group =
+									self.groups.pop_back().unwrap();
 								self.collapse_init(
 									current_group,
 									span(
@@ -697,15 +727,42 @@ impl ShuntingYard {
 							}
 							Group::Index(_, _) => {
 								log!("Unclosed `]` index operator found!");
+								let current_group =
+									self.groups.pop_back().unwrap();
 								self.collapse_index(
 									current_group,
 									end_span.start_zero_width(),
 								)
 							}
-							Group::List(_, _) => self.collapse_list(
-								current_group,
-								end_span.end_at_previous().end,
-							),
+							Group::List(_, _) => {
+								let current_group =
+									self.groups.pop_back().unwrap();
+
+								self.collapse_list(
+									current_group,
+									end_span.end_at_previous().end,
+								);
+							}
+							Group::Ternary => {
+								'tern: while let Some(op) =
+									self.operators.back()
+								{
+									if let OpTy::TernaryQ(_) = op.ty {
+										let moved =
+											self.operators.pop_back().unwrap();
+										self.stack
+											.push_back(Either::Right(moved));
+										break 'tern;
+									} else {
+										let moved =
+											self.operators.pop_back().unwrap();
+										self.stack
+											.push_back(Either::Right(moved));
+									}
+								}
+
+								self.groups.pop_back();
+							}
 							Group::Paren(_, _)
 							| Group::FnCall(_, _)
 							| Group::ArrInit(_, _) => break 'inner,
@@ -752,10 +809,11 @@ impl ShuntingYard {
 
 			if self.exists_index_group() {
 				// We have at least one other group to close before we can close the index group.
-				'inner: while let Some(current_group) = self.groups.pop_back() {
+				'inner: while let Some(current_group) = self.groups.back() {
 					match current_group {
 						Group::Paren(_, _) => {
 							log!("Unclosed `)` parenthesis found!");
+							let current_group = self.groups.pop_back().unwrap();
 							self.collapse_bracket(
 								current_group,
 								span(
@@ -766,6 +824,7 @@ impl ShuntingYard {
 						}
 						Group::FnCall(_, _) => {
 							log!("Unclosed `)` function call found!");
+							let current_group = self.groups.pop_back().unwrap();
 							self.collapse_fn(
 								current_group,
 								span(
@@ -776,6 +835,7 @@ impl ShuntingYard {
 						}
 						Group::Init(_, _) => {
 							log!("Unclosed `}}` initializer list found!");
+							let current_group = self.groups.pop_back().unwrap();
 							self.collapse_init(
 								current_group,
 								span(
@@ -786,6 +846,7 @@ impl ShuntingYard {
 						}
 						Group::ArrInit(_, _) => {
 							log!("Unclosed `)` array constructor found!");
+							let current_group = self.groups.pop_back().unwrap();
 							self.collapse_arr_init(
 								current_group,
 								span(
@@ -794,10 +855,29 @@ impl ShuntingYard {
 								),
 							);
 						}
-						Group::List(_, _) => self.collapse_list(
-							current_group,
-							end_span.end_at_previous().end,
-						),
+						Group::Ternary => {
+							'tern: while let Some(op) = self.operators.back() {
+								if let OpTy::TernaryQ(_) = op.ty {
+									let moved =
+										self.operators.pop_back().unwrap();
+									self.stack.push_back(Either::Right(moved));
+									break 'tern;
+								} else {
+									let moved =
+										self.operators.pop_back().unwrap();
+									self.stack.push_back(Either::Right(moved));
+								}
+							}
+
+							self.groups.pop_back();
+						}
+						Group::List(_, _) => {
+							let current_group = self.groups.pop_back().unwrap();
+							self.collapse_list(
+								current_group,
+								end_span.end_at_previous().end,
+							)
+						}
 						Group::Index(_, _) => break 'inner,
 					}
 				}
@@ -832,10 +912,11 @@ impl ShuntingYard {
 
 			if self.exists_init_group() {
 				// We have at least one other group to close before we can close the initializer group.
-				'inner: while let Some(current_group) = self.groups.pop_back() {
+				'inner: while let Some(current_group) = self.groups.back() {
 					match current_group {
 						Group::Paren(_, _) => {
 							log!("Unclosed `)` parenthesis found!");
+							let current_group = self.groups.pop_back().unwrap();
 							self.collapse_bracket(
 								current_group,
 								span(
@@ -846,6 +927,7 @@ impl ShuntingYard {
 						}
 						Group::Index(_, _) => {
 							log!("Unclosed `]` index operator found!");
+							let current_group = self.groups.pop_back().unwrap();
 							self.collapse_index(
 								current_group,
 								end_span.start_zero_width(),
@@ -853,6 +935,7 @@ impl ShuntingYard {
 						}
 						Group::FnCall(_, _) => {
 							log!("Unclosed `)` function call found!");
+							let current_group = self.groups.pop_back().unwrap();
 							self.collapse_fn(
 								current_group,
 								span(
@@ -863,6 +946,7 @@ impl ShuntingYard {
 						}
 						Group::ArrInit(_, _) => {
 							log!("Unclosed `)` array constructor found!");
+							let current_group = self.groups.pop_back().unwrap();
 							self.collapse_arr_init(
 								current_group,
 								span(
@@ -870,6 +954,22 @@ impl ShuntingYard {
 									end_span.end_at_previous().end,
 								),
 							);
+						}
+						Group::Ternary => {
+							'tern: while let Some(op) = self.operators.back() {
+								if let OpTy::TernaryQ(_) = op.ty {
+									let moved =
+										self.operators.pop_back().unwrap();
+									self.stack.push_back(Either::Right(moved));
+									break 'tern;
+								} else {
+									let moved =
+										self.operators.pop_back().unwrap();
+									self.stack.push_back(Either::Right(moved));
+								}
+							}
+
+							self.groups.pop_back();
 						}
 						// See `List` documentation.
 						Group::List(_, _) => unreachable!(),
@@ -935,6 +1035,20 @@ impl ShuntingYard {
 				Group::Index(_, _) => {
 					let group = self.groups.pop_back().unwrap();
 					self.collapse_index(group, end_span);
+				}
+				Group::Ternary => {
+					'tern: while let Some(op) = self.operators.back() {
+						if let OpTy::TernaryQ(_) = op.ty {
+							let moved = self.operators.pop_back().unwrap();
+							self.stack.push_back(Either::Right(moved));
+							break 'tern;
+						} else {
+							let moved = self.operators.pop_back().unwrap();
+							self.stack.push_back(Either::Right(moved));
+						}
+					}
+
+					self.groups.pop_back();
 				}
 			}
 		}
@@ -1016,6 +1130,8 @@ impl ShuntingYard {
 				| OpTy::Neg(b)
 				| OpTy::Flip(b)
 				| OpTy::Not(b)
+				| OpTy::TernaryQ(b)
+				| OpTy::TernaryC(b)
 				| OpTy::ObjAccess(b) => *b = true,
 				_ => {}
 			}
@@ -1029,14 +1145,22 @@ impl ShuntingYard {
 	}
 
 	/// Returns whether we have just started to parse a function, i.e. `..fn(<HERE>`
-	fn just_started_fn(&self) -> bool {
-		if let Some(current_group) = self.groups.back() {
-			match current_group {
-				Group::FnCall(count, _) => *count == 0,
-				_ => false,
-			}
-		} else {
-			false
+	fn just_started_fn_arr_init(&self) -> bool {
+		let stack_span = self.stack.back().map(|i| match i {
+			Either::Left(e) => e.span,
+			Either::Right(op) => op.span,
+		});
+		let op_span = match self.operators.back() {
+			Some(op) => match op.ty {
+				OpTy::FnCallStart | OpTy::ArrInitStart => op.span,
+				_ => return false,
+			},
+			None => return false,
+		};
+
+		match (stack_span, op_span) {
+			(Some(stack), op_span) => op_span.is_after(&stack),
+			(None, _op_span) => true,
 		}
 	}
 
@@ -1075,6 +1199,17 @@ impl ShuntingYard {
 		}
 	}
 
+	fn is_in_ternary(&self) -> bool {
+		if let Some(current_group) = self.groups.back() {
+			match current_group {
+				Group::Ternary => true,
+				_ => false,
+			}
+		} else {
+			false
+		}
+	}
+
 	/// Returns whether we are currently in a function call, initializer list or array constructor group.
 	fn is_in_variable_arg_group(&self) -> bool {
 		if let Some(current_group) = self.groups.back() {
@@ -1083,6 +1218,18 @@ impl ShuntingYard {
 				| Group::Init(_, _)
 				| Group::ArrInit(_, _)
 				| Group::List(_, _) => true,
+				Group::Ternary => {
+					for group in self.groups.iter().rev() {
+						match group {
+							Group::FnCall(_, _)
+							| Group::Init(_, _)
+							| Group::ArrInit(_, _)
+							| Group::List(_, _) => return true,
+							_ => {}
+						}
+					}
+					false
+				}
 				_ => false,
 			}
 		} else {
@@ -1406,7 +1553,9 @@ impl ShuntingYard {
 							if self.is_in_variable_arg_group()
 								&& arity_state == Arity::PotentialEnd
 							{
-								self.increase_arity();
+								self.register_arity_argument(
+									span.start_zero_width(),
+								);
 								arity_state = Arity::Operator;
 							}
 
@@ -1590,7 +1739,9 @@ impl ShuntingYard {
 					arity_state = Arity::Operator;
 				}
 				Token::RParen if state == State::AfterOperand => {
-					if self.is_in_variable_arg_group() {
+					if !self.just_started_fn_arr_init()
+						&& self.is_in_variable_arg_group()
+					{
 						self.register_arity_argument(span.start_zero_width());
 					}
 					arity_state = Arity::PotentialEnd;
@@ -1947,6 +2098,59 @@ impl ShuntingYard {
 					));
 					break 'main;
 				}
+				Token::Question => {
+					if state == State::Operand {
+						// We have encountered something like: `foo + ?`.
+						self.errors.push(
+							SyntaxErr::ExprFoundQuestionInsteadOfOperand(
+								self.get_previous_span(),
+								*span,
+							),
+						);
+					}
+
+					self.push_operator(Op {
+						span: *span,
+						ty: OpTy::TernaryQ(false),
+					});
+					self.groups.push_back(Group::Ternary);
+
+					// We switch state since after the `?` we are expecting an operand, such as:
+					// `foo ? bar`.
+					state = State::Operand;
+
+					can_start = Start::None;
+
+					arity_state = Arity::Operator;
+				}
+				Token::Colon => {
+					if !self.is_in_ternary() {
+						break 'main;
+					}
+
+					if state == State::Operand {
+						// We have encountered something like: `foo ? a + :`.
+						self.errors.push(
+							SyntaxErr::ExprFoundColonInsteadOfOperand(
+								self.get_previous_span(),
+								*span,
+							),
+						);
+					}
+
+					self.push_operator(Op {
+						span: *span,
+						ty: OpTy::TernaryC(false),
+					});
+
+					// We switch state since after the `:` we are expecting an operand, such as:
+					// `foo ? bar : baz2`.
+					state = State::Operand;
+
+					can_start = Start::None;
+
+					arity_state = Arity::Operator;
+				}
 				_ => {
 					// We have encountered an unexpected token that's not allowed to be part of an expression.
 					self.errors.push(SyntaxErr::ExprFoundInvalidToken(*span));
@@ -2029,6 +2233,7 @@ impl ShuntingYard {
 					Group::List(_, _) => {
 						self.collapse_list(group, group_end.end)
 					}
+					Group::Ternary => {}
 				}
 			}
 		}
@@ -2179,6 +2384,69 @@ impl ShuntingYard {
 								},
 								expr: expr.map(|e| Box::from(e)),
 							},
+						});
+					}
+					OpTy::TernaryQ(has_rhs) => {
+						let last = stack.pop_back().unwrap();
+						let (cond, true_) = if has_rhs {
+							(stack.pop_back().unwrap(), Some(last))
+						} else {
+							(last, None)
+						};
+
+						let span = if let Some(ref true_) = true_ {
+							Span::new(cond.span.start, true_.span.end)
+						} else {
+							Span::new(cond.span.start, op.span.end)
+						};
+
+						stack.push_back(Expr {
+							ty: ExprTy::Ternary {
+								cond: Box::from(cond),
+								question: op.span,
+								true_: true_.map(|e| Box::from(e)),
+								colon: None,
+								false_: None,
+							},
+							span,
+						});
+					}
+					OpTy::TernaryC(has_rhs) => {
+						let last = stack.pop_back().unwrap();
+						let (prev, false_) = if has_rhs {
+							(stack.pop_back().unwrap(), Some(last))
+						} else {
+							(last, None)
+						};
+
+						let (cond, question, true_) = match prev.ty {
+							ExprTy::Ternary {
+								cond,
+								question,
+								true_,
+								colon: _,
+								false_: _,
+							} => (cond, question, true_),
+							// Panics: `prev` is guaranteed to be a `ExprTy::Ternary` which only has the `cond`,
+							// `question` and `true_` fields filled in.
+							_ => unreachable!(),
+						};
+
+						let span = if let Some(ref false_) = false_ {
+							Span::new(prev.span.start, false_.span.end)
+						} else {
+							Span::new(prev.span.start, op.span.end)
+						};
+
+						stack.push_back(Expr {
+							ty: ExprTy::Ternary {
+								cond,
+								question,
+								true_,
+								colon: Some(op.span),
+								false_: false_.map(|e| Box::from(e)),
+							},
+							span,
 						});
 					}
 					OpTy::Paren(has_inner, l_span, end) => {

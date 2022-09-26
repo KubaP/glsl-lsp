@@ -49,6 +49,24 @@ pub enum SyntaxErr {
 	/// - `0` - the span of the previous operator,
 	/// - `1` - the span of the current comma.
 	ExprFoundCommaInsteadOfOperand(Span, Span),
+	/// In the position that either a prefix operator or operand were expected to occur, we found a question mark.
+	/// E.g. `foo + ?`.
+	///
+	/// Note that this error is generated if the first token encountered when parsing a new expression is a
+	/// question mark.
+	///
+	/// - `0` - the span of the previous operator,
+	/// - `1` - the span of the current question mark.
+	ExprFoundQuestionInsteadOfOperand(Option<Span>, Span),
+	/// In the position that either a prefix operator or operand were expected to occur, we found a colon.
+	/// E.g. `foo ? bar + :`.
+	///
+	/// Note that this error is generated if the first token encountered when parsing a new expression is a
+	/// colon mark.
+	///
+	/// - `0` - the span of the previous operator,
+	/// - `1` - the span of the current colon.
+	ExprFoundColonInsteadOfOperand(Option<Span>, Span),
 	/// Found a [`Token`](crate::lexer::Token) which cannot be part of an expression. E.g. `;`.
 	///
 	/// - `0` - the span of the token.

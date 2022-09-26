@@ -381,8 +381,10 @@ pub enum ExprTy {
 	/// A ternary condition.
 	Ternary {
 		cond: Box<Expr>,
-		true_: Box<Expr>,
-		false_: Box<Expr>,
+		question: Span,
+		true_: Option<Box<Expr>>,
+		colon: Option<Span>,
+		false_: Option<Box<Expr>>,
 	},
 	/// A parenthesis group.
 	Paren {

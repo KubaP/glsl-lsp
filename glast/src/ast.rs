@@ -1,3 +1,5 @@
+//! Types and functionality related to the Abstract Syntax Tree.
+
 use crate::cst::{Expr, ExprTy};
 
 // Re-export shared types. This is to make things clearer. If you're operating on the AST, you only import from the

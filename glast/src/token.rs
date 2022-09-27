@@ -1,3 +1,5 @@
+//! Types and functionality related to the Token Stream.
+
 use crate::{
 	cst::{Expr, Layout, LayoutTy},
 	span::{Span, Spanned},
@@ -16,6 +18,16 @@ pub type TokenStream = Vec<Spanned<Token>>;
 /// i---7      becomes (i) (--) (-) (7)
 /// i-----7    becomes (i) (--) (--) (-) (7)
 /// i-- - --7  becomes (i) (--) (-) (--) (7)
+/// ```
+///
+/// # Examples
+/// Parse a simple GLSL expression:
+/// ```rust
+/// # use glast::token::parse_from_str;
+/// let src = r#"
+/// int i = 5.0 + 1;
+/// "#;
+/// let token_stream = parse_from_str(&src);
 /// ```
 pub fn parse_from_str(source: &str) -> TokenStream {
 	let mut tokens = Vec::new();

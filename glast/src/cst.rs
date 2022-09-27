@@ -1,3 +1,5 @@
+//! Types and functionality related to the Concrete Syntax Tree.
+
 mod parser;
 
 use crate::{
@@ -8,10 +10,20 @@ use crate::{
 	Either,
 };
 
-/// A concrete syntax tree. This represents the root of a GLSL source file.
+/// A concrete syntax tree; this vector represents the root of a GLSL source file.
 pub type Cst = Vec<Node>;
 
 /// Parses a string representing the GLSL source file into a Concrete Syntax Tree.
+///
+/// # Examples
+/// Parse a simple GLSL expression:
+/// ```rust
+/// # use glast::cst::parse_from_str;
+/// let src = r#"
+/// int i = 5.0 + 1;
+/// "#;
+/// let (cst, syntax_errors) = parse_from_str(&src);
+/// ```
 pub fn parse_from_str(source: &str) -> (Cst, Vec<SyntaxErr>) {
 	use self::parser::{parse_stmt, Walker};
 
@@ -31,6 +43,18 @@ pub fn parse_from_str(source: &str) -> (Cst, Vec<SyntaxErr>) {
 }
 
 /// Parses a token stream into a Concrete Syntax Tree.
+///
+/// # Examples
+/// Parse a simple GLSL expression, whilst performing some custom logic between the steps:
+/// ```rust
+/// # use glast::{cst, token};
+/// let src = r#"
+/// int i = 5.0 + 1;
+/// "#;
+/// let token_stream = token::parse_from_str(&src);
+/// // .. do some logic
+/// let (cst, syntax_errors) = cst::parse_from_token_stream(token_stream);
+/// ```
 pub fn parse_from_token_stream(
 	stream: crate::token::TokenStream,
 ) -> (Cst, Vec<SyntaxErr>) {
@@ -52,6 +76,33 @@ pub fn parse_from_token_stream(
 /// Prints the concrete syntax tree.
 ///
 /// This produces a formatted [`String`] which contains all of the information of the CST.
+///
+/// # Examples
+/// Print the contents for debugging purposes:
+/// ```rust
+/// # use glast::cst::{parse_from_str, print_tree};
+/// let src = r#"
+/// int i = 5.0 + 1;
+/// "#;
+/// let (cst, syntax_errors) = parse_from_str(&src);
+/// println!("{}", print_tree(&cst));
+/// ```
+/// would result in:
+/// ```text
+/// VAR_DECL@0..16
+///     TYPE@0..3
+///         IDENT@0..3 "int"
+///     IDENT
+///         IDENT@4..5 "i"
+///     EQ@6..7
+///     VALUE@8..15
+///         BINARY@8..15
+///             LIT_FLOAT@8..11 "5.0"
+///             OP@12..13 "+"
+///             LIT_INT@14..15 "1"
+///     SEMI@15..16
+/// ```
+/// *Note that this string representation is not stable and can change at any time.*
 pub fn print_tree(cst: &Cst) -> String {
 	if let Some(last) = cst.last() {
 		use std::fmt::Write;

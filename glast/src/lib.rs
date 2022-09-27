@@ -4,13 +4,15 @@
 //! constructs yet, and the `ast` module is mostly empty. ⚠
 //!
 //! This crate is split into modules representing the different stages of parsing:
-//! - `token` - token streams produced by the lexer,
-//! - `cst` - concrete syntax trees produced as an intermediate step of the parser,
-//! - `ast` - abstract syntax trees produced as the final output of the parser.
+//! - `token` - token stream produced by the lexer,
+//! - `cst` - concrete syntax tree produced as an intermediate step of the parser,
+//! - `ast` - abstract syntax tree produced as the final output of the parser.
 //!
-//! You can invoke a specific parsing stage individually, such as calling `glast::token::lexer()` or
-//! `glast::cst::parse_from_token_stream()` and chaining them however you need, or you can invoke all of the stages
-//! automatically by calling a function such as `glast::cst::parse_from_source_str()`.
+//! You can invoke a specific parsing stage individually, such as calling
+//! [`glast::token::parse_from_str()`](self::token::parse_from_str()) or
+//! [`glast::cst::parse_from_token_stream()`](self::cst::parse_from_token_stream()) and chaining them however you
+//! need, or you can invoke all of the stages automatically by calling a function such as
+//! [`glast::cst::parse_from_str()`](self::cst::parse_from_str()).
 //!
 //! ## The parsing pipeline
 //! This crate breaks up the individual parsing steps into separate modules which can be invoked individually. The
@@ -25,7 +27,7 @@
 //! int i = 5.0+1;
 //! ```
 //!
-//! ### Token stream
+//! ### Token Stream
 //! This is the first transformation in the parsing pipeline, and it converts a string of characters into a list of
 //! tokens. The source string would become (in pseudocode):
 //! ```text

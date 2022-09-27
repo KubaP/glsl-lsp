@@ -1,0 +1,75 @@
+name: publish-glast
+
+on:
+    push:
+        branches:
+            - "release/glast"
+
+    # Allows you to run this workflow manually from the Actions tab
+    workflow_dispatch:
+
+jobs:
+    test:
+        strategy:
+            matrix:
+                os: [ubuntu-latest]
+        runs-on: ${{ matrix.os }}
+        timeout-minutes: 10
+        defaults:
+            run:
+                working-directory: glast
+
+        steps:
+            - name: Checkout repository
+              uses: actions/checkout@v3
+
+            - name: Install rust toolchain
+              run: rustup update
+
+            - name: Run tests
+              run: cargo test
+
+    publish:
+        runs-on: ubuntu-latest
+        timeout-minutes: 10
+        needs: test
+        defaults:
+            run:
+                shell: pwsh
+
+        outputs:
+            version: ${{ steps.out.outputs.version }}
+
+        steps:
+            # Checks-out your repository under $GITHUB_WORKSPACE, so your job can access it
+            - name: Checkout repository
+              uses: actions/checkout@v3
+
+            - name: Install rust toolchain
+              run: rustup update
+
+            - name: Output version
+              id: out
+              run: .\build\build.ps1
+
+            - name: Publish
+              env:
+                  CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN_GLAST }}
+              run: cargo build
+              working-directory: glast
+
+    tag:
+        runs-on: ubuntu-latest
+        timeout-minutes: 10
+        needs: publish
+        defaults:
+            run:
+                shell: pwsh
+
+        steps:
+            # Checks-out your repository under $GITHUB_WORKSPACE, so your job can access it
+            - name: Checkout repository
+              uses: actions/checkout@v3
+
+            - name: Tag
+              run: .\build\release.ps1 -Version "${{ needs.publish.outputs.version }}"

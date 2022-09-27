@@ -322,7 +322,7 @@ pub enum NodeTy {
 /// ```
 /// would be constructed like so:
 /// ```
-/// # use glsl_parser::{cst::List, span::Span};
+/// # use glast::{cst::List, Span};
 /// # let mut list = List::new();
 /// # let t = 1;
 /// # let comma_span = Span::new(0, 1);

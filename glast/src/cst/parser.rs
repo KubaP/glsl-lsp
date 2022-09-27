@@ -1,20 +1,20 @@
-mod printing;
+mod expression;
+pub(super) mod printing;
 
+use self::expression::{expr_parser, Mode};
 use crate::{
 	ast::Type,
 	cst::{
-		Cst, Expr, ExprTy, Ident, IfBranch, IfTy, List, Node, NodeTy, Nodes,
-		Param, Qualifier, QualifierTy, Scope, SwitchBranch,
+		Expr, ExprTy, Ident, IfBranch, IfTy, List, Node, NodeTy, Nodes, Param,
+		Qualifier, QualifierTy, Scope, SwitchBranch,
 	},
 	error::SyntaxErr,
-	expression::{expr_parser, Mode},
-	lexer::{lexer, OpTy, Token, TokenStream},
-	log,
 	span::{Span, Spanned},
+	token::{OpTy, Token, TokenStream},
 	Either,
 };
 
-pub struct Walker {
+pub(super) struct Walker {
 	pub token_stream: TokenStream,
 	pub cursor: usize,
 }
@@ -73,33 +73,17 @@ impl Walker {
 	pub fn get_previous_span(&self) -> Span {
 		self.token_stream
 			.get(self.cursor - 1)
-			.map_or(Span::empty(), |t| t.1)
+			.map_or(Span::new_zero_width(0), |t| t.1)
 	}
 
 	/// Returns the [`Span`] of the last `Token`.
 	///
 	/// *Note:* If there are no tokens, the span returned will be `0-0`.
 	pub fn get_last_span(&self) -> Span {
-		self.token_stream.last().map_or(Span::empty(), |t| t.1)
+		self.token_stream
+			.last()
+			.map_or(Span::new_zero_width(0), |t| t.1)
 	}
-}
-
-/// Parse a source file into a Concrete Syntax Tree.
-pub fn parse(source: &str) -> (Cst, Vec<SyntaxErr>) {
-	let token_stream = lexer(source);
-	log!("{token_stream:?}");
-
-	let mut walker = Walker {
-		token_stream,
-		cursor: 0,
-	};
-	let mut nodes = Vec::new();
-	let mut errors = Vec::new();
-	while walker.peek().is_some() {
-		parse_stmt(&mut walker, &mut nodes, &mut errors);
-	}
-
-	(nodes, errors)
 }
 
 /// Try to parse a list of qualifiers beginning at the current position, if there are any. E.g.
@@ -534,7 +518,7 @@ fn try_parse_stmt_not_beginning_with_keyword(
 		// we want to remove any syntax error about a missing operator between operands, so that we don't get a
 		// syntax error for the fact that `int i` has no operator between `int` and `i`.
 		errs.retain(|e| match e {
-			SyntaxErr::FoundOperandAfterOperand(_, _) => false,
+			SyntaxErr::ExprFoundOperandAfterOperand(_, _) => false,
 			_ => true,
 		});
 		errors.append(&mut errs);
@@ -1078,7 +1062,7 @@ fn try_parse_stmt_not_beginning_with_keyword(
 ///
 /// # Panics
 /// This function assumes that there is a current `Token` to peek.
-fn parse_stmt(
+pub(super) fn parse_stmt(
 	walker: &mut Walker,
 	nodes: &mut Vec<Node>,
 	syntax_errors: &mut Vec<SyntaxErr>,
@@ -3504,7 +3488,7 @@ fn parse_fn(
 			(Some(e), errs) => {
 				for err in errs {
 					match err {
-						SyntaxErr::FoundOperandAfterOperand(_, _) => {}
+						SyntaxErr::ExprFoundOperandAfterOperand(_, _) => {}
 						_ => errors.push(err),
 					}
 				}
@@ -3948,312 +3932,3 @@ fn parse_struct(
 		return;
 	}
 }
-
-/// Prints the concrete syntax tree.
-///
-/// This function produces a formatted `String` which contains all of the information of the CST.
-#[allow(unused_must_use)]
-pub fn print_tree(cst: &Cst) -> String {
-	use std::fmt::Write;
-
-	let mut buffer = String::with_capacity(10_000);
-
-	if let Some(last) = cst.last() {
-		write!(&mut buffer, "SOURCE_FILE@0..{}", last.span.end);
-		for node in cst {
-			printing::print_tree_node(node, 1, &mut buffer);
-		}
-	} else {
-		write!(&mut buffer, "SOURCE_FILE@0..0");
-	}
-
-	buffer
-}
-
-/// Asserts the list of statements from the `parse()` function matches the right hand side.
-#[cfg(test)]
-macro_rules! assert_stmt {
-    ($src:expr, $($stmt:expr),*) => {
-        assert_eq!(parse($src).0, vec![
-            $(
-                $stmt,
-            )*
-        ])
-    };
-}
-/*
-#[cfg(test)]
-use crate::ast::{Fundamental, Lit, Primitive};
-
-#[test]
-#[rustfmt::skip]
-fn var_def_decl() {
-	use crate::ast::{Storage, Layout, Interpolation, Memory};
-
-	// Variable definitions.
-	assert_stmt!("int i;", Stmt::VarDef {
-		type_: Type::Basic(Primitive::Scalar(Fundamental::Int)),
-		ident: Ident("i".into()),
-		qualifiers: vec![]
-	});
-	assert_stmt!("bool[2] b;", Stmt::VarDef {
-		type_: Type::Array(Primitive::Scalar(Fundamental::Bool), Some(ExprTy::Lit(Lit::Int(2)))),
-		ident: Ident("b".into()),
-		qualifiers: vec![]
-	});
-	assert_stmt!("mat4 m[2][6];", Stmt::VarDef {
-		type_: Type::Array2D(Primitive::Matrix(4, 4), Some(ExprTy::Lit(Lit::Int(2))), Some(ExprTy::Lit(Lit::Int(6)))),
-		ident: Ident("m".into()),
-		qualifiers: vec![]
-	});
-	assert_stmt!("double[6] d[2];", Stmt::VarDef {
-		type_: Type::Array2D(
-			Primitive::Scalar(Fundamental::Double),
-			Some(ExprTy::Lit(Lit::Int(2))),
-			Some(ExprTy::Lit(Lit::Int(6)))
-		),
-		ident: Ident("d".into()),
-		qualifiers: vec![]
-	});
-	assert_stmt!("float a, b;", Stmt::VarDefs(vec![
-		(Type::Basic(Primitive::Scalar(Fundamental::Float)), Ident("a".into())),
-		(Type::Basic(Primitive::Scalar(Fundamental::Float)), Ident("b".into())),
-	], vec![]));
-	assert_stmt!("vec3[7][9] a[1], b[3];", Stmt::VarDefs(vec![
-		(
-			Type::ArrayND(Primitive::Vector(Fundamental::Float, 3), vec![
-				Some(ExprTy::Lit(Lit::Int(1))),
-				Some(ExprTy::Lit(Lit::Int(7))),
-				Some(ExprTy::Lit(Lit::Int(9))),
-				]),
-			Ident("a".into())
-		),
-		(
-			Type::ArrayND(Primitive::Vector(Fundamental::Float, 3), vec![
-				Some(ExprTy::Lit(Lit::Int(3))),
-				Some(ExprTy::Lit(Lit::Int(7))),
-				Some(ExprTy::Lit(Lit::Int(9))),
-				]),
-			Ident("b".into())
-		)
-	], vec![]));
-
-	// Variable declarations.
-	assert_stmt!("uint u = 5;", Stmt::VarDecl {
-		type_: Type::Basic(Primitive::Scalar(Fundamental::Uint)),
-		ident: Ident("u".into()),
-		value: ExprTy::Lit(Lit::Int(5)),
-		qualifiers: vec![]
-	});
-	assert_stmt!("int[3] a[1] = {{4, 5, 6}};", Stmt::VarDecl {
-		type_: Type::Array2D(
-			Primitive::Scalar(Fundamental::Int),
-			Some(ExprTy::Lit(Lit::Int(1))),
-			Some(ExprTy::Lit(Lit::Int(3)))
-		),
-		ident: Ident("a".into()),
-		value: ExprTy::Init(vec![ExprTy::Init(vec![
-			ExprTy::Lit(Lit::Int(4)),
-			ExprTy::Lit(Lit::Int(5)),
-			ExprTy::Lit(Lit::Int(6))
-		])]),
-		qualifiers: vec![]
-	});
-	assert_stmt!("double[] d = {1.0LF, 2.0LF};", Stmt::VarDecl {
-		type_: Type::Array(Primitive::Scalar(Fundamental::Double), None),
-		ident: Ident("d".into()),
-		value: ExprTy::Init(vec![
-			ExprTy::Lit(Lit::Double(1.0)),
-			ExprTy::Lit(Lit::Double(2.0))
-		]),
-		qualifiers: vec![]
-	});
-	assert_stmt!("vec2 a, b = vec2(1, 2);", Stmt::VarDecls {
-		vars: vec![
-			(Type::Basic(Primitive::Vector(Fundamental::Float, 2)), Ident("a".into())),
-			(Type::Basic(Primitive::Vector(Fundamental::Float, 2)), Ident("b".into())),
-		],
-		value: ExprTy::Fn {
-			ident: Ident("vec2".into()),
-			args: vec![
-				ExprTy::Lit(Lit::Int(1)),
-				ExprTy::Lit(Lit::Int(2)),
-			]
-		},
-		qualifiers: vec![]
-	});
-	assert_stmt!("float[2] a, b = float[](5, 6);", Stmt::VarDecls {
-		vars: vec![
-			(Type::Array(Primitive::Scalar(Fundamental::Float), Some(ExprTy::Lit(Lit::Int(2)))), Ident("a".into())),
-			(Type::Array(Primitive::Scalar(Fundamental::Float), Some(ExprTy::Lit(Lit::Int(2)))), Ident("b".into()))
-		],
-		value: ExprTy::ArrInit {
-			arr: Box::from(ExprTy::Index {
-				item: Box::from(ExprTy::Ident(Ident("float".into()))),
-				i: None
-			}),
-			args: vec![
-				ExprTy::Lit(Lit::Int(5)),
-				ExprTy::Lit(Lit::Int(6))
-			]
-		},
-		qualifiers: vec![]
-	});
-
-	// With qualifiers.
-	assert_stmt!("const int i;", Stmt::VarDef {
-		type_: Type::Basic(Primitive::Scalar(Fundamental::Int)),
-		ident: Ident("i".into()),
-		qualifiers: vec![
-			Qualifier::Storage(Storage::Const)
-		]
-	});
-	assert_stmt!("highp float i;", Stmt::VarDef {
-		type_: Type::Basic(Primitive::Scalar(Fundamental::Float)),
-		ident: Ident("i".into()),
-		qualifiers: vec![
-			Qualifier::Precision
-		]
-	});
-	assert_stmt!("layout(location = 0) in int i;", Stmt::VarDef {
-		type_: Type::Basic(Primitive::Scalar(Fundamental::Int)),
-		ident: Ident("i".into()),
-		qualifiers: vec![
-			Qualifier::Layout(vec![Layout::Location(ExprTy::Lit(Lit::Int(0)))]),
-			Qualifier::Storage(Storage::In)
-		]
-	});
-	assert_stmt!("flat uniform vec3 v;", Stmt::VarDef {
-		type_: Type::Basic(Primitive::Vector(Fundamental::Float, 3)),
-		ident: Ident("v".into()),
-		qualifiers: vec![
-			Qualifier::Interpolation(Interpolation::Flat),
-			Qualifier::Storage(Storage::Uniform)
-		]
-	});
-	assert_stmt!("readonly mat4[1] m;", Stmt::VarDef {
-		type_: Type::Array(Primitive::Matrix(4, 4), Some(ExprTy::Lit(Lit::Int(1)))),
-		ident: Ident("m".into()),
-		qualifiers: vec![
-			Qualifier::Memory(Memory::Readonly)
-		]
-	});
-}
-
-#[test]
-#[rustfmt::skip]
-fn struct_def_decl() {
-	use crate::ast::Memory;
-
-	// Single-member structs.
-	assert_stmt!("struct S;", Stmt::StructDef { ident: Ident("S".into()), qualifiers: vec![] });
-	assert_stmt!("struct S { int i; };", Stmt::StructDecl {
-		ident: Ident("S".into()),
-		members: vec![Stmt::VarDef {
-			type_: Type::Basic(Primitive::Scalar(Fundamental::Int)),
-			ident: Ident("i".into()),
-			qualifiers: vec![]
-		}],
-		qualifiers: vec![],
-		instance: None,
-	});
-	assert_stmt!("struct S { bool[2] b; };", Stmt::StructDecl {
-		ident: Ident("S".into()),
-		members: vec![Stmt::VarDef {
-			type_: Type::Array(Primitive::Scalar(Fundamental::Bool), Some(ExprTy::Lit(Lit::Int(2)))),
-			ident: Ident("b".into()),
-			qualifiers: vec![]
-		}],
-		qualifiers: vec![],
-		instance: None,
-	});
-	assert_stmt!("struct S { mat4 m[2][6]; };", Stmt::StructDecl {
-		ident: Ident("S".into()),
-		members: vec![Stmt::VarDef {
-			type_: Type::Array2D(Primitive::Matrix(4, 4), Some(ExprTy::Lit(Lit::Int(2))), Some(ExprTy::Lit(Lit::Int(6)))),
-			ident: Ident("m".into()),
-			qualifiers: vec![]
-		}],
-		qualifiers: vec![],
-		instance: None,
-	});
-	assert_stmt!("struct S { vec3[7][9] a[1], b[3]; };", Stmt::StructDecl {
-		ident: Ident("S".into()),
-		members: vec![Stmt::VarDefs(vec![
-			(
-				Type::ArrayND(Primitive::Vector(Fundamental::Float, 3), vec![
-					Some(ExprTy::Lit(Lit::Int(1))),
-					Some(ExprTy::Lit(Lit::Int(7))),
-					Some(ExprTy::Lit(Lit::Int(9))),
-					]),
-				Ident("a".into())
-			),
-			(
-				Type::ArrayND(Primitive::Vector(Fundamental::Float, 3), vec![
-					Some(ExprTy::Lit(Lit::Int(3))),
-					Some(ExprTy::Lit(Lit::Int(7))),
-					Some(ExprTy::Lit(Lit::Int(9))),
-					]),
-				Ident("b".into())
-			)
-		], vec![])],
-		qualifiers: vec![],
-		instance: None,
-	});
-
-	// Multi-member struct.
-	assert_stmt!("struct S { int i; bool b; float f1, f2; dvec2[1] d[2]; };", Stmt::StructDecl {
-		ident: Ident("S".into()),
-		members: vec![
-			Stmt::VarDef {
-				type_: Type::Basic(Primitive::Scalar(Fundamental::Int)),
-				ident: Ident("i".into()),
-				qualifiers: vec![]
-			},
-			Stmt::VarDef {
-				type_: Type::Basic(Primitive::Scalar(Fundamental::Bool)),
-				ident: Ident("b".into()),
-				qualifiers: vec![]
-			},
-			Stmt::VarDefs(vec![
-				(
-					Type::Basic(Primitive::Scalar(Fundamental::Float)),
-					Ident("f1".into())
-				),
-				(
-					Type::Basic(Primitive::Scalar(Fundamental::Float)),
-					Ident("f2".into())
-				)
-			], vec![]),
-			Stmt::VarDef {
-				type_: Type::Array2D(
-					Primitive::Vector(Fundamental::Double, 2),
-					Some(ExprTy::Lit(Lit::Int(2))),
-					Some(ExprTy::Lit(Lit::Int(1)))
-				),
-				ident: Ident("d".into()),
-				qualifiers: vec![]
-			}
-		],
-		qualifiers: vec![],
-		instance: None,
-	});
-
-	// Struct with member with qualifiers.
-	assert_stmt!("struct S { precise writeonly int i; };", Stmt::StructDecl {
-		ident: Ident("S".into()),
-		members: vec![
-			Stmt::VarDef {
-				type_: Type::Basic(Primitive::Scalar(Fundamental::Int)),
-				ident: Ident("i".into()),
-				qualifiers: vec![
-					Qualifier::Precise,
-					Qualifier::Memory(Memory::Writeonly)
-				]
-			}
-		],
-		qualifiers: vec![],
-		instance: None,
-	});
-}
-*/

@@ -8,6 +8,9 @@ target
 /client/node_modules
 
 # Playground testing/experimenting files
-playground/test.vert
-playground/test.frag
-playground/test.parse
+/playground/test.vert
+/playground/test.frag
+/playground/test.parse
+
+# Library cargo.lock file
+/glast/Cargo.lock

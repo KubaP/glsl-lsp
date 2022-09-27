@@ -1,6 +1,8 @@
 use crate::span::Span;
 
 /// A syntactical/gramatical error.
+/// 
+/// This enum contains all the possible syntax errors that are emitted by the parser.
 #[derive(Debug)]
 #[non_exhaustive]
 pub enum SyntaxErr {

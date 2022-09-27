@@ -1,12 +1,15 @@
 use crate::{
-	cst::{Expr, Ident, List, Node, NodeTy, Nodes, Param, Qualifier, Scope},
+	cst::{
+		BinOp, Expr, ExprTy, Ident, List, Lit, Node, NodeTy, Nodes, Param,
+		PostOp, PreOp, Qualifier, Scope,
+	},
 	span::Span,
 	Either,
 };
 use std::fmt::Write;
 
 #[allow(unused_must_use)]
-pub(super) fn print_tree_node(
+pub(in super::super) fn print_tree_node(
 	node: &Node,
 	indent: usize,
 	f: &mut String,
@@ -2007,6 +2010,461 @@ fn print_tree_qualifiers(
 fn print_tree_expr(label: &str, expr: &Expr, indent: usize, f: &mut String) {
 	write!(f, "\r\n{:indent$}", "", indent = indent * 2);
 	write!(f, "{}@{}", label, expr.span);
+	print_expr(expr, indent + 1, f);
+}
+
+#[allow(unused_must_use)]
+fn print_expr(expr: &Expr, indent: usize, f: &mut String) {
+	match &expr.ty {
+		ExprTy::Missing => {
+			write!(
+				f,
+				"\r\n{:indent$}MISSING@{}",
+				"",
+				expr.span,
+				indent = indent * 2
+			);
+		}
+		ExprTy::Incomplete => {
+			write!(
+				f,
+				"\r\n{:indent$}INCOMPLETE@{}",
+				"",
+				expr.span,
+				indent = indent * 2
+			);
+		}
+		ExprTy::Invalid => {
+			write!(
+				f,
+				"\r\n{:indent$}INVALID@{}",
+				"",
+				expr.span,
+				indent = indent * 2
+			);
+		}
+		ExprTy::Lit(l) => {
+			let (t, v) = match l {
+				Lit::Bool(b) => ("BOOL", b.to_string()),
+				Lit::Int(i) => ("INT", i.to_string()),
+				Lit::UInt(u) => ("UINT", u.to_string()),
+				Lit::Float(f) => ("FLOAT", f.to_string()),
+				Lit::Double(d) => ("DOUBLE", d.to_string()),
+			};
+			write!(
+				f,
+				"\r\n{:indent$}LIT_{t}@{} \"{v}\"",
+				"",
+				expr.span,
+				indent = indent * 2
+			);
+		}
+		ExprTy::Ident(i) => {
+			write!(
+				f,
+				"\r\n{:indent$}IDENT@{} \"{}\"",
+				"",
+				expr.span,
+				i.name,
+				indent = indent * 2
+			);
+		}
+		ExprTy::Prefix { expr: inner, op } => {
+			write!(
+				f,
+				"\r\n{:indent$}PREFIX@{}",
+				"",
+				expr.span,
+				indent = indent * 2
+			);
+			let indent = indent + 1;
+			print_pre_op(op, indent, f);
+			if let Some(inner) = inner {
+				print_expr(inner, indent, f);
+			}
+		}
+		ExprTy::Postfix { expr: inner, op } => {
+			write!(
+				f,
+				"\r\n{:indent$}POSTFIX@{}",
+				"",
+				expr.span,
+				indent = indent * 2
+			);
+			let indent = indent + 1;
+			print_expr(inner, indent, f);
+			print_post_op(op, indent, f);
+		}
+		ExprTy::Binary { left, op, right } => {
+			write!(
+				f,
+				"\r\n{:indent$}BINARY@{}",
+				"",
+				expr.span,
+				indent = indent * 2
+			);
+			let indent = indent + 1;
+			print_expr(left, indent, f);
+			print_op(op, indent, f);
+			if let Some(right) = right {
+				print_expr(right, indent, f);
+			}
+		}
+		ExprTy::Paren {
+			l_paren: left,
+			expr: inner,
+			r_paren: right,
+		} => {
+			write!(
+				f,
+				"\r\n{:indent$}PAREN@{}",
+				"",
+				expr.span,
+				indent = indent * 2
+			);
+			let indent = indent + 1;
+			write!(
+				f,
+				"\r\n{:indent$}L_PAREN@{} \"(\"",
+				"",
+				left,
+				indent = indent * 2
+			);
+			if let Some(inner) = inner {
+				print_expr(inner, indent, f);
+			}
+			if let Some(right) = right {
+				write!(
+					f,
+					"\r\n{:indent$}R_PAREN@{} \")\"",
+					"",
+					right,
+					indent = indent * 2
+				);
+			}
+		}
+		ExprTy::Index {
+			item,
+			l_bracket,
+			i,
+			r_bracket,
+		} => {
+			write!(
+				f,
+				"\r\n{:indent$}INDEX@{}",
+				"",
+				expr.span,
+				indent = indent * 2
+			);
+			let indent = indent + 1;
+			print_expr(item, indent, f);
+			write!(
+				f,
+				"\r\n{:indent$}L_BRACKET@{} \"[\"",
+				"",
+				l_bracket,
+				indent = indent * 2
+			);
+			if let Some(i) = i {
+				print_expr(i, indent, f);
+			}
+			if let Some(r_bracket) = r_bracket {
+				write!(
+					f,
+					"\r\n{:indent$}R_BRACKET@{} \"]\"",
+					"",
+					r_bracket,
+					indent = indent * 2
+				);
+			}
+		}
+		ExprTy::ObjAccess { obj, dot, leaf } => {
+			write!(
+				f,
+				"\r\n{:indent$}OBJ_ACCESS@{}",
+				"",
+				expr.span,
+				indent = indent * 2
+			);
+			let indent = indent + 1;
+			print_expr(obj, indent, f);
+			write!(
+				f,
+				"\r\n{:indent$}DOT@{} \".\"",
+				"",
+				dot,
+				indent = indent * 2
+			);
+			if let Some(leaf) = leaf {
+				print_expr(leaf, indent, f);
+			}
+		}
+		ExprTy::Fn {
+			ident,
+			l_paren,
+			args,
+			r_paren,
+		} => {
+			write!(
+				f,
+				"\r\n{:indent$}FN_CALL@{}",
+				"",
+				expr.span,
+				indent = indent * 2
+			);
+			let indent = indent + 1;
+			print_tree_ident(ident, indent, f);
+			write!(
+				f,
+				"\r\n{:indent$}ARGS@{}",
+				"",
+				"??..??",
+				indent = indent * 2
+			);
+			let indent = indent + 1;
+			write!(
+				f,
+				"\r\n{:indent$}L_PAREN@{} \"(\"",
+				"",
+				l_paren,
+				indent = indent * 2
+			);
+			for i in args.entry_iter() {
+				match i {
+					Either::Left(arg) => {
+						print_expr(arg, indent, f);
+					}
+					Either::Right(span) => {
+						write!(
+							f,
+							"\r\n{:indent$}COMMA@{} \",\"",
+							"",
+							span,
+							indent = indent * 2
+						);
+					}
+				}
+			}
+			if let Some(r_paren) = r_paren {
+				write!(
+					f,
+					"\r\n{:indent$}R_PAREN@{} \")\"",
+					"",
+					r_paren,
+					indent = indent * 2
+				);
+			}
+		}
+		ExprTy::Init {
+			l_brace,
+			args,
+			r_brace,
+		} => {
+			write!(
+				f,
+				"\r\n{:indent$}INITIALIZER@{}",
+				"",
+				expr.span,
+				indent = indent * 2
+			);
+			let indent = indent + 1;
+			write!(
+				f,
+				"\r\n{:indent$}L_BRACE@{} \"{{\"",
+				"",
+				l_brace,
+				indent = indent * 2
+			);
+			for i in args.entry_iter() {
+				match i {
+					Either::Left(arg) => {
+						print_expr(arg, indent, f);
+					}
+					Either::Right(span) => {
+						write!(
+							f,
+							"\r\n{:indent$}COMMA@{} \",\"",
+							"",
+							span,
+							indent = indent * 2
+						);
+					}
+				}
+			}
+			if let Some(r_brace) = r_brace {
+				write!(
+					f,
+					"\r\n{:indent$}R_BRACE@{} \"}}\"",
+					"",
+					r_brace,
+					indent = indent * 2
+				);
+			}
+		}
+		ExprTy::ArrInit {
+			arr,
+			l_paren,
+			args,
+			r_paren,
+		} => {
+			write!(
+				f,
+				"\r\n{:indent$}ARR_INIT@{}",
+				"",
+				expr.span,
+				indent = indent * 2
+			);
+			let indent = indent + 1;
+			print_tree_expr("ARR_EXPR", arr, indent, f);
+			write!(
+				f,
+				"\r\n{:indent$}ARGS@{}",
+				"",
+				"??..??",
+				indent = indent * 2
+			);
+			let indent = indent + 1;
+			write!(
+				f,
+				"\r\n{:indent$}L_PAREN@{} \"(\"",
+				"",
+				l_paren,
+				indent = indent * 2
+			);
+			for i in args.entry_iter() {
+				match i {
+					Either::Left(arg) => {
+						print_expr(arg, indent, f);
+					}
+					Either::Right(span) => {
+						write!(
+							f,
+							"\r\n{:indent$}COMMA@{} \",\"",
+							"",
+							span,
+							indent = indent * 2
+						);
+					}
+				}
+			}
+			if let Some(r_paren) = r_paren {
+				write!(
+					f,
+					"\r\n{:indent$}R_PAREN@{} \")\"",
+					"",
+					r_paren,
+					indent = indent * 2
+				);
+			}
+		}
+		ExprTy::List(l) => {
+			write!(
+				f,
+				"\r\n{:indent$}LIST@{}",
+				"",
+				expr.span,
+				indent = indent * 2
+			);
+			let indent = indent + 1;
+			for i in l.entry_iter() {
+				match i {
+					Either::Left(e) => print_expr(e, indent, f),
+					Either::Right(span) => {
+						write!(
+							f,
+							"\r\n{:indent$}COMMA@{} \",\"",
+							"",
+							span,
+							indent = indent * 2
+						);
+					}
+				}
+			}
+		}
+		_ => {}
+	}
+}
+
+#[allow(unused_must_use)]
+fn print_op(op: &BinOp, indent: usize, f: &mut String) {
+	use crate::cst::BinOpTy;
+
+	write!(
+		f,
+		"\r\n{:indent$}OP@{} \"{}\"",
+		"",
+		op.span,
+		match &op.ty {
+			BinOpTy::Add => "+",
+			BinOpTy::Sub => "-",
+			BinOpTy::Mul => "*",
+			BinOpTy::Div => "/",
+			BinOpTy::Rem => "%",
+			BinOpTy::And => "&",
+			BinOpTy::Or => "|",
+			BinOpTy::Xor => "^",
+			BinOpTy::LShift => "<<",
+			BinOpTy::RShift => ">>",
+			BinOpTy::Eq => "=",
+			BinOpTy::AddEq => "+=",
+			BinOpTy::SubEq => "-=",
+			BinOpTy::MulEq => "*=",
+			BinOpTy::DivEq => "/=",
+			BinOpTy::RemEq => "%=",
+			BinOpTy::AndEq => "&=",
+			BinOpTy::OrEq => "|=",
+			BinOpTy::XorEq => "^=",
+			BinOpTy::LShiftEq => "<<=",
+			BinOpTy::RShiftEq => ">>=",
+			BinOpTy::EqEq => "==",
+			BinOpTy::NotEq => "!=",
+			BinOpTy::Gt => ">",
+			BinOpTy::Lt => "<",
+			BinOpTy::Ge => ">=",
+			BinOpTy::Le => "<=",
+			BinOpTy::AndAnd => "&&",
+			BinOpTy::OrOr => "||",
+			BinOpTy::XorXor => "^^",
+		},
+		indent = indent * 2
+	);
+}
+
+#[allow(unused_must_use)]
+fn print_pre_op(op: &PreOp, indent: usize, f: &mut String) {
+	use crate::cst::PreOpTy;
+
+	write!(
+		f,
+		"\r\n{:indent$}OP@{} \"{}\"",
+		"",
+		op.span,
+		match &op.ty {
+			PreOpTy::Add => "++",
+			PreOpTy::Sub => "--",
+			PreOpTy::Neg => "-",
+			PreOpTy::Flip => "~",
+			PreOpTy::Not => "!",
+		},
+		indent = indent * 2
+	);
+}
+
+#[allow(unused_must_use)]
+fn print_post_op(op: &PostOp, indent: usize, f: &mut String) {
+	use crate::cst::PostOpTy;
+
+	write!(
+		f,
+		"\r\n{:indent$}OP@{} \"{}\"",
+		"",
+		op.span,
+		match &op.ty {
+			PostOpTy::Add => "++",
+			PostOpTy::Sub => "--",
+		},
+		indent = indent * 2
+	);
 }
 
 #[allow(unused_must_use)]

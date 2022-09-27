@@ -6,7 +6,7 @@ edition = "2021"
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [dependencies]
-glsl-parser = { path = "../glsl-parser" }
+glast = { path = "../glast" }
 tokio = { version = "1.17.0", features = ["full"] }
 tower-lsp = "0.17.0"
 serde = "1.0.139"

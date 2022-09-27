@@ -29,9 +29,9 @@
 			"type": "lldb",
 			"request": "launch",
 			"name": "Playground",
-			"program": "${workspaceFolder}\\playground\\target\\debug\\playground.exe",
+			"program": "${workspaceFolder}/playground/target/debug/playground.exe",
 			"args": [],
-			"cwd": "${workspaceFolder}\\playground",
+			"cwd": "${workspaceFolder}/playground",
 			"env": {
 				"RUST_BACKTRACE": "1"
 			},
@@ -43,14 +43,14 @@
 			"request": "launch",
 			"name": "Lib tests",
 			"cargo": {
-				"args": ["test", "--no-run", "--lib", "--package=glsl-parser"],
+				"args": ["test", "--no-run", "--lib", "--package=glast"],
 				"filter": {
-					"name": "glsl-parser",
+					"name": "glast",
 					"kind": "lib"
 				}
 			},
 			"args": [],
-			"cwd": "${workspaceFolder}\\glsl-parser",
+			"cwd": "${workspaceFolder}/glast",
 			"env": {
 				"RUST_BACKTRACE": "1"
 			},

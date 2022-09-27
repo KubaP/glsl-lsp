@@ -1,5 +1,5 @@
 use crate::state::State;
-use glsl_parser::span::Span;
+use glast::Span;
 use tokio::sync::Mutex;
 use tower_lsp::jsonrpc::Result;
 use tower_lsp::lsp_types::*;

@@ -12,9 +12,8 @@ use std::{
 };
 
 pub fn parse_file(source: &str) {
-	let (cst, errs) = glsl_parser::parser::parse(source);
-	glsl_parser::parser::print_tree(&cst);
-	print!("\r\n");
+	let (cst, errs) = glast::cst::parse_from_str(source);
+	println!("\r\n{}\r\n", glast::cst::print_tree(&cst));
 	for err in errs {
 		println!("{err:?}");
 	}

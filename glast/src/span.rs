@@ -1,7 +1,7 @@
-/// A span in the source file.
+/// A span in the source string.
 ///
-/// Keeps track of the offset between characters from the start of the source, e.g. `if=abc` would be stored as
-/// `0-2, 2-3, 3-6`.
+/// Keeps track of the offset between characters from the start of the source string, e.g. `if=abc` would be stored
+/// as `0-2, 2-3, 3-6`.
 ///
 /// Illustrated example:
 /// ```text
@@ -12,9 +12,10 @@
 /// ```
 ///
 /// # Invariants
-/// If this type is manually constructed, the `end` position must be equal-to or greater than the `start` position.
-/// If this invariant is not upheld, interacting with this span, for example to resolve the cursor position, will
-/// result in logic bugs and incorrect behaviour, but it will never cause a panic or memory safety issue.
+/// If this type is manually constructed or modified, the `end` position must be equal-to or greater than the
+/// `start` position. If this invariant is not upheld then interacting with this span, for example to resolve the
+/// cursor position, will result in logical bugs and incorrect behaviour but it will never cause a panic or memory
+/// unsafety.
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub struct Span {
 	pub start: usize,
@@ -22,7 +23,7 @@ pub struct Span {
 }
 
 impl Span {
-	/// Constructs a new `Span` between the positions.
+	/// Constructs a new span between the two positions.
 	pub fn new(start: usize, end: usize) -> Self {
 		// Panics: If this assertion is not met, the semantic meaning of this type will be incorrect, but it will
 		// never cause any further panics or memory unsafety. Hence, I've made a decision to only perform this
@@ -35,7 +36,7 @@ impl Span {
 		Self { start, end }
 	}
 
-	/// Constructs a new `Span` between the two spans.
+	/// Constructs a new span between the end of the first span and the beginning of the second span.
 	pub fn new_between(a: Span, b: Span) -> Self {
 		// Panics: If this assertion is not met, the semantic meaning of this type will be incorrect, but it will
 		// never cause any further panics or memory unsafety. Hence, I've made a decision to only perform this
@@ -53,7 +54,7 @@ impl Span {
 		}
 	}
 
-	/// Constructs a zero-width `Span` at a position.
+	/// Constructs a zero-width span at the position.
 	pub fn new_zero_width(position: usize) -> Self {
 		Self {
 			start: position,
@@ -61,9 +62,9 @@ impl Span {
 		}
 	}
 
-	/// Constructs a zero-width `Span` at `0`.
-	pub fn empty() -> Self {
-		Self { start: 0, end: 0 }
+	/// Returns whether this span is zero-width.
+	pub fn is_zero_width(&self) -> bool {
+		self.start == self.end
 	}
 
 	/// Returns whether this span is located after the other span.
@@ -71,17 +72,17 @@ impl Span {
 		self.start >= other.end
 	}
 
-	/// Returns whether this span is zero-width.
-	pub fn is_zero_width(&self) -> bool {
-		self.start == self.end
-	}
-
 	/// Returns whether the beginning of this span is located at or after the specified position.
 	pub fn starts_at_or_after(&self, position: usize) -> bool {
 		self.start >= position
 	}
 
-	/// Returns a new `Span` which starts at the same position but ends at a previous position, i.e. `end:
+	/// Returns whether a position lies within this span.
+	pub fn contains(&self, position: usize) -> bool {
+		self.start <= position && position <= self.end
+	}
+
+	/// Returns a new span which starts at the same position but ends at a previous position, i.e. `end:
 	/// span.end - 1`.
 	pub fn end_at_previous(self) -> Self {
 		let new_end = self.end.saturating_sub(1);
@@ -94,7 +95,7 @@ impl Span {
 		}
 	}
 
-	/// Returns a new `Span` over the first character of this span.
+	/// Returns a new span over the first character of this span.
 	///
 	/// If this span is zero-width, the new span will be identical.
 	pub fn first_char(self) -> Self {
@@ -104,7 +105,7 @@ impl Span {
 		}
 	}
 
-	/// Returns a new `Span` over the last character of this span.
+	/// Returns a new span over the last character of this span.
 	///
 	/// If this span is zero-width, the new span will be identical.
 	pub fn last_char(self) -> Self {
@@ -114,7 +115,7 @@ impl Span {
 		}
 	}
 
-	/// Returns a new zero-width `Span` located at the start of this span.
+	/// Returns a new zero-width span located at the start of this span.
 	pub fn start_zero_width(self) -> Self {
 		Self {
 			start: self.start,
@@ -122,7 +123,7 @@ impl Span {
 		}
 	}
 
-	/// Returns a new zero-width `Span` located at the end of this span.
+	/// Returns a new zero-width span located at the end of this span.
 	pub fn end_zero_width(self) -> Self {
 		Self {
 			start: self.end,
@@ -130,7 +131,7 @@ impl Span {
 		}
 	}
 
-	/// Returns a new `Span` one width long, beginning at the end of this span.
+	/// Returns a new span one width long, beginning at the end of this span.
 	///
 	/// Examples of how vscode will squiggle this:
 	/// ```c
@@ -155,7 +156,7 @@ impl Span {
 		}
 	}
 
-	/// Returns a new `Span` one width long, ending at the beginning of this span.
+	/// Returns a new span one width long, ending at the beginning of this span.
 	pub fn previous_single_width(self) -> Self {
 		// Note: Unlike `next_single_width()`, this has a potential to overflow onto the previous line if the token
 		// starts at the beginning on the line. Since this is used much less often, I don't think it's worth
@@ -164,11 +165,6 @@ impl Span {
 			start: self.start.saturating_sub(1),
 			end: self.start,
 		}
-	}
-
-	/// Returns whether a position lies within this span.
-	pub fn contains_position(&self, position: usize) -> bool {
-		self.start <= position && position <= self.end
 	}
 }
 
@@ -187,8 +183,8 @@ impl std::fmt::Display for Span {
 /// Constructs a new [`Span`] from a start and end position.
 ///
 /// *Note:* This is just a shorthand for [`Span::new()`], since that becomes a bit verbose to type out again and
-/// again, especially in the unit test assertions.
-pub fn span(start: usize, end: usize) -> Span {
+/// again especially in the unit test assertions. This is not publically accessible outside of the crate.
+pub(crate) fn span(start: usize, end: usize) -> Span {
 	Span { start, end }
 }
 

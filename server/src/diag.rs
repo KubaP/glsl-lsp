@@ -1,7 +1,7 @@
 use crate::{state, File};
-use glsl_parser::{
+use glast::{
 	error::SyntaxErr::{self, *},
-	span::Span,
+	Span,
 };
 use tower_lsp::lsp_types::{
 	Diagnostic, DiagnosticRelatedInformation, DiagnosticSeverity, Location,

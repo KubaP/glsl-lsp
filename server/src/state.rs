@@ -1,5 +1,5 @@
 use crate::{diag, File};
-use glsl_parser::cst::Cst;
+use glast::cst::Cst;
 use std::collections::HashMap;
 use tower_lsp::{
 	lsp_types::{InitializeParams, Position, Range, Url},
@@ -104,7 +104,7 @@ impl State {
 		// right now, in the future when the cross-file analysis eventually gets implemented, any primitive caching
 		// will be useless.
 		for (_, file) in &self.files {
-			let (_cst, errors) = glsl_parser::parser::parse(&file.contents);
+			let (_cst, errors) = glast::cst::parse_from_str(&file.contents);
 
 			let mut diagnostics = Vec::new();
 			errors.into_iter().for_each(|err| {
@@ -133,8 +133,8 @@ impl State {
 		);
 
 		// Parse the file and print the CST into a tree.
-		let (cst, _) = glsl_parser::parser::parse(&file.contents);
-		let string = "".to_owned();
+		let (cst, _) = glast::cst::parse_from_str(&file.contents);
+		let string = glast::cst::print_tree(&cst);
 
 		// If this file's CST was already cached then update it, otherwise insert a new entry.
 		self.syntax_trees.insert(uri, (version, cst));

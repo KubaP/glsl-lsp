@@ -8,7 +8,7 @@
 			"type": "cargo",
 			"command": "build",
 			"options": {
-				"cwd": "${workspaceFolder}/glsl-parser"
+				"cwd": "${workspaceFolder}/glast"
 			},
 			"group": "build",
 			"presentation": {
@@ -25,7 +25,7 @@
 			"command": "build",
 			"args": ["--release"],
 			"options": {
-				"cwd": "${workspaceFolder}/glsl-parser"
+				"cwd": "${workspaceFolder}/glast"
 			},
 			"group": "build",
 			"presentation": {
@@ -109,7 +109,7 @@
 			"type": "cargo",
 			"command": "check",
 			"options": {
-				"cwd": "${workspaceFolder}/glsl-parser"
+				"cwd": "${workspaceFolder}/glast"
 			},
 			"group": "test",
 			"presentation": {
@@ -141,7 +141,7 @@
 			"type": "cargo",
 			"command": "test",
 			"options": {
-				"cwd": "${workspaceFolder}/glsl-parser"
+				"cwd": "${workspaceFolder}/glast"
 			},
 			"group": {
 				"kind": "test",
@@ -160,7 +160,7 @@
 			"type": "cargo",
 			"command": "doc",
 			"options": {
-				"cwd": "${workspaceFolder}/glsl-parser"
+				"cwd": "${workspaceFolder}/glast"
 			},
 			"args": [
 				// This flag is necessary in order to document any non pub modules. Technically this flag is passed
@@ -181,7 +181,7 @@
 			"label": "Open lib documentation",
 			"type": "process",
 			"command": "C:/Program Files/Mozilla Firefox/firefox.exe",
-			"args": ["file://${workspaceFolder}/glsl-parser/target/doc/glsl_parser/index.html"],
+			"args": ["file://${workspaceFolder}/glast/target/doc/glast/index.html"],
 			"presentation": {
 				"echo": false,
 				"reveal": "never",

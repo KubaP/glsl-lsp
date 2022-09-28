@@ -7,8 +7,8 @@ Write-Host "Version: $Version"
 Write-Host "Commit SHA: $env:GITHUB_SHA"
 
 # Tag the commit.
-git tag "glast/v$Version" "$env:GITHUB_SHA"
-git push origin "glast/v$Version"
+#git tag "glast/v$Version" "$env:GITHUB_SHA"
+#git push origin "glast/v$Version"
 
 # Prepare the release artefact.
 

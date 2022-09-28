@@ -81,5 +81,6 @@ jobs:
               with:
                   name: "glast v${{ needs.publish.outputs.version }}"
                   prerelease: true
+                  tag_name: "glast/v${{ needs.publish.outputs.version }}"
                   files: "out/glast-v${{ needs.publish.outputs.version }}.zip"
                   fail_on_unmatched_files: true

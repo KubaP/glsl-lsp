@@ -5,7 +5,7 @@ on:
         branches:
             - "release/glast"
 
-    # Allows you to run this workflow manually from the Actions tab
+    # Allows running this workflow manually from the Actions tab
     workflow_dispatch:
 
 jobs:
@@ -20,6 +20,7 @@ jobs:
                 working-directory: glast
 
         steps:
+            # Checks-out your repository under $GITHUB_WORKSPACE
             - name: Checkout repository
               uses: actions/checkout@v3
 
@@ -37,20 +38,13 @@ jobs:
             run:
                 shell: pwsh
 
-        outputs:
-            version: ${{ steps.out.outputs.version }}
-
         steps:
-            # Checks-out your repository under $GITHUB_WORKSPACE, so your job can access it
+            # Checks-out your repository under $GITHUB_WORKSPACE
             - name: Checkout repository
               uses: actions/checkout@v3
 
             - name: Install rust toolchain
               run: rustup update
-
-            - name: Output version
-              id: out
-              run: .\build\build.ps1
 
             - name: Publish
               env:
@@ -58,9 +52,9 @@ jobs:
               run: cargo build
               working-directory: glast
 
-    tag:
+    release:
         runs-on: ubuntu-latest
-        timeout-minutes: 10
+        timeout-minutes: 5
         needs: publish
         defaults:
             run:
@@ -69,19 +63,20 @@ jobs:
             contents: write
 
         steps:
-            # Checks-out your repository under $GITHUB_WORKSPACE, so your job can access it
+            # Checks-out your repository under $GITHUB_WORKSPACE
             - name: Checkout repository
               uses: actions/checkout@v3
 
-            - name: Tag
-              run: .\build\release.ps1 -Version "${{ needs.publish.outputs.version }}"
+            - name: Package release
+              id: release-script
+              run: .\build\release.ps1
 
-            - name: Release
+            - name: Publish release
               uses: softprops/action-gh-release@v0.1.14
               with:
-                  name: "glast v${{ needs.publish.outputs.version }}"
-                  prerelease: true
-                  tag_name: "glast/v${{ needs.publish.outputs.version }}"
+                  name: "glast v${{ steps.release-script.outputs.VERSION }}"
+                  body: ""
+                  tag_name: "glast/v${{ steps.release-script.outputs.VERSION }}"
                   target_commitish: ${{ github.sha }}
-                  files: "out/glast-v${{ needs.publish.outputs.version }}.zip"
+                  files: "out/glast-v${{ steps.release-script.outputs.VERSION }}.zip"
                   fail_on_unmatched_files: true

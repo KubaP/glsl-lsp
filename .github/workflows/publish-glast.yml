@@ -72,4 +72,4 @@ jobs:
               uses: actions/checkout@v3
 
             - name: Tag
-              run: .\build\release.ps1 -Version "${{ needs.publish.outputs.version }}"
+              run: .\build\release.ps1 -Version "${{ needs.publish.outputs.version }}" -SHA "${GITHUB_SHA}"

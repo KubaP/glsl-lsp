@@ -1,16 +1,14 @@
 ﻿param (
     [String]
-    $Version,
-
-    [String]
-    $SHA
+    $Version
 )
 
 write-host "version is $Version"
-write-host "sha is $SHA"
+write-host "sha is $env:GITHUB_SHA"
 
 # Tag the commit.
-git tag "glast/v$Version" "$SHA"
+git tag "glast/v$Version" "$env:GITHUB_SHA"
+git push origin "glast/v$Version"
 
 # Prepare the release artefact.
 

@@ -6,12 +6,11 @@
 Write-Host "Version: $Version"
 Write-Host "Commit SHA: $env:GITHUB_SHA"
 
-# Tag the commit.
-#git tag "glast/v$Version" "$env:GITHUB_SHA"
-#git push origin "glast/v$Version"
+# Tag the commit - not necessary; the release action does it for us.
+# git tag "glast/v$Version" "$env:GITHUB_SHA"
+# git push origin "glast/v$Version"
 
 # Prepare the release artefact.
-
 $script:SRC_DIR = Get-Item -Path "$PSScriptRoot/../glast"
 New-Item -Path "$PSScriptRoot/../" -Name "out" -ItemType Directory -Force -Verbose
 New-Item -Path "$PSScriptRoot/../out/" -Name "glast" -ItemType Directory -Force -Verbose

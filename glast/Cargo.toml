@@ -2,7 +2,14 @@
 name = "glast"
 version = "0.0.1"
 edition = "2021"
+authors = ["KubaP"]
 description = "A library for parsing and manipulating the OpenGL Shading Language."
+license = "MIT"
+readme = "README.md"
+homepage = "https://github.com/KubaP/glsl-lsp"
+repository = "https://github.com/KubaP/glsl-lsp"
+keywords = ["GLSL", "OpenGL", "parser", "ast"]
+categories = ["parser-implementations", "rendering"]
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 

@@ -10,9 +10,10 @@ on:
 
 jobs:
     test:
+        name: "Run test suite"
         strategy:
             matrix:
-                os: [ubuntu-latest]
+                os: [windows-latest, macos-latest, ubuntu-latest]
         runs-on: ${{ matrix.os }}
         timeout-minutes: 10
         defaults:
@@ -31,6 +32,7 @@ jobs:
               run: cargo test
 
     publish:
+        name: "Build and publish to crates.io"
         runs-on: ubuntu-latest
         timeout-minutes: 10
         needs: test
@@ -49,10 +51,11 @@ jobs:
             - name: Publish
               env:
                   CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN_GLAST }}
-              run: cargo build
+              run: cargo publish --verbose
               working-directory: glast
 
-    release:
+    gh-release:
+        name: "Create github release"
         runs-on: ubuntu-latest
         timeout-minutes: 5
         needs: publish
@@ -75,7 +78,7 @@ jobs:
               uses: softprops/action-gh-release@v0.1.14
               with:
                   name: "glast v${{ steps.release-script.outputs.VERSION }}"
-                  body: ""
+                  body: "PASTE CHANGELOG HERE"
                   tag_name: "glast/v${{ steps.release-script.outputs.VERSION }}"
                   target_commitish: ${{ github.sha }}
                   files: "out/glast-v${{ steps.release-script.outputs.VERSION }}.zip"

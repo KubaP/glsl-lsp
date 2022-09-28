@@ -3,8 +3,8 @@
     $Version
 )
 
-write-host "version is $Version"
-write-host "sha is $env:GITHUB_SHA"
+Write-Host "Version: $Version"
+Write-Host "Commit SHA: $env:GITHUB_SHA"
 
 # Tag the commit.
 git tag "glast/v$Version" "$env:GITHUB_SHA"

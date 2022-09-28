@@ -65,6 +65,8 @@ jobs:
         defaults:
             run:
                 shell: pwsh
+        permissions:
+            contents: write
 
         steps:
             # Checks-out your repository under $GITHUB_WORKSPACE, so your job can access it
@@ -73,3 +75,11 @@ jobs:
 
             - name: Tag
               run: .\build\release.ps1 -Version "${{ needs.publish.outputs.version }}"
+
+            - name: Release
+              uses: softprops/action-gh-release@v0.1.14
+              with:
+                  name: "glast v${{ needs.publish.outputs.version }}"
+                  prerelease: true
+                  files: "out/glast-v${{ needs.publish.outputs.version }}.zip"
+                  fail_on_unmatched_files: true

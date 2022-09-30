@@ -1931,7 +1931,6 @@ fn print_tree_qualifiers(
 							}
 						}
 					}
-					let indent = indent - 1;
 				}
 				if let Some(r_paren) = r_paren {
 					write!(
@@ -2034,7 +2033,7 @@ fn print_expr(expr: &Expr, indent: usize, f: &mut String) {
 				indent = indent * 2
 			);
 		}
-		ExprTy::Invalid => {
+		ExprTy::Invalid { .. } => {
 			write!(
 				f,
 				"\r\n{:indent$}INVALID@{}",
@@ -2043,8 +2042,8 @@ fn print_expr(expr: &Expr, indent: usize, f: &mut String) {
 				indent = indent * 2
 			);
 		}
-		ExprTy::Lit(l) => {
-			let (t, v) = match l {
+		ExprTy::Lit { lit, .. } => {
+			let (t, v) = match lit {
 				Lit::Bool(b) => ("BOOL", b.to_string()),
 				Lit::Int(i) => ("INT", i.to_string()),
 				Lit::UInt(u) => ("UINT", u.to_string()),
@@ -2059,17 +2058,19 @@ fn print_expr(expr: &Expr, indent: usize, f: &mut String) {
 				indent = indent * 2
 			);
 		}
-		ExprTy::Ident(i) => {
+		ExprTy::Ident { ident, .. } => {
 			write!(
 				f,
 				"\r\n{:indent$}IDENT@{} \"{}\"",
 				"",
 				expr.span,
-				i.name,
+				ident.name,
 				indent = indent * 2
 			);
 		}
-		ExprTy::Prefix { expr: inner, op } => {
+		ExprTy::Prefix {
+			expr: inner, op, ..
+		} => {
 			write!(
 				f,
 				"\r\n{:indent$}PREFIX@{}",
@@ -2083,7 +2084,9 @@ fn print_expr(expr: &Expr, indent: usize, f: &mut String) {
 				print_expr(inner, indent, f);
 			}
 		}
-		ExprTy::Postfix { expr: inner, op } => {
+		ExprTy::Postfix {
+			expr: inner, op, ..
+		} => {
 			write!(
 				f,
 				"\r\n{:indent$}POSTFIX@{}",
@@ -2095,7 +2098,9 @@ fn print_expr(expr: &Expr, indent: usize, f: &mut String) {
 			print_expr(inner, indent, f);
 			print_post_op(op, indent, f);
 		}
-		ExprTy::Binary { left, op, right } => {
+		ExprTy::Binary {
+			left, op, right, ..
+		} => {
 			write!(
 				f,
 				"\r\n{:indent$}BINARY@{}",
@@ -2114,6 +2119,7 @@ fn print_expr(expr: &Expr, indent: usize, f: &mut String) {
 			l_paren: left,
 			expr: inner,
 			r_paren: right,
+			..
 		} => {
 			write!(
 				f,
@@ -2148,6 +2154,7 @@ fn print_expr(expr: &Expr, indent: usize, f: &mut String) {
 			l_bracket,
 			i,
 			r_bracket,
+			..
 		} => {
 			write!(
 				f,
@@ -2178,7 +2185,7 @@ fn print_expr(expr: &Expr, indent: usize, f: &mut String) {
 				);
 			}
 		}
-		ExprTy::ObjAccess { obj, dot, leaf } => {
+		ExprTy::ObjAccess { obj, dot, leaf, .. } => {
 			write!(
 				f,
 				"\r\n{:indent$}OBJ_ACCESS@{}",
@@ -2204,6 +2211,7 @@ fn print_expr(expr: &Expr, indent: usize, f: &mut String) {
 			l_paren,
 			args,
 			r_paren,
+			..
 		} => {
 			write!(
 				f,
@@ -2259,6 +2267,7 @@ fn print_expr(expr: &Expr, indent: usize, f: &mut String) {
 			l_brace,
 			args,
 			r_brace,
+			..
 		} => {
 			write!(
 				f,
@@ -2306,6 +2315,7 @@ fn print_expr(expr: &Expr, indent: usize, f: &mut String) {
 			l_paren,
 			args,
 			r_paren,
+			..
 		} => {
 			write!(
 				f,

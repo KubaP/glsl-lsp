@@ -491,10 +491,7 @@ pub fn parse_from_str(source: &str) -> TokenStream {
 						None => {
 							// We have reached the end of the source string, and therefore the end of the comment.
 							tokens.push((
-								Token::Comment {
-									str: std::mem::take(&mut buffer),
-									contains_eof: false,
-								},
+								Token::LineComment(std::mem::take(&mut buffer)),
 								Span {
 									start: buffer_start,
 									end: lexer.position(),
@@ -507,10 +504,7 @@ pub fn parse_from_str(source: &str) -> TokenStream {
 					if current == '\r' || current == '\n' {
 						// We have an EOL without a line-continuator, so therefore this is the end of the directive.
 						tokens.push((
-							Token::Comment {
-								str: std::mem::take(&mut buffer),
-								contains_eof: false,
-							},
+							Token::LineComment(std::mem::take(&mut buffer)),
 							Span {
 								start: buffer_start,
 								end: lexer.position(),
@@ -529,7 +523,7 @@ pub fn parse_from_str(source: &str) -> TokenStream {
 					// Test if the end delimiter is here.
 					if lexer.take_pat("*/") {
 						tokens.push((
-							Token::Comment {
+							Token::BlockComment {
 								str: std::mem::take(&mut buffer),
 								contains_eof: false,
 							},
@@ -548,7 +542,7 @@ pub fn parse_from_str(source: &str) -> TokenStream {
 						// We have reached the end of the source string, and therefore the end of the comment. This
 						// comment however therefore contains the EOF and hence is not valid.
 						tokens.push((
-							Token::Comment {
+							Token::BlockComment {
 								str: std::mem::take(&mut buffer),
 								contains_eof: true,
 							},
@@ -639,9 +633,10 @@ pub enum Token {
 	Bool(bool),
 	Ident(String),
 	Directive(String),
-	Comment {
+	LineComment(String),
+	BlockComment {
 		str: String,
-		/// Only `true` if this is a `/*...` multi-line comment without a closing delimiter.
+		/// Only `true` if this comment is missing the closing delimiter.
 		contains_eof: bool,
 	},
 	Invalid(char),
@@ -1382,9 +1377,9 @@ fn spans() {
 	assert_eq!(parse_from_str(": "), vec![(Token::Colon, span(0, 1))]);
 	assert_eq!(parse_from_str("; :"), vec![(Token::Semi, span(0, 1)), (Token::Colon, span(2, 3))]);
 	// Comments
-	assert_eq!(parse_from_str("// comment"), vec![(Token::Comment { str: " comment".into(), contains_eof: false }, span(0, 10))]);
-	assert_eq!(parse_from_str("/* a */"), vec![(Token::Comment { str: " a ".into(), contains_eof: false }, span(0, 7))]);
-	assert_eq!(parse_from_str("/* a"), vec![(Token::Comment { str: " a".into(), contains_eof: true }, span(0, 4))]);
+	assert_eq!(parse_from_str("// comment"), vec![(Token::LineComment(" comment".into()), span(0, 10))]);
+	assert_eq!(parse_from_str("/* a */"), vec![(Token::BlockComment { str: " a ".into(), contains_eof: false }, span(0, 7))]);
+	assert_eq!(parse_from_str("/* a"), vec![(Token::BlockComment { str: " a".into(), contains_eof: true }, span(0, 4))]);
 	// Directive
 	assert_eq!(parse_from_str("#dir"), vec![(Token::Directive("dir".into()), span(0, 4))]);
 	assert_eq!(parse_from_str("#dir a "), vec![(Token::Directive("dir a ".into()), span(0, 7))]);
@@ -1580,26 +1575,26 @@ fn punctuation() {
 #[rustfmt::skip]
 fn comments() {
 	// Line comments
-	assert_tokens!("// a comment", Token::Comment{str: " a comment".into(), contains_eof: false});
-	assert_tokens!("//a comment", Token::Comment{str: "a comment".into(), contains_eof: false});
+	assert_tokens!("// a comment", Token::LineComment(" a comment".into()));
+	assert_tokens!("//a comment", Token::LineComment("a comment".into()));
 
 	// Broken by line continuator
-	assert_tokens!("// a comment \\\rcontinuation", Token::Comment{ str: " a comment continuation".into(), contains_eof: false});
-	assert_tokens!("//a comment\\\ncontinuation", Token::Comment{ str: "a commentcontinuation".into(), contains_eof: false});
-	assert_tokens!("//a comment \\\r\ncontinuation", Token::Comment{ str: "a comment continuation".into(), contains_eof: false});
-	assert_tokens!("/\\\r/ a comment", Token::Comment{ str: " a comment".into(), contains_eof: false});
-	assert_tokens!("/\\\r\n/ a comment", Token::Comment{ str: " a comment".into(), contains_eof: false});
-	assert_tokens!("//\\\n a comment", Token::Comment{ str: " a comment".into(), contains_eof: false});
+	assert_tokens!("// a comment \\\rcontinuation", Token::LineComment(" a comment continuation".into()));
+	assert_tokens!("//a comment\\\ncontinuation", Token::LineComment("a commentcontinuation".into()));
+	assert_tokens!("//a comment \\\r\ncontinuation", Token::LineComment("a comment continuation".into()));
+	assert_tokens!("/\\\r/ a comment", Token::LineComment(" a comment".into()));
+	assert_tokens!("/\\\r\n/ a comment", Token::LineComment(" a comment".into()));
+	assert_tokens!("//\\\n a comment", Token::LineComment(" a comment".into()));
 
 	// Multi-line comments
-	assert_tokens!("/* a comment */", Token::Comment{ str: " a comment ".into(), contains_eof: false});
-	assert_tokens!("/*a comment*/", Token::Comment{ str: "a comment".into(), contains_eof: false});
-	assert_tokens!("/* <Ll#,;#l,_!\"^$!6 */", Token::Comment{ str: " <Ll#,;#l,_!\"^$!6 ".into(), contains_eof: false});
-	assert_tokens!("/* open-ended comment", Token::Comment{ str: " open-ended comment".into(), contains_eof: true});
+	assert_tokens!("/* a comment */", Token::BlockComment{ str: " a comment ".into(), contains_eof: false});
+	assert_tokens!("/*a comment*/", Token::BlockComment{ str: "a comment".into(), contains_eof: false});
+	assert_tokens!("/* <Ll#,;#l,_!\"^$!6 */", Token::BlockComment{ str: " <Ll#,;#l,_!\"^$!6 ".into(), contains_eof: false});
+	assert_tokens!("/* open-ended comment", Token::BlockComment{ str: " open-ended comment".into(), contains_eof: true});
 
 	// Broken by line continuator
-	assert_tokens!("/\\\r* a comment */", Token::Comment{ str: " a comment ".into(), contains_eof: false});
-	assert_tokens!("/\\\n*a comment*\\\r\n/", Token::Comment{ str: "a comment".into(), contains_eof: false});
+	assert_tokens!("/\\\r* a comment */", Token::BlockComment{ str: " a comment ".into(), contains_eof: false});
+	assert_tokens!("/\\\n*a comment*\\\r\n/", Token::BlockComment{ str: "a comment".into(), contains_eof: false});
 }
 
 #[test]

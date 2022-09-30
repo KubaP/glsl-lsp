@@ -241,7 +241,7 @@ impl Type {
 	/// Tries to parse an [`Expr`] into a `Type`, e.g. `int` or `MyStruct` or `float[3][2]`.
 	pub fn parse(expr: &Expr) -> Option<Self> {
 		match &expr.ty {
-			ExprTy::Ident(i) => Some(Self::Basic(Primitive::parse(i))),
+			ExprTy::Ident{ident,..} => Some(Self::Basic(Primitive::parse(ident))),
 			ExprTy::Index { item, i, .. } => {
 				let mut current_item = item;
 				let mut stack = Vec::new();
@@ -249,8 +249,8 @@ impl Type {
 
 				let primitive = loop {
 					match &current_item.ty {
-						ExprTy::Ident(i) => {
-							break Primitive::parse(i);
+						ExprTy::Ident{ident,..} => {
+							break Primitive::parse(ident);
 						}
 						ExprTy::Index { item, i, .. } => {
 							stack.push(i.as_deref());

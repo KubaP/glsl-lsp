@@ -304,7 +304,7 @@ fn try_parse_qualifier_list(
 					match current {
 						Token::Comma => {
 							// Consume the `,` separator and continue looking for a layout identifier.
-							layouts.push_separator(*current_span);
+							layouts.push_separator(vec![], *current_span);
 							walker.advance();
 							continue 'layouts;
 						}
@@ -1670,7 +1670,7 @@ pub(super) fn parse_stmt(
 
 				match current {
 					Token::Semi => {
-						args.push_separator(current_span);
+						args.push_separator(vec![], current_span);
 						walker.advance();
 						continue 'for_args;
 					}
@@ -1695,7 +1695,7 @@ pub(super) fn parse_stmt(
 
 					args.push_item(Nodes::from_vec(nodes));
 					if let Some(semi) = semi {
-						args.push_separator(semi);
+						args.push_separator(vec![], semi);
 					}
 
 					continue 'for_args;
@@ -3430,7 +3430,7 @@ fn parse_fn(
 		match current {
 			Token::Comma => {
 				// Consume the `,` separator and continue looking for a parameter.
-				params.push_separator(current_span);
+				params.push_separator(vec![], current_span);
 				walker.advance();
 				continue 'params;
 			}
@@ -3730,7 +3730,7 @@ fn parse_struct(
 		&[Token::LBrace, Token::Semi],
 	) {
 		(Some(e), _) => match e.ty {
-			ExprTy::Ident(i) => i,
+			ExprTy::Ident { ident, .. } => ident,
 			_ => {
 				// No error recovery: we are missing the identifier.
 				syntax_errors.push(SyntaxErr::ExpectedIdentAfterStructKw(
@@ -3854,7 +3854,7 @@ fn parse_struct(
 	let instance = match expr_parser(walker, Mode::TakeOneUnit, &[Token::Semi])
 	{
 		(Some(e), _) => match e.ty {
-			ExprTy::Ident(i) => Some(i),
+			ExprTy::Ident { ident, .. } => Some(ident),
 			_ => {
 				// Error recovery: we are missing the semi colon.
 				syntax_errors.push(SyntaxErr::ExpectedSemiAfterStructBody(

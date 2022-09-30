@@ -327,16 +327,16 @@ pub enum NodeTy {
 /// # let t = 1;
 /// # let comma_span = Span::new(0, 1);
 /// list.push_item(t);
-/// list.push_separator(comma_span);
+/// list.push_separator(vec![], comma_span);
 /// list.push_item(t);
 /// list.push_item(t);
-/// list.push_separator(comma_span);
-/// list.push_separator(comma_span);
+/// list.push_separator(vec![], comma_span);
+/// list.push_separator(vec![], comma_span);
 /// ```
 #[derive(Debug, Clone, PartialEq)]
 pub struct List<T> {
 	/// Each entry consists of an optional item followed by an optional separator.
-	entries: Vec<(Option<T>, Option<Span>)>,
+	entries: Vec<(Option<T>, (Comments, Option<Span>))>,
 }
 
 /// A growable collection of [`Node`]s.
@@ -645,18 +645,19 @@ impl<T> List<T> {
 
 	/// Appends an item `T` to the `List`.
 	pub fn push_item(&mut self, item: T) {
-		self.entries.push((Some(item), None));
+		self.entries.push((Some(item), (vec![], None)));
 	}
 
 	/// Appends a separator to the `List`.
-	pub fn push_separator(&mut self, span: Span) {
+	pub fn push_separator(&mut self, comments: Comments, span: Span) {
 		if let Some(last) = self.entries.last_mut() {
-			if last.1.is_none() {
-				last.1 = Some(span);
+			if last.1 .1.is_none() {
+				last.1 .0 = comments;
+				last.1 .1 = Some(span);
 				return;
 			}
 		}
-		self.entries.push((None, Some(span)));
+		self.entries.push((None, (comments, Some(span))));
 	}
 
 	/// Wraps this `List` within an `Option<List`. If this list is empty, `None` will returned.
@@ -674,7 +675,7 @@ impl<T> List<T> {
 	/// they appear in.
 	pub fn entry_iter(&self) -> ListEntryIterator<T> {
 		ListEntryIterator {
-			items: &&self.entries,
+			items: &self.entries,
 			cursor: 0,
 			index: 0,
 		}
@@ -716,7 +717,7 @@ impl List<Expr> {
 				previous = Prev::Item(item.span);
 			}
 
-			if let Some(comma) = comma {
+			if let Some(comma) = &comma.1 {
 				match previous {
 					Prev::Comma(span) => syntax_errors.push(
 						SyntaxErr::ExprExpectedArgAfterComma(
@@ -769,7 +770,7 @@ impl List<Expr> {
 				previous = Prev::Item(item.span);
 			}
 
-			if let Some(comma) = comma {
+			if let Some(comma) = &comma.1 {
 				match previous {
 					Prev::Comma(span) => syntax_errors.push(
 						SyntaxErr::ExprExpectedArgAfterComma(
@@ -817,7 +818,7 @@ impl List<Expr> {
 				previous = Prev::Item(item.span);
 			}
 
-			if let Some(comma) = comma {
+			if let Some(comma) = &comma.1 {
 				match previous {
 					Prev::Comma(span) => syntax_errors.push(
 						SyntaxErr::ExprExpectedExprAfterComma(
@@ -855,14 +856,14 @@ impl List<Param> {
 		let first = self.entries.first().unwrap();
 		let start = if let Some(p) = &first.0 {
 			p.span.start
-		} else if let Some(s) = &first.1 {
+		} else if let Some(s) = &first.1 .1 {
 			s.start
 		} else {
 			unreachable!("[List<Param>::span] `self.entries` first element has no item or separator.")
 		};
 
 		let last = self.entries.last().unwrap();
-		let end = if let Some(s) = &last.1 {
+		let end = if let Some(s) = &last.1 .1 {
 			s.end
 		} else if let Some(p) = &last.0 {
 			p.span.end
@@ -901,7 +902,7 @@ impl List<Param> {
 					});
 				}
 			}
-			if let Some(separator) = entry.1 {
+			if let Some(separator) = entry.1 .1 {
 				nodes.push(Node {
 					span: separator,
 					ty: NodeTy::Punctuation,
@@ -936,7 +937,7 @@ impl List<Param> {
 				previous = Prev::Item(item.span);
 			}
 
-			if let Some(comma) = comma {
+			if let Some(comma) = &comma.1 {
 				match previous {
 					Prev::Comma(span) => {
 						syntax_errors.push(SyntaxErr::ExpectedParamAfterComma(
@@ -974,14 +975,14 @@ impl List<Layout> {
 		let first = self.entries.first().unwrap();
 		let start = if let Some(l) = &first.0 {
 			l.span.start
-		} else if let Some(s) = &first.1 {
+		} else if let Some(s) = &first.1 .1 {
 			s.start
 		} else {
 			unreachable!("[List<Layout>::span] `self.entries` first element has no item or separator.")
 		};
 
 		let last = self.entries.last().unwrap();
-		let end = if let Some(s) = &last.1 {
+		let end = if let Some(s) = &last.1 .1 {
 			s.end
 		} else if let Some(l) = &last.0 {
 			l.span.end
@@ -1065,7 +1066,7 @@ impl List<Layout> {
 					}
 				}
 			}
-			if let Some(separator) = entry.1 {
+			if let Some(separator) = entry.1 .1 {
 				nodes.push(Node {
 					span: separator,
 					ty: NodeTy::Punctuation,
@@ -1100,7 +1101,7 @@ impl List<Layout> {
 				previous = Prev::Item(item.span);
 			}
 
-			if let Some(comma) = comma {
+			if let Some(comma) = &comma.1 {
 				match previous {
 					Prev::Comma(span) => syntax_errors.push(
 						SyntaxErr::ExpectedLayoutIdentAfterComma(
@@ -1142,14 +1143,14 @@ impl List<Nodes> {
 		let first = self.entries.first().unwrap();
 		let start = if let Some(n) = &first.0 {
 			n.span().start
-		} else if let Some(s) = &first.1 {
+		} else if let Some(s) = &first.1 .1 {
 			s.start
 		} else {
 			unreachable!("[List<Layout>::span] `self.entries` first element has no item or separator.")
 		};
 
 		let last = self.entries.last().unwrap();
-		let end = if let Some(s) = &last.1 {
+		let end = if let Some(s) = &last.1 .1 {
 			s.end
 		} else if let Some(n) = &last.0 {
 			n.span().end
@@ -1166,7 +1167,7 @@ impl List<Nodes> {
 ///
 /// This struct is created by the [`List::entry_iter()`](List::entry_iter) method.
 pub struct ListEntryIterator<'a, T> {
-	items: &'a [(Option<T>, Option<Span>)],
+	items: &'a [(Option<T>, (Comments, Option<Span>))],
 	cursor: usize,
 	index: usize,
 }
@@ -1186,7 +1187,7 @@ impl<'a, T> Iterator for ListEntryIterator<'a, T> {
 			self.cursor += 1;
 			self.index = 0;
 
-			if let Some(s) = &t.1 {
+			if let Some(s) = &t.1 .1 {
 				return Some(Either::Right(s));
 			}
 		}
@@ -1198,7 +1199,7 @@ impl<'a, T> Iterator for ListEntryIterator<'a, T> {
 ///
 /// This struct is created by the [`List::item_iter()`](List::item_iter) method.
 pub struct ListItemIterator<'a, T> {
-	items: &'a [(Option<T>, Option<Span>)],
+	items: &'a [(Option<T>, (Comments, Option<Span>))],
 	cursor: usize,
 }
 
@@ -1295,6 +1296,14 @@ impl IfTy {
 	}
 }
 
+#[derive(Debug, Clone, PartialEq)]
+pub enum Comment {
+	Line(String),
+	Block(String),
+}
+
+pub type Comments = Vec<(Comment, Span)>;
+
 /// An expression, which is part of a larger statement.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Expr {
@@ -1358,75 +1367,103 @@ pub enum ExprTy {
 	Incomplete,
 	/// A number token which could not be parsed as a valid number, e.g. `1.0B` cannot be converted to a valid
 	/// `Lit` because `B` is not a valid numerical suffix.
-	Invalid,
-	Separator,
+	Invalid {
+		comments_before: Comments,
+	},
+	LineComment(String),
+	BlockComment(String),
+	Separator {
+		comments_before: Comments,
+	},
 	/// A literal value; either a number or a boolean.
-	Lit(Lit),
+	Lit {
+		comments_before: Comments,
+		lit: Lit,
+	},
 	/// An identifier; could be a variable name, function name, type name, etc.
-	Ident(Ident),
+	Ident {
+		comments_before: Comments,
+		ident: Ident,
+	},
 	/// A prefix operation.
 	Prefix {
+		comments_before: Comments,
 		op: PreOp,
 		expr: Option<Box<Expr>>,
 	},
 	/// A postfix operation.
 	Postfix {
 		expr: Box<Expr>,
+		comments_before_op: Comments,
 		op: PostOp,
 	},
 	/// A binary expression with a left and right hand-side.
 	Binary {
 		left: Box<Expr>,
+		comments_before_op: Comments,
 		op: BinOp,
 		right: Option<Box<Expr>>,
 	},
 	/// A ternary condition.
 	Ternary {
 		cond: Box<Expr>,
+		comments_before_question: Comments,
 		question: Span,
 		true_: Option<Box<Expr>>,
+		comments_before_colon: Comments,
 		colon: Option<Span>,
 		false_: Option<Box<Expr>>,
 	},
 	/// A parenthesis group.
 	Paren {
+		comments_before: Comments,
 		l_paren: Span,
 		expr: Option<Box<Expr>>,
+		comments_before_r: Comments,
 		r_paren: Option<Span>,
 	},
 	/// An index operator, e.g. `item[i]`.
 	Index {
 		item: Box<Expr>,
+		comments_before_l: Comments,
 		l_bracket: Span,
 		i: Option<Box<Expr>>,
+		comments_before_r: Comments,
 		r_bracket: Option<Span>,
 	},
 	/// Object access.
 	ObjAccess {
 		obj: Box<Expr>,
+		comments_before_dot: Comments,
 		dot: Span,
 		leaf: Option<Box<Expr>>,
 	},
 	/// A function call.
 	Fn {
 		ident: Ident,
+		comments_before_l: Comments,
 		l_paren: Span,
 		args: List<Expr>,
+		comments_before_r: Comments,
 		r_paren: Option<Span>,
 	},
 	/// An initializer list.
 	Init {
+		comments_before: Comments,
 		l_brace: Span,
 		args: List<Expr>,
+		comments_before_r: Comments,
 		r_brace: Option<Span>,
 	},
 	/// An array constructor.
 	ArrInit {
 		/// Contains the first part of an array constructor, e.g. `int[3]`.
 		arr: Box<Expr>,
+		comments_before_l: Comments,
 		l_paren: Span,
 		/// Contains the expressions within the brackets i.e. `..](a, b, ...)`.
 		args: List<Expr>,
+		comments_before_r: Comments,
 		r_paren: Option<Span>,
 	},
 	/// A general list expression, e.g. `a, b`.
@@ -1576,7 +1613,7 @@ impl Ident {
 		expr: &ExprTy,
 	) -> Option<Either<Ident, (Ident, Vec<ArrSize>)>> {
 		match expr {
-			ExprTy::Ident(i) => Some(Either::Left(i.clone())),
+			ExprTy::Ident { ident, .. } => Some(Either::Left(ident.clone())),
 			ExprTy::Index { item, i, .. } => {
 				let mut current_item = item;
 				let mut stack = Vec::new();
@@ -1584,8 +1621,8 @@ impl Ident {
 
 				let ident = loop {
 					match &current_item.ty {
-						ExprTy::Ident(i) => {
-							break i.clone();
+						ExprTy::Ident { ident, .. } => {
+							break ident.clone();
 						}
 						ExprTy::Index { item, i, .. } => {
 							stack.push(i.as_deref());

@@ -1,4 +1,62 @@
 //! Types and functionality related to the Concrete Syntax Tree.
+//!
+//! This module contains structs and enums used to represent the Concrete Syntax Tree, and the
+//! [`parse_from_str()`]/[`parse_from_token_stream()`] functions which return a [`Cst`].
+//!
+//! # Types
+//! This crate strongly embraces the notion of making illegal states un-representable; which means that there are a
+//! *lot* of types in this module. The advantage of this approach is that you can figure out all of the possible
+//! states of a struct/enum just by looking at it's fields.
+//! - Unless otherwise stated, any [`Option<T>`] fields mean that the parser may perform error recovery when
+//!   parsing that field, and hence a value of `None` means that the parsing of that type was cut short at that
+//!   field because of some sort of syntax error.
+//! - All [`Comments`] fields can be omitted. However, if any optional [`Option<T>`] field is `None`, then any
+//!   `Comments` fields after it can **never** be populated.
+//! - The fields of all structs/variants are ordered in the order that the elements they represent appear in the
+//!   source code.
+//!
+//! ## Example
+//! The following definition:
+//! ```text
+//! Binary {
+//!     left: Box<Expr>,
+//!     comments_before_op: Comments,
+//!     op: BinOp,
+//!     right: Option<Box<Expr>>,
+//! }
+//! ```
+//! tells us that:
+//! - there **must** be a compond expression on the left-hand side,
+//! - there **may** be one or more comments after but they can be omitted,
+//! - there **is** a binary operator afterwards,
+//! - and that if there are no syntax errors there **will** be a compound expression on the right-hand side, *but*
+//!   if there are syntax errors the parser will stop parsing this binary expression after the operator.
+//!
+//! The following definition:
+//! ```text
+//! Paren {
+//!     comments_before: Comments,
+//!     l_paren: Span,
+//!     // Can be omitted:
+//!     expr: Option<Box<Expr>>,
+//!     comments_before_r: Comments,
+//!     r_paren: Option<Span>,
+//! }
+//! ```
+//! tells us that:
+//! - there **may** be one or more comments before the left parenthesis but they can be omitted,
+//! - there **is** a left parethensis symbol afterwards,
+//! - if there are no syntax errors there **will** be a compound expression after the parenthesis, but equally the
+//!   compound expression can be omitted,
+//! - there **may** be one or more comments before the right parenthesis but they can be omitted,
+//! - and if there are no syntax errors there **will** be a right parenthesis symbol at the end, *but* if there are
+//!   syntax errors the parser will stop parsing this parenthesis expression before the right parenthesis.
+//!
+//! # Limitations
+//! TODO: Limited #define support.
+//!
+//! # Differences in behaviour
+//! TODO: If no syntax errors returned, behaves the same; if syntax error, behaviour departs from spec.
 
 mod parser;
 
@@ -10,10 +68,10 @@ use crate::{
 	Either,
 };
 
-/// A concrete syntax tree; this vector represents the root of a GLSL source file.
+/// A concrete syntax tree; this vector represents the root of a GLSL source string.
 pub type Cst = Vec<Node>;
 
-/// Parses a string representing the GLSL source file into a Concrete Syntax Tree.
+/// Parses a GLSL source string into a Concrete Syntax Tree.
 ///
 /// # Examples
 /// Parse a simple GLSL expression:
@@ -42,7 +100,7 @@ pub fn parse_from_str(source: &str) -> (Cst, Vec<SyntaxErr>) {
 	(nodes, errors)
 }
 
-/// Parses a token stream into a Concrete Syntax Tree.
+/// Parses a Token Stream into a Concrete Syntax Tree.
 ///
 /// # Examples
 /// Parse a simple GLSL expression, whilst performing some custom logic between the steps:
@@ -73,7 +131,7 @@ pub fn parse_from_token_stream(
 	(nodes, errors)
 }
 
-/// Prints the concrete syntax tree.
+/// Prints the Concrete Syntax Tree.
 ///
 /// This produces a formatted [`String`] which contains all of the information of the CST.
 ///
@@ -1440,6 +1498,7 @@ pub enum ExprTy {
 	},
 	/// A function call.
 	Fn {
+		// FIXME: comments_before is missing since `Ident` itself doesn't have such field, only the variant does.
 		ident: Ident,
 		comments_before_l: Comments,
 		l_paren: Span,

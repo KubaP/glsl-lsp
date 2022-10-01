@@ -1,4 +1,40 @@
 //! Types and functionality related to the Token Stream.
+//!
+//! This module contains the structs and enums used to represent tokens, and the [`parse_from_str()`] function
+//! which returns a [`TokenStream`].
+//!
+//! # Differences in behaviour
+//! Since this crate is part of a larger language extension effort, it is designed to handle syntax errors in a UX
+//! friendly manner. This means that there are some minor differences between the behaviour of this lexer and of a
+//! lexer as specified by the official GLSL specification. The differences are listed below:
+//!
+//! - When the lexer comes across a character which is not part of the allowed character set it emits the
+//!   [`Invalid`](Token::Invalid) token. The only exception is in preprocessor directives where any characters are
+//!   allowed, but after preprocessor expansion only the allowed characters can remain. The specification says that
+//!   upon such a case a compile-time error must be produced.
+//! - When the lexer comes across a block comment which does not have a delimiter (and therefore goes to the
+//!   end-of-file) it still produces a [`BlockComment`](Token::BlockComment) with the `contains_eof` field set to
+//!   `true`. The specification does not mention what should technically happen in such a case, but compilers seem
+//!   to produce a compile-time error.
+//! - The lexer treats any number that matches the following pattern `0[0-9]+` as on octal number. The
+//!   specification says that an octal number can only contain digits `[0-7]`.
+//! - The lexer treats any identifier immediately after a number (without separating whitespace) as a valid suffix.
+//!   The specification only defines the `u|U` suffix as valid for integers, and the `f|F` & `lf|LF` suffix as
+//!   valid for floating point numbers. Anything afterwards should be treated as a new token, so this would be
+//!   valid: `#define TEST +5 \n uint i = 5uTEST`. Currently, this crate only supports define macros in valid
+//!   expressions, hence for now the lexer will treat the suffix as `uTEST` instead.
+//!
+//! To be certain that the source is valid, these cases (apart from the define issue) must be checked afterwards by
+//! iterating over the [`TokenStream`]. The parsing functions provided in the `ast`/`cst` modules do this for you,
+//! but if you are performing your own manipulation you must perform these checks yourself.
+//!
+//! A potential idea for consideration would be to include the official-spec behaviour behind a flag (i.e. stop
+//! parsing after encountering an error). This is currently not a priority, but if you would like such
+//! functionality please file an issue on the github repository to show interest. An alternative would be to
+//! produce a flag along with the `TokenStream` which signifies whether any errors were encountered.
+//!
+//! For a BNF notation of the official lexer grammar, see
+//! [this](https://github.com/KubaP/glsl-lsp/blob/release/glast/docs/lexer_grammar.bnf) file.
 
 use crate::{
 	cst::{Expr, Layout, LayoutTy},
@@ -6,10 +42,10 @@ use crate::{
 	Either,
 };
 
-/// A vector of tokens representing a GLSL source file.
+/// A vector of tokens representing a GLSL source string.
 pub type TokenStream = Vec<Spanned<Token>>;
 
-/// Parses a string representing the GLSL source file into a Token Stream.
+/// Parses a GLSL source string into a Token Stream.
 ///
 /// This lexer uses the "Maximal munch" principle to greedily create tokens. This means the longest possible valid
 /// token is always produced. Some examples:
@@ -31,7 +67,16 @@ pub type TokenStream = Vec<Spanned<Token>>;
 /// ```
 pub fn parse_from_str(source: &str) -> TokenStream {
 	let mut tokens = Vec::new();
-	let mut lexer = Lexer::new(source);
+	let mut lexer = {
+		// FIXME: Deal with a line continuator character if it's the first thing in the source file.
+		// Is that even legal?
+		Lexer {
+			// Iterating over individual characters is guaranteed to produce correct behaviour because GLSL source
+			// strings must use the utf-8 encoding as per the specification.
+			chars: source.chars().collect(),
+			cursor: 0,
+		}
+	};
 	let mut buffer = String::new();
 	let mut can_start_directive = true;
 
@@ -625,136 +670,229 @@ pub fn parse_from_str(source: &str) -> TokenStream {
 /// A token representing a unit of text in the GLSL source string.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Token {
+	/// A number, e.g. `1`, `517u`, `0xA9C`, `07113`, `7.3e-2`, `.015LF`.
 	Num {
 		num: String,
 		suffix: Option<String>,
 		type_: NumType,
 	},
+	/// A boolean, either `true` or `false`.
 	Bool(bool),
+	/// An identifier, e.g. `foo_bar`, `_900_a`.
 	Ident(String),
+	/// A preprocessor directive, e.g. `#version 450 core`, `#define FOO 42`, `#ifdef TOGGLE`.
 	Directive(String),
+	/// A line comment, e.g. `// comment`.
 	LineComment(String),
+	/// A block comment, e.g. `/* comment */`.
 	BlockComment {
 		str: String,
 		/// Only `true` if this comment is missing the closing delimiter.
 		contains_eof: bool,
 	},
+	/// An invalid character, e.g. `@`, `"`, `'`.
 	Invalid(char),
-	// General keywords
+	/* Keywords */
+	/// The `if` keyword.
 	If,
+	/// The `else` keyword.
 	Else,
+	/// The `for` keyword.
 	For,
+	/// The `do` keyword.
 	Do,
+	/// The `while` keyword.
 	While,
+	/// The `continue` keyword.
 	Continue,
+	/// The `switch` keyword.
 	Switch,
+	/// The `case` keyword.
 	Case,
+	/// The `default` keyword.
 	Default,
+	/// The `break` keyword.
 	Break,
+	/// The `return` keyword.
 	Return,
+	/// The `discard` keyword.
 	Discard,
+	/// The `struct` keyword.
 	Struct,
+	/// The `subroutine` keyword.
 	Subroutine,
+	/// A reserved keyword, e.g. `class`, `public`, `typedef`, `union`.
 	Reserved(String),
-	// Qualifier keywords
+	/* Qualifiers */
+	/// The `const` keyword.
 	Const,
+	/// The `in` keyword.
 	In,
+	/// The `out` keyword.
 	Out,
+	/// The `inout` keyword.
 	InOut,
+	/// The `attribute` keyword.
 	Attribute,
+	/// The `uniform` keyword.
 	Uniform,
+	/// The `varying` keyword.
 	Varying,
+	/// The `buffer` keyword.
 	Buffer,
+	/// The `shared` keyword.
 	Shared,
+	/// The `centroid` keyword.
 	Centroid,
+	/// The `sample` keyword.
 	Sample,
+	/// The `patch` keyword.
 	Patch,
+	/// The `layout` keyword.
 	Layout,
+	/// The `flat` keyword.
 	Flat,
+	/// The `smooth` keyword.
 	Smooth,
+	/// The `noperspective` keyword.
 	NoPerspective,
+	/// The `highp` keyword.
 	HighP,
+	/// The `mediump` keyword.
 	MediumP,
+	/// The `lowp` keyword.
 	LowP,
+	/// The `invariant` keyword.
 	Invariant,
+	/// The `precise` keyword.
 	Precise,
+	/// The `coherent` keyword.
 	Coherent,
+	/// The `volatile` keyword.
 	Volatile,
+	/// The `restrict` keyword.
 	Restrict,
+	/// The `readonly` keyword.
 	Readonly,
+	/// The `writeonly` keyword.
 	Writeonly,
-	// Punctuation
+	/* Punctuation tokens */
+	/// A punctuation token.
 	Op(OpTy),
+	/// A comma `,`.
 	Comma,
+	/// A dot `.`.
 	Dot,
+	/// A semi-colon `;`.
 	Semi,
+	/// A colon `:`.
 	Colon,
+	/// A question mark `?`.
 	Question,
+	/// An opening parenthesis `(`.
 	LParen,
+	/// A closing parenthesis `)`.
 	RParen,
+	/// An opening bracket `[`.
 	LBracket,
+	/// A closing bracket `]`.
 	RBracket,
+	/// An opening brace `{`.
 	LBrace,
+	/// A closing brace `}`.
 	RBrace,
 }
 
 /// The type/notation of a number token.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum NumType {
-	/// Any number beginning with `1-9` without a decimal point or an exponent, or just the digit `0` on it's own.
+	/// A decimal is any number beginning with `1-9` without a decimal point or an exponent, or just the digit `0` on it's own.
 	Dec,
-	/// Any number beginning with `0` without a decimal point or an exponent.
+	/// An octal is any number beginning with `0` without a decimal point or an exponent.
 	Oct,
-	/// Any number beginning with `0x` without a decimal point or an exponent.
+	/// A hexadecimal is any number beginning with `0x` without a decimal point or an exponent.
 	Hex,
-	/// Any number that contains a decimal point or an exponent.
+	/// A float is any number that contains a decimal point or an exponent.
 	Float,
 }
 
 /// A mathematical/comparison operator.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum OpTy {
-	// Maths
+	/* Maths */
+	/// The `+` symbol.
 	Add,
+	/// The `-` symbol.
 	Sub,
+	/// The `*` symbol.
 	Mul,
+	/// The `/` symbol.
 	Div,
+	/// The `%` symbol.
 	Rem,
+	/// The `&` symbol.
 	And,
+	/// The `|` symbol.
 	Or,
+	/// The `^` symbol.
 	Xor,
+	/// The `<<` symbol.
 	LShift,
+	/// The `>>` symbol.
 	RShift,
-	Neg,
+	/// The `-` symbol.
 	Flip,
+	/// The `=` symbol.
 	Eq,
+	/// The `++` symbol.
 	AddAdd,
+	/// The `--` symbol.
 	SubSub,
+	/// The `+=` symbol.
 	AddEq,
+	/// The `-=` symbol.
 	SubEq,
+	/// The `*=` symbol.
 	MulEq,
+	/// The `/=` symbol.
 	DivEq,
+	/// The `%=` symbol.
 	RemEq,
+	/// The `&=` symbol.
 	AndEq,
+	/// The `|=` symbol.
 	OrEq,
+	/// The `^=` symbol.
 	XorEq,
+	/// The `<<=` symbol.
 	LShiftEq,
+	/// The `>>=` symbol.
 	RShiftEq,
-	// Comparison
+	/* Comparison */
+	/// The `==` symbol.
 	EqEq,
+	/// The `!=` symbol.
 	NotEq,
+	/// The `!` symbol.
 	Not,
+	/// The `>` symbol.
 	Gt,
+	/// The `<` symbol.
 	Lt,
+	/// The `>=` symbol.
 	Ge,
+	/// The `<=` symbol.
 	Le,
+	/// The `&&` symbol.
 	AndAnd,
+	/// The `||` symbol.
 	OrOr,
+	/// The `^^` symbol.
 	XorXor,
 }
 
 impl Token {
-	/// Returns whether the current `Token` is a keyword that can start a statement.
+	/// Returns whether the current token is a keyword that can start a statement.
 	pub fn starts_statement(&self) -> bool {
 		match self {
 			Self::If
@@ -802,8 +940,7 @@ impl Token {
 		}
 	}
 
-	/// Returns whether the current `Token` is a punctuation assuming we are at the beginning of parsing a
-	/// statement.
+	/// Returns whether the current token is a punctuation assuming we are at the beginning of parsing a statement.
 	pub fn is_punctuation_for_stmt(&self) -> bool {
 		match self {
 			Self::Op(_)
@@ -819,7 +956,7 @@ impl Token {
 		}
 	}
 
-	/// Tries to convert the current `Token` into a [`LayoutTy`] identifier.
+	/// Tries to convert the current token into a [`LayoutTy`] identifier.
 	///
 	/// If the token matches a layout identifier that doesn't take an expression, e.g. `early_fragment_tests`, then
 	/// `Left` is returned with the converted `LayoutTy`. If the token matches a layout identifier that takes an
@@ -1068,15 +1205,6 @@ struct Lexer {
 }
 
 impl Lexer {
-	/// Constructs a new `Lexer` from the given GLSL source string.
-	fn new(source: &str) -> Self {
-		// FIXME: Deal with a line continuator character if it's the first thing in the source file.
-		Self {
-			chars: source.chars().collect(),
-			cursor: 0,
-		}
-	}
-
 	/// Returns the current character under the cursor, without advancing the cursor.
 	fn peek(&self) -> Option<char> {
 		self.chars.get(self.cursor).map(|c| *c)
@@ -1400,7 +1528,8 @@ fn spans() {
 	assert_eq!(parse_from_str("1e+"), vec![(Token::Num { num: "1".into(), suffix: Some("e".into()), type_: NumType::Dec }, span(0, 2)), (Token::Op(OpTy::Add), span(2, 3))]);
 }
 
-/// Asserts whether the token output of the `lexer()` matches the right hand side; ignores the spans.
+/// Asserts whether the token output of the `parse_from_str()` function matches the right hand side; this ignores
+/// the span information.
 #[cfg(test)]
 macro_rules! assert_tokens {
     ($src:expr, $($token:expr),*) => {

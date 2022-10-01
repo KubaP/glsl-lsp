@@ -18,6 +18,10 @@
 //! This crate breaks up the individual parsing steps into separate modules which can be invoked individually. The
 //! modules are self-contained so if you're for example working with the abstract syntax tree, you only need to
 //! concern yourself with the `glast::ast` module.
+//! 
+//! This crate operates only on [`str`] inputs because the GLSL specification states that GLSL source strings must
+//! use the UTF-8 encoding (so if the source can be parsed into a valid Rust [`str`] then it must be valid), hence
+//! no support for `[u8]` inputs is provided.
 //!
 //! ### Source String
 //! We start with a string of characters that makes up the glsl source file. We will use the following example to

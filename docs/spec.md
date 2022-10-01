@@ -1,4 +1,6 @@
 # OpenGL Shading Language Specification
+This is a document outlining the GLSL 4.50 specification. It is effectively a rewrite of the official specification pdf in order to a) order the information in a more cohesive manner, b) provide intra-doc links, c) make it easier to read through a less terse language.
+
 Missing/incomplete:
 - Buffer objects
 - Samplers
@@ -6,6 +8,8 @@ Missing/incomplete:
 - Atomic counters
 - Arrays/opaque arrays limitations
 - Subroutines
+
+GLSL source strings **must** use the UTF-8 encoding. Any characters which are not explicitly allowed are treated as invalid.
 
 # Types
 Note that the term *composites* refers to any of the vector, matrix, array or struct types.
@@ -398,7 +402,7 @@ These are the allowed literals:
 - `double` - `1.0lf` or `1.0LF` (mixing case such as `lF` is not allowed).
 
 ### Numbers
-For a specification of valid number notations, see the [grammar.bnf](./grammar.bnf) file.
+For a specification of valid number notations, see the [lexer_grammar.bnf](./lexer_grammar.bnf) file.
 
 ### Operators
 Mathematical operators:
@@ -470,7 +474,7 @@ a ^^ b // Logical XOR
 |12|`&&`|
 |13|`^^`|
 |14|`\|\|`|
-|15|`?:`|
+|15|`?:` (ternary)|
 |16|`=`, `+=`, `-=`, `*=`, `/=`, `%=`, `&=`, `^=`, `\|=`, `<<=`, `>>=`|
 |17|`,` (list seperator)|
 
@@ -727,6 +731,25 @@ else {
 
 ```
 `EXPR` is an expression which evaluates to a `bool`.
+
+If the body only contains one statement, the braces can be omitted. Note that if the braces are omitted, there **must** be one statement after, zero statements is not allowed.
+```glsl
+if (EXPR)
+    /*...*/
+else if (EXPR)
+    /*...*/
+else
+    /*...*/
+
+// We can mix and match:
+if (EXPR) {
+    /*...*/
+} else if (EXPR)
+    /*...*/
+else {
+    /*...*/
+}
+```
 
 ### Switch
 ```glsl
@@ -1129,7 +1152,7 @@ Single line comments can continue with the [Line-Continuation Character](#line-c
 int i = 5; * This is still part of the first comment *
 ```
 
-Open-ended multiline comments containing the EOF produce an error:
+Open-ended multi-line comments containing the EOF produce an error:
 ```glsl
 // Something else
 

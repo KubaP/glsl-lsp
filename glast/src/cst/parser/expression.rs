@@ -271,8 +271,7 @@ impl Op {
 				token::OpTy::Lt => OpTy::Lt(false, comments),
 				token::OpTy::Ge => OpTy::Ge(false, comments),
 				token::OpTy::Le => OpTy::Le(false, comments),
-				token::OpTy::Neg
-				| token::OpTy::Not
+				token::OpTy::Not
 				| token::OpTy::Flip
 				| token::OpTy::AddAdd
 				| token::OpTy::SubSub => {
@@ -2427,9 +2426,7 @@ impl ShuntingYard {
 			return None;
 		}
 
-		let pop_back = |stack: &mut VecDeque<Expr>| {
-			stack.pop_back().unwrap()
-		};
+		let pop_back = |stack: &mut VecDeque<Expr>| stack.pop_back().unwrap();
 
 		// Consume the stack from the front. If we have an expression, we move it to the back of a temporary stack.
 		// If we have an operator, we take the n-most expressions from the back of the temporary stack, process

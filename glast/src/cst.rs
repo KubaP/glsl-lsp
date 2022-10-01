@@ -218,6 +218,10 @@ pub enum NodeTy {
 	/* STATEMENTS */
 	/// An empty statement, i.e. just a `;`.
 	EmptyStmt,
+	/// A line comment, e.g. `// comment`.
+	LineComment(String),
+	/// A block comment, e.g. `/* comment */`.
+	BlockComment(String),
 	/// A variable definition, e.g. `int a;`.
 	VarDef {
 		qualifiers: Vec<Qualifier>,
@@ -1231,7 +1235,7 @@ pub struct ListEntryIterator<'a, T> {
 }
 
 impl<'a, T> Iterator for ListEntryIterator<'a, T> {
-	type Item = Either<&'a T, &'a Span>;
+	type Item = Either<&'a T, (&'a Comments, &'a Span)>;
 
 	fn next(&mut self) -> Option<Self::Item> {
 		while let Some(t) = self.items.get(self.cursor) {
@@ -1246,7 +1250,7 @@ impl<'a, T> Iterator for ListEntryIterator<'a, T> {
 			self.index = 0;
 
 			if let Some(s) = &t.1 .1 {
-				return Some(Either::Right(s));
+				return Some(Either::Right((&t.1 .0, s)));
 			}
 		}
 		None
@@ -1428,8 +1432,6 @@ pub enum ExprTy {
 	Invalid {
 		comments_before: Comments,
 	},
-	LineComment(String),
-	BlockComment(String),
 	Separator {
 		comments_before: Comments,
 	},
@@ -1498,7 +1500,7 @@ pub enum ExprTy {
 	},
 	/// A function call.
 	Fn {
-		// FIXME: comments_before is missing since `Ident` itself doesn't have such field, only the variant does.
+		comments_before: Comments,
 		ident: Ident,
 		comments_before_l: Comments,
 		l_paren: Span,

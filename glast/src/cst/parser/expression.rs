@@ -2760,8 +2760,8 @@ impl ShuntingYard {
 							temp.push_front(pop_back(&mut stack));
 						}
 						// Get the identifier (which is the first expression).
-						let ident = match temp.pop_front().unwrap().ty {
-							ExprTy::Ident{ident, ..} => ident,
+						let (comments_before, ident) = match temp.pop_front().unwrap().ty {
+							ExprTy::Ident{ comments_before,ident} => (comments_before, ident),
 							_ => panic!("The first expression of a function call operator is not an identifier!")
 						};
 
@@ -2783,6 +2783,7 @@ impl ShuntingYard {
 						stack.push_back(Expr {
 							span: Span::new(ident.span.start, end.end),
 							ty: ExprTy::Fn {
+								comments_before,
 								ident,
 								comments_before_l: l_comments,
 								l_paren,

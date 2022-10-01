@@ -1,7 +1,7 @@
 use crate::{
 	cst::{
-		BinOp, Expr, ExprTy, Ident, List, Lit, Node, NodeTy, Nodes, Param,
-		PostOp, PreOp, Qualifier, Scope,
+		BinOp, Comment, Comments, Expr, ExprTy, Ident, List, Lit, Node, NodeTy,
+		Nodes, Param, PostOp, PreOp, Qualifier, Scope,
 	},
 	span::Span,
 	Either,
@@ -17,6 +17,9 @@ pub(in super::super) fn print_tree_node(
 	write!(f, "\r\n{:indent$}", "", indent = indent * 2);
 
 	match &node.ty {
+		NodeTy::LineComment(str) | NodeTy::BlockComment(str) => {
+			write!(f, "COMMENT@{} \"{str}\"", node.span)
+		}
 		NodeTy::Keyword => write!(f, "KEYWORD@{}", node.span),
 		NodeTy::Punctuation => write!(f, "PUNCTUATION@{}", node.span),
 		NodeTy::Ident => write!(f, "IDENT@{}", node.span),
@@ -639,13 +642,16 @@ pub(in super::super) fn print_tree_node(
 								print_tree_nodes("STMT", n, indent, f);
 								Ok(())
 							}
-							Either::Right(span) => write!(
-								f,
-								"\r\n{:indent$}SEMI@{}",
-								"",
-								span,
-								indent = indent * 2
-							),
+							Either::Right((comments, span)) => {
+								print_comments(comments, indent, f);
+								write!(
+									f,
+									"\r\n{:indent$}SEMI@{}",
+									"",
+									span,
+									indent = indent * 2
+								)
+							}
 						};
 					}
 				}
@@ -843,7 +849,13 @@ pub(in super::super) fn print_tree_node(
 			}
 			Ok(())
 		}
-		_ => write!(f, "UNIMPLEMENTED"),
+		NodeTy::Preproc(_) => write!(
+			f,
+			"\r\n{:indent$}UNIMPLEMENTED@{}",
+			"",
+			node.span,
+			indent = indent * 2
+		),
 	}
 }
 
@@ -1920,7 +1932,8 @@ fn print_tree_qualifiers(
 									);
 								}
 							},
-							Either::Right(span) => {
+							Either::Right((comments, span)) => {
+								print_comments(comments, indent, f);
 								write!(
 									f,
 									"\r\n{:indent$}COMMA@{}",
@@ -2013,6 +2026,22 @@ fn print_tree_expr(label: &str, expr: &Expr, indent: usize, f: &mut String) {
 }
 
 #[allow(unused_must_use)]
+fn print_comments(comments: &Comments, indent: usize, f: &mut String) {
+	for (comment, span) in comments {
+		write!(
+			f,
+			"\r\n{:indent$}COMMENT@{}, \"{}\"",
+			"",
+			span,
+			match comment {
+				Comment::Line(s) | Comment::Block(s) => s,
+			},
+			indent = indent * 2
+		);
+	}
+}
+
+#[allow(unused_must_use)]
 fn print_expr(expr: &Expr, indent: usize, f: &mut String) {
 	match &expr.ty {
 		ExprTy::Missing => {
@@ -2033,7 +2062,8 @@ fn print_expr(expr: &Expr, indent: usize, f: &mut String) {
 				indent = indent * 2
 			);
 		}
-		ExprTy::Invalid { .. } => {
+		ExprTy::Invalid { comments_before } => {
+			print_comments(comments_before, indent, f);
 			write!(
 				f,
 				"\r\n{:indent$}INVALID@{}",
@@ -2042,7 +2072,11 @@ fn print_expr(expr: &Expr, indent: usize, f: &mut String) {
 				indent = indent * 2
 			);
 		}
-		ExprTy::Lit { lit, .. } => {
+		ExprTy::Lit {
+			lit,
+			comments_before,
+		} => {
+			print_comments(comments_before, indent, f);
 			let (t, v) = match lit {
 				Lit::Bool(b) => ("BOOL", b.to_string()),
 				Lit::Int(i) => ("INT", i.to_string()),
@@ -2058,7 +2092,11 @@ fn print_expr(expr: &Expr, indent: usize, f: &mut String) {
 				indent = indent * 2
 			);
 		}
-		ExprTy::Ident { ident, .. } => {
+		ExprTy::Ident {
+			ident,
+			comments_before,
+		} => {
+			print_comments(comments_before, indent, f);
 			write!(
 				f,
 				"\r\n{:indent$}IDENT@{} \"{}\"",
@@ -2069,8 +2107,11 @@ fn print_expr(expr: &Expr, indent: usize, f: &mut String) {
 			);
 		}
 		ExprTy::Prefix {
-			expr: inner, op, ..
+			op,
+			expr: inner,
+			comments_before,
 		} => {
+			print_comments(comments_before, indent, f);
 			write!(
 				f,
 				"\r\n{:indent$}PREFIX@{}",
@@ -2085,7 +2126,9 @@ fn print_expr(expr: &Expr, indent: usize, f: &mut String) {
 			}
 		}
 		ExprTy::Postfix {
-			expr: inner, op, ..
+			expr: inner,
+			comments_before_op,
+			op,
 		} => {
 			write!(
 				f,
@@ -2096,10 +2139,14 @@ fn print_expr(expr: &Expr, indent: usize, f: &mut String) {
 			);
 			let indent = indent + 1;
 			print_expr(inner, indent, f);
+			print_comments(comments_before_op, indent, f);
 			print_post_op(op, indent, f);
 		}
 		ExprTy::Binary {
-			left, op, right, ..
+			left,
+			comments_before_op,
+			op,
+			right,
 		} => {
 			write!(
 				f,
@@ -2110,17 +2157,63 @@ fn print_expr(expr: &Expr, indent: usize, f: &mut String) {
 			);
 			let indent = indent + 1;
 			print_expr(left, indent, f);
+			print_comments(comments_before_op, indent, f);
 			print_op(op, indent, f);
 			if let Some(right) = right {
 				print_expr(right, indent, f);
 			}
 		}
+		ExprTy::Ternary {
+			cond,
+			comments_before_question,
+			question,
+			true_,
+			comments_before_colon,
+			colon,
+			false_,
+		} => {
+			write!(
+				f,
+				"\r\n{:indent$}TERNARY@{}",
+				"",
+				expr.span,
+				indent = indent * 2
+			);
+			let indent = indent + 1;
+			print_expr(cond, indent, f);
+			print_comments(comments_before_question, indent, f);
+			write!(
+				f,
+				"\r\n{:indent$}QUESTION@{} \"?\"",
+				"",
+				question,
+				indent = indent * 2
+			);
+			if let Some(true_) = true_ {
+				print_tree_expr("TRUE", true_, indent, f);
+			}
+			if let Some(colon) = colon {
+				print_comments(comments_before_colon, indent, f);
+				write!(
+					f,
+					"\r\n{:indent$}COLON@{} \":\"",
+					"",
+					colon,
+					indent = indent * 2
+				);
+			}
+			if let Some(false_) = false_ {
+				print_tree_expr("FALSE", false_, indent, f);
+			}
+		}
 		ExprTy::Paren {
+			comments_before,
 			l_paren: left,
 			expr: inner,
+			comments_before_r,
 			r_paren: right,
-			..
 		} => {
+			print_comments(comments_before, indent, f);
 			write!(
 				f,
 				"\r\n{:indent$}PAREN@{}",
@@ -2140,6 +2233,7 @@ fn print_expr(expr: &Expr, indent: usize, f: &mut String) {
 				print_expr(inner, indent, f);
 			}
 			if let Some(right) = right {
+				print_comments(comments_before_r, indent, f);
 				write!(
 					f,
 					"\r\n{:indent$}R_PAREN@{} \")\"",
@@ -2151,10 +2245,11 @@ fn print_expr(expr: &Expr, indent: usize, f: &mut String) {
 		}
 		ExprTy::Index {
 			item,
+			comments_before_l,
 			l_bracket,
 			i,
+			comments_before_r,
 			r_bracket,
-			..
 		} => {
 			write!(
 				f,
@@ -2165,6 +2260,7 @@ fn print_expr(expr: &Expr, indent: usize, f: &mut String) {
 			);
 			let indent = indent + 1;
 			print_expr(item, indent, f);
+			print_comments(comments_before_l, indent, f);
 			write!(
 				f,
 				"\r\n{:indent$}L_BRACKET@{} \"[\"",
@@ -2176,6 +2272,7 @@ fn print_expr(expr: &Expr, indent: usize, f: &mut String) {
 				print_expr(i, indent, f);
 			}
 			if let Some(r_bracket) = r_bracket {
+				print_comments(comments_before_r, indent, f);
 				write!(
 					f,
 					"\r\n{:indent$}R_BRACKET@{} \"]\"",
@@ -2185,7 +2282,12 @@ fn print_expr(expr: &Expr, indent: usize, f: &mut String) {
 				);
 			}
 		}
-		ExprTy::ObjAccess { obj, dot, leaf, .. } => {
+		ExprTy::ObjAccess {
+			obj,
+			comments_before_dot,
+			dot,
+			leaf,
+		} => {
 			write!(
 				f,
 				"\r\n{:indent$}OBJ_ACCESS@{}",
@@ -2195,6 +2297,7 @@ fn print_expr(expr: &Expr, indent: usize, f: &mut String) {
 			);
 			let indent = indent + 1;
 			print_expr(obj, indent, f);
+			print_comments(comments_before_dot, indent, f);
 			write!(
 				f,
 				"\r\n{:indent$}DOT@{} \".\"",
@@ -2207,12 +2310,15 @@ fn print_expr(expr: &Expr, indent: usize, f: &mut String) {
 			}
 		}
 		ExprTy::Fn {
+			comments_before,
 			ident,
+			comments_before_l,
 			l_paren,
 			args,
+			comments_before_r,
 			r_paren,
-			..
 		} => {
+			print_comments(comments_before, indent, f);
 			write!(
 				f,
 				"\r\n{:indent$}FN_CALL@{}",
@@ -2222,6 +2328,7 @@ fn print_expr(expr: &Expr, indent: usize, f: &mut String) {
 			);
 			let indent = indent + 1;
 			print_tree_ident(ident, indent, f);
+			print_comments(comments_before_l, indent, f);
 			write!(
 				f,
 				"\r\n{:indent$}ARGS@{}",
@@ -2242,7 +2349,8 @@ fn print_expr(expr: &Expr, indent: usize, f: &mut String) {
 					Either::Left(arg) => {
 						print_expr(arg, indent, f);
 					}
-					Either::Right(span) => {
+					Either::Right((comments, span)) => {
+						print_comments(comments, indent, f);
 						write!(
 							f,
 							"\r\n{:indent$}COMMA@{} \",\"",
@@ -2254,6 +2362,7 @@ fn print_expr(expr: &Expr, indent: usize, f: &mut String) {
 				}
 			}
 			if let Some(r_paren) = r_paren {
+				print_comments(comments_before_r, indent, f);
 				write!(
 					f,
 					"\r\n{:indent$}R_PAREN@{} \")\"",
@@ -2264,11 +2373,13 @@ fn print_expr(expr: &Expr, indent: usize, f: &mut String) {
 			}
 		}
 		ExprTy::Init {
+			comments_before,
 			l_brace,
 			args,
+			comments_before_r,
 			r_brace,
-			..
 		} => {
+			print_comments(comments_before, indent, f);
 			write!(
 				f,
 				"\r\n{:indent$}INITIALIZER@{}",
@@ -2289,7 +2400,8 @@ fn print_expr(expr: &Expr, indent: usize, f: &mut String) {
 					Either::Left(arg) => {
 						print_expr(arg, indent, f);
 					}
-					Either::Right(span) => {
+					Either::Right((comments, span)) => {
+						print_comments(comments, indent, f);
 						write!(
 							f,
 							"\r\n{:indent$}COMMA@{} \",\"",
@@ -2301,6 +2413,7 @@ fn print_expr(expr: &Expr, indent: usize, f: &mut String) {
 				}
 			}
 			if let Some(r_brace) = r_brace {
+				print_comments(comments_before_r, indent, f);
 				write!(
 					f,
 					"\r\n{:indent$}R_BRACE@{} \"}}\"",
@@ -2312,10 +2425,11 @@ fn print_expr(expr: &Expr, indent: usize, f: &mut String) {
 		}
 		ExprTy::ArrInit {
 			arr,
+			comments_before_l,
 			l_paren,
 			args,
+			comments_before_r,
 			r_paren,
-			..
 		} => {
 			write!(
 				f,
@@ -2326,6 +2440,7 @@ fn print_expr(expr: &Expr, indent: usize, f: &mut String) {
 			);
 			let indent = indent + 1;
 			print_tree_expr("ARR_EXPR", arr, indent, f);
+			print_comments(comments_before_l, indent, f);
 			write!(
 				f,
 				"\r\n{:indent$}ARGS@{}",
@@ -2346,7 +2461,8 @@ fn print_expr(expr: &Expr, indent: usize, f: &mut String) {
 					Either::Left(arg) => {
 						print_expr(arg, indent, f);
 					}
-					Either::Right(span) => {
+					Either::Right((comments, span)) => {
+						print_comments(comments, indent, f);
 						write!(
 							f,
 							"\r\n{:indent$}COMMA@{} \",\"",
@@ -2358,6 +2474,7 @@ fn print_expr(expr: &Expr, indent: usize, f: &mut String) {
 				}
 			}
 			if let Some(r_paren) = r_paren {
+				print_comments(comments_before_r, indent, f);
 				write!(
 					f,
 					"\r\n{:indent$}R_PAREN@{} \")\"",
@@ -2379,7 +2496,8 @@ fn print_expr(expr: &Expr, indent: usize, f: &mut String) {
 			for i in l.entry_iter() {
 				match i {
 					Either::Left(e) => print_expr(e, indent, f),
-					Either::Right(span) => {
+					Either::Right((comments, span)) => {
+						print_comments(comments, indent, f);
 						write!(
 							f,
 							"\r\n{:indent$}COMMA@{} \",\"",
@@ -2391,7 +2509,7 @@ fn print_expr(expr: &Expr, indent: usize, f: &mut String) {
 				}
 			}
 		}
-		_ => {}
+		ExprTy::Separator { comments_before: _ } => {}
 	}
 }
 
@@ -2550,13 +2668,16 @@ fn print_tree_params(list: &List<Param>, indent: usize, f: &mut String) {
 				}
 				Ok(())
 			}
-			Either::Right(span) => write!(
-				f,
-				"\r\n{:indent$}COMMA@{}",
-				"",
-				span,
-				indent = indent * 2
-			),
+			Either::Right((comments, span)) => {
+				print_comments(comments, indent, f);
+				write!(
+					f,
+					"\r\n{:indent$}COMMA@{}",
+					"",
+					span,
+					indent = indent * 2
+				)
+			}
 		};
 	}
 }

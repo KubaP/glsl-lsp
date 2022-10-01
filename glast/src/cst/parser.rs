@@ -1090,7 +1090,26 @@ pub(super) fn parse_stmt(
 		return;
 	}
 
-	// TODO: Deal with comments?
+	// Check for statement-level comments.
+	match current {
+		Token::LineComment(str) => {
+			nodes.push(Node {
+				span: *current_span,
+				ty: NodeTy::LineComment(str.clone()),
+			});
+			walker.advance();
+			return;
+		}
+		Token::BlockComment { str, .. } => {
+			nodes.push(Node {
+				span: *current_span,
+				ty: NodeTy::BlockComment(str.clone()),
+			});
+			walker.advance();
+			return;
+		}
+		_ => {}
+	}
 
 	// First, we look for any qualifiers because they are always located first in a statement.
 	let qualifiers = try_parse_qualifier_list(walker, syntax_errors);

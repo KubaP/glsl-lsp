@@ -1,3 +1,44 @@
+#[cfg(test)]
+mod arr_init_tests;
+#[cfg(test)]
+mod bin_op_tests;
+#[cfg(test)]
+mod fn_tests;
+#[cfg(test)]
+mod index_tests;
+#[cfg(test)]
+mod init_list_tests;
+#[cfg(test)]
+mod list_tests;
+#[cfg(test)]
+mod lit_tests;
+#[cfg(test)]
+mod object_access_tests;
+#[cfg(test)]
+mod paren_tests;
+#[cfg(test)]
+mod post_op_tests;
+#[cfg(test)]
+mod pre_op_tests;
+#[cfg(test)]
+mod ternary_tests;
+
+#[cfg(test)]
+macro_rules! assert_expr {
+	($source:expr, $rest:expr) => {
+		let mut walker = Walker {
+			token_stream: parse_from_str($source),
+			cursor: 0,
+		};
+		assert_eq!(
+			expr_parser(&mut walker, Mode::Default, &[]).0.unwrap(),
+			$rest
+		);
+	};
+}
+#[cfg(test)]
+pub(self) use assert_expr;
+
 use super::Walker;
 use crate::{
 	cst::{
@@ -11,6 +52,82 @@ use crate::{
 	Either,
 };
 use std::collections::VecDeque;
+
+/*
+Useful links related to expression parsing:
+
+https://petermalmgren.com/three-rust-parsers/
+	- recursive descent parser
+
+https://wcipeg.com/wiki/Shunting_yard_algorithm
+	- shunting yard overview & algorithm extensions
+
+https://erikeidt.github.io/The-Double-E-Method
+	- stateful shunting yard for unary support
+
+https://matklad.github.io/2020/04/13/simple-but-powerful-pratt-parsing.html
+https://matklad.github.io/2020/04/15/from-pratt-to-dijkstra.html
+	- two parter, first writing a pratt parser, and then refactoring into a shunting yard parser with a slightly
+	  different approach
+*/
+
+/// Tries to parse an expression beginning at the current position.
+pub(super) fn expr_parser(
+	walker: &mut Walker,
+	mode: Mode,
+	end_tokens: &[Token],
+) -> (Option<Expr>, Vec<SyntaxErr>) {
+	let start_position = match walker.peek() {
+		Some((_, span)) => span.start,
+		// If we are at the end of the token stream, we can return early with nothing.
+		None => return (None, vec![]),
+	};
+
+	let mut parser = ShuntingYard {
+		stack: VecDeque::new(),
+		operators: VecDeque::new(),
+		groups: VecDeque::new(),
+		comments: Vec::new(),
+		start_position,
+		mode,
+		errors: Vec::new(),
+	};
+
+	parser.parse(walker, end_tokens);
+	(parser.create_ast(), parser.errors)
+}
+
+/// Tries to parse an expression beginning at the current position.
+/// 
+/// This returns:
+/// - `0` - An expression if one exists under the cursor,
+/// - `1` - Any comments after the expression. If no expression was found, these could be comments found under the
+///   cursor,
+/// - `2` - Any syntax errors found whilst parsing.
+pub(super) fn expr_parser_2(
+	walker: &mut Walker,
+	mode: Mode,
+	end_tokens: &[Token],
+) -> (Option<Expr>, Comments, Vec<SyntaxErr>) {
+	let start_position = match walker.peek() {
+		Some((_, span)) => span.start,
+		// If we are at the end of the token stream, we can return early with nothing.
+		None => return (None, vec![], vec![]),
+	};
+
+	let mut parser = ShuntingYard {
+		stack: VecDeque::new(),
+		operators: VecDeque::new(),
+		groups: VecDeque::new(),
+		comments: Vec::new(),
+		start_position,
+		mode,
+		errors: Vec::new(),
+	};
+
+	parser.parse(walker, end_tokens);
+	(parser.create_ast(), parser.comments, parser.errors)
+}
 
 /// Sets the behaviour of the expression parser.
 #[derive(Debug, PartialEq, Eq)]
@@ -51,56 +168,14 @@ pub enum Mode {
 	TakeOneUnit,
 }
 
-/// Tries to parse an expression beginning at the current position.
-pub(super) fn expr_parser(
-	walker: &mut Walker,
-	mode: Mode,
-	end_tokens: &[Token],
-) -> (Option<Expr>, Vec<SyntaxErr>) {
-	let start_position = match walker.peek() {
-		Some((_, span)) => span.start,
-		// If we are at the end of the token stream, we can return early with nothing.
-		None => return (None, vec![]),
-	};
-
-	let mut parser = ShuntingYard {
-		stack: VecDeque::new(),
-		operators: VecDeque::new(),
-		groups: VecDeque::new(),
-		comments: Vec::new(),
-		start_position,
-		mode,
-		errors: Vec::new(),
-	};
-
-	parser.parse(walker, end_tokens);
-	(parser.create_ast(), parser.errors)
-}
-
-/*
-Useful links related to expression parsing:
-
-https://petermalmgren.com/three-rust-parsers/
-	- recursive descent parser
-
-https://wcipeg.com/wiki/Shunting_yard_algorithm
-	- shunting yard overview & algorithm extensions
-
-https://erikeidt.github.io/The-Double-E-Method
-	- stateful shunting yard for unary support
-
-https://matklad.github.io/2020/04/13/simple-but-powerful-pratt-parsing.html
-https://matklad.github.io/2020/04/15/from-pratt-to-dijkstra.html
-	- two parter, first writing a pratt parser, and then refactoring into a shunting yard parser with a slightly
-	  different approach
-*/
-
-/// A node.
+/// A node; used in the parser stack.
+#[derive(Debug, Clone, PartialEq)]
 struct Node {
 	ty: NodeTy,
 	span: Span,
 }
 
+#[derive(Debug, Clone, PartialEq)]
 enum NodeTy {
 	Lit(Lit, Comments),
 	Ident(Ident, Comments),
@@ -108,7 +183,7 @@ enum NodeTy {
 	Invalid(Comments),
 }
 
-/// A node operator.
+/// A node operator; used in the parser stack.
 #[derive(Debug, Clone, PartialEq)]
 struct Op {
 	ty: OpTy,
@@ -118,8 +193,8 @@ struct Op {
 #[derive(Debug, Clone, PartialEq)]
 enum OpTy {
 	/* BINARY OPERATORS */
-	/* The `bool` represents whether to consume a node for the right-hand side expression. */
-	/* The `Comments` represents any comments before the operator. */
+	/* - `0` - Whether to consume a node for the right-hand side expression. */
+	/* - `1` - Any comments before the operator. */
 	Add(bool, Comments),
 	Sub(bool, Comments),
 	Mul(bool, Comments),
@@ -150,38 +225,42 @@ enum OpTy {
 	Lt(bool, Comments),
 	Ge(bool, Comments),
 	Le(bool, Comments),
-	/// The `bool` represents whether to consume a node for the leaf expression (after the `.`).
-	/// The `Comments` represents any comments before the `.`
+	/// - `0` - Whether to consume a node for the leaf expression (after the `.`).
+	/// - `1` - Any comments before the `.`
 	ObjAccess(bool, Comments),
-	/// The `bool` represents whether to consume a node for the if expression (after the `?`).
-	/// The `Comments` represents any comments before the `?`
+	/// - `0` - Whether to consume a node for the if expression (after the `?`).
+	/// - `1` - Any comments before the `?`
 	TernaryQ(bool, Comments),
-	/// The `bool` represents whether to consume a node for the else expression (after the `:`).
-	/// The `Comments` represents any comments before the `:`
+	/// - `0` - Whether to consume a node for the else expression (after the `:`).
+	/// - `1` - Any comments before the `:`
 	TernaryC(bool, Comments),
 	/* PREFIX OPERATORS */
-	/* The `bool` represents whether to consume a node for the expression. */
-	/* The `Comments` represents any comments before the operator. */
+	/* - `0` - Whether to consume a node for the expression. */
+	/* - `1` - Any comments before the operator. */
 	AddPre(bool, Comments),
 	SubPre(bool, Comments),
 	Neg(bool, Comments),
 	Flip(bool, Comments),
 	Not(bool, Comments),
 	/* POSTFIX OPERATORS */
-	/* The `Comments` represents any comments before the operator. */
+	/* - `0` - Any comments before the operator. */
 	AddPost(Comments),
 	SubPost(Comments),
 	/* GROUP BEGINNING DELIMITERS */
-	/* The `Comments` represents any comments before the opening token. */
 	/// The `(` token.
+	/// - `0` - Any comments before the operator.
 	ParenStart(Comments),
 	/// The `(` token.
+	/// - `0` - Any comments before the operator.
 	FnCallStart(Comments),
 	/// The `[` token.
+	/// - `0` - Any comments before the operator.
 	IndexStart(Comments),
 	/// The `{` token.
+	/// - `0` - Any comments before the operator.
 	InitStart(Comments),
 	/// The `(` token.
+	/// - `0` - Any comments before the operator.
 	ArrInitStart(Comments),
 	/* GROUPS */
 	/// A parenthesis group. This operator spans from the opening parenthesis to the closing parenthesis.

@@ -66,15 +66,21 @@ pub(in super::super) fn print_tree_node(
 		}
 		NodeTy::VarDef {
 			qualifiers,
+			comments_after_qualifiers,
 			type_,
+			comments_after_type,
 			ident,
+			comments_after_ident,
 			semi,
 		} => {
 			write!(f, "VAR_DEF@{}", node.span);
 			let indent = indent + 1;
 			print_tree_qualifiers(qualifiers, indent, f);
+			print_comments(comments_after_qualifiers, indent, f);
 			print_tree_expr("TYPE", type_, indent, f);
+			print_comments(comments_after_type, indent, f);
 			print_tree_expr("IDENT", ident, indent, f);
+			print_comments(comments_after_ident, indent, f);
 			if let Some(semi) = semi {
 				write!(
 					f,
@@ -88,15 +94,21 @@ pub(in super::super) fn print_tree_node(
 		}
 		NodeTy::VarDefs {
 			qualifiers,
+			comments_after_qualifiers,
 			type_,
+			comments_after_type,
 			idents,
+			comments_after_idents,
 			semi,
 		} => {
 			write!(f, "VAR_DEFS@{}", node.span);
 			let indent = indent + 1;
 			print_tree_qualifiers(qualifiers, indent, f);
+			print_comments(comments_after_qualifiers, indent, f);
 			print_tree_expr("TYPE", type_, indent, f);
+			print_comments(comments_after_type, indent, f);
 			print_tree_expr("IDENTS", idents, indent, f);
+			print_comments(comments_after_idents, indent, f);
 			if let Some(semi) = semi {
 				write!(
 					f,
@@ -110,22 +122,32 @@ pub(in super::super) fn print_tree_node(
 		}
 		NodeTy::VarDecl {
 			qualifiers,
+			comments_after_qualifiers,
 			type_,
+			comments_after_type,
 			ident,
+			comments_after_ident,
 			eq,
+			comments_after_eq,
 			value,
+			comments_after_value,
 			semi,
 		} => {
 			write!(f, "VAR_DECL@{}", node.span);
 			let indent = indent + 1;
 			print_tree_qualifiers(qualifiers, indent, f);
+			print_comments(comments_after_qualifiers, indent, f);
 			print_tree_expr("TYPE", type_, indent, f);
+			print_comments(comments_after_type, indent, f);
 			print_tree_expr("IDENT", ident, indent, f);
+			print_comments(comments_after_ident, indent, f);
 			if let Some(eq) = eq {
 				write!(f, "\r\n{:indent$}EQ@{}", "", eq, indent = indent * 2);
+				print_comments(comments_after_eq, indent, f);
 			}
 			if let Some(value) = value {
 				print_tree_expr("VALUE", value, indent, f);
+				print_comments(comments_after_value, indent, f);
 			}
 			if let Some(semi) = semi {
 				write!(
@@ -140,22 +162,32 @@ pub(in super::super) fn print_tree_node(
 		}
 		NodeTy::VarDecls {
 			qualifiers,
+			comments_after_qualifiers,
 			type_,
+			comments_after_type,
 			idents,
+			comments_after_idents,
 			eq,
+			comments_after_eq,
 			value,
+			comments_after_value,
 			semi,
 		} => {
 			write!(f, "VAR_DECLS@{}", node.span);
 			let indent = indent + 1;
 			print_tree_qualifiers(qualifiers, indent, f);
+			print_comments(comments_after_qualifiers, indent, f);
 			print_tree_expr("TYPE", type_, indent, f);
+			print_comments(comments_after_type, indent, f);
 			print_tree_expr("IDENTS", idents, indent, f);
+			print_comments(comments_after_idents, indent, f);
 			if let Some(eq) = eq {
 				write!(f, "\r\n{:indent$}EQ@{}", "", eq, indent = indent * 2);
+				print_comments(comments_after_eq, indent, f);
 			}
 			if let Some(value) = value {
 				print_tree_expr("VALUE", value, indent, f);
+				print_comments(comments_after_value, indent, f);
 			}
 			if let Some(semi) = semi {
 				write!(
@@ -170,18 +202,25 @@ pub(in super::super) fn print_tree_node(
 		}
 		NodeTy::FnDef {
 			qualifiers,
+			comments_after_qualifiers,
 			return_type,
+			comments_after_type,
 			ident,
+			comments_after_ident,
 			l_paren,
 			params,
 			r_paren,
+			comments_after_paren,
 			semi,
 		} => {
 			write!(f, "FN_DEF@{}", node.span);
 			let indent = indent + 1;
 			print_tree_qualifiers(qualifiers, indent, f);
+			print_comments(comments_after_qualifiers, indent, f);
 			print_tree_expr("RETURN_TYPE", return_type, indent, f);
+			print_comments(comments_after_type, indent, f);
 			print_tree_ident(ident, indent, f);
+			print_comments(comments_after_ident, indent, f);
 			write!(
 				f,
 				"\r\n{:indent$}PARAMS@{}",
@@ -217,6 +256,7 @@ pub(in super::super) fn print_tree_node(
 					r_paren,
 					indent = indent * 2
 				);
+				print_comments(comments_after_paren, indent, f);
 			}
 			let indent = indent - 1;
 			if let Some(semi) = semi {
@@ -232,18 +272,25 @@ pub(in super::super) fn print_tree_node(
 		}
 		NodeTy::FnDecl {
 			qualifiers,
+			comments_after_qualifiers,
 			return_type,
+			comments_after_type,
 			ident,
+			comments_after_ident,
 			l_paren,
 			params,
 			r_paren,
+			comments_after_paren,
 			body,
 		} => {
 			write!(f, "FN_DECL@{}", node.span);
 			let indent = indent + 1;
 			print_tree_qualifiers(qualifiers, indent, f);
+			print_comments(comments_after_qualifiers, indent, f);
 			print_tree_expr("RETURN_TYPE", return_type, indent, f);
+			print_comments(comments_after_type, indent, f);
 			print_tree_ident(ident, indent, f);
+			print_comments(comments_after_ident, indent, f);
 			write!(
 				f,
 				"\r\n{:indent$}PARAMS@{}",
@@ -279,6 +326,7 @@ pub(in super::super) fn print_tree_node(
 					r_paren,
 					indent = indent * 2
 				);
+				print_comments(comments_after_paren, indent, f);
 			}
 			let indent = indent - 1;
 			print_tree_scope(body, indent, f);
@@ -286,13 +334,17 @@ pub(in super::super) fn print_tree_node(
 		}
 		NodeTy::StructDef {
 			qualifiers,
+			comments_after_qualifiers,
 			kw,
+			comments_after_kw,
 			ident,
+			comments_after_ident,
 			semi,
 		} => {
 			write!(f, "STRUCT_DEF@{}", node.span);
 			let indent = indent + 1;
 			print_tree_qualifiers(qualifiers, indent, f);
+			print_comments(comments_after_qualifiers, indent, f);
 			write!(
 				f,
 				"\r\n{:indent$}STRUCT_KW@{}",
@@ -300,21 +352,29 @@ pub(in super::super) fn print_tree_node(
 				kw,
 				indent = indent * 2
 			);
+			print_comments(comments_after_kw, indent, f);
 			print_tree_ident(ident, indent, f);
+			print_comments(comments_after_ident, indent, f);
 			write!(f, "\r\n{:indent$}SEMI@{}", "", semi, indent = indent * 2);
 			Ok(())
 		}
 		NodeTy::StructDecl {
 			qualifiers,
+			comments_after_qualifiers,
 			kw,
+			comments_after_kw,
 			ident,
+			comments_after_ident,
 			body,
+			comments_after_body,
 			instance,
+			optional_comments_after_instance,
 			semi,
 		} => {
 			write!(f, "STRUCT_DECL@{}", node.span);
 			let indent = indent + 1;
 			print_tree_qualifiers(qualifiers, indent, f);
+			print_comments(comments_after_qualifiers, indent, f);
 			write!(
 				f,
 				"\r\n{:indent$}STRUCT_KW@{}",
@@ -322,8 +382,11 @@ pub(in super::super) fn print_tree_node(
 				kw,
 				indent = indent * 2
 			);
+			print_comments(comments_after_kw, indent, f);
 			print_tree_ident(ident, indent, f);
+			print_comments(comments_after_ident, indent, f);
 			print_tree_scope(body, indent, f);
+			print_comments(comments_after_body, indent, f);
 			if let Some(instance) = instance {
 				write!(
 					f,
@@ -332,6 +395,7 @@ pub(in super::super) fn print_tree_node(
 					instance.span,
 					indent = indent * 2
 				);
+				print_comments(optional_comments_after_instance, indent, f);
 			}
 			if let Some(semi) = semi {
 				write!(
@@ -344,10 +408,15 @@ pub(in super::super) fn print_tree_node(
 			}
 			Ok(())
 		}
-		NodeTy::ExprStmt { expr, semi } => {
+		NodeTy::ExprStmt {
+			expr,
+			comments_after_expr,
+			semi,
+		} => {
 			write!(f, "EXPR_STMT@{}", node.span);
 			let indent = indent + 1;
 			print_tree_expr("EXPR", expr, indent, f);
+			print_comments(comments_after_expr, indent, f);
 			if let Some(semi) = semi {
 				write!(
 					f,
@@ -868,7 +937,6 @@ fn print_tree_qualifiers(
 	if qualifiers.is_empty() {
 		return;
 	}
-
 	write!(
 		f,
 		"\r\n{:indent$}QUALIFIERS@{}",
@@ -886,6 +954,7 @@ fn print_tree_qualifiers(
 	};
 
 	for qualifier in qualifiers {
+		print_comments(&qualifier.comments_before, indent, f);
 		write!(f, "\r\n{:indent$}", "", indent = indent * 2);
 		match &qualifier.ty {
 			QualifierTy::Storage(ty) => write!(
@@ -2662,9 +2731,12 @@ fn print_tree_params(list: &List<Param>, indent: usize, f: &mut String) {
 				);
 				let indent = indent + 1;
 				print_tree_qualifiers(&param.qualifiers, indent, f);
+				print_comments(&param.comments_after_qualifiers, indent, f);
 				print_tree_expr("TYPE", &param.type_, indent, f);
+				print_comments(&param.comments_after_type, indent, f);
 				if let Some(ident) = &param.ident {
 					print_tree_expr("IDENT", ident, indent, f);
+					print_comments(&param.comments_after_ident, indent, f);
 				}
 				Ok(())
 			}

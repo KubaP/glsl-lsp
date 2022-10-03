@@ -225,70 +225,102 @@ pub enum NodeTy {
 	/// A variable definition, e.g. `int a;`.
 	VarDef {
 		qualifiers: Vec<Qualifier>,
+		comments_after_qualifiers: Comments,
 		type_: Expr,
+		comments_after_type: Comments,
 		ident: Expr,
+		comments_after_ident: Comments,
 		semi: Option<Span>,
 	},
 	/// Multiple variable definitions, e.g. `int a, b;`.
 	VarDefs {
 		qualifiers: Vec<Qualifier>,
+		comments_after_qualifiers: Comments,
 		type_: Expr,
+		comments_after_type: Comments,
 		idents: Expr,
+		comments_after_idents: Comments,
 		semi: Option<Span>,
 	},
 	/// A variable declaration, e.g. `int a = 5 + 1;`.
 	VarDecl {
 		qualifiers: Vec<Qualifier>,
+		comments_after_qualifiers: Comments,
 		type_: Expr,
+		comments_after_type: Comments,
 		ident: Expr,
+		comments_after_ident: Comments,
 		eq: Option<Span>,
+		comments_after_eq: Comments,
 		value: Option<Expr>,
+		comments_after_value: Comments,
 		semi: Option<Span>,
 	},
 	/// Multiple variable declarations, e.g. `int a, b = 5 + 1;`.
 	VarDecls {
 		qualifiers: Vec<Qualifier>,
+		comments_after_qualifiers: Comments,
 		type_: Expr,
+		comments_after_type: Comments,
 		idents: Expr,
+		comments_after_idents: Comments,
 		eq: Option<Span>,
+		comments_after_eq: Comments,
 		value: Option<Expr>,
+		comments_after_value: Comments,
 		semi: Option<Span>,
 	},
 	/// A function definition.
 	FnDef {
 		qualifiers: Vec<Qualifier>,
+		comments_after_qualifiers: Comments,
 		return_type: Expr,
+		comments_after_type: Comments,
 		ident: Ident,
+		comments_after_ident: Comments,
 		l_paren: Span,
 		params: List<Param>,
 		r_paren: Option<Span>,
+		comments_after_paren: Comments,
 		semi: Option<Span>,
 	},
 	/// A function declaration.
 	FnDecl {
 		qualifiers: Vec<Qualifier>,
+		comments_after_qualifiers: Comments,
 		return_type: Expr,
+		comments_after_type: Comments,
 		ident: Ident,
+		comments_after_ident: Comments,
 		l_paren: Span,
 		params: List<Param>,
 		r_paren: Option<Span>,
+		comments_after_paren: Comments,
 		body: Scope,
 	},
 	/// A struct definition. *Note:* This is invalid glsl grammar.
 	StructDef {
 		qualifiers: Vec<Qualifier>,
+		comments_after_qualifiers: Comments,
 		kw: Span,
+		comments_after_kw: Comments,
 		ident: Ident,
+		comments_after_ident: Comments,
 		semi: Span,
 	},
 	/// A struct declaration.
 	StructDecl {
 		qualifiers: Vec<Qualifier>,
+		comments_after_qualifiers: Comments,
 		kw: Span,
+		comments_after_kw: Comments,
 		ident: Ident,
+		comments_after_ident: Comments,
 		body: Scope,
+		comments_after_body: Comments,
 		/// Instance name can be omitted, so `None` is a valid value.
 		instance: Option<Ident>,
+		optional_comments_after_instance: Comments,
 		semi: Option<Span>,
 	},
 	/// A general expression, e.g.
@@ -299,6 +331,7 @@ pub enum NodeTy {
 	/// - `i *= fn();`
 	ExprStmt {
 		expr: Expr,
+		comments_after_expr: Comments,
 		semi: Option<Span>,
 	},
 	/// A standalone scope, e.g.
@@ -318,59 +351,59 @@ pub enum NodeTy {
 	/// A switch statement.
 	Switch {
 		kw: Span,
-		l_paren: Option<Span>,
+		l_paren: Option<Span>, // before
 		expr: Option<Nodes>,
-		r_paren: Option<Span>,
-		l_brace: Option<Span>,
-		cases: Vec<SwitchBranch>,
-		r_brace: Option<Span>,
+		r_paren: Option<Span>,    // before
+		l_brace: Option<Span>,    // before
+		cases: Vec<SwitchBranch>, // before
+		r_brace: Option<Span>,    // before
 	},
 	/// A for-loop statement.
 	For {
 		kw: Span,
-		l_paren: Option<Span>,
+		l_paren: Option<Span>, // before
 		nodes: Option<List<Nodes>>,
-		r_paren: Option<Span>,
-		body: Option<Scope>,
+		r_paren: Option<Span>, // before
+		body: Option<Scope>,   // before
 	},
 	/// A while-loop, i.e. `while ( /*..*/ ) { /*..*/ }`.
 	While {
 		kw: Span,
-		l_paren: Option<Span>,
+		l_paren: Option<Span>, // before
 		cond: Option<Nodes>,
-		r_paren: Option<Span>,
-		body: Option<Scope>,
+		r_paren: Option<Span>, // before
+		body: Option<Scope>,   // before
 	},
 	/// A do-while loop, i.e. `do { /*..*/ } while ( /*..*/ );`.
 	DoWhile {
 		do_kw: Span,
-		body: Option<Scope>,
-		while_kw: Option<Span>,
-		l_paren: Option<Span>,
+		body: Option<Scope>,    // before
+		while_kw: Option<Span>, // before
+		l_paren: Option<Span>,  // before
 		cond: Option<Nodes>,
-		r_paren: Option<Span>,
-		semi: Option<Span>,
+		r_paren: Option<Span>, // before
+		semi: Option<Span>,    // before
 	},
 	/// A return statement.
 	Return {
 		kw: Span,
 		value: Option<Expr>,
-		semi: Option<Span>,
+		semi: Option<Span>, // before
 	},
 	/// A break statement.
 	Break {
 		kw: Span,
-		semi: Option<Span>,
+		semi: Option<Span>, // before
 	},
 	/// A continue statement.
 	Continue {
 		kw: Span,
-		semi: Option<Span>,
+		semi: Option<Span>, // before
 	},
 	/// A discard statement.
 	Discard {
 		kw: Span,
-		semi: Option<Span>,
+		semi: Option<Span>, // before
 	},
 }
 
@@ -417,9 +450,12 @@ pub struct Nodes {
 #[derive(Debug, Clone, PartialEq)]
 pub struct Param {
 	pub qualifiers: Vec<Qualifier>,
+	pub comments_after_qualifiers: Comments,
 	pub type_: Expr,
+	pub comments_after_type: Comments,
 	/// Parameter name can be omitted, so `None` is a valid value.
 	pub ident: Option<Expr>,
+	pub comments_after_ident: Comments,
 	pub span: Span,
 }
 
@@ -474,6 +510,7 @@ pub struct Scope {
 /// A qualifier which is associated with a definition/declaration or a parameter.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Qualifier {
+	pub comments_before: Comments,
 	pub ty: QualifierTy,
 	pub span: Span,
 }
@@ -685,6 +722,18 @@ pub enum ExtBehaviour {
 	Require,
 	Warn,
 	Disable,
+}
+
+impl Node {
+	pub fn from_comment((comment, span): (Comment, Span)) -> Self {
+		Node {
+			span,
+			ty: match comment {
+				Comment::Line(str) => NodeTy::LineComment(str),
+				Comment::Block(str) => NodeTy::BlockComment(str),
+			},
+		}
+	}
 }
 
 impl<T> List<T> {
@@ -944,7 +993,7 @@ impl List<Param> {
 				qualifiers,
 				type_,
 				ident,
-				span: _,
+				..
 			}) = entry.0
 			{
 				for Qualifier { span, .. } in qualifiers {

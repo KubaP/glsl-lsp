@@ -68,27 +68,32 @@ pub type TokenStream = Vec<Spanned<Token>>;
 pub fn parse_from_str(source: &str) -> TokenStream {
 	let mut tokens = Vec::new();
 	let mut lexer = {
-		// FIXME: Deal with a line continuator character if it's the first thing in the source file.
-		// Is that even legal?
-		Lexer {
+		let mut lexer = Lexer {
 			// Iterating over individual characters is guaranteed to produce correct behaviour because GLSL source
-			// strings must use the utf-8 encoding as per the specification.
+			// strings must use the UTF-8 encoding as per the specification.
 			chars: source.chars().collect(),
 			cursor: 0,
-		}
+		};
+
+		// Deal with a line-continuation character if it's the first thing in the source file. If we didn't do
+		// this, the first time `peek()` is called in the first iteration of the loop it could return a `\` even
+		// though it's a valid line-continuator.
+		lexer.cursor = lexer.take_line_continuator(0);
+
+		lexer
 	};
-	let mut buffer = String::new();
+
+	// `can_start_directive` is a flag as to whether we can start parsing a directive if we encounter a `#` symbol.
+	// After an EOL or end of block comment this is set to `true`. Any branch other than the whitespace branch sets
+	// this to `false`. This makes it easy to keep track of when we are allowed to parse a directive, since they
+	// must exist at the start of a line barring any whitespace.
 	let mut can_start_directive = true;
 
 	// Any time we want to test the next character, we first `peek()` to see what it is. If it is valid in whatever
 	// branch we are in, we can `advance()` the lexer to the next character and repeat the process. If it is
 	// invalid (and hence we want to finish this branch and try another one), we don't `advance()` the lexer
 	// because we don't want to consume this character; we want to test it against the other branches.
-	//
-	// `can_start_directive` is a flag as to whether we can start parsing a directive if we encounter a `#` symbol.
-	// After an EOL this is set to `true`. Any branch other than the whitespace branch sets this to `false`. This
-	// makes it easy to keep track of when we are allowed to parse a directive, since they must exist at the start
-	// of a line barring any whitespace.
+	let mut buffer = String::new();
 	while !lexer.is_done() {
 		let buffer_start = lexer.position();
 		// Peek the current character.
@@ -577,6 +582,7 @@ pub fn parse_from_str(source: &str) -> TokenStream {
 								end: lexer.position(),
 							},
 						));
+						can_start_directive = true;
 						break 'comment;
 					}
 

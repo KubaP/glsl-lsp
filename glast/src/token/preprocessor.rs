@@ -1,9 +1,12 @@
 //! Types and functionality related to lexing preprocessor directives.
 //!
-//! Preprocessor identifier token is the same as a c/glsl identifier token.
+//! Overview of the directives:
+//! - `#version` - see [`VersionToken`],
+//! - `#extension` - see [`ExtensionToken`],
+//! - `#line` - see [`LineToken`],
 //!
-//! GLSL-specific directives undergo no expansion/replacement, they are treated as-is irrespective of any #defines.
-//!
+//! The `#line` directive undergoes macro expansion, so the following would be valid: `#define FOO 5 \r\n #line
+//! FOO`.
 
 use super::{is_word, is_word_start, Lexer};
 use crate::{span::Spanned, Span};
@@ -52,14 +55,18 @@ pub fn parse_from_str(source: &str, offset: usize) -> TokenStream {
 	let kw_end = lexer.position();
 	let kw_span = Span::new(kw_start, kw_end) + offset;
 
+	// TODO: Pass macro names into this function.
 	match buffer.as_ref() {
 		"version" => parse_version(lexer, kw_span, offset),
 		"extension" => parse_extension(lexer, kw_span, offset),
 		"line" => parse_line(lexer, kw_span, offset, vec![]),
-		_ => TokenStream::Unsupported,
+		"define" | "undef" | "ifdef" | "ifndef" | "if" | "elif" | "else"
+		| "endif" | "error" | "pragma" => TokenStream::Unsupported,
+		_ => TokenStream::Invalid,
 	}
 }
 
+/// Parse a `#version` directive.
 fn parse_version(
 	mut lexer: Lexer,
 	kw_span: Span,
@@ -119,10 +126,72 @@ fn parse_version(
 			buffer.push(current);
 			lexer.advance();
 
+			let mut invalid_num = false;
 			'number: loop {
 				current = match lexer.peek() {
 					Some(c) => c,
 					None => {
+						if invalid_num {
+							tokens.push((
+								VersionToken::InvalidNumber(std::mem::take(
+									&mut buffer,
+								)),
+								Span {
+									start: buffer_start,
+									end: lexer.position(),
+								} + offset,
+							));
+						} else {
+							match usize::from_str_radix(&buffer, 10) {
+								Ok(num) => {
+									tokens.push((
+										VersionToken::Number(num),
+										Span {
+											start: buffer_start,
+											end: lexer.position(),
+										} + offset,
+									));
+									buffer.clear();
+								}
+								Err(_) => tokens.push((
+									VersionToken::InvalidNumber(
+										std::mem::take(&mut buffer),
+									),
+									Span {
+										start: buffer_start,
+										end: lexer.position(),
+									} + offset,
+								)),
+							}
+						}
+						break 'number;
+					}
+				};
+
+				if current.is_ascii_digit() {
+					// The character can be part of a number, so consume it and continue looping.
+					buffer.push(current);
+					lexer.advance();
+				} else if current.is_ascii_alphabetic() {
+					// The character can't be part of a number, but it also requires separation to be valid. Hence
+					// this becomes an invalid number-like token.
+					invalid_num = true;
+					buffer.push(current);
+					lexer.advance();
+				} else {
+					// The character can't be part of a number, so we can produce a token and exit this loop
+					// without consuming it.
+					if invalid_num {
+						tokens.push((
+							VersionToken::InvalidNumber(std::mem::take(
+								&mut buffer,
+							)),
+							Span {
+								start: buffer_start,
+								end: lexer.position(),
+							} + offset,
+						));
+					} else {
 						match usize::from_str_radix(&buffer, 10) {
 							Ok(num) => {
 								tokens.push((
@@ -144,39 +213,6 @@ fn parse_version(
 								} + offset,
 							)),
 						}
-						break 'number;
-					}
-				};
-
-				if current.is_ascii_digit() {
-					// The character can be part of a number, so consume it and continue looping.
-					buffer.push(current);
-					lexer.advance();
-				// FIXME: Match on a word so that `450core` doesn't get treated as 2 separate tokens, but one
-				// invalid number.
-				} else {
-					// The character can't be part of a number, so we can produce a token and exit this loop
-					// without consuming it.
-					match usize::from_str_radix(&buffer, 10) {
-						Ok(num) => {
-							tokens.push((
-								VersionToken::Number(num),
-								Span {
-									start: buffer_start,
-									end: lexer.position(),
-								} + offset,
-							));
-							buffer.clear();
-						}
-						Err(_) => tokens.push((
-							VersionToken::InvalidNumber(std::mem::take(
-								&mut buffer,
-							)),
-							Span {
-								start: buffer_start,
-								end: lexer.position(),
-							} + offset,
-						)),
 					}
 					break 'number;
 				}
@@ -203,6 +239,7 @@ fn parse_version(
 	}
 }
 
+/// Parse an `#extension` directive.
 fn parse_extension(
 	mut lexer: Lexer,
 	kw_span: Span,
@@ -289,6 +326,7 @@ fn parse_extension(
 	}
 }
 
+/// Parse a `#line` directive.
 fn parse_line(
 	mut lexer: Lexer,
 	kw_span: Span,
@@ -487,9 +525,13 @@ fn parse_line(
 		tokens,
 	}
 }
+
+/// A vector of tokens representing a specific preprocessor directive.
 pub enum TokenStream {
-	/// A directive which is not currently supported.
+	/// A directive which is not currently supported by this crate.
 	Unsupported,
+	/// An invalid directive, e.g. `#nonexistent`.
+	Invalid,
 	/// A `#version` directive.
 	Version {
 		kw: Span,
@@ -509,54 +551,64 @@ pub enum TokenStream {
 
 /// A token representing a unit of text in a `#version` directive.
 ///
-/// # Differences in behaviour
-/// The lexer defines the directive to be:
+/// # Description of behaviour
+/// The specification defines the directive to be:
 /// ```text
-/// #version number profile(opt)
+/// #version _number_
+/// #version _number_ _profile_
 /// ```
+/// where:
+/// - `_number_` matches `[0-9]+\s`,
+/// - `_profile_` matches `core|compatability|es`.
 ///
-/// Since this crate is part of a larger language extension effort, it is designed to handle syntax errors in a UX
-/// friendly manner. This means that there are some minor differences between the behaviour of this lexer and of a
-/// lexer as specified by the official GLSL specification. The differences are listed below:
-///
+/// This lexer behaves as following:
 /// - When the lexer comes across anything which matches the `[0-9]+` pattern it produces a
-///   [`Number`](VersionToken::Number) token, even if the token doesn't match a valid GLSL version number. The only
-///   exception is if the number cannot be parsed into a [`usize`] in which case a
-///   [`InvalidNumber`](VersionToken::InvalidNumber) token will be produced. The specification does not mention
-///   what should happen if a number that's not a valid GLSL version number is encountered; it just mentions that
-///   should happen if a compiler doesn't support a given GLSL version.
+///   [`Number`](VersionToken::Number) token, even if the token doesn't match a valid GLSL version number. If the
+///   number cannot be parsed into a [`usize`] it produces an [`InvalidNumber`](VersionToken::InvalidNumber) token.
+///   If it matches the `[0-9]+([a-z]|[A-Z])+([a-z]|[A-Z]|[0-9])*` pattern it produces an
+///   [`InvalidNumber`](VersionToken::InvalidNumber) token.
 /// - When the lexer comes across anything which matches the `([a-z]|[A-Z]|_)([a-z]|[A-Z]|[0-9]|_)*` pattern it
-///   produces a [`Word`](VersionToken::Word) token. The specification does not have a `Word` token, but rather a
-///   `Profile` token which can only match `core|compatibility|es`.
+///   produces a [`Word`](VersionToken::Word) token.
+/// - Anything else produces the [`Invalid`](VersionToken::Invalid) token.
+///
+/// Notes:
+/// - There are no individual `core/compatability/es` keyword tokens; they are just a `Word`. This is to make it
+///   easier to perform error recovery in the case that a word has incorrect capitalization but otherwise would
+///   match, e.g. `CORE` instead of `core`.
 #[derive(Debug, Clone, PartialEq)]
 pub enum VersionToken {
-	/// An integer number that matches `[0-9]+`.
+	/// An integer number.
 	Number(usize),
-	/// An integer number which could not be parsed into a valid [`usize`]. An example would be an integer number
-	/// that is too large to be represented by a `usize`.
-	InvalidNumber(String),
-	/// A word that matches `([a-z]|[A-Z]|_)([a-z]|[A-Z]|[0-9]|_)*`.
+	/// A word.
 	Word(String),
+	/// An invalid number.
+	InvalidNumber(String),
 	/// An invalid character.
 	Invalid(char),
 }
 
 /// A token representing a unit of text in an `#extension` directive.
 ///
-/// # Differences in behaviour
-/// The lexer defines the directive to be:
+/// # Description of behaviour
+/// The specification defines the directive to be:
 /// ```text
-/// #extension _extension_name_ : _behaviour_
+/// #extension _extension-name_ : _behaviour_
 /// #extension all : _behaviour_
 /// ```
+/// where:
+/// - `_extension-name_` matches `([a-z]|[A-Z]|_)([a-z]|[A-Z]|[0-9]|_)*`, - `_behaviour_` matches
+/// `require|enable|warn|disable`.
 ///
-/// Since this crate is part of a larger language extension effort, it is designed to handle syntax errors in a UX
-/// friendly manner. This means that there are some minor differences between the behaviour of this lexer and of a
-/// lexer as specified by the official GLSL specification. The differences are listed below:
-///
+/// This lexer behaves as following:
 /// - When the lexer comes across anything which matches the `([a-z]|[A-Z]|_)([a-z]|[A-Z]|[0-9]|_)*` pattern it
-///   produces a [`Word`](ExtensionToken::Word) token, even if it matches the `require`/`enable`/`warn`/`disable`
-///   behaviour keyword or the `all` keyword. There are no individual tokens for the different keywords.
+///   produces a [`Word`](ExtensionToken::Word) token.
+/// - When the lexer comes across the `:` symbol it produces the [`Colon`](ExtensionToken::Colon) token.
+/// - Anything else produces the [`Invalid`](ExtensionToken::Invalid) token.
+///
+/// Notes:
+/// - There are no individual `require/enable/warn/disable/all` keyword tokens; they are just a `Word`. This is to
+///   make it easier to perform error recovery in the case that a word has incorrect capitalization but otherwise
+///   would match, e.g. `WARN` instead of `warn`.
 #[derive(Debug, Clone, PartialEq)]
 pub enum ExtensionToken {
 	/// A word that matches `([a-z]|[A-Z]|_)([a-z]|[A-Z]|[0-9]|_)*`.
@@ -578,6 +630,7 @@ pub enum ExtensionToken {
 /// where `_line_` and `_source-string-number_` match either `[0-9]+\s`, or
 /// `([a-z]|[A-Z]|_)([a-z]|[A-Z]|[0-9]|_)*\s` if it also matches a macro name.
 ///
+/// This lexer behaves as following:
 /// - When the lexer comes across anything which matches the `[0-9]+` pattern it produces a
 ///   [`Number`](LineToken::Number) token. If the number cannot be parsed into a [`usize`] it produces an
 ///   [`InvalidNumber`](LineToken::InvalidNumber) token. If it matches the
@@ -589,7 +642,7 @@ pub enum ExtensionToken {
 /// - Anything else produces the [`Invalid`](LineToken::Invalid) token.
 #[derive(Debug, Clone, PartialEq)]
 pub enum LineToken {
-	/// A number.
+	/// An integer number.
 	Number(usize),
 	/// A macro identifier.
 	Macro(String),

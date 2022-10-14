@@ -36,6 +36,8 @@
 //! For a BNF notation of the official lexer grammar, see
 //! [this](https://github.com/KubaP/glsl-lsp/blob/release/glast/docs/lexer_grammar.bnf) file.
 
+pub mod preprocessor;
+
 use crate::{
 	cst::{Expr, Layout, LayoutTy},
 	span::{Span, Spanned},

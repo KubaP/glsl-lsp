@@ -60,7 +60,8 @@ pub fn parse_from_str(source: &str, offset: usize) -> TokenStream {
 		"version" => parse_version(lexer, kw_span, offset),
 		"extension" => parse_extension(lexer, kw_span, offset),
 		"line" => parse_line(lexer, kw_span, offset, vec![]),
-		"define" | "undef" => TokenStream::Unsupported,
+		"define" => parse_define(lexer, kw_span, offset),
+		"undef" => parse_undef(lexer, kw_span, offset),
 		"ifdef" | "ifndef" | "if" | "elif" | "else" | "endif" => {
 			parse_condition(lexer, kw_span, buffer.as_ref(), offset)
 		}
@@ -529,6 +530,266 @@ fn parse_line(
 	}
 }
 
+/// Parse a `#define` directive.
+fn parse_define(mut lexer: Lexer, kw_span: Span, offset: usize) -> TokenStream {
+	// We continue off from where the lexer previously stopped.
+	let mut tokens = Vec::new();
+	let mut buffer = String::new();
+	let buffer_start = lexer.position();
+
+	let mut current = match lexer.peek() {
+		Some(c) => c,
+		None => {
+			return TokenStream::Define {
+				kw: kw_span,
+				ident_tokens: vec![],
+				body_tokens: vec![],
+			}
+		}
+	};
+
+	if !is_word_start(&current) {
+		return TokenStream::Define {
+			kw: kw_span,
+			ident_tokens: vec![],
+			body_tokens: vec![],
+		};
+	}
+
+	buffer.push(current);
+	lexer.advance();
+	loop {
+		// Peek the current character.
+		current = match lexer.peek() {
+			Some(c) => c,
+			None => {
+				// We have reached the end of the source string, and therefore the end of this word and define
+				// directive.
+				return TokenStream::Define {
+					kw: kw_span,
+					ident_tokens: vec![(
+						DefineToken::Identifier(std::mem::take(&mut buffer)),
+						Span {
+							start: buffer_start,
+							end: lexer.position(),
+						} + offset,
+					)],
+					body_tokens: vec![],
+				};
+			}
+		};
+
+		if is_word(&current) {
+			// The character can be part of a word, so we consume it and continue looping.
+			buffer.push(current);
+			lexer.advance();
+		} else if current == '(' {
+			// We have encountered a `(` immediately after a word. This means this directive is a function
+			// macro and we now need to parse the parameter list.
+			tokens.push((
+				DefineToken::Identifier(std::mem::take(&mut buffer)),
+				Span {
+					start: buffer_start,
+					end: lexer.position(),
+				} + offset,
+			));
+			let pos = lexer.position();
+			lexer.advance();
+			tokens.push((
+				DefineToken::LParen,
+				Span {
+					start: pos,
+					end: lexer.position(),
+				} + offset,
+			));
+			break;
+		} else {
+			// We have reached the end of the first word, and have not encountered a `(` immediately
+			// afterwards. This means this directive is an object macro and everything from here on is a
+			// standard GLSL token.
+			tokens.push((
+				DefineToken::Identifier(std::mem::take(&mut buffer)),
+				Span {
+					start: buffer_start,
+					end: lexer.position(),
+				} + offset,
+			));
+
+			return TokenStream::Define {
+				kw: kw_span,
+				ident_tokens: tokens,
+				body_tokens: vec![],
+			};
+		}
+	}
+
+	// We have a function macro, and now need to parse the parameter list.
+	loop {
+		let token_start = lexer.position();
+		current = match lexer.peek() {
+			Some(c) => c,
+			None => {
+				return TokenStream::Define {
+					kw: kw_span,
+					ident_tokens: tokens,
+					body_tokens: vec![],
+				};
+			}
+		};
+
+		if is_word_start(&current) {
+			buffer.push(current);
+			lexer.advance();
+
+			'word: loop {
+				// Peek the current character.
+				current = match lexer.peek() {
+					Some(c) => c,
+					None => {
+						// We have reached the end of the source string, and therefore the end of the word.
+						tokens.push((
+							DefineToken::Identifier(std::mem::take(
+								&mut buffer,
+							)),
+							Span {
+								start: buffer_start,
+								end: lexer.position(),
+							} + offset,
+						));
+						break 'word;
+					}
+				};
+
+				// Check if it can be part of a word.
+				if is_word(&current) {
+					// The character can be part of an word, so consume it and continue looping.
+					buffer.push(current);
+					lexer.advance();
+				} else {
+					// The character can't be part of an word, so we can produce a token and exit this loop without
+					// consuming it.
+					tokens.push((
+						DefineToken::Identifier(std::mem::take(&mut buffer)),
+						Span {
+							start: buffer_start,
+							end: lexer.position(),
+						} + offset,
+					));
+					break 'word;
+				}
+			}
+		} else if current == ',' {
+			lexer.advance();
+			tokens.push((
+				DefineToken::Comma,
+				Span {
+					start: token_start,
+					end: lexer.position(),
+				} + offset,
+			));
+		} else if current == ')' {
+			lexer.advance();
+			tokens.push((
+				DefineToken::RParen,
+				Span {
+					start: token_start,
+					end: lexer.position(),
+				} + offset,
+			));
+			break;
+		} else {
+			lexer.advance();
+			tokens.push((
+				DefineToken::Invalid(current),
+				Span {
+					start: token_start,
+					end: lexer.position(),
+				},
+			));
+		}
+	}
+
+	return TokenStream::Define {
+		kw: kw_span,
+		ident_tokens: tokens,
+		body_tokens: vec![],
+	};
+}
+
+/// Parse an `#undef` directive.
+fn parse_undef(mut lexer: Lexer, kw_span: Span, offset: usize) -> TokenStream {
+	// We continue off from where the lexer previously stopped.
+	let mut tokens = Vec::new();
+	let mut buffer = String::new();
+	'main: while !lexer.is_done() {
+		let buffer_start = lexer.position();
+		// Peek the current character.
+		let mut current = match lexer.peek() {
+			Some(c) => c,
+			None => break 'main,
+		};
+
+		if is_word_start(&current) {
+			buffer.push(current);
+			lexer.advance();
+
+			'word: loop {
+				// Peek the current character.
+				current = match lexer.peek() {
+					Some(c) => c,
+					None => {
+						// We have reached the end of the source string, and therefore the end of the word.
+						tokens.push((
+							UndefToken::Identifier(std::mem::take(&mut buffer)),
+							Span {
+								start: buffer_start,
+								end: lexer.position(),
+							} + offset,
+						));
+						break 'word;
+					}
+				};
+
+				// Check if it can be part of a word.
+				if is_word(&current) {
+					// The character can be part of an word, so consume it and continue looping.
+					buffer.push(current);
+					lexer.advance();
+				} else {
+					// The character can't be part of an word, so we can produce a token and exit this loop without
+					// consuming it.
+					tokens.push((
+						UndefToken::Identifier(std::mem::take(&mut buffer)),
+						Span {
+							start: buffer_start,
+							end: lexer.position(),
+						} + offset,
+					));
+					break 'word;
+				}
+			}
+		} else if current.is_whitespace() {
+			// We ignore whitespace characters.
+			lexer.advance();
+		} else {
+			// This character isn't valid to start any token.
+			lexer.advance();
+			tokens.push((
+				UndefToken::Invalid(current),
+				Span {
+					start: buffer_start,
+					end: lexer.position(),
+				} + offset,
+			));
+		}
+	}
+
+	TokenStream::Undef {
+		kw: kw_span,
+		tokens,
+	}
+}
+
 /// Parse a `#ifdef`/`#ifndef`/`#if`/`#elif`/`#else`/`#endif` directive.
 fn parse_condition(
 	mut lexer: Lexer,
@@ -819,6 +1080,17 @@ pub enum TokenStream {
 		kw: Span,
 		tokens: Vec<Spanned<LineToken>>,
 	},
+	/// A `#define` directive.
+	Define {
+		kw: Span,
+		ident_tokens: Vec<Spanned<DefineToken>>,
+		body_tokens: Vec<Spanned<super::Token>>,
+	},
+	/// An `#undef` directive.
+	Undef {
+		kw: Span,
+		tokens: Vec<Spanned<UndefToken>>,
+	},
 	/// An `#ifdef` directive.
 	IfDef {
 		kw: Span,
@@ -952,6 +1224,30 @@ pub enum LineToken {
 	InvalidNumber(String),
 	/// An identifier which does not match any valid macro name.
 	InvalidWord(String),
+	/// An invalid character.
+	Invalid(char),
+}
+
+/// A token representing a unit of text in the first part of a `#define` directive.
+#[derive(Debug, Clone, PartialEq)]
+pub enum DefineToken {
+	/// An identifier
+	Identifier(String),
+	/// An invalid character.
+	Invalid(char),
+	/// An opening parenthesis `(`.
+	LParen,
+	/// A closing parenthesis `)`.
+	RParen,
+	/// A comma `,`.
+	Comma,
+}
+
+/// A token representing a unit of text in an `#undef` directive.
+#[derive(Debug, Clone, PartialEq)]
+pub enum UndefToken {
+	/// An identifier.
+	Identifier(String),
 	/// An invalid character.
 	Invalid(char),
 }

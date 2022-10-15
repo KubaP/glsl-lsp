@@ -65,8 +65,27 @@ pub fn parse_from_str(source: &str, offset: usize) -> TokenStream {
 		"ifdef" | "ifndef" | "if" | "elif" | "else" | "endif" => {
 			parse_condition(lexer, kw_span, buffer.as_ref(), offset)
 		}
-		"error" | "pragma" => TokenStream::Unsupported,
-		_ => TokenStream::Invalid,
+		"error" => parse_error(lexer, kw_span, offset),
+		"pragma" => parse_pragma(lexer, kw_span, offset),
+		_ => {
+			let mut content = String::new();
+			let start = lexer.position();
+			while let Some(char) = lexer.peek() {
+				content.push(char);
+				lexer.advance();
+			}
+
+			TokenStream::Invalid {
+				kw: (buffer, kw_span),
+				content: (
+					content,
+					Span {
+						start,
+						end: lexer.position(),
+					} + offset,
+				),
+			}
+		}
 	}
 }
 
@@ -1022,6 +1041,48 @@ fn parse_condition(
 	}
 }
 
+/// Parse an `#error` directive.
+fn parse_error(mut lexer: Lexer, kw_span: Span, offset: usize) -> TokenStream {
+	let mut buffer = String::new();
+	let start = lexer.position();
+	while let Some(char) = lexer.peek() {
+		buffer.push(char);
+		lexer.advance();
+	}
+
+	TokenStream::Error {
+		kw: kw_span,
+		message: (
+			buffer,
+			Span {
+				start,
+				end: lexer.position(),
+			} + offset,
+		),
+	}
+}
+
+/// Parse a `#pragma` directive.
+fn parse_pragma(mut lexer: Lexer, kw_span: Span, offset: usize) -> TokenStream {
+	let mut buffer = String::new();
+	let start = lexer.position();
+	while let Some(char) = lexer.peek() {
+		buffer.push(char);
+		lexer.advance();
+	}
+
+	TokenStream::Pragma {
+		kw: kw_span,
+		options: (
+			buffer,
+			Span {
+				start,
+				end: lexer.position(),
+			} + offset,
+		),
+	}
+}
+
 /// Returns whether the character is allowed to start a punctuation token.
 fn is_condition_punctuation_start(c: &char) -> bool {
 	match c {
@@ -1064,7 +1125,10 @@ pub enum TokenStream {
 	/// A directive which is not currently supported by this crate.
 	Unsupported,
 	/// An invalid directive, e.g. `#nonexistent`.
-	Invalid,
+	Invalid {
+		kw: Spanned<String>,
+		content: Spanned<String>,
+	},
 	/// A `#version` directive.
 	Version {
 		kw: Span,
@@ -1121,6 +1185,10 @@ pub enum TokenStream {
 		kw: Span,
 		tokens: Vec<Spanned<ConditionToken>>,
 	},
+	/// An `#error` directive.
+	Error { kw: Span, message: Spanned<String> },
+	/// A `#pragma` directive.
+	Pragma { kw: Span, options: Spanned<String> },
 }
 
 /// A token representing a unit of text in a `#version` directive.

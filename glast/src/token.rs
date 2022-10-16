@@ -737,41 +737,19 @@ pub fn parse_from_str(source: &str) -> TokenStream {
 					Some(c) => c,
 					None => {
 						// We have reached the end of the source string, and hence of this directive.
-						match buffer.as_ref() {
-							"version" => tokens.push((
-								Token::Directive2(
-									preprocessor::TokenStream::Version {
-										kw: Span {
-											start: directive_kw_start,
-											end: lexer.position(),
-										},
-										tokens: vec![],
-									},
-								),
+						tokens.push((
+							Token::Directive2(preprocessor::construct_empty(
+								buffer,
 								Span {
-									start: directive_start,
+									start: directive_kw_start,
 									end: lexer.position(),
 								},
 							)),
-							_ => tokens.push((
-								Token::Directive2(
-									preprocessor::TokenStream::Custom {
-										kw: (
-											std::mem::take(&mut buffer),
-											Span {
-												start: directive_kw_start,
-												end: lexer.position(),
-											},
-										),
-										content: None,
-									},
-								),
-								Span {
-									start: directive_start,
-									end: lexer.position(),
-								},
-							)),
-						}
+							Span {
+								start: directive_start,
+								end: lexer.position(),
+							},
+						));
 						break 'outer;
 					}
 				};
@@ -803,6 +781,121 @@ pub fn parse_from_str(source: &str) -> TokenStream {
 						end: lexer.position(),
 					},
 				)),
+				"extension" => tokens.push((
+					Token::Directive2(preprocessor::parse_extension2(
+						&mut lexer,
+						directive_kw_span,
+					)),
+					Span {
+						start: directive_start,
+						end: lexer.position(),
+					},
+				)),
+				"line" => tokens.push((
+					Token::Directive2(preprocessor::parse_line2(
+						&mut lexer,
+						directive_kw_span,
+						&[], // FIXME
+					)),
+					Span {
+						start: directive_start,
+						end: lexer.position(),
+					},
+				)),
+				"undef" => tokens.push((
+					Token::Directive2(preprocessor::parse_undef2(
+						&mut lexer,
+						directive_kw_span,
+					)),
+					Span {
+						start: directive_start,
+						end: lexer.position(),
+					},
+				)),
+				"error" => {
+					buffer.clear();
+					let content_start = lexer.position();
+
+					'content: loop {
+						// Peek the current character.
+						current = match lexer.peek() {
+							Some(c) => c,
+							None => {
+								// We have reached the end of the source string, and therefore the end of this
+								// directive.
+								break 'content;
+							}
+						};
+
+						if current == '\r' || current == '\n' {
+							// We have an EOL without a line-continuator, which marks the end of this directive.
+							break 'content;
+						} else {
+							// Any other character is just added to the content buffer.
+							buffer.push(current);
+							lexer.advance();
+						}
+					}
+
+					tokens.push((
+						Token::Directive2(preprocessor::TokenStream::Error {
+							kw: directive_kw_span,
+							message: Some((
+								std::mem::take(&mut buffer),
+								Span {
+									start: content_start,
+									end: lexer.position(),
+								},
+							)),
+						}),
+						Span {
+							start: directive_start,
+							end: lexer.position(),
+						},
+					));
+				}
+				"pragma" => {
+					buffer.clear();
+					let content_start = lexer.position();
+
+					'content: loop {
+						// Peek the current character.
+						current = match lexer.peek() {
+							Some(c) => c,
+							None => {
+								// We have reached the end of the source string, and therefore the end of this
+								// directive.
+								break 'content;
+							}
+						};
+
+						if current == '\r' || current == '\n' {
+							// We have an EOL without a line-continuator, which marks the end of this directive.
+							break 'content;
+						} else {
+							// Any other character is just added to the content buffer.
+							buffer.push(current);
+							lexer.advance();
+						}
+					}
+
+					tokens.push((
+						Token::Directive2(preprocessor::TokenStream::Pragma {
+							kw: directive_kw_span,
+							options: Some((
+								std::mem::take(&mut buffer),
+								Span {
+									start: content_start,
+									end: lexer.position(),
+								},
+							)),
+						}),
+						Span {
+							start: directive_start,
+							end: lexer.position(),
+						},
+					));
+				}
 				_ => {
 					let kw = (std::mem::take(&mut buffer), directive_kw_span);
 					let content_start = lexer.position();
@@ -814,15 +907,6 @@ pub fn parse_from_str(source: &str) -> TokenStream {
 							None => {
 								// We have reached the end of the source string, and therefore the end of this
 								// directive.
-								tokens.push((
-									Token::Directive(std::mem::take(
-										&mut buffer,
-									)),
-									Span {
-										start: buffer_start,
-										end: lexer.position(),
-									},
-								));
 								break 'content;
 							}
 						};

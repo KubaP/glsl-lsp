@@ -11,6 +11,71 @@
 use super::{is_word, is_word_start, Lexer};
 use crate::{span::Spanned, token::match_op, Span};
 
+pub(super) fn construct_empty(
+	directive_kw: String,
+	directive_kw_span: Span,
+) -> TokenStream {
+	match directive_kw.as_ref() {
+		"version" => TokenStream::Version {
+			kw: directive_kw_span,
+			tokens: vec![],
+		},
+		"extension" => TokenStream::Extension {
+			kw: directive_kw_span,
+			tokens: vec![],
+		},
+		"line" => TokenStream::Line {
+			kw: directive_kw_span,
+			tokens: vec![],
+		},
+		"define" => TokenStream::Define {
+			kw: directive_kw_span,
+			ident_tokens: vec![],
+			body_tokens: vec![],
+		},
+		"undef" => TokenStream::Undef {
+			kw: directive_kw_span,
+			tokens: vec![],
+		},
+		"ifdef" => TokenStream::IfDef {
+			kw: directive_kw_span,
+			tokens: vec![],
+		},
+		"ifndef" => TokenStream::IfNotDef {
+			kw: directive_kw_span,
+			tokens: vec![],
+		},
+		"if" => TokenStream::If {
+			kw: directive_kw_span,
+			tokens: vec![],
+		},
+		"elif" => TokenStream::ElseIf {
+			kw: directive_kw_span,
+			tokens: vec![],
+		},
+		"else" => TokenStream::Else {
+			kw: directive_kw_span,
+			tokens: vec![],
+		},
+		"endif" => TokenStream::EndIf {
+			kw: directive_kw_span,
+			tokens: vec![],
+		},
+		"error" => TokenStream::Error {
+			kw: directive_kw_span,
+			message: None,
+		},
+		"pragma" => TokenStream::Pragma {
+			kw: directive_kw_span,
+			options: None,
+		},
+		_ => TokenStream::Custom {
+			kw: (directive_kw, directive_kw_span),
+			content: None,
+		},
+	}
+}
+
 pub fn parse_from_str(source: &str, offset: usize) -> TokenStream {
 	let mut lexer = Lexer::new(source);
 	let mut buffer = String::new();
@@ -57,15 +122,10 @@ pub fn parse_from_str(source: &str, offset: usize) -> TokenStream {
 
 	// TODO: Pass macro names into this function.
 	match buffer.as_ref() {
-		"extension" => parse_extension(lexer, kw_span, offset),
-		"line" => parse_line(lexer, kw_span, offset, vec![]),
 		"define" => parse_define(lexer, kw_span, offset),
-		"undef" => parse_undef(lexer, kw_span, offset),
 		"ifdef" | "ifndef" | "if" | "elif" | "else" | "endif" => {
 			parse_condition(lexer, kw_span, buffer.as_ref(), offset)
 		}
-		"error" => parse_error(lexer, kw_span, offset),
-		"pragma" => parse_pragma(lexer, kw_span, offset),
 		_ => {
 			let mut content = String::new();
 			let start = lexer.position();
@@ -316,21 +376,25 @@ pub(super) fn parse_version2(
 }
 
 /// Parse an `#extension` directive.
-fn parse_extension(
-	mut lexer: Lexer,
-	kw_span: Span,
-	offset: usize,
+pub(super) fn parse_extension2(
+	lexer: &mut Lexer,
+	directive_kw_span: Span,
 ) -> TokenStream {
-	// We continue off from where the lexer previously stopped.
 	let mut tokens = Vec::new();
 	let mut buffer = String::new();
-	'main: while !lexer.is_done() {
+	// We continue off from where the lexer previously stopped.
+	'outer: while !lexer.is_done() {
 		let buffer_start = lexer.position();
 		// Peek the current character.
 		let mut current = match lexer.peek() {
 			Some(c) => c,
-			None => break 'main,
+			None => break,
 		};
+
+		if current == '\r' || current == '\n' {
+			// We have reached the end of this directive.
+			break;
+		}
 
 		if is_word_start(&current) {
 			buffer.push(current);
@@ -347,11 +411,23 @@ fn parse_extension(
 							Span {
 								start: buffer_start,
 								end: lexer.position(),
-							} + offset,
+							},
 						));
 						break 'word;
 					}
 				};
+
+				if current == '\r' || current == '\n' {
+					// We have reached the end of this directive, and therefore the end of this word.
+					tokens.push((
+						ExtensionToken::Word(std::mem::take(&mut buffer)),
+						Span {
+							start: buffer_start,
+							end: lexer.position(),
+						},
+					));
+					break 'outer;
+				}
 
 				// Check if it can be part of a word.
 				if is_word(&current) {
@@ -366,7 +442,7 @@ fn parse_extension(
 						Span {
 							start: buffer_start,
 							end: lexer.position(),
-						} + offset,
+						},
 					));
 					break 'word;
 				}
@@ -378,7 +454,7 @@ fn parse_extension(
 				Span {
 					start: buffer_start,
 					end: lexer.position(),
-				} + offset,
+				},
 			));
 		} else if current.is_whitespace() {
 			// We ignore whitespace characters.
@@ -391,34 +467,38 @@ fn parse_extension(
 				Span {
 					start: buffer_start,
 					end: lexer.position(),
-				} + offset,
+				},
 			));
 		}
 	}
 
 	TokenStream::Extension {
-		kw: kw_span,
+		kw: directive_kw_span,
 		tokens,
 	}
 }
 
 /// Parse a `#line` directive.
-fn parse_line(
-	mut lexer: Lexer,
-	kw_span: Span,
-	offset: usize,
-	macro_names: Vec<&'static str>,
+pub(super) fn parse_line2(
+	lexer: &mut Lexer,
+	directive_kw_span: Span,
+	macro_names: &[&'static str],
 ) -> TokenStream {
-	// We continue off from where the lexer previously stopped.
 	let mut tokens = Vec::new();
 	let mut buffer = String::new();
-	'main: while !lexer.is_done() {
+	// We continue off from where the lexer previously stopped.
+	'outer: while !lexer.is_done() {
 		let buffer_start = lexer.position();
 		// Peek the current character.
 		let mut current = match lexer.peek() {
 			Some(c) => c,
-			None => break 'main,
+			None => break,
 		};
+
+		if current == '\r' || current == '\n' {
+			// We have reached the end of this directive.
+			break;
+		}
 
 		if is_word_start(&current) {
 			buffer.push(current);
@@ -437,7 +517,7 @@ fn parse_line(
 								Span {
 									start: buffer_start,
 									end: lexer.position(),
-								} + offset,
+								},
 							));
 						} else {
 							// This word doesn't match a macro name.
@@ -448,12 +528,36 @@ fn parse_line(
 								Span {
 									start: buffer_start,
 									end: lexer.position(),
-								} + offset,
+								},
 							));
 						}
 						break 'word;
 					}
 				};
+
+				if current == '\r' || current == '\n' {
+					// We have reached the end of this directive, and therefore the end of this word.
+					if macro_names.contains(&buffer.as_str()) {
+						// This word matches a macro name.
+						tokens.push((
+							LineToken::Macro(std::mem::take(&mut buffer)),
+							Span {
+								start: buffer_start,
+								end: lexer.position(),
+							},
+						));
+					} else {
+						// This word doesn't match a macro name.
+						tokens.push((
+							LineToken::InvalidWord(std::mem::take(&mut buffer)),
+							Span {
+								start: buffer_start,
+								end: lexer.position(),
+							},
+						));
+					}
+					break 'outer;
+				}
 
 				// Check if it can be part of a word.
 				if is_word(&current) {
@@ -470,7 +574,7 @@ fn parse_line(
 							Span {
 								start: buffer_start,
 								end: lexer.position(),
-							} + offset,
+							},
 						));
 					} else {
 						// This word doesn't match a macro name.
@@ -479,7 +583,7 @@ fn parse_line(
 							Span {
 								start: buffer_start,
 								end: lexer.position(),
-							} + offset,
+							},
 						));
 					}
 					break 'word;
@@ -502,7 +606,7 @@ fn parse_line(
 								Span {
 									start: buffer_start,
 									end: lexer.position(),
-								} + offset,
+								},
 							));
 						} else {
 							match usize::from_str_radix(&buffer, 10) {
@@ -512,7 +616,7 @@ fn parse_line(
 										Span {
 											start: buffer_start,
 											end: lexer.position(),
-										} + offset,
+										},
 									));
 									buffer.clear();
 								}
@@ -523,13 +627,51 @@ fn parse_line(
 									Span {
 										start: buffer_start,
 										end: lexer.position(),
-									} + offset,
+									},
 								)),
 							}
 						}
 						break 'number;
 					}
 				};
+
+				if current == '\r' || current == '\n' {
+					// We have reached the end of this directive, and therefore the end of this number.
+					if invalid_num {
+						tokens.push((
+							LineToken::InvalidNumber(std::mem::take(
+								&mut buffer,
+							)),
+							Span {
+								start: buffer_start,
+								end: lexer.position(),
+							},
+						));
+					} else {
+						match usize::from_str_radix(&buffer, 10) {
+							Ok(num) => {
+								tokens.push((
+									LineToken::Number(num),
+									Span {
+										start: buffer_start,
+										end: lexer.position(),
+									},
+								));
+								buffer.clear();
+							}
+							Err(_) => tokens.push((
+								LineToken::InvalidNumber(std::mem::take(
+									&mut buffer,
+								)),
+								Span {
+									start: buffer_start,
+									end: lexer.position(),
+								},
+							)),
+						}
+					}
+					break 'outer;
+				}
 
 				if current.is_ascii_digit() {
 					// The character can be part of a number, so consume it and continue looping.
@@ -552,7 +694,7 @@ fn parse_line(
 							Span {
 								start: buffer_start,
 								end: lexer.position(),
-							} + offset,
+							},
 						));
 					} else {
 						match usize::from_str_radix(&buffer, 10) {
@@ -562,7 +704,7 @@ fn parse_line(
 									Span {
 										start: buffer_start,
 										end: lexer.position(),
-									} + offset,
+									},
 								));
 								buffer.clear();
 							}
@@ -573,7 +715,7 @@ fn parse_line(
 								Span {
 									start: buffer_start,
 									end: lexer.position(),
-								} + offset,
+								},
 							)),
 						}
 					}
@@ -591,13 +733,13 @@ fn parse_line(
 				Span {
 					start: buffer_start,
 					end: lexer.position(),
-				} + offset,
+				},
 			));
 		}
 	}
 
 	TokenStream::Line {
-		kw: kw_span,
+		kw: directive_kw_span,
 		tokens,
 	}
 }
@@ -789,17 +931,25 @@ fn parse_define(mut lexer: Lexer, kw_span: Span, offset: usize) -> TokenStream {
 }
 
 /// Parse an `#undef` directive.
-fn parse_undef(mut lexer: Lexer, kw_span: Span, offset: usize) -> TokenStream {
-	// We continue off from where the lexer previously stopped.
+pub(super) fn parse_undef2(
+	lexer: &mut Lexer,
+	directive_kw_span: Span,
+) -> TokenStream {
 	let mut tokens = Vec::new();
 	let mut buffer = String::new();
-	'main: while !lexer.is_done() {
+	// We continue off from where the lexer previously stopped.
+	'outer: while !lexer.is_done() {
 		let buffer_start = lexer.position();
 		// Peek the current character.
 		let mut current = match lexer.peek() {
 			Some(c) => c,
-			None => break 'main,
+			None => break,
 		};
+
+		if current == '\r' || current == '\n' {
+			// We have reached the end of this directive.
+			break;
+		}
 
 		if is_word_start(&current) {
 			buffer.push(current);
@@ -816,11 +966,23 @@ fn parse_undef(mut lexer: Lexer, kw_span: Span, offset: usize) -> TokenStream {
 							Span {
 								start: buffer_start,
 								end: lexer.position(),
-							} + offset,
+							},
 						));
 						break 'word;
 					}
 				};
+
+				if current == '\r' || current == '\n' {
+					// We have reached the end of this directive, and therefore the end of this word.
+					tokens.push((
+						UndefToken::Identifier(std::mem::take(&mut buffer)),
+						Span {
+							start: buffer_start,
+							end: lexer.position(),
+						},
+					));
+					break 'outer;
+				}
 
 				// Check if it can be part of a word.
 				if is_word(&current) {
@@ -835,7 +997,7 @@ fn parse_undef(mut lexer: Lexer, kw_span: Span, offset: usize) -> TokenStream {
 						Span {
 							start: buffer_start,
 							end: lexer.position(),
-						} + offset,
+						},
 					));
 					break 'word;
 				}
@@ -851,13 +1013,13 @@ fn parse_undef(mut lexer: Lexer, kw_span: Span, offset: usize) -> TokenStream {
 				Span {
 					start: buffer_start,
 					end: lexer.position(),
-				} + offset,
+				},
 			));
 		}
 	}
 
 	TokenStream::Undef {
-		kw: kw_span,
+		kw: directive_kw_span,
 		tokens,
 	}
 }
@@ -1091,48 +1253,6 @@ fn parse_condition(
 			tokens,
 		},
 		_ => unreachable!(),
-	}
-}
-
-/// Parse an `#error` directive.
-fn parse_error(mut lexer: Lexer, kw_span: Span, offset: usize) -> TokenStream {
-	let mut buffer = String::new();
-	let start = lexer.position();
-	while let Some(char) = lexer.peek() {
-		buffer.push(char);
-		lexer.advance();
-	}
-
-	TokenStream::Error {
-		kw: kw_span,
-		message: (
-			buffer,
-			Span {
-				start,
-				end: lexer.position(),
-			} + offset,
-		),
-	}
-}
-
-/// Parse a `#pragma` directive.
-fn parse_pragma(mut lexer: Lexer, kw_span: Span, offset: usize) -> TokenStream {
-	let mut buffer = String::new();
-	let start = lexer.position();
-	while let Some(char) = lexer.peek() {
-		buffer.push(char);
-		lexer.advance();
-	}
-
-	TokenStream::Pragma {
-		kw: kw_span,
-		options: (
-			buffer,
-			Span {
-				start,
-				end: lexer.position(),
-			} + offset,
-		),
 	}
 }
 

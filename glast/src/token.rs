@@ -623,40 +623,236 @@ pub fn parse_from_str(source: &str) -> TokenStream {
 			}
 			// We ignore whitespace characters.
 			lexer.advance();
-		} else if can_start_directive && current == '#' {
+		} else if can_start_directive
+			&& current == '#'
+			&& !parsing_directive_contents
+		{
+			// If we are parsing a directive string, then the only difference in behaviour is that we don't start a
+			// new directive within the existing directive. This means the `#` character will be treated as an
+			// invalid character instead.
+			let directive_start = lexer.position();
 			lexer.advance();
 
-			'directive: loop {
-				// Peek the current character.
+			// Consume whitespace since any whitespace between the `#` and `<keyword>` is ignored.
+			loop {
 				current = match lexer.peek() {
 					Some(c) => c,
 					None => {
-						// We have reached the end of the source string, and therefore the end of the comment.
+						// We have reached the end of the source string, and hence the end of this directive.
 						tokens.push((
-							Token::Directive(std::mem::take(&mut buffer)),
+							Token::Directive2(preprocessor::TokenStream::Empty),
 							Span {
-								start: buffer_start,
+								start: directive_start,
 								end: lexer.position(),
 							},
 						));
-						break 'directive;
+						break 'outer;
 					}
 				};
 
 				if current == '\r' || current == '\n' {
-					// We have an EOL without a line-continuator, so therefore this is the end of the directive.
+					// We have an EOL without a line-continuator, which marks the end of this directive.
 					tokens.push((
-						Token::Directive(std::mem::take(&mut buffer)),
+						Token::Directive2(preprocessor::TokenStream::Empty),
 						Span {
-							start: buffer_start,
+							start: directive_start,
 							end: lexer.position(),
 						},
 					));
-					break 'directive;
+					continue 'outer;
+				}
+
+				if current.is_ascii_whitespace() {
+					lexer.advance();
+					continue;
 				} else {
-					// Any other character is just added to the comment buffer.
+					break;
+				}
+			}
+
+			if !is_word_start(&current) {
+				// We have a directive which doesn't begin with a word, which is invalid.
+				let content_start = lexer.position();
+				'content: loop {
+					// Peek the current character.
+					current = match lexer.peek() {
+						Some(c) => c,
+						None => {
+							tokens.push((
+								Token::Directive2(
+									preprocessor::TokenStream::Invalid {
+										content: (
+											std::mem::take(&mut buffer),
+											Span {
+												start: content_start,
+												end: lexer.position(),
+											},
+										),
+									},
+								),
+								Span {
+									start: directive_start,
+									end: lexer.position(),
+								},
+							));
+							break 'outer;
+						}
+					};
+
+					if current == '\r' || current == '\n' {
+						// We have an EOL without a line-continuator, which marks the end of this directive.
+						break 'content;
+					} else {
+						// Any other character is just added to the content buffer.
+						buffer.push(current);
+						lexer.advance();
+					}
+				}
+
+				tokens.push((
+					Token::Directive2(preprocessor::TokenStream::Invalid {
+						content: (
+							std::mem::take(&mut buffer),
+							Span {
+								start: content_start,
+								end: lexer.position(),
+							},
+						),
+					}),
+					Span {
+						start: directive_start,
+						end: lexer.position(),
+					},
+				));
+				continue 'outer;
+			}
+
+			// Consume the first word, which is the name of the directive.
+			let directive_kw_start = lexer.position();
+			buffer.push(current);
+			lexer.advance();
+			'directive_name: loop {
+				// Peek the current character.
+				current = match lexer.peek() {
+					Some(c) => c,
+					None => {
+						// We have reached the end of the source string, and hence of this directive.
+						match buffer.as_ref() {
+							"version" => tokens.push((
+								Token::Directive2(
+									preprocessor::TokenStream::Version {
+										kw: Span {
+											start: directive_kw_start,
+											end: lexer.position(),
+										},
+										tokens: vec![],
+									},
+								),
+								Span {
+									start: directive_start,
+									end: lexer.position(),
+								},
+							)),
+							_ => tokens.push((
+								Token::Directive2(
+									preprocessor::TokenStream::Custom {
+										kw: (
+											std::mem::take(&mut buffer),
+											Span {
+												start: directive_kw_start,
+												end: lexer.position(),
+											},
+										),
+										content: None,
+									},
+								),
+								Span {
+									start: directive_start,
+									end: lexer.position(),
+								},
+							)),
+						}
+						break 'outer;
+					}
+				};
+
+				// Check if it can be part of a word.
+				if is_word(&current) {
+					// The character can be part of a word, so consume it and continue looping.
 					buffer.push(current);
 					lexer.advance();
+				} else {
+					break 'directive_name;
+				}
+			}
+
+			let directive_kw_span = Span {
+				start: directive_kw_start,
+				end: lexer.position(),
+			};
+
+			// Consume the rest of the directive, and create appropriate tokens depending on the directive keyword.
+			match buffer.as_ref() {
+				"version" => tokens.push((
+					Token::Directive2(preprocessor::parse_version2(
+						&mut lexer,
+						directive_kw_span,
+					)),
+					Span {
+						start: directive_start,
+						end: lexer.position(),
+					},
+				)),
+				_ => {
+					let kw = (std::mem::take(&mut buffer), directive_kw_span);
+					let content_start = lexer.position();
+
+					'content: loop {
+						// Peek the current character.
+						current = match lexer.peek() {
+							Some(c) => c,
+							None => {
+								// We have reached the end of the source string, and therefore the end of this
+								// directive.
+								tokens.push((
+									Token::Directive(std::mem::take(
+										&mut buffer,
+									)),
+									Span {
+										start: buffer_start,
+										end: lexer.position(),
+									},
+								));
+								break 'content;
+							}
+						};
+
+						if current == '\r' || current == '\n' {
+							// We have an EOL without a line-continuator, which marks the end of this directive.
+							break 'content;
+						} else {
+							// Any other character is just added to the content buffer.
+							buffer.push(current);
+							lexer.advance();
+						}
+					}
+
+					tokens.push((
+						Token::Directive2(preprocessor::TokenStream::Custom {
+							kw,
+							content: Some((
+								std::mem::take(&mut buffer),
+								Span {
+									start: content_start,
+									end: lexer.position(),
+								},
+							)),
+						}),
+						Span {
+							start: directive_start,
+							end: lexer.position(),
+						},
+					));
 				}
 			}
 		} else {
@@ -690,6 +886,7 @@ pub enum Token {
 	Ident(String),
 	/// A preprocessor directive, e.g. `#version 450 core`, `#define FOO 42`, `#ifdef TOGGLE`.
 	Directive(String),
+	Directive2(preprocessor::TokenStream),
 	/// A line comment, e.g. `// comment`.
 	LineComment(String),
 	/// A block comment, e.g. `/* comment */`.

@@ -57,7 +57,6 @@ pub fn parse_from_str(source: &str, offset: usize) -> TokenStream {
 
 	// TODO: Pass macro names into this function.
 	match buffer.as_ref() {
-		"version" => parse_version(lexer, kw_span, offset),
 		"extension" => parse_extension(lexer, kw_span, offset),
 		"line" => parse_line(lexer, kw_span, offset, vec![]),
 		"define" => parse_define(lexer, kw_span, offset),
@@ -75,36 +74,40 @@ pub fn parse_from_str(source: &str, offset: usize) -> TokenStream {
 				lexer.advance();
 			}
 
-			TokenStream::Invalid {
+			TokenStream::Custom {
 				kw: (buffer, kw_span),
-				content: (
+				content: Some((
 					content,
 					Span {
 						start,
 						end: lexer.position(),
 					} + offset,
-				),
+				)),
 			}
 		}
 	}
 }
 
 /// Parse a `#version` directive.
-fn parse_version(
-	mut lexer: Lexer,
-	kw_span: Span,
-	offset: usize,
+pub(super) fn parse_version2(
+	lexer: &mut Lexer,
+	directive_kw_span: Span,
 ) -> TokenStream {
-	// We continue off from where the lexer previously stopped.
 	let mut tokens = Vec::new();
 	let mut buffer = String::new();
-	'main: while !lexer.is_done() {
+	// We continue off from where the lexer previously stopped.
+	'outer: while !lexer.is_done() {
 		let buffer_start = lexer.position();
 		// Peek the current character.
 		let mut current = match lexer.peek() {
 			Some(c) => c,
-			None => break 'main,
+			None => break,
 		};
+
+		if current == '\r' || current == '\n' {
+			// We have reached the end of this directive.
+			break;
+		}
 
 		if is_word_start(&current) {
 			buffer.push(current);
@@ -115,32 +118,44 @@ fn parse_version(
 				current = match lexer.peek() {
 					Some(c) => c,
 					None => {
-						// We have reached the end of the source string, and therefore the end of the word.
+						// We have reached the end of the source string, and therefore the end of this word.
 						tokens.push((
 							VersionToken::Word(std::mem::take(&mut buffer)),
 							Span {
 								start: buffer_start,
 								end: lexer.position(),
-							} + offset,
+							},
 						));
 						break 'word;
 					}
 				};
 
+				if current == '\r' || current == '\n' {
+					// We have reached the end of this directive, and therefore the end of this word.
+					tokens.push((
+						VersionToken::Word(std::mem::take(&mut buffer)),
+						Span {
+							start: buffer_start,
+							end: lexer.position(),
+						},
+					));
+					break 'outer;
+				}
+
 				// Check if it can be part of a word.
 				if is_word(&current) {
-					// The character can be part of an word, so consume it and continue looping.
+					// The character can be part of a word, so consume it and continue looping.
 					buffer.push(current);
 					lexer.advance();
 				} else {
-					// The character can't be part of an word, so we can produce a token and exit this loop without
+					// The character can't be part of a word, so we can produce a token and exit this loop without
 					// consuming it.
 					tokens.push((
 						VersionToken::Word(std::mem::take(&mut buffer)),
 						Span {
 							start: buffer_start,
 							end: lexer.position(),
-						} + offset,
+						},
 					));
 					break 'word;
 				}
@@ -162,7 +177,7 @@ fn parse_version(
 								Span {
 									start: buffer_start,
 									end: lexer.position(),
-								} + offset,
+								},
 							));
 						} else {
 							match usize::from_str_radix(&buffer, 10) {
@@ -172,7 +187,7 @@ fn parse_version(
 										Span {
 											start: buffer_start,
 											end: lexer.position(),
-										} + offset,
+										},
 									));
 									buffer.clear();
 								}
@@ -183,7 +198,7 @@ fn parse_version(
 									Span {
 										start: buffer_start,
 										end: lexer.position(),
-									} + offset,
+									},
 								)),
 							}
 						}
@@ -191,13 +206,51 @@ fn parse_version(
 					}
 				};
 
+				if current == '\r' || current == '\n' {
+					// We have reached the end of this directive, and therefore the end of this number.
+					if invalid_num {
+						tokens.push((
+							VersionToken::InvalidNumber(std::mem::take(
+								&mut buffer,
+							)),
+							Span {
+								start: buffer_start,
+								end: lexer.position(),
+							},
+						));
+					} else {
+						match usize::from_str_radix(&buffer, 10) {
+							Ok(num) => {
+								tokens.push((
+									VersionToken::Number(num),
+									Span {
+										start: buffer_start,
+										end: lexer.position(),
+									},
+								));
+								buffer.clear();
+							}
+							Err(_) => tokens.push((
+								VersionToken::InvalidNumber(std::mem::take(
+									&mut buffer,
+								)),
+								Span {
+									start: buffer_start,
+									end: lexer.position(),
+								},
+							)),
+						}
+					}
+					break 'outer;
+				}
+
 				if current.is_ascii_digit() {
 					// The character can be part of a number, so consume it and continue looping.
 					buffer.push(current);
 					lexer.advance();
 				} else if current.is_ascii_alphabetic() {
-					// The character can't be part of a number, but it also requires separation to be valid. Hence
-					// this becomes an invalid number-like token.
+					// The character can't be part of a number. However it requires separation to be valid. Hence
+					// this becomes an invalid "number-like" token.
 					invalid_num = true;
 					buffer.push(current);
 					lexer.advance();
@@ -212,7 +265,7 @@ fn parse_version(
 							Span {
 								start: buffer_start,
 								end: lexer.position(),
-							} + offset,
+							},
 						));
 					} else {
 						match usize::from_str_radix(&buffer, 10) {
@@ -222,7 +275,7 @@ fn parse_version(
 									Span {
 										start: buffer_start,
 										end: lexer.position(),
-									} + offset,
+									},
 								));
 								buffer.clear();
 							}
@@ -233,7 +286,7 @@ fn parse_version(
 								Span {
 									start: buffer_start,
 									end: lexer.position(),
-								} + offset,
+								},
 							)),
 						}
 					}
@@ -251,13 +304,13 @@ fn parse_version(
 				Span {
 					start: buffer_start,
 					end: lexer.position(),
-				} + offset,
+				},
 			));
 		}
 	}
 
 	TokenStream::Version {
-		kw: kw_span,
+		kw: directive_kw_span,
 		tokens,
 	}
 }
@@ -1121,14 +1174,20 @@ fn match_condition_punctuation(lexer: &mut Lexer) -> ConditionToken {
 }
 
 /// A vector of tokens representing a specific preprocessor directive.
+#[derive(Debug, Clone, PartialEq)]
 pub enum TokenStream {
+	/// An empty directive; just a `#` with nothing else on the same line.
+	Empty,
 	/// A directive which is not currently supported by this crate.
 	Unsupported,
-	/// An invalid directive, e.g. `#nonexistent`.
-	Invalid {
+	/// A directive which conforms to the `#<keyword> <content>` pattern but the keyword is not a recognized word,
+	/// e.g. `#nonexistent foo bar`.
+	Custom {
 		kw: Spanned<String>,
-		content: Spanned<String>,
+		content: Option<Spanned<String>>,
 	},
+	/// A directive which doesn't conform to the `#<keyword> <content>` pattern.
+	Invalid { content: Spanned<String> },
 	/// A `#version` directive.
 	Version {
 		kw: Span,

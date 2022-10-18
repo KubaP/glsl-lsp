@@ -123,9 +123,6 @@ pub fn parse_from_str(source: &str, offset: usize) -> TokenStream {
 	// TODO: Pass macro names into this function.
 	match buffer.as_ref() {
 		"define" => parse_define(lexer, kw_span, offset),
-		"ifdef" | "ifndef" | "if" | "elif" | "else" | "endif" => {
-			parse_condition(lexer, kw_span, buffer.as_ref(), offset)
-		}
 		_ => {
 			let mut content = String::new();
 			let start = lexer.position();
@@ -1025,22 +1022,26 @@ pub(super) fn parse_undef2(
 }
 
 /// Parse a `#ifdef`/`#ifndef`/`#if`/`#elif`/`#else`/`#endif` directive.
-fn parse_condition(
-	mut lexer: Lexer,
-	kw_span: Span,
-	kw: &str,
-	offset: usize,
+pub(super) fn parse_condition_2(
+	lexer: &mut Lexer,
+	directive_kw: &str,
+	directive_kw_span: Span,
 ) -> TokenStream {
-	// We continue off from where the lexer previously stopped.
 	let mut tokens = Vec::new();
 	let mut buffer = String::new();
-	'main: while !lexer.is_done() {
+	// We continue off from where the lexer previously stopped.
+	'outer: while !lexer.is_done() {
 		let buffer_start = lexer.position();
 		// Peek the current character.
 		let mut current = match lexer.peek() {
 			Some(c) => c,
-			None => break 'main,
+			None => break,
 		};
+
+		if current == '\r' || current == '\n' {
+			// We have reached the end of this directive.
+			break;
+		}
 
 		if is_word_start(&current) {
 			buffer.push(current);
@@ -1058,7 +1059,7 @@ fn parse_condition(
 								Span {
 									start: buffer_start,
 									end: lexer.position(),
-								} + offset,
+								},
 							));
 							buffer.clear();
 						} else {
@@ -1069,12 +1070,37 @@ fn parse_condition(
 								Span {
 									start: buffer_start,
 									end: lexer.position(),
-								} + offset,
+								},
 							));
 						}
 						break 'word;
 					}
 				};
+
+				if current == '\r' || current == '\n' {
+					// We have reached the end of this directive, and therefore the end of this word.
+					if &buffer == "defined" {
+						tokens.push((
+							ConditionToken::Defined,
+							Span {
+								start: buffer_start,
+								end: lexer.position(),
+							},
+						));
+						buffer.clear();
+					} else {
+						tokens.push((
+							ConditionToken::Identifier(std::mem::take(
+								&mut buffer,
+							)),
+							Span {
+								start: buffer_start,
+								end: lexer.position(),
+							},
+						));
+					}
+					break 'outer;
+				}
 
 				// Check if it can be part of a word.
 				if is_word(&current) {
@@ -1090,7 +1116,7 @@ fn parse_condition(
 							Span {
 								start: buffer_start,
 								end: lexer.position(),
-							} + offset,
+							},
 						));
 						buffer.clear();
 					} else {
@@ -1101,7 +1127,7 @@ fn parse_condition(
 							Span {
 								start: buffer_start,
 								end: lexer.position(),
-							} + offset,
+							},
 						));
 					}
 					break 'word;
@@ -1124,7 +1150,7 @@ fn parse_condition(
 								Span {
 									start: buffer_start,
 									end: lexer.position(),
-								} + offset,
+								},
 							));
 						} else {
 							match usize::from_str_radix(&buffer, 10) {
@@ -1134,7 +1160,7 @@ fn parse_condition(
 										Span {
 											start: buffer_start,
 											end: lexer.position(),
-										} + offset,
+										},
 									));
 									buffer.clear();
 								}
@@ -1145,13 +1171,51 @@ fn parse_condition(
 									Span {
 										start: buffer_start,
 										end: lexer.position(),
-									} + offset,
+									},
 								)),
 							}
 						}
 						break 'number;
 					}
 				};
+
+				if current == '\r' || current == '\n' {
+					// We have reached the end of this directive, and therefore the end of this number.
+					if invalid_num {
+						tokens.push((
+							ConditionToken::InvalidNumber(std::mem::take(
+								&mut buffer,
+							)),
+							Span {
+								start: buffer_start,
+								end: lexer.position(),
+							},
+						));
+					} else {
+						match usize::from_str_radix(&buffer, 10) {
+							Ok(num) => {
+								tokens.push((
+									ConditionToken::Number(num),
+									Span {
+										start: buffer_start,
+										end: lexer.position(),
+									},
+								));
+								buffer.clear();
+							}
+							Err(_) => tokens.push((
+								ConditionToken::InvalidNumber(std::mem::take(
+									&mut buffer,
+								)),
+								Span {
+									start: buffer_start,
+									end: lexer.position(),
+								},
+							)),
+						}
+					}
+					break 'outer;
+				}
 
 				if current.is_ascii_digit() {
 					// The character can be part of a number, so consume it and continue looping.
@@ -1174,7 +1238,7 @@ fn parse_condition(
 							Span {
 								start: buffer_start,
 								end: lexer.position(),
-							} + offset,
+							},
 						));
 					} else {
 						match usize::from_str_radix(&buffer, 10) {
@@ -1184,7 +1248,7 @@ fn parse_condition(
 									Span {
 										start: buffer_start,
 										end: lexer.position(),
-									} + offset,
+									},
 								));
 								buffer.clear();
 							}
@@ -1195,7 +1259,7 @@ fn parse_condition(
 								Span {
 									start: buffer_start,
 									end: lexer.position(),
-								} + offset,
+								},
 							)),
 						}
 					}
@@ -1203,13 +1267,12 @@ fn parse_condition(
 				}
 			}
 		} else if is_condition_punctuation_start(&current) {
-			lexer.advance();
 			tokens.push((
-				match_condition_punctuation(&mut lexer),
+				match_condition_punctuation(lexer),
 				Span {
 					start: buffer_start,
 					end: lexer.position(),
-				} + offset,
+				},
 			));
 		} else if current.is_whitespace() {
 			// We ignore whitespace characters.
@@ -1222,37 +1285,37 @@ fn parse_condition(
 				Span {
 					start: buffer_start,
 					end: lexer.position(),
-				} + offset,
+				},
 			));
 		}
 	}
 
-	match kw {
+	match directive_kw {
 		"ifdef" => TokenStream::IfDef {
-			kw: kw_span,
+			kw: directive_kw_span,
 			tokens,
 		},
 		"ifndef" => TokenStream::IfNotDef {
-			kw: kw_span,
+			kw: directive_kw_span,
 			tokens,
 		},
 		"if" => TokenStream::If {
-			kw: kw_span,
+			kw: directive_kw_span,
 			tokens,
 		},
 		"elif" => TokenStream::ElseIf {
-			kw: kw_span,
+			kw: directive_kw_span,
 			tokens,
 		},
 		"else" => TokenStream::Else {
-			kw: kw_span,
+			kw: directive_kw_span,
 			tokens,
 		},
 		"endif" => TokenStream::EndIf {
-			kw: kw_span,
+			kw: directive_kw_span,
 			tokens,
 		},
-		_ => unreachable!(),
+		_ => unreachable!("Only one of the above `&str` values should be passed into this function."),
 	}
 }
 

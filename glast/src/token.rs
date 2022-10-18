@@ -812,6 +812,18 @@ pub fn parse_from_str(source: &str) -> TokenStream {
 						end: lexer.position(),
 					},
 				)),
+				"ifdef" | "ifndef" | "if" | "elif" | "else" | "endif" => tokens
+					.push((
+						Token::Directive2(preprocessor::parse_condition_2(
+							&mut lexer,
+							&buffer,
+							directive_kw_span,
+						)),
+						Span {
+							start: directive_start,
+							end: lexer.position(),
+						},
+					)),
 				"error" => {
 					buffer.clear();
 					let content_start = lexer.position();

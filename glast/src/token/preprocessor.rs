@@ -462,7 +462,7 @@ pub(super) fn parse_version(
 	let mut tokens = Vec::new();
 	let mut buffer = String::new();
 	// We continue off from where the lexer previously stopped.
-	'outer: while !lexer.is_done() {
+	while !lexer.is_done() {
 		let buffer_start = lexer.position();
 		// Peek the current character.
 		let mut current = match lexer.peek() {
@@ -495,18 +495,6 @@ pub(super) fn parse_version(
 						break 'word;
 					}
 				};
-
-				if current == '\r' || current == '\n' {
-					// We have reached the end of this directive, and therefore the end of this word.
-					tokens.push((
-						VersionToken::Word(std::mem::take(&mut buffer)),
-						Span {
-							start: buffer_start,
-							end: lexer.position(),
-						},
-					));
-					break 'outer;
-				}
 
 				// Check if it can be part of a word.
 				if is_word(&current) {
@@ -571,44 +559,6 @@ pub(super) fn parse_version(
 						break 'number;
 					}
 				};
-
-				if current == '\r' || current == '\n' {
-					// We have reached the end of this directive, and therefore the end of this number.
-					if invalid_num {
-						tokens.push((
-							VersionToken::InvalidNum(std::mem::take(
-								&mut buffer,
-							)),
-							Span {
-								start: buffer_start,
-								end: lexer.position(),
-							},
-						));
-					} else {
-						match usize::from_str_radix(&buffer, 10) {
-							Ok(num) => {
-								tokens.push((
-									VersionToken::Num(num),
-									Span {
-										start: buffer_start,
-										end: lexer.position(),
-									},
-								));
-								buffer.clear();
-							}
-							Err(_) => tokens.push((
-								VersionToken::InvalidNum(std::mem::take(
-									&mut buffer,
-								)),
-								Span {
-									start: buffer_start,
-									end: lexer.position(),
-								},
-							)),
-						}
-					}
-					break 'outer;
-				}
 
 				if current.is_ascii_digit() {
 					// The character can be part of a number, so consume it and continue looping.
@@ -689,7 +639,7 @@ pub(super) fn parse_extension(
 	let mut tokens = Vec::new();
 	let mut buffer = String::new();
 	// We continue off from where the lexer previously stopped.
-	'outer: while !lexer.is_done() {
+	while !lexer.is_done() {
 		let buffer_start = lexer.position();
 		// Peek the current character.
 		let mut current = match lexer.peek() {
@@ -722,18 +672,6 @@ pub(super) fn parse_extension(
 						break 'word;
 					}
 				};
-
-				if current == '\r' || current == '\n' {
-					// We have reached the end of this directive, and therefore the end of this word.
-					tokens.push((
-						ExtensionToken::Word(std::mem::take(&mut buffer)),
-						Span {
-							start: buffer_start,
-							end: lexer.position(),
-						},
-					));
-					break 'outer;
-				}
 
 				// Check if it can be part of a word.
 				if is_word(&current) {
@@ -792,7 +730,7 @@ pub(super) fn parse_line(
 	let mut tokens = Vec::new();
 	let mut buffer = String::new();
 	// We continue off from where the lexer previously stopped.
-	'outer: while !lexer.is_done() {
+	while !lexer.is_done() {
 		let buffer_start = lexer.position();
 		// Peek the current character.
 		let mut current = match lexer.peek() {
@@ -825,18 +763,6 @@ pub(super) fn parse_line(
 						break 'word;
 					}
 				};
-
-				if current == '\r' || current == '\n' {
-					// We have reached the end of this directive, and therefore the end of this word.
-					tokens.push((
-						LineToken::Ident(std::mem::take(&mut buffer)),
-						Span {
-							start: buffer_start,
-							end: lexer.position(),
-						},
-					));
-					break 'outer;
-				}
 
 				// Check if it can be part of a word.
 				if is_word(&current) {
@@ -901,42 +827,6 @@ pub(super) fn parse_line(
 						break 'number;
 					}
 				};
-
-				if current == '\r' || current == '\n' {
-					// We have reached the end of this directive, and therefore the end of this number.
-					if invalid_num {
-						tokens.push((
-							LineToken::InvalidNum(std::mem::take(&mut buffer)),
-							Span {
-								start: buffer_start,
-								end: lexer.position(),
-							},
-						));
-					} else {
-						match usize::from_str_radix(&buffer, 10) {
-							Ok(num) => {
-								tokens.push((
-									LineToken::Num(num),
-									Span {
-										start: buffer_start,
-										end: lexer.position(),
-									},
-								));
-								buffer.clear();
-							}
-							Err(_) => tokens.push((
-								LineToken::InvalidNum(std::mem::take(
-									&mut buffer,
-								)),
-								Span {
-									start: buffer_start,
-									end: lexer.position(),
-								},
-							)),
-						}
-					}
-					break 'outer;
-				}
 
 				if current.is_ascii_digit() {
 					// The character can be part of a number, so consume it and continue looping.
@@ -1007,7 +897,7 @@ pub(super) fn parse_line(
 	}
 }
 
-/// Parse a `#define` directive.
+/// Parse the identifier part of a `#define` directive.
 pub(super) fn parse_define(lexer: &mut Lexer) -> Vec<Spanned<DefineToken>> {
 	let mut tokens = Vec::new();
 	// We continue off from where the lexer previously stopped.
@@ -1020,6 +910,7 @@ pub(super) fn parse_define(lexer: &mut Lexer) -> Vec<Spanned<DefineToken>> {
 		};
 
 		if current == '\r' || current == '\n' {
+			// We have reached the end of this directive.
 			return vec![];
 		}
 
@@ -1061,8 +952,8 @@ pub(super) fn parse_define(lexer: &mut Lexer) -> Vec<Spanned<DefineToken>> {
 			buffer.push(current);
 			lexer.advance();
 		} else if current == '(' {
-			// We have encountered a `(` immediately after a word. This means this directive is a function
-			// macro and we now need to parse the parameter list.
+			// We have encountered a `(` immediately after a word. This means this directive is a function macro
+			// and we now need to parse the parameter list.
 			tokens.push((
 				DefineToken::Ident(std::mem::take(&mut buffer)),
 				Span {
@@ -1081,9 +972,8 @@ pub(super) fn parse_define(lexer: &mut Lexer) -> Vec<Spanned<DefineToken>> {
 			));
 			break;
 		} else {
-			// We have reached the end of the first word, and have not encountered a `(` immediately
-			// afterwards. This means this directive is an object macro and everything from here on is a
-			// standard GLSL token.
+			// We have reached the end of the first word, and have not encountered a `(` immediately afterwards.
+			// This means this directive is an object macro and everything from here on is a standard GLSL token.
 			tokens.push((
 				DefineToken::Ident(std::mem::take(&mut buffer)),
 				Span {
@@ -1101,10 +991,13 @@ pub(super) fn parse_define(lexer: &mut Lexer) -> Vec<Spanned<DefineToken>> {
 		let token_start = lexer.position();
 		current = match lexer.peek() {
 			Some(c) => c,
-			None => {
-				return tokens;
-			}
+			None => break,
 		};
+
+		if current == '\r' || current == '\n' {
+			// We have reached the end of this directive.
+			break;
+		}
 
 		if is_word_start(&current) {
 			buffer.push(current);
@@ -1119,7 +1012,7 @@ pub(super) fn parse_define(lexer: &mut Lexer) -> Vec<Spanned<DefineToken>> {
 						tokens.push((
 							DefineToken::Ident(std::mem::take(&mut buffer)),
 							Span {
-								start: buffer_start,
+								start: token_start,
 								end: lexer.position(),
 							},
 						));
@@ -1138,7 +1031,7 @@ pub(super) fn parse_define(lexer: &mut Lexer) -> Vec<Spanned<DefineToken>> {
 					tokens.push((
 						DefineToken::Ident(std::mem::take(&mut buffer)),
 						Span {
-							start: buffer_start,
+							start: token_start,
 							end: lexer.position(),
 						},
 					));
@@ -1164,6 +1057,9 @@ pub(super) fn parse_define(lexer: &mut Lexer) -> Vec<Spanned<DefineToken>> {
 				},
 			));
 			break;
+		} else if current.is_whitespace() {
+			// We ignore whitespace characters.
+			lexer.advance();
 		} else {
 			lexer.advance();
 			tokens.push((
@@ -1187,7 +1083,7 @@ pub(super) fn parse_undef(
 	let mut tokens = Vec::new();
 	let mut buffer = String::new();
 	// We continue off from where the lexer previously stopped.
-	'outer: while !lexer.is_done() {
+	while !lexer.is_done() {
 		let buffer_start = lexer.position();
 		// Peek the current character.
 		let mut current = match lexer.peek() {
@@ -1220,18 +1116,6 @@ pub(super) fn parse_undef(
 						break 'word;
 					}
 				};
-
-				if current == '\r' || current == '\n' {
-					// We have reached the end of this directive, and therefore the end of this word.
-					tokens.push((
-						UndefToken::Ident(std::mem::take(&mut buffer)),
-						Span {
-							start: buffer_start,
-							end: lexer.position(),
-						},
-					));
-					break 'outer;
-				}
 
 				// Check if it can be part of a word.
 				if is_word(&current) {
@@ -1282,7 +1166,7 @@ pub(super) fn parse_condition(
 	let mut tokens = Vec::new();
 	let mut buffer = String::new();
 	// We continue off from where the lexer previously stopped.
-	'outer: while !lexer.is_done() {
+	while !lexer.is_done() {
 		let buffer_start = lexer.position();
 		// Peek the current character.
 		let mut current = match lexer.peek() {
@@ -1328,29 +1212,6 @@ pub(super) fn parse_condition(
 						break 'word;
 					}
 				};
-
-				if current == '\r' || current == '\n' {
-					// We have reached the end of this directive, and therefore the end of this word.
-					if &buffer == "defined" {
-						tokens.push((
-							ConditionToken::Defined,
-							Span {
-								start: buffer_start,
-								end: lexer.position(),
-							},
-						));
-						buffer.clear();
-					} else {
-						tokens.push((
-							ConditionToken::Ident(std::mem::take(&mut buffer)),
-							Span {
-								start: buffer_start,
-								end: lexer.position(),
-							},
-						));
-					}
-					break 'outer;
-				}
 
 				// Check if it can be part of a word.
 				if is_word(&current) {
@@ -1426,44 +1287,6 @@ pub(super) fn parse_condition(
 						break 'number;
 					}
 				};
-
-				if current == '\r' || current == '\n' {
-					// We have reached the end of this directive, and therefore the end of this number.
-					if invalid_num {
-						tokens.push((
-							ConditionToken::InvalidNum(std::mem::take(
-								&mut buffer,
-							)),
-							Span {
-								start: buffer_start,
-								end: lexer.position(),
-							},
-						));
-					} else {
-						match usize::from_str_radix(&buffer, 10) {
-							Ok(num) => {
-								tokens.push((
-									ConditionToken::Num(num),
-									Span {
-										start: buffer_start,
-										end: lexer.position(),
-									},
-								));
-								buffer.clear();
-							}
-							Err(_) => tokens.push((
-								ConditionToken::InvalidNum(std::mem::take(
-									&mut buffer,
-								)),
-								Span {
-									start: buffer_start,
-									end: lexer.position(),
-								},
-							)),
-						}
-					}
-					break 'outer;
-				}
 
 				if current.is_ascii_digit() {
 					// The character can be part of a number, so consume it and continue looping.

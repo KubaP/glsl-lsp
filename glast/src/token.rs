@@ -54,9 +54,13 @@ pub type TokenStream = Vec<Spanned<Token>>;
 ///
 /// ```text
 /// i---7      becomes (i) (--) (-) (7)
+/// i----7     becomes (i) (--) (--) (7)
 /// i-----7    becomes (i) (--) (--) (-) (7)
 /// i-- - --7  becomes (i) (--) (-) (--) (7)
 /// ```
+/// The longest possible tokens are produced even if they form an invalid expression, for example, `i----7`
+/// could've been a valid GLSL expression if it was parsed as `(i) (--) (-) (-) (7)` but this behaviour is not
+/// exhibited.
 ///
 /// # Examples
 /// Parse a simple GLSL expression:
@@ -65,27 +69,20 @@ pub type TokenStream = Vec<Spanned<Token>>;
 /// let src = r#"
 /// int i = 5.0 + 1;
 /// "#;
-/// let token_stream = parse_from_str(&src);
+/// let token_stream = parse_from_str(&src, false);
 /// ```
+/// TODO: Track spans of line-continuators.
 pub fn parse_from_str(source: &str) -> TokenStream {
+	let mut lexer = Lexer::new(source);
+	parse_tokens(&mut lexer, false)
+}
+
+/// - `parsing_define_body` - Whether we are parsing the body of a `#define` preprocessor directive, which slightly
+///   changes the behaviour of the lexer.
+fn parse_tokens(lexer: &mut Lexer, parsing_define_body: bool) -> TokenStream {
 	let mut tokens = Vec::new();
-	let mut lexer = {
-		let mut lexer = Lexer {
-			// Iterating over individual characters is guaranteed to produce correct behaviour because GLSL source
-			// strings must use the UTF-8 encoding as per the specification.
-			chars: source.chars().collect(),
-			cursor: 0,
-		};
 
-		// Deal with a line-continuation character if it's the first thing in the source file. If we didn't do
-		// this, the first time `peek()` is called in the first iteration of the loop it could return a `\` even
-		// though it's a valid line-continuator.
-		lexer.cursor = lexer.take_line_continuator(0);
-
-		lexer
-	};
-
-	// `can_start_directive` is a flag as to whether we can start parsing a directive if we encounter a `#` symbol.
+	// This is a flag as to whether we can start parsing a directive if we encounter a `#` symbol.
 	// After an EOL or end of block comment this is set to `true`. Any branch other than the whitespace branch sets
 	// this to `false`. This makes it easy to keep track of when we are allowed to parse a directive, since they
 	// must exist at the start of a line barring any whitespace.
@@ -95,8 +92,12 @@ pub fn parse_from_str(source: &str) -> TokenStream {
 	// branch we are in, we can `advance()` the lexer to the next character and repeat the process. If it is
 	// invalid (and hence we want to finish this branch and try another one), we don't `advance()` the lexer
 	// because we don't want to consume this character; we want to test it against the other branches.
+	//
+	// Any time we reach a EOL, we don't bother checking what type it is. If it's \n then any check consumes it and
+	// the next iteration of the loop starts a new token. If it's \r\n then the next iteration will consume the \n,
+	// after which we do _another_ iteration to start a new token.
 	let mut buffer = String::new();
-	while !lexer.is_done() {
+	'outer: while !lexer.is_done() {
 		let buffer_start = lexer.position();
 		// Peek the current character.
 		let mut current = match lexer.peek() {
@@ -105,6 +106,12 @@ pub fn parse_from_str(source: &str) -> TokenStream {
 				break;
 			}
 		};
+
+		if parsing_define_body && (current == '\r' || current == '\n') {
+			// We are parsing the body of a `#define` macro. And EOL signifies the end of the body, and a return to
+			// the normal lexer behaviour.
+			return tokens;
+		}
 
 		if is_word_start(&current) {
 			can_start_directive = false;
@@ -609,7 +616,7 @@ pub fn parse_from_str(source: &str) -> TokenStream {
 				}
 			} else {
 				tokens.push((
-					match_punctuation(&mut lexer),
+					match_punctuation(lexer),
 					Span {
 						start: buffer_start,
 						end: lexer.position(),
@@ -623,9 +630,7 @@ pub fn parse_from_str(source: &str) -> TokenStream {
 			}
 			// We ignore whitespace characters.
 			lexer.advance();
-		} else if can_start_directive
-			&& current == '#'
-			&& !parsing_directive_contents
+		} else if can_start_directive && current == '#' && !parsing_define_body
 		{
 			// If we are parsing a directive string, then the only difference in behaviour is that we don't start a
 			// new directive within the existing directive. This means the `#` character will be treated as an
@@ -773,7 +778,7 @@ pub fn parse_from_str(source: &str) -> TokenStream {
 			match buffer.as_ref() {
 				"version" => tokens.push((
 					Token::Directive2(preprocessor::parse_version2(
-						&mut lexer,
+						lexer,
 						directive_kw_span,
 					)),
 					Span {
@@ -783,7 +788,7 @@ pub fn parse_from_str(source: &str) -> TokenStream {
 				)),
 				"extension" => tokens.push((
 					Token::Directive2(preprocessor::parse_extension2(
-						&mut lexer,
+						lexer,
 						directive_kw_span,
 					)),
 					Span {
@@ -793,7 +798,7 @@ pub fn parse_from_str(source: &str) -> TokenStream {
 				)),
 				"line" => tokens.push((
 					Token::Directive2(preprocessor::parse_line2(
-						&mut lexer,
+						lexer,
 						directive_kw_span,
 						&[], // FIXME
 					)),
@@ -802,9 +807,22 @@ pub fn parse_from_str(source: &str) -> TokenStream {
 						end: lexer.position(),
 					},
 				)),
+				"define" => {
+					tokens.push((
+						Token::Directive2(preprocessor::TokenStream::Define {
+							kw: directive_kw_span,
+							ident_tokens: preprocessor::parse_define2(lexer),
+							body_tokens: parse_tokens(lexer, true),
+						}),
+						Span {
+							start: directive_start,
+							end: lexer.position(),
+						},
+					));
+				}
 				"undef" => tokens.push((
 					Token::Directive2(preprocessor::parse_undef2(
-						&mut lexer,
+						lexer,
 						directive_kw_span,
 					)),
 					Span {
@@ -815,7 +833,7 @@ pub fn parse_from_str(source: &str) -> TokenStream {
 				"ifdef" | "ifndef" | "if" | "elif" | "else" | "endif" => tokens
 					.push((
 						Token::Directive2(preprocessor::parse_condition_2(
-							&mut lexer,
+							lexer,
 							&buffer,
 							directive_kw_span,
 						)),
@@ -950,6 +968,17 @@ pub fn parse_from_str(source: &str) -> TokenStream {
 						},
 					));
 				}
+			}
+		} else if current == '#' && parsing_define_body {
+			// Look for a `##` which is valid within the body of a `#define` macro.
+			if lexer.take_pat("##") {
+				tokens.push((
+					Token::MacroConcat,
+					Span {
+						start: buffer_start,
+						end: lexer.position(),
+					},
+				));
 			}
 		} else {
 			// This character isn't valid to start any token.

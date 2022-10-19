@@ -120,28 +120,22 @@ pub fn parse_from_str(source: &str, offset: usize) -> TokenStream {
 	let kw_end = lexer.position();
 	let kw_span = Span::new(kw_start, kw_end) + offset;
 
-	// TODO: Pass macro names into this function.
-	match buffer.as_ref() {
-		"define" => parse_define(lexer, kw_span, offset),
-		_ => {
-			let mut content = String::new();
-			let start = lexer.position();
-			while let Some(char) = lexer.peek() {
-				content.push(char);
-				lexer.advance();
-			}
+	let mut content = String::new();
+	let start = lexer.position();
+	while let Some(char) = lexer.peek() {
+		content.push(char);
+		lexer.advance();
+	}
 
-			TokenStream::Custom {
-				kw: (buffer, kw_span),
-				content: Some((
-					content,
-					Span {
-						start,
-						end: lexer.position(),
-					} + offset,
-				)),
-			}
-		}
+	TokenStream::Custom {
+		kw: (buffer, kw_span),
+		content: Some((
+			content,
+			Span {
+				start,
+				end: lexer.position(),
+			} + offset,
+		)),
 	}
 }
 
@@ -742,31 +736,35 @@ pub(super) fn parse_line2(
 }
 
 /// Parse a `#define` directive.
-fn parse_define(mut lexer: Lexer, kw_span: Span, offset: usize) -> TokenStream {
-	// We continue off from where the lexer previously stopped.
+pub(super) fn parse_define2(lexer: &mut Lexer) -> Vec<Spanned<DefineToken>> {
 	let mut tokens = Vec::new();
-	let mut buffer = String::new();
-	let buffer_start = lexer.position();
-
-	let mut current = match lexer.peek() {
-		Some(c) => c,
-		None => {
-			return TokenStream::Define {
-				kw: kw_span,
-				ident_tokens: vec![],
-				body_tokens: vec![],
-			}
-		}
-	};
-
-	if !is_word_start(&current) {
-		return TokenStream::Define {
-			kw: kw_span,
-			ident_tokens: vec![],
-			body_tokens: vec![],
+	// We continue off from where the lexer previously stopped.
+	let mut current;
+	// Consume whitespace since any whitespace between the `#define` and the `<identifier>` is ignored.
+	loop {
+		current = match lexer.peek() {
+			Some(c) => c,
+			None => return vec![],
 		};
+
+		if current == '\r' || current == '\n' {
+			return vec![];
+		}
+
+		if current.is_ascii_whitespace() {
+			lexer.advance();
+			continue;
+		} else {
+			break;
+		}
 	}
 
+	if !is_word_start(&current) {
+		return vec![];
+	}
+
+	let mut buffer = String::new();
+	let buffer_start = lexer.position();
 	buffer.push(current);
 	lexer.advance();
 	loop {
@@ -776,17 +774,13 @@ fn parse_define(mut lexer: Lexer, kw_span: Span, offset: usize) -> TokenStream {
 			None => {
 				// We have reached the end of the source string, and therefore the end of this word and define
 				// directive.
-				return TokenStream::Define {
-					kw: kw_span,
-					ident_tokens: vec![(
-						DefineToken::Identifier(std::mem::take(&mut buffer)),
-						Span {
-							start: buffer_start,
-							end: lexer.position(),
-						} + offset,
-					)],
-					body_tokens: vec![],
-				};
+				return vec![(
+					DefineToken::Identifier(std::mem::take(&mut buffer)),
+					Span {
+						start: buffer_start,
+						end: lexer.position(),
+					},
+				)];
 			}
 		};
 
@@ -802,7 +796,7 @@ fn parse_define(mut lexer: Lexer, kw_span: Span, offset: usize) -> TokenStream {
 				Span {
 					start: buffer_start,
 					end: lexer.position(),
-				} + offset,
+				},
 			));
 			let pos = lexer.position();
 			lexer.advance();
@@ -811,7 +805,7 @@ fn parse_define(mut lexer: Lexer, kw_span: Span, offset: usize) -> TokenStream {
 				Span {
 					start: pos,
 					end: lexer.position(),
-				} + offset,
+				},
 			));
 			break;
 		} else {
@@ -823,14 +817,10 @@ fn parse_define(mut lexer: Lexer, kw_span: Span, offset: usize) -> TokenStream {
 				Span {
 					start: buffer_start,
 					end: lexer.position(),
-				} + offset,
+				},
 			));
 
-			return TokenStream::Define {
-				kw: kw_span,
-				ident_tokens: tokens,
-				body_tokens: vec![],
-			};
+			return tokens;
 		}
 	}
 
@@ -840,11 +830,7 @@ fn parse_define(mut lexer: Lexer, kw_span: Span, offset: usize) -> TokenStream {
 		current = match lexer.peek() {
 			Some(c) => c,
 			None => {
-				return TokenStream::Define {
-					kw: kw_span,
-					ident_tokens: tokens,
-					body_tokens: vec![],
-				};
+				return tokens;
 			}
 		};
 
@@ -865,7 +851,7 @@ fn parse_define(mut lexer: Lexer, kw_span: Span, offset: usize) -> TokenStream {
 							Span {
 								start: buffer_start,
 								end: lexer.position(),
-							} + offset,
+							},
 						));
 						break 'word;
 					}
@@ -884,7 +870,7 @@ fn parse_define(mut lexer: Lexer, kw_span: Span, offset: usize) -> TokenStream {
 						Span {
 							start: buffer_start,
 							end: lexer.position(),
-						} + offset,
+						},
 					));
 					break 'word;
 				}
@@ -896,7 +882,7 @@ fn parse_define(mut lexer: Lexer, kw_span: Span, offset: usize) -> TokenStream {
 				Span {
 					start: token_start,
 					end: lexer.position(),
-				} + offset,
+				},
 			));
 		} else if current == ')' {
 			lexer.advance();
@@ -905,7 +891,7 @@ fn parse_define(mut lexer: Lexer, kw_span: Span, offset: usize) -> TokenStream {
 				Span {
 					start: token_start,
 					end: lexer.position(),
-				} + offset,
+				},
 			));
 			break;
 		} else {
@@ -920,11 +906,7 @@ fn parse_define(mut lexer: Lexer, kw_span: Span, offset: usize) -> TokenStream {
 		}
 	}
 
-	return TokenStream::Define {
-		kw: kw_span,
-		ident_tokens: tokens,
-		body_tokens: vec![],
-	};
+	tokens
 }
 
 /// Parse an `#undef` directive.

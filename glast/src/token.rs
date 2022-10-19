@@ -21,8 +21,8 @@
 //! - The lexer treats any identifier immediately after a number (without separating whitespace) as a valid suffix.
 //!   The specification only defines the `u|U` suffix as valid for integers, and the `f|F` & `lf|LF` suffix as
 //!   valid for floating point numbers. Anything afterwards should be treated as a new token, so this would be
-//!   valid: `#define TEST +5 \n uint i = 5uTEST`. Currently, this crate only supports define macros in valid
-//!   expressions, hence for now the lexer will treat the suffix as `uTEST` instead.
+//!   valid: `#define TEST +5 \n uint i = 5uTEST`. Currently, this crate doesn't work according to this behaviour,
+//!   hence for now the lexer will treat the suffix as `uTEST` instead.
 //!
 //! To be certain that the source is valid, these cases (apart from the define issue) must be checked afterwards by
 //! iterating over the [`TokenStream`]. The parsing functions provided in the `ast`/`cst` modules do this for you,
@@ -642,7 +642,7 @@ fn parse_tokens(lexer: &mut Lexer, parsing_define_body: bool) -> TokenStream {
 			}
 		} else if current.is_whitespace() {
 			// Check for an EOL, to reset the directive parsing flag.
-			if current == '\n' || current == '\r' {
+			if current == '\r' || current == '\n' {
 				can_start_directive = true;
 			}
 			// We ignore whitespace characters.
@@ -1680,11 +1680,11 @@ impl Lexer {
 			} else if *lookahead == '\\' {
 				// We have `\\`; this is a syntax error.
 				// TODO: Syntax error
-				2
+				0
 			} else {
 				// We have a `\` followed by a non-eol character; this is a syntax error.
 				// TODO: Syntax error.
-				1
+				0
 			}
 		} else {
 			// We have a `\<eof>`, so we might as well treat this is a line-continuator.
@@ -1763,7 +1763,6 @@ fn match_punctuation(lexer: &mut Lexer) -> Token {
 	match_op!(lexer, "]", Token::RBracket);
 	match_op!(lexer, "{", Token::LBrace);
 	match_op!(lexer, "}", Token::RBrace);
-	match_op!(lexer, ":", Token::Colon);
 	match_op!(lexer, "+", Token::Op(OpTy::Add));
 	match_op!(lexer, "-", Token::Op(OpTy::Sub));
 	match_op!(lexer, "*", Token::Op(OpTy::Mul));
@@ -1773,6 +1772,7 @@ fn match_punctuation(lexer: &mut Lexer) -> Token {
 	match_op!(lexer, "!", Token::Op(OpTy::Not));
 	match_op!(lexer, "~", Token::Op(OpTy::Flip));
 	match_op!(lexer, "?", Token::Question);
+	match_op!(lexer, ":", Token::Colon);
 	match_op!(lexer, "%", Token::Op(OpTy::Rem));
 	match_op!(lexer, "&", Token::Op(OpTy::And));
 	match_op!(lexer, "|", Token::Op(OpTy::Or));

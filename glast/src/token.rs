@@ -1,7 +1,7 @@
 //! Types and functionality related to the Token Stream.
 //!
 //! This module contains the structs and enums used to represent tokens, and the [`parse_from_str()`] function
-//! which returns a [`TokenStream`].
+//! which returns a [`TokenStream`]. The [`preprocessor`] submodule contains things related to the preprocessor.
 //!
 //! # Differences in behaviour
 //! Since this crate is part of a larger language extension effort, it is designed to handle syntax errors in a UX
@@ -13,10 +13,10 @@
 //!   allowed, but after preprocessor expansion only the allowed characters can remain. The specification says that
 //!   upon such a case a compile-time error must be produced.
 //! - When the lexer comes across a block comment which does not have a delimiter (and therefore goes to the
-//!   end-of-file) it still produces a [`BlockComment`](Token::BlockComment) with the `contains_eof` field set to
-//!   `true`. The specification does not mention what should technically happen in such a case, but compilers seem
-//!   to produce a compile-time error.
-//! - The lexer treats any number that matches the following pattern `0[0-9]+` as on octal number. The
+//!   end-of-file) it still produces a [`BlockComment`](Token::BlockComment) token with the `contains_eof` field
+//!   set to `true`. The specification does not mention what should technically happen in such a case, but
+//!   compilers seem to produce a compile-time error.
+//! - The lexer treats any number that matches the following pattern `0[0-9]+` as an octal number. The
 //!   specification says that an octal number can only contain digits `[0-7]`.
 //! - The lexer treats any identifier immediately after a number (without separating whitespace) as a valid suffix.
 //!   The specification only defines the `u|U` suffix as valid for integers, and the `f|F` & `lf|LF` suffix as
@@ -71,14 +71,31 @@ pub type TokenStream = Vec<Spanned<Token>>;
 /// "#;
 /// let token_stream = parse_from_str(&src, false);
 /// ```
-/// TODO: Track spans of line-continuators.
 pub fn parse_from_str(source: &str) -> TokenStream {
-	let mut lexer = Lexer::new(source);
+	let mut lexer = {
+		let mut lexer = Lexer {
+			// Iterating over individual characters is guaranteed to produce correct behaviour because GLSL source
+			// strings must use the UTF-8 encoding as per the specification.
+			chars: source.chars().collect(),
+			cursor: 0,
+		};
+
+		// Deal with a line-continuation character if it's the first thing in the source file. If we didn't do
+		// this, the first time `peek()` is called in the first iteration of the loop it could return a `\` even
+		// though it's a valid line-continuator.
+		lexer.cursor = lexer.take_line_continuator(0);
+
+		lexer
+	};
 	parse_tokens(&mut lexer, false)
 }
 
+/// Parses GLSL tokens, continuing off from the current position of the lexer.
+///
 /// - `parsing_define_body` - Whether we are parsing the body of a `#define` preprocessor directive, which slightly
 ///   changes the behaviour of the lexer.
+///
+/// TODO: Track spans of line-continuators.
 fn parse_tokens(lexer: &mut Lexer, parsing_define_body: bool) -> TokenStream {
 	let mut tokens = Vec::new();
 
@@ -645,7 +662,7 @@ fn parse_tokens(lexer: &mut Lexer, parsing_define_body: bool) -> TokenStream {
 					None => {
 						// We have reached the end of the source string, and hence the end of this directive.
 						tokens.push((
-							Token::Directive2(preprocessor::TokenStream::Empty),
+							Token::Directive(preprocessor::TokenStream::Empty),
 							Span {
 								start: directive_start,
 								end: lexer.position(),
@@ -658,7 +675,7 @@ fn parse_tokens(lexer: &mut Lexer, parsing_define_body: bool) -> TokenStream {
 				if current == '\r' || current == '\n' {
 					// We have an EOL without a line-continuator, which marks the end of this directive.
 					tokens.push((
-						Token::Directive2(preprocessor::TokenStream::Empty),
+						Token::Directive(preprocessor::TokenStream::Empty),
 						Span {
 							start: directive_start,
 							end: lexer.position(),
@@ -684,7 +701,7 @@ fn parse_tokens(lexer: &mut Lexer, parsing_define_body: bool) -> TokenStream {
 						Some(c) => c,
 						None => {
 							tokens.push((
-								Token::Directive2(
+								Token::Directive(
 									preprocessor::TokenStream::Invalid {
 										content: (
 											std::mem::take(&mut buffer),
@@ -715,7 +732,7 @@ fn parse_tokens(lexer: &mut Lexer, parsing_define_body: bool) -> TokenStream {
 				}
 
 				tokens.push((
-					Token::Directive2(preprocessor::TokenStream::Invalid {
+					Token::Directive(preprocessor::TokenStream::Invalid {
 						content: (
 							std::mem::take(&mut buffer),
 							Span {
@@ -743,7 +760,7 @@ fn parse_tokens(lexer: &mut Lexer, parsing_define_body: bool) -> TokenStream {
 					None => {
 						// We have reached the end of the source string, and hence of this directive.
 						tokens.push((
-							Token::Directive2(preprocessor::construct_empty(
+							Token::Directive(preprocessor::construct_empty(
 								buffer,
 								Span {
 									start: directive_kw_start,
@@ -777,7 +794,7 @@ fn parse_tokens(lexer: &mut Lexer, parsing_define_body: bool) -> TokenStream {
 			// Consume the rest of the directive, and create appropriate tokens depending on the directive keyword.
 			match buffer.as_ref() {
 				"version" => tokens.push((
-					Token::Directive2(preprocessor::parse_version2(
+					Token::Directive(preprocessor::parse_version(
 						lexer,
 						directive_kw_span,
 					)),
@@ -787,7 +804,7 @@ fn parse_tokens(lexer: &mut Lexer, parsing_define_body: bool) -> TokenStream {
 					},
 				)),
 				"extension" => tokens.push((
-					Token::Directive2(preprocessor::parse_extension2(
+					Token::Directive(preprocessor::parse_extension(
 						lexer,
 						directive_kw_span,
 					)),
@@ -797,10 +814,9 @@ fn parse_tokens(lexer: &mut Lexer, parsing_define_body: bool) -> TokenStream {
 					},
 				)),
 				"line" => tokens.push((
-					Token::Directive2(preprocessor::parse_line2(
+					Token::Directive(preprocessor::parse_line(
 						lexer,
 						directive_kw_span,
-						&[], // FIXME
 					)),
 					Span {
 						start: directive_start,
@@ -809,9 +825,9 @@ fn parse_tokens(lexer: &mut Lexer, parsing_define_body: bool) -> TokenStream {
 				)),
 				"define" => {
 					tokens.push((
-						Token::Directive2(preprocessor::TokenStream::Define {
+						Token::Directive(preprocessor::TokenStream::Define {
 							kw: directive_kw_span,
-							ident_tokens: preprocessor::parse_define2(lexer),
+							ident_tokens: preprocessor::parse_define(lexer),
 							body_tokens: parse_tokens(lexer, true),
 						}),
 						Span {
@@ -821,7 +837,7 @@ fn parse_tokens(lexer: &mut Lexer, parsing_define_body: bool) -> TokenStream {
 					));
 				}
 				"undef" => tokens.push((
-					Token::Directive2(preprocessor::parse_undef2(
+					Token::Directive(preprocessor::parse_undef(
 						lexer,
 						directive_kw_span,
 					)),
@@ -832,7 +848,7 @@ fn parse_tokens(lexer: &mut Lexer, parsing_define_body: bool) -> TokenStream {
 				)),
 				"ifdef" | "ifndef" | "if" | "elif" | "else" | "endif" => tokens
 					.push((
-						Token::Directive2(preprocessor::parse_condition_2(
+						Token::Directive(preprocessor::parse_condition(
 							lexer,
 							&buffer,
 							directive_kw_span,
@@ -868,7 +884,7 @@ fn parse_tokens(lexer: &mut Lexer, parsing_define_body: bool) -> TokenStream {
 					}
 
 					tokens.push((
-						Token::Directive2(preprocessor::TokenStream::Error {
+						Token::Directive(preprocessor::TokenStream::Error {
 							kw: directive_kw_span,
 							message: Some((
 								std::mem::take(&mut buffer),
@@ -910,7 +926,7 @@ fn parse_tokens(lexer: &mut Lexer, parsing_define_body: bool) -> TokenStream {
 					}
 
 					tokens.push((
-						Token::Directive2(preprocessor::TokenStream::Pragma {
+						Token::Directive(preprocessor::TokenStream::Pragma {
 							kw: directive_kw_span,
 							options: Some((
 								std::mem::take(&mut buffer),
@@ -952,7 +968,7 @@ fn parse_tokens(lexer: &mut Lexer, parsing_define_body: bool) -> TokenStream {
 					}
 
 					tokens.push((
-						Token::Directive2(preprocessor::TokenStream::Custom {
+						Token::Directive(preprocessor::TokenStream::Custom {
 							kw,
 							content: Some((
 								std::mem::take(&mut buffer),
@@ -997,21 +1013,26 @@ fn parse_tokens(lexer: &mut Lexer, parsing_define_body: bool) -> TokenStream {
 }
 
 /// A token representing a unit of text in the GLSL source string.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq)]
 pub enum Token {
 	/// A number, e.g. `1`, `517u`, `0xA9C`, `07113`, `7.3e-2`, `.015LF`.
 	Num {
-		num: String,
-		suffix: Option<String>,
+		/// The type of number.
 		type_: NumType,
+		/// The numeric contents, (this excludes any prefixes or suffixes).
+		num: String,
+		/// An optional suffix after the numeric contents.
+		suffix: Option<String>,
 	},
 	/// A boolean, either `true` or `false`.
 	Bool(bool),
 	/// An identifier, e.g. `foo_bar`, `_900_a`.
 	Ident(String),
 	/// A preprocessor directive, e.g. `#version 450 core`, `#define FOO 42`, `#ifdef TOGGLE`.
-	Directive(String),
-	Directive2(preprocessor::TokenStream),
+	Directive(preprocessor::TokenStream),
+	/// The `##` punctuation symbol. This token is only emitted when parsing the body of a `#define` preprocessor
+	/// directive.
+	MacroConcat,
 	/// A line comment, e.g. `// comment`.
 	LineComment(String),
 	/// A block comment, e.g. `/* comment */`.
@@ -1624,7 +1645,7 @@ impl Lexer {
 		self.cursor == self.chars.len()
 	}
 
-	/// Returns the cursor advancement value necessary to consume a line continuator, if one is present.
+	/// Returns the cursor advancement value necessary to consume a line-continuator, if one is present.
 	///
 	/// This takes a cursor position as `idx`. The reason a separate parameter is needed (rather than accessing
 	/// `self.cursor`) is because in the `lookahead_*()` methods the cursor can't move.
@@ -1666,7 +1687,7 @@ impl Lexer {
 				1
 			}
 		} else {
-			// We have a `\<eof>`, so we might as well treat this is a line continuator.
+			// We have a `\<eof>`, so we might as well treat this is a line-continuator.
 			1
 		}
 	}
@@ -1840,8 +1861,8 @@ fn spans() {
 	assert_eq!(parse_from_str("/* a */"), vec![(Token::BlockComment { str: " a ".into(), contains_eof: false }, span(0, 7))]);
 	assert_eq!(parse_from_str("/* a"), vec![(Token::BlockComment { str: " a".into(), contains_eof: true }, span(0, 4))]);
 	// Directive
-	assert_eq!(parse_from_str("#dir"), vec![(Token::Directive("dir".into()), span(0, 4))]);
-	assert_eq!(parse_from_str("#dir a "), vec![(Token::Directive("dir a ".into()), span(0, 7))]);
+	//assert_eq!(parse_from_str("#dir"), vec![(Token::Directive("dir".into()), span(0, 4))]);
+	//assert_eq!(parse_from_str("#dir a "), vec![(Token::Directive("dir a ".into()), span(0, 7))]);
 	// Invalid
 	assert_eq!(parse_from_str("@"), vec![(Token::Invalid('@'), span(0, 1))]);
 	assert_eq!(parse_from_str("¬"), vec![(Token::Invalid('¬'), span(0, 1))]);
@@ -2188,23 +2209,6 @@ fn floats() {
 	assert_tokens!(".0\\\r\ne+7", Token::Num{num: ".0e+7".into(), suffix: None, type_: NumType::Float});
 	assert_tokens!("1.0e-\\\n7lf", Token::Num{num: "1.0e-7".into(), suffix: Some("lf".into()), type_: NumType::Float});
 	assert_tokens!(".1\\\re-7lf", Token::Num{num: ".1e-7".into(), suffix: Some("lf".into()), type_: NumType::Float});
-}
-
-#[test]
-#[rustfmt::skip]
-fn directives(){
-	assert_tokens!("#directive", Token::Directive("directive".into()));
-	assert_tokens!("#   directive", Token::Directive("   directive".into()));
-	assert_tokens!("#directive args", Token::Directive("directive args".into()));
-	assert_tokens!("  #directive", Token::Directive("directive".into()));
-	assert_tokens!("\t#directive", Token::Directive("directive".into()));
-	assert_tokens!("#", Token::Directive("".into()));
-	assert_tokens!("   #", Token::Directive("".into()));
-
-	// Broken by line continuator
-	assert_tokens!("#dir \\\n args", Token::Directive("dir  args".into()));
-	assert_tokens!("\t#dir \\\rargs", Token::Directive("dir args".into()));
-	assert_tokens!(" #dir\\\r\nargs", Token::Directive("dirargs".into()));
 }
 
 #[test]

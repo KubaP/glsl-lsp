@@ -1637,6 +1637,37 @@ pub(super) fn parse_stmt(
 	// struct), so we don't need to consider the comments (apart from in the struct branch).
 
 	match token {
+		Token::Invalid(c) => {
+			syntax_errors.push(SyntaxErr::FoundIllegalChar(token_span, *c));
+			walker.advance();
+			nodes.push(Node {
+				ty: NodeTy::Invalid,
+				span: token_span,
+			});
+		}
+		Token::Reserved(_) => {
+			walker.advance();
+			syntax_errors.push(SyntaxErr::FoundIllegalReservedKw(token_span));
+			nodes.push(Node {
+				ty: NodeTy::Keyword,
+				span: token_span,
+			});
+		}
+		Token::RBrace => {
+			walker.advance();
+			syntax_errors.push(SyntaxErr::FoundLonelyRBrace(token_span));
+			nodes.push(Node {
+				ty: NodeTy::Punctuation,
+				span: token_span,
+			});
+		}
+		Token::Semi => {
+			walker.advance();
+			nodes.push(Node {
+				ty: NodeTy::EmptyStmt,
+				span: token_span,
+			});
+		}
 		Token::Struct => {
 			walker.advance();
 			parse_struct(
@@ -1648,12 +1679,50 @@ pub(super) fn parse_stmt(
 				token_span,
 			);
 		}
-		Token::Semi => {
-			walker.advance();
-			nodes.push(Node {
-				ty: NodeTy::EmptyStmt,
-				span: token_span,
-			});
+		Token::Directive(tokenstream) => {
+			let directive_span = token_span;
+
+			/* if contents.is_empty() {
+				// TODO: Refactor from `_errors` to `_diagnostics`.
+				syntax_errors.push(SyntaxErr::Preproc(
+					PreprocDiag::FoundEmptyDirective(directive_span),
+				));
+				nodes.push(Node {
+					span: directive_span,
+					ty: NodeTy::Preproc(Preproc::Empty),
+				});
+				walker.advance();
+				return;
+			}
+
+			// Check for `##`, because that's only valid in the _contents_ of a preprocessor directive but we
+			// haven't even started one properly yet, since we first need an identifier.
+			//
+			// Panics: `str` length checked above.
+			if contents.chars().next().unwrap() == '#' {
+				syntax_errors.push(SyntaxErr::Preproc(
+					PreprocDiag::FoundTokenConcatOutsideOfDirective(Span::new(
+						directive_span.start,
+						directive_span.start + 2,
+					)),
+				));
+				nodes.push(Node {
+					span: directive_span,
+					ty: NodeTy::Invalid,
+				});
+				walker.advance();
+				return;
+			} */
+
+			parse_directive(
+				walker,
+				nodes,
+				syntax_errors,
+				tokenstream.clone(),
+				directive_span,
+			);
+
+			return;
 		}
 		Token::If => {
 			let kw_span = token_span;
@@ -3106,39 +3175,6 @@ pub(super) fn parse_stmt(
 					kw: kw_span,
 					semi: semi_span,
 				},
-			});
-		}
-		Token::Directive(_) => {
-			walker.advance();
-			syntax_errors.push(SyntaxErr::DirectivesNotSupported(token_span));
-			// TODO: Implement preprocessor stuff.
-			nodes.push(Node {
-				ty: NodeTy::Directive,
-				span: token_span,
-			});
-		}
-		Token::Reserved(_) => {
-			walker.advance();
-			syntax_errors.push(SyntaxErr::FoundIllegalReservedKw(token_span));
-			nodes.push(Node {
-				ty: NodeTy::Keyword,
-				span: token_span,
-			});
-		}
-		Token::Invalid(c) => {
-			syntax_errors.push(SyntaxErr::FoundIllegalChar(token_span, *c));
-			walker.advance();
-			nodes.push(Node {
-				ty: NodeTy::Invalid,
-				span: token_span,
-			});
-		}
-		Token::RBrace => {
-			walker.advance();
-			syntax_errors.push(SyntaxErr::FoundLonelyRBrace(token_span));
-			nodes.push(Node {
-				ty: NodeTy::Punctuation,
-				span: token_span,
 			});
 		}
 		_ => {

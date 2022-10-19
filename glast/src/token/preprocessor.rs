@@ -52,6 +52,342 @@
 use super::{is_word, is_word_start, Lexer};
 use crate::{span::Spanned, token::match_op, Span};
 
+/// A vector of tokens representing a specific preprocessor directive.
+#[derive(Debug, Clone, PartialEq)]
+pub enum TokenStream {
+	/// An empty directive; just a `#` with nothing else on the same line.
+	Empty,
+	/// A directive which conforms to the `#<keyword> <content>` pattern but the keyword is not a recognized word,
+	/// e.g. `#nonexistent foo bar`.
+	Custom {
+		/// Span of the custom keyword.
+		kw: Spanned<String>,
+		/// The contents of everything after the custom keyword, as a string.
+		content: Option<Spanned<String>>,
+	},
+	/// A directive which doesn't conform to the `#<keyword> <content>` pattern.
+	Invalid {
+		/// The contents of everything after the beginning `#`, as a string.
+		content: Spanned<String>,
+	},
+	/// A `#version` directive.
+	Version {
+		/// Span of the `version` keyword.
+		kw: Span,
+		tokens: Vec<Spanned<VersionToken>>,
+	},
+	/// An `#extension` directive.
+	Extension {
+		/// Span of the `extension` keyword.
+		kw: Span,
+		tokens: Vec<Spanned<ExtensionToken>>,
+	},
+	/// A `#line` directive.
+	Line {
+		/// Span of the `line` keyword.
+		kw: Span,
+		tokens: Vec<Spanned<LineToken>>,
+	},
+	/// A `#define` directive.
+	Define {
+		/// Span of the `define` keyword.
+		kw: Span,
+		/// Tokens of the macro identifier (and optional parameter list for a function-like macro).
+		ident_tokens: Vec<Spanned<DefineToken>>,
+		/// Tokens of the macro body, i.e. the GLSL tokens which replace a macro invocation.
+		body_tokens: super::TokenStream,
+	},
+	/// An `#undef` directive.
+	Undef {
+		/// Span of the `undef` keyword.
+		kw: Span,
+		tokens: Vec<Spanned<UndefToken>>,
+	},
+	/// An `#ifdef` directive.
+	IfDef {
+		/// Span of the `ifdef` keyword.
+		kw: Span,
+		tokens: Vec<Spanned<ConditionToken>>,
+	},
+	/// An `#ifndef` directive.
+	IfNotDef {
+		/// Span of the `ifndef` keyword.
+		kw: Span,
+		tokens: Vec<Spanned<ConditionToken>>,
+	},
+	/// An `#if` directive.
+	If {
+		/// Span of the `if` keyword.
+		kw: Span,
+		tokens: Vec<Spanned<ConditionToken>>,
+	},
+	/// An `#elif` directive.
+	ElseIf {
+		/// Span of the `elseif` keyword.
+		kw: Span,
+		tokens: Vec<Spanned<ConditionToken>>,
+	},
+	/// An `#else` directive.
+	Else {
+		/// Span of the `else` keyword.
+		kw: Span,
+		tokens: Vec<Spanned<ConditionToken>>,
+	},
+	/// An `#endif` directive.
+	EndIf {
+		/// Span of the `endif` keyword.
+		kw: Span,
+		tokens: Vec<Spanned<ConditionToken>>,
+	},
+	/// An `#error` directive.
+	Error {
+		/// Span of the `error` keyword.
+		kw: Span,
+		/// The contents of everything after the keyword. The `#error` directive treats everything following the
+		/// keyword verbatim as the error message, so no further processing is necessary.
+		message: Option<Spanned<String>>,
+	},
+	/// A `#pragma` directive.
+	Pragma {
+		/// Span of the `pragma` keyword.
+		kw: Span,
+		/// There is no defined set of what is and isn't allowed as a compiler option; it entirely depends on the
+		/// compiler, hence for maximum compatability this is just a string of everything after the keyword.
+		options: Option<Spanned<String>>,
+	},
+}
+
+/// A token representing a unit of text in a `#version` directive.
+///
+/// # Description of behaviour
+/// The GLSL specification defines the directive to be:
+/// ```text
+/// #version _number_
+/// #version _number_ _profile_
+/// ```
+/// where:
+/// - `_number_` matches `[0-9]+\s`,
+/// - `_profile_` matches `core|compatability|es`.
+///
+/// This lexer behaves as following:
+/// - When the lexer comes across anything which matches the `[0-9]+` pattern it produces a
+///   [`Num`](VersionToken::Num) token, even if the token doesn't match a valid GLSL version number. If the number
+///   cannot be parsed into a [`usize`] it produces an [`InvalidNum`](VersionToken::InvalidNum) token. If it
+///   matches the `[0-9]+([a-z]|[A-Z])+([a-z]|[A-Z]|[0-9])*` pattern it produces an
+///   [`InvalidNum`](VersionToken::InvalidNum) token.
+/// - When the lexer comes across anything which matches the `([a-z]|[A-Z]|_)([a-z]|[A-Z]|[0-9]|_)*` pattern it
+///   produces a [`Word`](VersionToken::Word) token.
+/// - Anything else produces the [`Invalid`](VersionToken::Invalid) token.
+///
+/// Notes:
+/// - There are no individual `core/compatability/es` keyword tokens; they are just a `Word`. This is to make it
+///   easier to perform error recovery in the case that a word has incorrect capitalization but otherwise would
+///   match, e.g. `CORE` instead of `core`.
+#[derive(Debug, Clone, PartialEq)]
+pub enum VersionToken {
+	/// An integer number.
+	Num(usize),
+	/// A word.
+	Word(String),
+	/// An invalid number.
+	InvalidNum(String),
+	/// An invalid character.
+	Invalid(char),
+}
+
+/// A token representing a unit of text in an `#extension` directive.
+///
+/// # Description of behaviour
+/// The GLSL specification defines the directive to be:
+/// ```text
+/// #extension _extension-name_ : _behaviour_
+/// #extension all : _behaviour_
+/// ```
+/// where:
+/// - `_extension-name_` matches `([a-z]|[A-Z]|_)([a-z]|[A-Z]|[0-9]|_)*`,
+/// - `_behaviour_` matches `require|enable|warn|disable`.
+///
+/// This lexer behaves as following:
+/// - When the lexer comes across anything which matches the `([a-z]|[A-Z]|_)([a-z]|[A-Z]|[0-9]|_)*` pattern it
+///   produces a [`Word`](ExtensionToken::Word) token.
+/// - When the lexer comes across the `:` symbol it produces the [`Colon`](ExtensionToken::Colon) token.
+/// - Anything else produces the [`Invalid`](ExtensionToken::Invalid) token.
+///
+/// Notes:
+/// - There are no individual `require/enable/warn/disable/all` keyword tokens; they are just a `Word`. This is to
+///   make it easier to perform error recovery in the case that a word has incorrect capitalization but otherwise
+///   would match, e.g. `WARN` instead of `warn`.
+#[derive(Debug, Clone, PartialEq)]
+pub enum ExtensionToken {
+	/// A word that matches `([a-z]|[A-Z]|_)([a-z]|[A-Z]|[0-9]|_)*`.
+	Word(String),
+	/// A colon `:`.
+	Colon,
+	/// An invalid character.
+	Invalid(char),
+}
+
+/// A token representing a unit of text in a `#line` directive.
+///
+/// # Description of behaviour
+/// The GLSL specification defines the directive to be:
+/// ```text
+/// #line _line_
+/// #line _line_ _source-string-number_
+/// ```
+/// where `_line_` and `_source-string-number_` match `[0-9]+\s`.
+///
+/// ⚠ Note that this is the only directive within which macros are a valid replacement for tokens. Therefore,
+/// something like `#define FOO 5 \r\n #line FOO 7` is valid.
+///
+/// This lexer behaves as following:
+/// - When the lexer comes across anything which matches the `[0-9]+` pattern it produces a [`Num`](LineToken::Num)
+///   token. If the number cannot be parsed into a [`usize`] it produces an [`InvalidNum`](LineToken::InvalidNum)
+///   token. If it matches the `[0-9]+([a-z]|[A-Z])+([a-z]|[A-Z]|[0-9])*` pattern it produces an
+///   [`InvalidNum`](LineToken::InvalidNum) token.
+/// - When the lexer comes across anything which matches the `([a-z]|[A-Z]|_)([a-z]|[A-Z]|[0-9]|_)*` pattern it
+///   produces an [`Ident`](LineToken::Ident) token. This is to support macro expansion within the directive, but
+///   this **does not** check if a macro with the given name actually exists.
+/// - Anything else produces the [`Invalid`](LineToken::Invalid) token.
+#[derive(Debug, Clone, PartialEq)]
+pub enum LineToken {
+	/// An integer number.
+	Num(usize),
+	/// An identifier.
+	Ident(String),
+	/// An invalid number.
+	InvalidNum(String),
+	/// An invalid character.
+	Invalid(char),
+}
+
+/// A token representing a unit of text in the first part of a `#define` directive.
+///
+/// # Description of behaviour
+/// The GLSL specification defines the directive to be:
+/// ```text
+/// #define _identifier_ _replacement-tokens_
+/// #define _identifier() _replacement-tokens_
+/// #define _identifier(_param_) _replacement-tokens_
+/// #define _identifier(_param_,..., _param) _replacement-tokens_
+/// ```
+/// where:
+/// - `_identifier_` and `_param_` match `([a-z]|[A-Z]|_)([a-z]|[A-Z]|[0-9]|_)*\s`,
+/// - `_replacement-tokens_` is zero or more standard GLSL tokens, with the expection that the `##` token
+///   concatenation operator ([`Token::MacroConcat`](super::Token::MacroConcat)) is allowed to be present.
+///
+/// This lexer behaves as following:
+/// - When the lexer comes across anything which matches the `([a-z]|[A-Z]|_)([a-z]|[A-Z]|[0-9]|_)*` pattern it
+///   produces an [`Ident`](DefineToken::Ident) token.
+/// - When the lexer comes across `(` it produces a [`LParen`](DefineToken::LParen) token.
+/// - When the lexer comes across `)` it produces a [`RParen`](DefineToken::RParen) token.
+/// - When the lexer comes across `,` it produces a [`Comma`](DefineToken::Comma) token.
+/// - Anything else produces the [`Invalid`](DefineToken::Invalid) token.
+#[derive(Debug, Clone, PartialEq)]
+pub enum DefineToken {
+	/// An identifier
+	Ident(String),
+	/// An invalid character.
+	Invalid(char),
+	/// An opening parenthesis `(`.
+	LParen,
+	/// A closing parenthesis `)`.
+	RParen,
+	/// A comma `,`.
+	Comma,
+}
+
+/// A token representing a unit of text in an `#undef` directive.
+///
+/// # Description of behaviour
+/// The GLl specification defines the directive to be:
+/// ```text
+/// #undef _name_
+/// ```
+/// where `_name_` matches `([a-z]|[A-Z]|_)([a-z]|[A-Z]|[0-9]|_)*\s`.
+///
+/// The lexer behaves as following:
+/// - When the lexer comes across anything which matches the `([a-z]|[A-Z]|_)([a-z]|[A-Z]|[0-9]|_)*\s` pattern it
+///   produces a [`Ident`](UndefToken::Ident) token.
+/// - Anything else produces the [`Invalid`](UndefToken::Invalid) token.
+#[derive(Debug, Clone, PartialEq)]
+pub enum UndefToken {
+	/// An identifier.
+	Ident(String),
+	/// An invalid character.
+	Invalid(char),
+}
+
+/// A token representing a unit of text in a `#ifdef`/`#ifndef`/`#if`/`#elif`/`#else`/`#endif` directive.
+///
+/// # Description of behaviour
+/// The GLSL specification defines the following as valid tokens:
+/// - integer literals,
+/// - identifiers,
+/// - `defined` keyword,
+/// - specified punctuation symbols.
+#[derive(Debug, Clone, PartialEq)]
+pub enum ConditionToken {
+	/// An integer number.
+	Num(usize),
+	/// An identifier.
+	Ident(String),
+	/// An invalid number.
+	InvalidNum(String),
+	/// An invalid character.
+	Invalid(char),
+	/* KEYWORDS */
+	/// The `defined` keyword.
+	Defined,
+	/* PUNCTUATION */
+	/// The `+` symbol.
+	Add,
+	/// The `-` symbol.
+	Sub,
+	/// The `*` symbol.
+	Mul,
+	/// The `/` symbol.
+	Div,
+	/// The `%` symbol.
+	Rem,
+	/// The `&` symbol.
+	And,
+	/// The `|` symbol.
+	Or,
+	/// The `^` symbol.
+	Xor,
+	/// The `<<` symbol.
+	LShift,
+	/// The `>>` symbol.
+	RShift,
+	/// The `~` symbol.
+	Flip,
+	/// The `==` symbol.
+	EqEq,
+	/// The `!=` symbol.
+	NotEq,
+	/// The `!` symbol.
+	Not,
+	/// The `>` symbol.
+	Gt,
+	/// The `<` symbol.
+	Lt,
+	/// The `>=` symbol.
+	Ge,
+	/// The `<=` symbol.
+	Le,
+	/// The `&&` symbol.
+	AndAnd,
+	/// The `||` symbol.
+	OrOr,
+	/// The `^^` symbol.
+	XorXor,
+	/// An opening parenthesis `(`.
+	LParen,
+	/// A closing parenthesis `)`.
+	RParen,
+}
+
 /// Construct a directive with no tokens, just the keyword.
 pub(super) fn construct_empty(
 	directive_kw: String,
@@ -1266,340 +1602,4 @@ fn match_condition_punctuation(lexer: &mut Lexer) -> ConditionToken {
 	match_op!(lexer, "|", ConditionToken::Or);
 	match_op!(lexer, "^", ConditionToken::Xor);
 	unreachable!("[preprocessor::match_condition_punctuation] Exhausted all of the patterns without matching anything!");
-}
-
-/// A vector of tokens representing a specific preprocessor directive.
-#[derive(Debug, Clone, PartialEq)]
-pub enum TokenStream {
-	/// An empty directive; just a `#` with nothing else on the same line.
-	Empty,
-	/// A directive which conforms to the `#<keyword> <content>` pattern but the keyword is not a recognized word,
-	/// e.g. `#nonexistent foo bar`.
-	Custom {
-		/// Span of the custom keyword.
-		kw: Spanned<String>,
-		/// The contents of everything after the custom keyword, as a string.
-		content: Option<Spanned<String>>,
-	},
-	/// A directive which doesn't conform to the `#<keyword> <content>` pattern.
-	Invalid {
-		/// The contents of everything after the beginning `#`, as a string.
-		content: Spanned<String>,
-	},
-	/// A `#version` directive.
-	Version {
-		/// Span of the `version` keyword.
-		kw: Span,
-		tokens: Vec<Spanned<VersionToken>>,
-	},
-	/// An `#extension` directive.
-	Extension {
-		/// Span of the `extension` keyword.
-		kw: Span,
-		tokens: Vec<Spanned<ExtensionToken>>,
-	},
-	/// A `#line` directive.
-	Line {
-		/// Span of the `line` keyword.
-		kw: Span,
-		tokens: Vec<Spanned<LineToken>>,
-	},
-	/// A `#define` directive.
-	Define {
-		/// Span of the `define` keyword.
-		kw: Span,
-		/// Tokens of the macro identifier (and optional parameter list for a function-like macro).
-		ident_tokens: Vec<Spanned<DefineToken>>,
-		/// Tokens of the macro body, i.e. the GLSL tokens which replace a macro invocation.
-		body_tokens: super::TokenStream,
-	},
-	/// An `#undef` directive.
-	Undef {
-		/// Span of the `undef` keyword.
-		kw: Span,
-		tokens: Vec<Spanned<UndefToken>>,
-	},
-	/// An `#ifdef` directive.
-	IfDef {
-		/// Span of the `ifdef` keyword.
-		kw: Span,
-		tokens: Vec<Spanned<ConditionToken>>,
-	},
-	/// An `#ifndef` directive.
-	IfNotDef {
-		/// Span of the `ifndef` keyword.
-		kw: Span,
-		tokens: Vec<Spanned<ConditionToken>>,
-	},
-	/// An `#if` directive.
-	If {
-		/// Span of the `if` keyword.
-		kw: Span,
-		tokens: Vec<Spanned<ConditionToken>>,
-	},
-	/// An `#elif` directive.
-	ElseIf {
-		/// Span of the `elseif` keyword.
-		kw: Span,
-		tokens: Vec<Spanned<ConditionToken>>,
-	},
-	/// An `#else` directive.
-	Else {
-		/// Span of the `else` keyword.
-		kw: Span,
-		tokens: Vec<Spanned<ConditionToken>>,
-	},
-	/// An `#endif` directive.
-	EndIf {
-		/// Span of the `endif` keyword.
-		kw: Span,
-		tokens: Vec<Spanned<ConditionToken>>,
-	},
-	/// An `#error` directive.
-	Error {
-		/// Span of the `error` keyword.
-		kw: Span,
-		/// The contents of everything after the keyword. The `#error` directive treats everything following the
-		/// keyword verbatim as the error message, so no further processing is necessary.
-		message: Option<Spanned<String>>,
-	},
-	/// A `#pragma` directive.
-	Pragma {
-		/// Span of the `pragma` keyword.
-		kw: Span,
-		/// There is no defined set of what is and isn't allowed as a compiler option; it entirely depends on the
-		/// compiler, hence for maximum compatability this is just a string of everything after the keyword.
-		options: Option<Spanned<String>>,
-	},
-}
-
-/// A token representing a unit of text in a `#version` directive.
-///
-/// # Description of behaviour
-/// The GLSL specification defines the directive to be:
-/// ```text
-/// #version _number_
-/// #version _number_ _profile_
-/// ```
-/// where:
-/// - `_number_` matches `[0-9]+\s`,
-/// - `_profile_` matches `core|compatability|es`.
-///
-/// This lexer behaves as following:
-/// - When the lexer comes across anything which matches the `[0-9]+` pattern it produces a
-///   [`Num`](VersionToken::Num) token, even if the token doesn't match a valid GLSL version number. If the number
-///   cannot be parsed into a [`usize`] it produces an [`InvalidNum`](VersionToken::InvalidNum) token. If it
-///   matches the `[0-9]+([a-z]|[A-Z])+([a-z]|[A-Z]|[0-9])*` pattern it produces an
-///   [`InvalidNum`](VersionToken::InvalidNum) token.
-/// - When the lexer comes across anything which matches the `([a-z]|[A-Z]|_)([a-z]|[A-Z]|[0-9]|_)*` pattern it
-///   produces a [`Word`](VersionToken::Word) token.
-/// - Anything else produces the [`Invalid`](VersionToken::Invalid) token.
-///
-/// Notes:
-/// - There are no individual `core/compatability/es` keyword tokens; they are just a `Word`. This is to make it
-///   easier to perform error recovery in the case that a word has incorrect capitalization but otherwise would
-///   match, e.g. `CORE` instead of `core`.
-#[derive(Debug, Clone, PartialEq)]
-pub enum VersionToken {
-	/// An integer number.
-	Num(usize),
-	/// A word.
-	Word(String),
-	/// An invalid number.
-	InvalidNum(String),
-	/// An invalid character.
-	Invalid(char),
-}
-
-/// A token representing a unit of text in an `#extension` directive.
-///
-/// # Description of behaviour
-/// The GLSL specification defines the directive to be:
-/// ```text
-/// #extension _extension-name_ : _behaviour_
-/// #extension all : _behaviour_
-/// ```
-/// where:
-/// - `_extension-name_` matches `([a-z]|[A-Z]|_)([a-z]|[A-Z]|[0-9]|_)*`,
-/// - `_behaviour_` matches `require|enable|warn|disable`.
-///
-/// This lexer behaves as following:
-/// - When the lexer comes across anything which matches the `([a-z]|[A-Z]|_)([a-z]|[A-Z]|[0-9]|_)*` pattern it
-///   produces a [`Word`](ExtensionToken::Word) token.
-/// - When the lexer comes across the `:` symbol it produces the [`Colon`](ExtensionToken::Colon) token.
-/// - Anything else produces the [`Invalid`](ExtensionToken::Invalid) token.
-///
-/// Notes:
-/// - There are no individual `require/enable/warn/disable/all` keyword tokens; they are just a `Word`. This is to
-///   make it easier to perform error recovery in the case that a word has incorrect capitalization but otherwise
-///   would match, e.g. `WARN` instead of `warn`.
-#[derive(Debug, Clone, PartialEq)]
-pub enum ExtensionToken {
-	/// A word that matches `([a-z]|[A-Z]|_)([a-z]|[A-Z]|[0-9]|_)*`.
-	Word(String),
-	/// A colon `:`.
-	Colon,
-	/// An invalid character.
-	Invalid(char),
-}
-
-/// A token representing a unit of text in a `#line` directive.
-///
-/// # Description of behaviour
-/// The GLSL specification defines the directive to be:
-/// ```text
-/// #line _line_
-/// #line _line_ _source-string-number_
-/// ```
-/// where `_line_` and `_source-string-number_` match `[0-9]+\s`.
-///
-/// ⚠ Note that this is the only directive within which macros are a valid replacement for tokens. Therefore,
-/// something like `#define FOO 5 \r\n #line FOO 7` is valid.
-///
-/// This lexer behaves as following:
-/// - When the lexer comes across anything which matches the `[0-9]+` pattern it produces a [`Num`](LineToken::Num)
-///   token. If the number cannot be parsed into a [`usize`] it produces an [`InvalidNum`](LineToken::InvalidNum)
-///   token. If it matches the `[0-9]+([a-z]|[A-Z])+([a-z]|[A-Z]|[0-9])*` pattern it produces an
-///   [`InvalidNum`](LineToken::InvalidNum) token.
-/// - When the lexer comes across anything which matches the `([a-z]|[A-Z]|_)([a-z]|[A-Z]|[0-9]|_)*` pattern it
-///   produces an [`Ident`](LineToken::Ident) token. This is to support macro expansion within the directive, but
-///   this **does not** check if a macro with the given name actually exists.
-/// - Anything else produces the [`Invalid`](LineToken::Invalid) token.
-#[derive(Debug, Clone, PartialEq)]
-pub enum LineToken {
-	/// An integer number.
-	Num(usize),
-	/// An identifier.
-	Ident(String),
-	/// An invalid number.
-	InvalidNum(String),
-	/// An invalid character.
-	Invalid(char),
-}
-
-/// A token representing a unit of text in the first part of a `#define` directive.
-///
-/// # Description of behaviour
-/// The GLSL specification defines the directive to be:
-/// ```text
-/// #define _identifier_ _replacement-tokens_
-/// #define _identifier() _replacement-tokens_
-/// #define _identifier(_param_) _replacement-tokens_
-/// #define _identifier(_param_,..., _param) _replacement-tokens_
-/// ```
-/// where:
-/// - `_identifier_` and `_param_` match `([a-z]|[A-Z]|_)([a-z]|[A-Z]|[0-9]|_)*\s`,
-/// - `_replacement-tokens_` is zero or more standard GLSL tokens, with the expection that the `##` token
-///   concatenation operator ([`Token::MacroConcat`](super::Token::MacroConcat)) is allowed to be present.
-///
-/// This lexer behaves as following:
-/// - When the lexer comes across anything which matches the `([a-z]|[A-Z]|_)([a-z]|[A-Z]|[0-9]|_)*` pattern it
-///   produces an [`Ident`](DefineToken::Ident) token.
-/// - When the lexer comes across `(` it produces a [`LParen`](DefineToken::LParen) token.
-/// - When the lexer comes across `)` it produces a [`RParen`](DefineToken::RParen) token.
-/// - When the lexer comes across `,` it produces a [`Comma`](DefineToken::Comma) token.
-/// - Anything else produces the [`Invalid`](DefineToken::Invalid) token.
-#[derive(Debug, Clone, PartialEq)]
-pub enum DefineToken {
-	/// An identifier
-	Ident(String),
-	/// An invalid character.
-	Invalid(char),
-	/// An opening parenthesis `(`.
-	LParen,
-	/// A closing parenthesis `)`.
-	RParen,
-	/// A comma `,`.
-	Comma,
-}
-
-/// A token representing a unit of text in an `#undef` directive.
-///
-/// # Description of behaviour
-/// The GLl specification defines the directive to be:
-/// ```text
-/// #undef _name_
-/// ```
-/// where `_name_` matches `([a-z]|[A-Z]|_)([a-z]|[A-Z]|[0-9]|_)*\s`.
-///
-/// The lexer behaves as following:
-/// - When the lexer comes across anything which matches the `([a-z]|[A-Z]|_)([a-z]|[A-Z]|[0-9]|_)*\s` pattern it
-///   produces a [`Ident`](UndefToken::Ident) token.
-/// - Anything else produces the [`Invalid`](UndefToken::Invalid) token.
-#[derive(Debug, Clone, PartialEq)]
-pub enum UndefToken {
-	/// An identifier.
-	Ident(String),
-	/// An invalid character.
-	Invalid(char),
-}
-
-/// A token representing a unit of text in a `#ifdef`/`#ifndef`/`#if`/`#elif`/`#else`/`#endif` directive.
-///
-/// # Description of behaviour
-/// The GLSL specification defines the following as valid tokens:
-/// - integer literals,
-/// - identifiers,
-/// - `defined` keyword,
-/// - specified punctuation symbols.
-#[derive(Debug, Clone, PartialEq)]
-pub enum ConditionToken {
-	/// An integer number.
-	Num(usize),
-	/// An identifier.
-	Ident(String),
-	/// An invalid number.
-	InvalidNum(String),
-	/// An invalid character.
-	Invalid(char),
-	/* KEYWORDS */
-	/// The `defined` keyword.
-	Defined,
-	/* PUNCTUATION */
-	/// The `+` symbol.
-	Add,
-	/// The `-` symbol.
-	Sub,
-	/// The `*` symbol.
-	Mul,
-	/// The `/` symbol.
-	Div,
-	/// The `%` symbol.
-	Rem,
-	/// The `&` symbol.
-	And,
-	/// The `|` symbol.
-	Or,
-	/// The `^` symbol.
-	Xor,
-	/// The `<<` symbol.
-	LShift,
-	/// The `>>` symbol.
-	RShift,
-	/// The `~` symbol.
-	Flip,
-	/// The `==` symbol.
-	EqEq,
-	/// The `!=` symbol.
-	NotEq,
-	/// The `!` symbol.
-	Not,
-	/// The `>` symbol.
-	Gt,
-	/// The `<` symbol.
-	Lt,
-	/// The `>=` symbol.
-	Ge,
-	/// The `<=` symbol.
-	Le,
-	/// The `&&` symbol.
-	AndAnd,
-	/// The `||` symbol.
-	OrOr,
-	/// The `^^` symbol.
-	XorXor,
-	/// An opening parenthesis `(`.
-	LParen,
-	/// A closing parenthesis `)`.
-	RParen,
 }

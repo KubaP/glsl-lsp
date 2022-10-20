@@ -621,6 +621,11 @@ pub enum Diag {
 	/// Directives are currently unsupported.
 	DirectivesNotSupported(Span),
 
+	/// WARNING - Found a macro call site, but the macro contains no replacement tokens.
+	///
+	/// - `0` - the span of the call site.
+	EmptyMacroCallSite(Span),
+
 	/// A preprocessor diagnostic.
 	Preproc(PreprocDiag),
 }

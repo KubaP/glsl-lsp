@@ -10,7 +10,7 @@ use crate::{
 	token::{Token, TokenStream},
 };
 use ast::*;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 pub fn parse_from_str(
 	source: &str,
@@ -25,10 +25,11 @@ pub fn parse_from_str(
 }
 
 struct Walker {
-	/// The token stream.
-	token_stream: TokenStream,
-	/// The current position within the token stream.
-	cursor: usize,
+	/// The active token streams.
+	///
+	/// - `(identifier, token_stream, cursor)`.
+	streams: Vec<(String, TokenStream, usize)>,
+
 	/// The currently defined macros.
 	///
 	/// Key: The macro identifier
@@ -37,18 +38,10 @@ struct Walker {
 	/// - `0` - The span of the identifier,
 	/// - `1` - The body/replacement-list of tokens.
 	macros: HashMap<String, (Span, TokenStream)>,
-	/// A replacement [`TokenStream`] from a `#define` macro body.
-	///
-	/// - `0` - The replacement stream,
-	/// - `1` - The span of the macro identifier instance.
-	///
-	/// PERF: Optimize this to store a reference. This may require some wrapper structs or pinning because this
-	/// would be a self-reference into the `macros` field. In reality there shouldn't be a problem because whilst
-	/// we are using this replacement stream the `macros` field will never be modified, but we can't easily express
-	/// that through the type system.
-	temp_replacement_stream: Option<(TokenStream, Span)>,
-	/// The current position within the replacement token stream.
-	temp_cursor: usize,
+	/// The span of an initial macro call site. Only the first macro call site is registered.
+	macro_call_site: Option<Span>,
+	/// The actively called macros.
+	active_macros: HashSet<String>,
 
 	/// The diagnostics created from the tokens parsed so-far.
 	diagnostics: Vec<Diag>,
@@ -61,46 +54,63 @@ struct Walker {
 impl Walker {
 	/// Constructs a new walker.
 	fn new(token_stream: TokenStream) -> Self {
+		let mut active_macros = HashSet::new();
+		// Invariant: A macro cannot have no name (an empty identifier), so this won't cause any hashing clashes
+		// with valid macros. By using "" we can avoid having a special case for the root source stream.
+		active_macros.insert("".into());
+
 		Self {
-			token_stream,
-			cursor: 0,
+			streams: vec![("".into(), token_stream, 0)],
 			macros: HashMap::new(),
-			temp_replacement_stream: None,
-			temp_cursor: 0,
+			macro_call_site: None,
+			active_macros,
 			diagnostics: Vec::new(),
 			syntax_tokens: Vec::new(),
 		}
 	}
 
 	/// Returns a reference to the current token under the cursor, without advancing the cursor.
-	fn peek(&self) -> Option<(&Token, &Span)> {
-		if let Some((ref replacement_stream, ref instance_span)) =
-			self.temp_replacement_stream
-		{
-			replacement_stream
-				.get(self.temp_cursor)
-				.map(|(token, _)| (token, instance_span))
+	fn peek(&self) -> Option<Spanned<&Token>> {
+		if self.streams.is_empty() {
+			None
+		} else if self.streams.len() == 1 {
+			let (_, stream, cursor) = self.streams.last().unwrap();
+			stream.get(*cursor).map(|(t, s)| (t, *s))
 		} else {
-			self.token_stream.get(self.cursor).map(|(t, s)| (t, s))
+			let (_, stream, cursor) = self.streams.last().unwrap();
+			match stream.get(*cursor).map(|(t, _)| t) {
+				Some(token) => Some((
+					token,
+					// Panic: This is guaranteed to be some if `self.streams.len() > 1`.
+					self.macro_call_site.unwrap(),
+				)),
+				None => None,
+			}
 		}
 	}
 
 	/// Returns the current token under the cursor, without advancing the cursor. (The token gets cloned).
 	fn get(&self) -> Option<Spanned<Token>> {
-		if let Some((ref replacement_stream, instance_span)) =
-			self.temp_replacement_stream
-		{
-			replacement_stream
-				.get(self.temp_cursor)
-				.cloned()
-				.map(|(token, _)| (token, instance_span))
+		if self.streams.is_empty() {
+			None
+		} else if self.streams.len() == 1 {
+			let (_, stream, cursor) = self.streams.last().unwrap();
+			stream.get(*cursor).cloned()
 		} else {
-			self.token_stream.get(self.cursor).cloned()
+			let (_, stream, cursor) = self.streams.last().unwrap();
+			let token = stream.get(*cursor).map(|(t, _)| t).cloned();
+			token.map(|t| {
+				(
+					t,
+					// Panic: This is guaranteed to be some if `self.streams.len() > 1`.
+					self.macro_call_site.unwrap(),
+				)
+			})
 		}
 	}
 
 	/// Peeks the next token without advancing the cursor; (returns the token under `cursor + 1`).
-	fn lookahead_1(&self) -> Option<&Spanned<Token>> {
+	/* fn lookahead_1(&self) -> Option<&Spanned<Token>> {
 		let token = self.token_stream.get(self.cursor + 1);
 		if let Some((token, _)) = token {
 			match token {
@@ -119,10 +129,10 @@ impl Walker {
 		}
 
 		token
-	}
+	} */
 
 	/// Peeks the next token without advancing the cursor whilst ignoring any comments.
-	fn lookahead_1_ignore_comments(&self) -> Option<&Spanned<Token>> {
+	/* fn lookahead_1_ignore_comments(&self) -> Option<&Spanned<Token>> {
 		// FIXME: replacement
 		let mut cursor = self.cursor + 1;
 		while let Some(i) = self.token_stream.get(cursor) {
@@ -139,51 +149,86 @@ impl Walker {
 			}
 		}
 		None
-	}
+	} */
 
 	/// Advances the cursor by one.
 	fn advance(&mut self) {
-		if let Some((ref replacement_stream, _)) = self.temp_replacement_stream
+		let mut dont_increment = false;
+		'outer: while let Some((identifier, stream, cursor)) =
+			self.streams.last_mut()
 		{
-			// If we are in a replacement stream we want to move the temporary cursor instead.
-			self.temp_cursor += 1;
-
-			if self.temp_cursor == replacement_stream.len() {
-				// We have reached the end of the replacement stream. We can now switch back to the normal stream.
-				self.temp_replacement_stream = None;
-				self.temp_cursor = 0;
-				self.cursor += 1;
-			} else {
-				// Since we are still within the replacement stream, we don't want to check for a macro match
-				// because that would result in an infinite loop.
-				return;
+			if !dont_increment {
+				*cursor += 1;
 			}
-		} else {
-			self.cursor += 1;
-		}
+			dont_increment = false;
 
-		// Check if we are now at an identifier which matches a macro identifier.
-		if let Some((token, token_span)) = self.token_stream.get(self.cursor) {
+			if *cursor == stream.len() {
+				// We have reached the end of this stream. We close it and re-run the loop on the next stream (if
+				// there is one).
+
+				// Panic: Anytime a stream is added the identifier is inserted into the set.
+				self.active_macros.remove(identifier);
+				// Panic: We checked the length.
+				self.streams.remove(self.streams.len() - 1);
+				continue;
+			}
+
+			// Panic: We check the length.
+			let (token, token_span) = stream.get(*cursor).unwrap();
+
+			// We now check if the new token is a macro call site.
 			match token {
 				Token::Ident(s) => {
-					if let Some((_, replacement_stream)) = self.macros.get(s) {
-						// The identifier matches an already-defined macro.
-						self.temp_replacement_stream =
-							Some((replacement_stream.clone(), *token_span));
-						self.temp_cursor = 0;
-						self.syntax_tokens
-							.push((SyntaxToken::ObjectMacro, *token_span));
+					if let Some((_, new_stream)) = self.macros.get(s) {
+						// The identifier matches a macro.
+
+						if self.active_macros.contains(s) {
+							// We have already visited a macro with this identifier. Recursion is not supported so
+							// we don't continue.
+							break;
+						}
+
+						if new_stream.is_empty() {
+							// The macro is empty, so we want to move to the next token of the existing stream.
+							self.diagnostics
+								.push(Diag::EmptyMacroCallSite(*token_span));
+
+							continue;
+						}
+
+						let token_span = *token_span;
+						let ident = s.to_owned();
+
+						// We only syntax highlight and note the macro call site when it is the first macro call.
+						if self.streams.len() == 1 {
+							self.syntax_tokens
+								.push((SyntaxToken::ObjectMacro, token_span));
+							self.macro_call_site = Some(token_span);
+						}
+
+						self.active_macros.insert(ident.clone());
+						self.streams.push((ident, new_stream.clone(), 0));
+
+						// The first token in the new stream could be another macro call, so we re-run the loop on
+						// this new stream in case.
+						dont_increment = true;
+						continue;
 					}
+					break;
 				}
-				_ => {}
+				_ => break,
 			}
+		}
+
+		if self.streams.len() <= 1 {
+			self.macro_call_site = None;
 		}
 	}
 
 	/// Returns the current token under the cursor and advances the cursor by one.
 	///
 	/// Equivalent to [`peek()`](Self::peek) followed by [`advance()`](Self::advance).
-	fn next(&mut self) -> Option<Spanned<Token>> {
+	/* fn next(&mut self) -> Option<Spanned<Token>> {
 		// FIXME: replacement
 		// If we are successful in getting the token, advance the cursor.
 		match self.token_stream.get(self.cursor) {
@@ -193,7 +238,7 @@ impl Walker {
 			}
 			None => None,
 		}
-	}
+	} */
 
 	/// Returns any potential comment tokens until the next non-comment token.
 	fn consume_comments(&mut self) -> Comments {
@@ -214,7 +259,7 @@ impl Walker {
 		comments
 	}
 
-	/// Registers a `#define` macro. Note: currently only supports object-like macros.
+	/// Registers a define macro. Note: currently only supports object-like macros.
 	fn register_macro(&mut self, ident: Spanned<String>, tokens: TokenStream) {
 		if let Some(_prev) = self.macros.insert(ident.0, (ident.1, tokens)) {
 			// MAYBE: Emit warning about overwriting a macro?
@@ -225,23 +270,19 @@ impl Walker {
 		self.diagnostics.push(diag);
 	}
 
-	// TODO: Functions to push syntax highlighting spans. Properly deals with calls when we are within a macro.
-
 	fn colour(&mut self, span: Span, token: SyntaxToken) {
 		// When we are within a macro, we don't want to produce syntax tokens.
-		if let None = self.temp_replacement_stream {
+		if self.streams.len() == 1 {
 			self.syntax_tokens.push((token, span));
 		}
 	}
 
 	/// Returns whether the `Lexer` has reached the end of the token list.
 	fn is_done(&self) -> bool {
-		// We check that the cursor is equal to the length, because that means we have gone past the last token
-		// of the string, and hence, we are done.
-		self.cursor == self.token_stream.len()
+		self.streams.is_empty()
 	}
 
-	/// Returns the [`Span`] of the current `Token`.
+	/* /// Returns the [`Span`] of the current `Token`.
 	///
 	/// *Note:* If we have reached the end of the tokens, this will return the value of
 	/// [`get_last_span()`](Self::get_last_span).
@@ -251,9 +292,9 @@ impl Walker {
 			Some(t) => t.1,
 			None => self.get_last_span(),
 		}
-	}
+	} */
 
-	/// Returns the [`Span`] of the previous `Token`.
+	/* /// Returns the [`Span`] of the previous `Token`.
 	///
 	/// *Note:* If the current token is the first, the span returned will be `0-0`.
 	fn get_previous_span(&self) -> Span {
@@ -261,9 +302,9 @@ impl Walker {
 		self.token_stream
 			.get(self.cursor - 1)
 			.map_or(Span::new_zero_width(0), |t| t.1)
-	}
+	} */
 
-	/// Returns the [`Span`] of the last `Token`.
+	/* /// Returns the [`Span`] of the last `Token`.
 	///
 	/// *Note:* If there are no tokens, the span returned will be `0-0`.
 	fn get_last_span(&self) -> Span {
@@ -271,7 +312,7 @@ impl Walker {
 		self.token_stream
 			.last()
 			.map_or(Span::new_zero_width(0), |t| t.1)
-	}
+	} */
 }
 
 /// Parses an individual statement at the current position.
@@ -299,7 +340,10 @@ fn parse_stmt(walker: &mut Walker, nodes: &mut Vec<ast::Node>) {
 				walker.colour(kw, SyntaxToken::Directive);
 
 				if ident_tokens.is_empty() {
-					// TODO: Emit error
+					// TODO: Emit error and don't register the macro.
+					body_tokens.iter().for_each(|(_, s)| {
+						walker.colour(*s, SyntaxToken::Invalid)
+					});
 				} else if ident_tokens.len() == 1 {
 					// We have an object-like macro.
 
@@ -315,11 +359,10 @@ fn parse_stmt(walker: &mut Walker, nodes: &mut Vec<ast::Node>) {
 					body_tokens.iter().for_each(|(t, s)| {
 						walker.colour(*s, t.non_semantic_colour())
 					});
-					// FIXME: Iterate through the tokens and look for any already-defined macros, to expand them.
 					walker.register_macro(ident, body_tokens);
 				} else {
 					// We have a function-like macro.
-					// TODO: Colour the `body_tokens`
+					// TODO: Implement
 				}
 
 				walker.advance();
@@ -372,10 +415,9 @@ fn parse_break_continue_discard(
 	let semi_span = match walker.peek() {
 		Some((token, token_span)) => {
 			if *token == Token::Semi {
-				let span = *token_span;
-				walker.colour(*token_span, SyntaxToken::Punctuation);
+				walker.colour(token_span, SyntaxToken::Punctuation);
 				walker.advance();
-				Some(span)
+				Some(token_span)
 			} else {
 				None
 			}

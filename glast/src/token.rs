@@ -69,24 +69,10 @@ pub type TokenStream = Vec<Spanned<Token>>;
 /// let src = r#"
 /// int i = 5.0 + 1;
 /// "#;
-/// let token_stream = parse_from_str(&src, false);
+/// let token_stream = parse_from_str(&src);
 /// ```
 pub fn parse_from_str(source: &str) -> TokenStream {
-	let mut lexer = {
-		let mut lexer = Lexer {
-			// Iterating over individual characters is guaranteed to produce correct behaviour because GLSL source
-			// strings must use the UTF-8 encoding as per the specification.
-			chars: source.chars().collect(),
-			cursor: 0,
-		};
-
-		// Deal with a line-continuation character if it's the first thing in the source file. If we didn't do
-		// this, the first time `peek()` is called in the first iteration of the loop it could return a `\` even
-		// though it's a valid line-continuator.
-		lexer.cursor = lexer.take_line_continuator(0);
-
-		lexer
-	};
+	let mut lexer = Lexer::new(source);
 	parse_tokens(&mut lexer, false)
 }
 
@@ -985,6 +971,7 @@ fn parse_tokens(lexer: &mut Lexer, parsing_define_body: bool) -> TokenStream {
 					));
 				}
 			}
+			buffer.clear();
 		} else if current == '#' && parsing_define_body {
 			// Look for a `##` which is valid within the body of a `#define` macro.
 			if lexer.take_pat("##") {
@@ -1544,6 +1531,94 @@ impl Token {
 	}
 }
 
+impl std::fmt::Display for Token {
+	fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+		match self {
+			Token::Num { type_, num, suffix } => {
+				match type_ {
+					NumType::Dec => {}
+					NumType::Oct => write!(f, "0")?,
+					NumType::Hex => write!(f, "0x")?,
+					NumType::Float => {}
+				}
+				write!(f, "{num}")?;
+				if let Some(suffix) = suffix {
+					write!(f, "{suffix}")
+				} else {
+					Ok(())
+				}
+			}
+			Token::Bool(b) => write!(f, "{b}"),
+			Token::Ident(s) => write!(f, "{s}"),
+			Token::Directive(_) => todo!(),
+			Token::MacroConcat => write!(f, "##"),
+			Token::LineComment(s) => write!(f, "//{s}"),
+			Token::BlockComment { str, contains_eof } => {
+				write!(f, "/*{str}")?;
+				if *contains_eof {
+					write!(f, "*/")
+				} else {
+					Ok(())
+				}
+			}
+			Token::Invalid(c) => write!(f, "{c}"),
+			Token::If => write!(f, "if"),
+			Token::Else => write!(f, "else"),
+			Token::For => write!(f, "for"),
+			Token::Do => write!(f, "do"),
+			Token::While => write!(f, "while"),
+			Token::Continue => write!(f, "continue"),
+			Token::Switch => write!(f, "switch"),
+			Token::Case => write!(f, "case"),
+			Token::Default => write!(f, "default"),
+			Token::Break => write!(f, "break"),
+			Token::Return => write!(f, "return"),
+			Token::Discard => write!(f, "discard"),
+			Token::Struct => write!(f, "struct"),
+			Token::Subroutine => write!(f, "subroutine"),
+			Token::Reserved(s) => write!(f, "{s}"),
+			Token::Const => write!(f, "const"),
+			Token::In => write!(f, "in"),
+			Token::Out => write!(f, "out"),
+			Token::InOut => write!(f, "inout"),
+			Token::Attribute => write!(f, "attribute"),
+			Token::Uniform => write!(f, "uniform"),
+			Token::Varying => write!(f, "varying"),
+			Token::Buffer => write!(f, "buffer"),
+			Token::Shared => write!(f, "shared"),
+			Token::Centroid => write!(f, "centroid"),
+			Token::Sample => write!(f, "sample"),
+			Token::Patch => write!(f, "patch"),
+			Token::Layout => write!(f, "layout"),
+			Token::Flat => write!(f, "flat"),
+			Token::Smooth => write!(f, "smooth"),
+			Token::NoPerspective => write!(f, "noperspective"),
+			Token::HighP => write!(f, "highp"),
+			Token::MediumP => write!(f, "mediump"),
+			Token::LowP => write!(f, "lowp"),
+			Token::Invariant => write!(f, "invariant"),
+			Token::Precise => write!(f, "precise"),
+			Token::Coherent => write!(f, "coherent"),
+			Token::Volatile => write!(f, "volatile"),
+			Token::Restrict => write!(f, "restrict"),
+			Token::Readonly => write!(f, "readonly"),
+			Token::Writeonly => write!(f, "writeonly"),
+			Token::Op(_) => todo!(),
+			Token::Comma => write!(f, ","),
+			Token::Dot => write!(f, "."),
+			Token::Semi => write!(f, ";"),
+			Token::Colon => write!(f, ":"),
+			Token::Question => write!(f, "?"),
+			Token::LParen => write!(f, "("),
+			Token::RParen => write!(f, ")"),
+			Token::LBracket => write!(f, "["),
+			Token::RBracket => write!(f, "]"),
+			Token::LBrace => write!(f, "{{"),
+			Token::RBrace => write!(f, "}}"),
+		}
+	}
+}
+
 /// A lexer which allows stepping through a GLSL source string character by character.
 ///
 /// This includes a lot of helper methods to make it easier to match patterns and correctly deal with things such
@@ -1556,6 +1631,23 @@ struct Lexer {
 }
 
 impl Lexer {
+	/// Constructs a new lexer.
+	fn new(source: &str) -> Self {
+		let mut lexer = Lexer {
+			// Iterating over individual characters is guaranteed to produce correct behaviour because GLSL source
+			// strings must use the UTF-8 encoding as per the specification.
+			chars: source.chars().collect(),
+			cursor: 0,
+		};
+
+		// Deal with a line-continuation character if it's the first thing in the source file. If we didn't do
+		// this, the first time `peek()` is called in the first iteration of the loop it could return a `\` even
+		// though it's a valid line-continuator.
+		lexer.cursor = lexer.take_line_continuator(0);
+
+		lexer
+	}
+
 	/// Returns the current character under the cursor, without advancing the cursor.
 	fn peek(&self) -> Option<char> {
 		self.chars.get(self.cursor).map(|c| *c)

@@ -44,13 +44,13 @@
 //! ```
 //!
 //! # Differences from C/C++
-//! - The GLSL preprocessor has no support for trigraphs.
+//! - The GLSL preprocessor has no support for digraphs or trigraphs.
 //! - The GLSL preprocessor has the extra `#version` and `#extension` directives, but it lacks the `#include`
 //!   directive.
 //! - The pre-defined macros differ depending on the GLSL version.
 
-use super::{is_word, is_word_start, Lexer};
-use crate::{span::Spanned, token::match_op, Span};
+use super::{is_word, is_word_start, match_op, Lexer};
+use crate::span::{Span, Spanned};
 
 /// A vector of tokens representing a specific preprocessor directive.
 #[derive(Debug, Clone, PartialEq)]
@@ -974,15 +974,13 @@ pub(super) fn parse_define(lexer: &mut Lexer) -> Vec<Spanned<DefineToken>> {
 		} else {
 			// We have reached the end of the first word, and have not encountered a `(` immediately afterwards.
 			// This means this directive is an object macro and everything from here on is a standard GLSL token.
-			tokens.push((
+			return vec![(
 				DefineToken::Ident(std::mem::take(&mut buffer)),
 				Span {
 					start: buffer_start,
 					end: lexer.position(),
 				},
-			));
-
-			return tokens;
+			)];
 		}
 	}
 
@@ -1425,4 +1423,78 @@ fn match_condition_punctuation(lexer: &mut Lexer) -> ConditionToken {
 	match_op!(lexer, "|", ConditionToken::Or);
 	match_op!(lexer, "^", ConditionToken::Xor);
 	unreachable!("[preprocessor::match_condition_punctuation] Exhausted all of the patterns without matching anything!");
+}
+
+/// Perform token concatenation on the given token stream.
+pub(crate) fn concat_object_macro_body(
+	tokens: super::TokenStream,
+) -> super::TokenStream {
+	let mut stack = Vec::new();
+
+	let mut tokens = tokens.into_iter();
+	while let Some(token) = tokens.next() {
+		if token.0 == super::Token::MacroConcat {
+			let previous = stack.pop();
+			let next = tokens.next();
+
+			match (previous, next) {
+				(Some(prev), Some(next)) => {
+					concat_tokens(&mut stack, prev, next)
+				}
+				// TODO: Emit errors when missing tokens.
+				(Some(prev), None) => {
+					stack.push(prev);
+				}
+				(None, Some(next)) => {
+					stack.push(next);
+				}
+				(None, None) => {}
+			}
+		} else {
+			stack.push(token);
+		}
+	}
+
+	stack
+}
+
+fn concat_tokens(
+	tokens: &mut super::TokenStream,
+	left: Spanned<super::Token>,
+	right: Spanned<super::Token>,
+) {
+	use super::Token;
+
+	let left_can_concat = match left.0 {
+		Token::Num { .. }
+		| Token::Bool(_)
+		| Token::Ident(_)
+		| Token::Invalid(_) => true,
+		_ => left.0.starts_statement(),
+	};
+
+	let right_can_concat = match right.0 {
+		Token::Num { .. }
+		| Token::Bool(_)
+		| Token::Ident(_)
+		| Token::Invalid(_) => true,
+		_ => right.0.starts_statement(),
+	};
+
+	// It only makes sense to concat certain types of tokens. For example `if` and `_foo` become `if_foo`, a new
+	// identifier. But something like `foo` and `;` cannot become a new single token; the concatenation operator
+	// does nothing in this case and just creates the two separate tokens.
+	if left_can_concat && right_can_concat {
+		let mut new_string = left.0.to_string();
+		new_string.push_str(&right.0.to_string());
+
+		// We run the lexer on the new concatenated string to produce our new token. This takes care of all the
+		// oddities, such as concatenating `con` and `st` to produce a `const` keyword.
+		let mut lexer = Lexer::new(&new_string);
+		let mut result = super::parse_tokens(&mut lexer, true);
+		tokens.append(&mut result);
+	} else {
+		tokens.push(left);
+		tokens.push(right);
+	}
 }

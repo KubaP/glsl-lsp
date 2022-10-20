@@ -1230,6 +1230,75 @@ pub enum OpTy {
 }
 
 impl Token {
+	/// Produces a syntax token corresponding to the type of this token. This performs simple, non-semantically
+	/// aware colouring.
+	pub fn non_semantic_colour(&self) -> crate::parser::SyntaxToken {
+		use crate::parser::SyntaxToken;
+		match self {
+			Token::Num { .. } => SyntaxToken::Num,
+			Token::Bool(_) => SyntaxToken::Bool,
+			Token::Ident(_) => SyntaxToken::Ident,
+			Token::Directive(_) => SyntaxToken::Directive,
+			Token::MacroConcat => SyntaxToken::MacroConcat,
+			Token::LineComment(_) | Token::BlockComment { .. } => {
+				SyntaxToken::Comment
+			}
+			Token::Invalid(_) => SyntaxToken::Invalid,
+			Token::If
+			| Token::Else
+			| Token::For
+			| Token::Do
+			| Token::While
+			| Token::Continue
+			| Token::Switch
+			| Token::Case
+			| Token::Default
+			| Token::Break
+			| Token::Return
+			| Token::Discard
+			| Token::Struct
+			| Token::Subroutine
+			| Token::Reserved(_)
+			| Token::Const
+			| Token::In
+			| Token::Out
+			| Token::InOut
+			| Token::Attribute
+			| Token::Uniform
+			| Token::Varying
+			| Token::Buffer
+			| Token::Shared
+			| Token::Centroid
+			| Token::Sample
+			| Token::Patch
+			| Token::Layout
+			| Token::Flat
+			| Token::Smooth
+			| Token::NoPerspective
+			| Token::HighP
+			| Token::MediumP
+			| Token::LowP
+			| Token::Invariant
+			| Token::Precise
+			| Token::Coherent
+			| Token::Volatile
+			| Token::Restrict
+			| Token::Readonly
+			| Token::Writeonly => SyntaxToken::Keyword,
+			Token::Op(_) => SyntaxToken::Operator,
+			Token::Comma
+			| Token::Dot
+			| Token::Semi
+			| Token::Colon
+			| Token::Question
+			| Token::LParen
+			| Token::RParen
+			| Token::LBracket
+			| Token::RBracket
+			| Token::LBrace
+			| Token::RBrace => SyntaxToken::Punctuation,
+		}
+	}
 	/// Returns whether the current token is a keyword that can start a statement.
 	pub fn starts_statement(&self) -> bool {
 		match self {

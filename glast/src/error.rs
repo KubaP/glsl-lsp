@@ -7,7 +7,7 @@ use crate::span::Span;
 /// This enum contains all the possible syntax errors that are emitted by the parser.
 #[derive(Debug)]
 #[non_exhaustive]
-pub enum SyntaxErr {
+pub enum Diag {
 	/* EXPRESSIONS */
 	/// In the position that either a binary or postfix operator or the end-of-expression were expected to occur,
 	/// we found an operand. E.g.
@@ -620,4 +620,119 @@ pub enum SyntaxErr {
 	/* TEMPORARY */
 	/// Directives are currently unsupported.
 	DirectivesNotSupported(Span),
+
+	/// A preprocessor diagnostic.
+	Preproc(PreprocDiag),
+}
+
+/// A preprocessor syntax diagnostic.
+///
+/// - Errors for the `#version` directive begin with `Version*`.
+#[derive(Debug)]
+pub enum PreprocDiag {
+	/// WARNING - Found a preprocessor directive which contains nothing apart from the beginning `#`.
+	///
+	/// - `0` - the span of the directive.
+	FoundEmptyDirective(Span),
+	/// ??? - Found a line directive which contains no value, e.g. `#line \n`.
+	///
+	/// - `0` - the span of the directive.
+	FoundEmptyLineDirective(Span),
+	/// WARNING - Found an error directive which contains no message, e.g. `#error \n`.
+	///
+	/// - `0` - the span of the directive.
+	FoundEmptyErrorDirective(Span),
+	/// WARNING - Found a pragma directive which contains no option, e.g. `#pragma \n`.
+	///
+	/// - `0` - the span of the directive.
+	FoundEmptyPragmaDirective(Span),
+
+	/* VERSION DIRECTIVE */
+	/// ERROR - Expected the version number but found a non-number token or nothing. E.g.
+	/// - `#version foobar`,
+	/// - `#version`.
+	///
+	/// Note: If the token is a valid profile, e.g. `#version core`, then the
+	/// [`VersionMissingNumber`](PreprocDiag::VersionMissingNumber) diagnostic will be produced instead.
+	///
+	/// - `0` - the span of the invalid token or the position the number should be inserted at.
+	VersionExpectedNumber(Span),
+	/// ERROR - Found a number token that isn't a valid version number, e.g. `#version 19617527`.
+	///
+	/// - `0` - the span of the number token.
+	VersionInvalidNumber(Span),
+	/// ERROR - Found a valid version number that is unsupported by the extension, e.g. `#version 430`.
+	///
+	/// - `0` - the span of the number token.
+	VersionUnsupportedNumber(Span),
+	/// ERROR - Found a profile but no version number, e.g. `#version core`.
+	///
+	/// - `0` - the span where the version number should be inserted.
+	VersionMissingNumber(Span),
+	/// ERROR - Expected the profile but found a non-word token, e.g.`#version 450 300`,
+	///
+	/// - `0 - the span of the invalid token.
+	VersionExpectedProfile(Span),
+	/// ERROR - Found a word token that isn't a valid profile, e.g. `#version 450 foobar`.
+	///
+	/// - `0` - the span of the word token.
+	VersionInvalidProfile(Span),
+	/// ERROR - Found a word token that would be a valid profile with the correct capitalization, e.g. `#version
+	/// 450 CoRe`.
+	///
+	/// - `0` - the span of the word token,
+	/// - `1` - the correct spelling.
+	VersionInvalidProfileCasing(Span, &'static str),
+	/// ERROR - Found trailing token(s) after the version number/profile, e.g. `#version 450 core s1_sfh_5`.
+	///
+	/// - `0` - the span of the trailing token(s).
+	VersionTrailingTokens(Span),
+
+	/* EXTENSION DIRECTIVE */
+	/// ERROR - Expected the name but found a non-word token or nothing. E.g.
+	/// - `#extension 155151`,
+	/// - `#extension`.
+	///
+	/// - `0` - the span of the invalid token or the position the name should be inserted at.
+	ExtensionExpectedName(Span),
+	/// ERROR - Found a colon but no name, e.g. `#extension :`.
+	///
+	/// - `0` - the span where the name should be inserted.
+	ExtensionMissingName(Span),
+	/// ERROR - Expected a colon but found a non-colon token or nothing. E.g.
+	/// - `#extension foobar baz`,
+	/// - `#extension foobar`.
+	///
+	/// - `0` - the span of the invalid token or the position the colon should be inserted at.
+	ExtensionExpectedColon(Span),
+	/// ERROR - Expected a colon but found a behaviour, e.g. `#extension foobar enable`.
+	///
+	/// - `0` - the span where the colon should be inserted.
+	ExtensionMissingColon(Span),
+	/// ERROR - Expected a behaviour but found a non-word token or nothing. E.g.
+	/// - `#extension foobar : @@@`,
+	/// - `#extension foobar :`.
+	///
+	/// - `0` - the span of the invalid token or the position the behaviour should be inserted at.
+	ExtensionExpectedBehaviour(Span),
+	/// ERROR - Found a word token that isn't a valid behaviour, e.g. `#extension foo : bar`.
+	///
+	/// - `0` - the span of the word token.
+	ExtensionInvalidBehaviour(Span),
+	/// ERROR - Found a word token that would be a valid behaviour with the correct capitalization, e.g.
+	/// `#extension foobar: EnAbLe`.
+	///
+	/// - `0` - the span of the word token,
+	/// - `1` - the correct spelling.
+	ExtensionIncorrectBehaviourCasing(Span, &'static str),
+	/// ERROR - Found trailing token(s) after the name/behaviour, e.g. `#extension foobar : enable baz2@@`.
+	///
+	/// - `0` - the span of the trailing token(s).
+	ExtensionTrailingTokens(Span),
+
+	/// ERROR - Found a token concatenation operator (`##`) outside of a directive's content, e.g. `\r\n /* comment
+	/// */ ##`.
+	///
+	/// - `0` - the span of the operator.
+	FoundTokenConcatOutsideOfDirective(Span),
 }

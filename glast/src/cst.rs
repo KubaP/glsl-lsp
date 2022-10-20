@@ -7,6 +7,9 @@
 //! This crate strongly embraces the notion of making illegal states un-representable; which means that there are a
 //! *lot* of types in this module. The advantage of this approach is that you can figure out all of the possible
 //! states of a struct/enum just by looking at it's fields.
+//!
+//! TODO: Newtype pattern to make it explicit at what point can the parser stop.
+//!
 //! - Unless otherwise stated, any [`Option<T>`] fields mean that the parser may perform error recovery when
 //!   parsing that field, and hence a value of `None` means that the parsing of that type was cut short at that
 //!   field because of some sort of syntax error.
@@ -62,10 +65,10 @@ mod parser;
 
 use crate::{
 	ast::ArrSize,
-	error::SyntaxErr,
+	error::Diag,
 	span::Span,
 	token::{NumType, Token},
-	Either,
+	Either, Spanned,
 };
 
 /// A concrete syntax tree; this vector represents the root of a GLSL source string.
@@ -82,7 +85,7 @@ pub type Cst = Vec<Node>;
 /// "#;
 /// let (cst, syntax_errors) = parse_from_str(&src);
 /// ```
-pub fn parse_from_str(source: &str) -> (Cst, Vec<SyntaxErr>) {
+pub fn parse_from_str(source: &str) -> (Cst, Vec<Diag>) {
 	use self::parser::{parse_stmt, Walker};
 
 	let token_stream = crate::token::parse_from_str(source);
@@ -115,7 +118,7 @@ pub fn parse_from_str(source: &str) -> (Cst, Vec<SyntaxErr>) {
 /// ```
 pub fn parse_from_token_stream(
 	stream: crate::token::TokenStream,
-) -> (Cst, Vec<SyntaxErr>) {
+) -> (Cst, Vec<Diag>) {
 	use self::parser::{parse_stmt, Walker};
 
 	let mut walker = Walker {
@@ -210,7 +213,6 @@ pub enum NodeTy {
 	Keyword,
 	Punctuation,
 	Ident,
-	Directive,
 	Invalid,
 	ZeroWidth,
 	Expression(Expr),
@@ -692,15 +694,24 @@ pub enum LayoutTy {
 /// A preprocessor directive.
 #[derive(Debug, Clone, PartialEq)]
 pub enum Preproc {
+	/// An empty directive, i.e. just `#` on a line.
+	Empty,
+	/// A `#version` directive.
 	Version {
-		version: usize,
-		is_core: bool,
+		kw: Span,
+		version: Option<Spanned<usize>>,
+		profile: Option<Spanned<Profile>>,
 	},
+	/// An `#extension` directive.
 	Extension {
-		name: String,
-		behaviour: ExtBehaviour,
+		kw: Span,
+		name: Option<Spanned<String>>,
+		colon: Option<Span>,
+		behaviour: Option<Spanned<ExtBehaviour>>,
 	},
+	/// A `#line` directive.
 	Line {
+		kw: Span,
 		line: usize,
 		src_str: Option<usize>,
 	},
@@ -710,16 +721,32 @@ pub enum Preproc {
 	IfnDef(String),
 	Else,
 	EndIf,
-	Error(String),
-	Pragma(String),
+	/// An `#error` directive.
+	Error {
+		kw: Span,
+		message: Option<Spanned<String>>,
+	},
+	/// A `#pragma` directive.
+	Pragma {
+		kw: Span,
+		option: Option<Spanned<String>>,
+	},
 	Unsupported,
+}
+
+/// The possible profiles in a `#version` directive.
+#[derive(Debug, Clone, PartialEq)]
+pub enum Profile {
+	Core,
+	Compatability,
+	Es,
 }
 
 /// The possible behaviours in an `#extension` directive.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum ExtBehaviour {
-	Enable,
 	Require,
+	Enable,
 	Warn,
 	Disable,
 }
@@ -804,7 +831,7 @@ impl<T> List<T> {
 impl List<Expr> {
 	pub fn analyze_syntax_errors_fn_arr_init(
 		&self,
-		syntax_errors: &mut Vec<SyntaxErr>,
+		syntax_errors: &mut Vec<Diag>,
 		l_paren: Span,
 	) {
 		enum Prev {
@@ -817,11 +844,11 @@ impl List<Expr> {
 		while let Some((item, comma)) = self.entries.get(cursor) {
 			if let Some(item) = item {
 				match previous {
-					Prev::Item(span) => syntax_errors.push(
-						SyntaxErr::ExprExpectedCommaAfterArg(
+					Prev::Item(span) => {
+						syntax_errors.push(Diag::ExprExpectedCommaAfterArg(
 							span.next_single_width(),
-						),
-					),
+						))
+					}
 					_ => {}
 				}
 
@@ -830,13 +857,13 @@ impl List<Expr> {
 
 			if let Some(comma) = &comma.1 {
 				match previous {
-					Prev::Comma(span) => syntax_errors.push(
-						SyntaxErr::ExprExpectedArgAfterComma(
+					Prev::Comma(span) => {
+						syntax_errors.push(Diag::ExprExpectedArgAfterComma(
 							span.next_single_width(),
-						),
-					),
+						))
+					}
 					Prev::None => syntax_errors.push(
-						SyntaxErr::ExprExpectedArgBetweenParenComma(
+						Diag::ExprExpectedArgBetweenParenComma(
 							l_paren.next_single_width(),
 						),
 					),
@@ -849,7 +876,7 @@ impl List<Expr> {
 			cursor += 1;
 		}
 		if let Prev::Comma(span) = previous {
-			syntax_errors.push(SyntaxErr::ExprExpectedArgAfterComma(
+			syntax_errors.push(Diag::ExprExpectedArgAfterComma(
 				span.next_single_width(),
 			));
 		}
@@ -857,7 +884,7 @@ impl List<Expr> {
 
 	pub fn analyze_syntax_errors_init(
 		&self,
-		syntax_errors: &mut Vec<SyntaxErr>,
+		syntax_errors: &mut Vec<Diag>,
 		l_brace: Span,
 	) {
 		enum Prev {
@@ -870,11 +897,11 @@ impl List<Expr> {
 		while let Some((item, comma)) = self.entries.get(cursor) {
 			if let Some(item) = item {
 				match previous {
-					Prev::Item(span) => syntax_errors.push(
-						SyntaxErr::ExprExpectedCommaAfterArg(
+					Prev::Item(span) => {
+						syntax_errors.push(Diag::ExprExpectedCommaAfterArg(
 							span.next_single_width(),
-						),
-					),
+						))
+					}
 					_ => {}
 				}
 
@@ -883,13 +910,13 @@ impl List<Expr> {
 
 			if let Some(comma) = &comma.1 {
 				match previous {
-					Prev::Comma(span) => syntax_errors.push(
-						SyntaxErr::ExprExpectedArgAfterComma(
+					Prev::Comma(span) => {
+						syntax_errors.push(Diag::ExprExpectedArgAfterComma(
 							span.next_single_width(),
-						),
-					),
+						))
+					}
 					Prev::None => syntax_errors.push(
-						SyntaxErr::ExprExpectedArgBetweenBraceComma(
+						Diag::ExprExpectedArgBetweenBraceComma(
 							l_brace.next_single_width(),
 						),
 					),
@@ -904,10 +931,7 @@ impl List<Expr> {
 		// We don't check for a trailing comma because that is legal in an initializer list.
 	}
 
-	pub fn analyze_syntax_errors_list(
-		&self,
-		syntax_errors: &mut Vec<SyntaxErr>,
-	) {
+	pub fn analyze_syntax_errors_list(&self, syntax_errors: &mut Vec<Diag>) {
 		enum Prev {
 			None,
 			Item(Span),
@@ -918,11 +942,11 @@ impl List<Expr> {
 		while let Some((item, comma)) = self.entries.get(cursor) {
 			if let Some(item) = item {
 				match previous {
-					Prev::Item(span) => syntax_errors.push(
-						SyntaxErr::ExprExpectedExprAfterComma(
+					Prev::Item(span) => {
+						syntax_errors.push(Diag::ExprExpectedExprAfterComma(
 							span.next_single_width(),
-						),
-					),
+						))
+					}
 					_ => {}
 				}
 
@@ -931,16 +955,16 @@ impl List<Expr> {
 
 			if let Some(comma) = &comma.1 {
 				match previous {
-					Prev::Comma(span) => syntax_errors.push(
-						SyntaxErr::ExprExpectedExprAfterComma(
+					Prev::Comma(span) => {
+						syntax_errors.push(Diag::ExprExpectedExprAfterComma(
 							span.next_single_width(),
-						),
-					),
-					Prev::None => syntax_errors.push(
-						SyntaxErr::ExprExpectedExprBeforeComma(
+						))
+					}
+					Prev::None => {
+						syntax_errors.push(Diag::ExprExpectedExprBeforeComma(
 							comma.previous_single_width(),
-						),
-					),
+						))
+					}
 					_ => {}
 				}
 
@@ -950,7 +974,7 @@ impl List<Expr> {
 			cursor += 1;
 		}
 		if let Prev::Comma(span) = previous {
-			syntax_errors.push(SyntaxErr::ExprExpectedExprAfterComma(
+			syntax_errors.push(Diag::ExprExpectedExprAfterComma(
 				span.next_single_width(),
 			));
 		}
@@ -1024,7 +1048,7 @@ impl List<Param> {
 
 	pub fn analyze_syntax_errors(
 		&self,
-		syntax_errors: &mut Vec<SyntaxErr>,
+		syntax_errors: &mut Vec<Diag>,
 		l_paren: Span,
 	) {
 		enum Prev {
@@ -1037,11 +1061,9 @@ impl List<Param> {
 		while let Some((item, comma)) = self.entries.get(cursor) {
 			if let Some(item) = item {
 				match previous {
-					Prev::Item(span) => {
-						syntax_errors.push(SyntaxErr::ExpectedCommaAfterParam(
-							span.next_single_width(),
-						))
-					}
+					Prev::Item(span) => syntax_errors.push(
+						Diag::ExpectedCommaAfterParam(span.next_single_width()),
+					),
 					_ => {}
 				}
 
@@ -1050,13 +1072,11 @@ impl List<Param> {
 
 			if let Some(comma) = &comma.1 {
 				match previous {
-					Prev::Comma(span) => {
-						syntax_errors.push(SyntaxErr::ExpectedParamAfterComma(
-							span.next_single_width(),
-						))
-					}
+					Prev::Comma(span) => syntax_errors.push(
+						Diag::ExpectedParamAfterComma(span.next_single_width()),
+					),
 					Prev::None => syntax_errors.push(
-						SyntaxErr::ExpectedParamBetweenParenComma(
+						Diag::ExpectedParamBetweenParenComma(
 							l_paren.next_single_width(),
 						),
 					),
@@ -1069,9 +1089,8 @@ impl List<Param> {
 			cursor += 1;
 		}
 		if let Prev::Comma(span) = previous {
-			syntax_errors.push(SyntaxErr::ExpectedParamAfterComma(
-				span.next_single_width(),
-			));
+			syntax_errors
+				.push(Diag::ExpectedParamAfterComma(span.next_single_width()));
 		}
 	}
 }
@@ -1188,7 +1207,7 @@ impl List<Layout> {
 
 	pub fn analyze_syntax_errors(
 		&self,
-		syntax_errors: &mut Vec<SyntaxErr>,
+		syntax_errors: &mut Vec<Diag>,
 		l_paren: Span,
 	) {
 		enum Prev {
@@ -1202,7 +1221,7 @@ impl List<Layout> {
 			if let Some(item) = item {
 				match previous {
 					Prev::Item(span) => syntax_errors.push(
-						SyntaxErr::ExpectedCommaAfterLayoutIdentOrExpr(
+						Diag::ExpectedCommaAfterLayoutIdentOrExpr(
 							span.next_single_width(),
 						),
 					),
@@ -1214,16 +1233,16 @@ impl List<Layout> {
 
 			if let Some(comma) = &comma.1 {
 				match previous {
-					Prev::Comma(span) => syntax_errors.push(
-						SyntaxErr::ExpectedLayoutIdentAfterComma(
+					Prev::Comma(span) => {
+						syntax_errors.push(Diag::ExpectedLayoutIdentAfterComma(
 							span.next_single_width(),
-						),
-					),
-					Prev::None => syntax_errors.push(
-						SyntaxErr::ExpectedLayoutIdentAfterParen(
+						))
+					}
+					Prev::None => {
+						syntax_errors.push(Diag::ExpectedLayoutIdentAfterParen(
 							l_paren.next_single_width(),
-						),
-					),
+						))
+					}
 					_ => {}
 				}
 
@@ -1233,11 +1252,11 @@ impl List<Layout> {
 			cursor += 1;
 		}
 		if let Prev::Comma(span) = previous {
-			syntax_errors.push(SyntaxErr::ExpectedLayoutIdentAfterComma(
+			syntax_errors.push(Diag::ExpectedLayoutIdentAfterComma(
 				span.next_single_width(),
 			));
 		} else if let Prev::None = previous {
-			syntax_errors.push(SyntaxErr::ExpectedLayoutIdentAfterParen(
+			syntax_errors.push(Diag::ExpectedLayoutIdentAfterParen(
 				l_paren.next_single_width(),
 			));
 		}
@@ -1403,6 +1422,108 @@ impl IfTy {
 			Self::If(i) => *i,
 			Self::ElseIf(e, i) => Span::new(e.start, i.end),
 			Self::Else(e) => *e,
+		}
+	}
+}
+
+impl Profile {
+	pub fn from_str(
+		str: &str,
+		span: Span,
+		diagnostics: &mut Vec<Diag>,
+	) -> Option<Self> {
+		use crate::error::PreprocDiag;
+
+		match str.as_ref() {
+			"core" => Some(Self::Core),
+			"compatability" => Some(Self::Compatability),
+			"es" => Some(Self::Es),
+			_ => {
+				let lowercased = str.to_lowercase();
+				match lowercased.as_ref() {
+					"core" => {
+						diagnostics.push(Diag::Preproc(
+							PreprocDiag::VersionInvalidProfileCasing(
+								span, "core",
+							),
+						));
+						Some(Self::Core)
+					}
+					"compatability" => {
+						diagnostics.push(Diag::Preproc(
+							PreprocDiag::VersionInvalidProfileCasing(
+								span,
+								"compatability",
+							),
+						));
+						Some(Self::Compatability)
+					}
+					"es" => {
+						diagnostics.push(Diag::Preproc(
+							PreprocDiag::VersionInvalidProfileCasing(
+								span, "es",
+							),
+						));
+						Some(Self::Es)
+					}
+					_ => None,
+				}
+			}
+		}
+	}
+}
+
+impl ExtBehaviour {
+	pub fn from_str(
+		str: &str,
+		span: Span,
+		diagnostics: &mut Vec<Diag>,
+	) -> Option<Self> {
+		use crate::error::PreprocDiag;
+
+		match str.as_ref() {
+			"require" => Some(Self::Require),
+			"enable" => Some(Self::Enable),
+			"warn" => Some(Self::Warn),
+			"disable" => Some(Self::Disable),
+			_ => {
+				let lowercased = str.to_lowercase();
+				match lowercased.as_ref() {
+					"require" => {
+						diagnostics.push(Diag::Preproc(
+							PreprocDiag::ExtensionIncorrectBehaviourCasing(
+								span, "require",
+							),
+						));
+						Some(Self::Require)
+					}
+					"enable" => {
+						diagnostics.push(Diag::Preproc(
+							PreprocDiag::ExtensionIncorrectBehaviourCasing(
+								span, "enable",
+							),
+						));
+						Some(Self::Enable)
+					}
+					"warn" => {
+						diagnostics.push(Diag::Preproc(
+							PreprocDiag::ExtensionIncorrectBehaviourCasing(
+								span, "warn",
+							),
+						));
+						Some(Self::Warn)
+					}
+					"disable" => {
+						diagnostics.push(Diag::Preproc(
+							PreprocDiag::ExtensionIncorrectBehaviourCasing(
+								span, "disable",
+							),
+						));
+						Some(Self::Disable)
+					}
+					_ => None,
+				}
+			}
 		}
 	}
 }

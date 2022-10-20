@@ -75,6 +75,7 @@
 pub mod ast;
 pub mod cst;
 pub mod error;
+pub mod parser;
 mod span;
 pub mod token;
 

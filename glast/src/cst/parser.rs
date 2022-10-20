@@ -5,14 +5,17 @@ use self::expression::{expr_parser, expr_parser_2, Mode};
 use crate::{
 	ast::Type,
 	cst::{
-		Comment, Comments, Expr, ExprTy, Ident, IfBranch, IfTy, List, Node,
-		NodeTy, Nodes, Param, Qualifier, QualifierTy, Scope, SwitchBranch,
+		Comment, Comments, Expr, ExprTy, ExtBehaviour, Ident, IfBranch, IfTy,
+		List, Node, NodeTy, Nodes, Param, Qualifier, QualifierTy, Scope,
+		SwitchBranch,
 	},
-	error::SyntaxErr,
+	error::Diag,
 	span::{Span, Spanned},
-	token::{OpTy, Token, TokenStream},
+	token::{self, OpTy, Token, TokenStream},
 	Either,
 };
+
+use super::Preproc;
 
 pub(super) struct Walker {
 	pub token_stream: TokenStream,
@@ -131,7 +134,7 @@ impl Walker {
 /// error if no qualifiers were found.
 fn try_parse_qualifier_list(
 	walker: &mut Walker,
-	syntax_errors: &mut Vec<SyntaxErr>,
+	syntax_errors: &mut Vec<Diag>,
 ) -> (Vec<Qualifier>, Comments) {
 	// Consume tokens until we've run out of qualifiers.
 	let mut qualifiers = Vec::new();
@@ -289,11 +292,9 @@ fn try_parse_qualifier_list(
 						// stream.
 
 						// Error recovery: we are missing the opening parenthesis.
-						syntax_errors.push(
-							SyntaxErr::ExpectedParenAfterLayoutKw(
-								kw_span.next_single_width(),
-							),
-						);
+						syntax_errors.push(Diag::ExpectedParenAfterLayoutKw(
+							kw_span.next_single_width(),
+						));
 						qualifiers.push(Qualifier {
 							comments_before,
 							ty: QualifierTy::Layout {
@@ -313,7 +314,7 @@ fn try_parse_qualifier_list(
 					walker.advance();
 				} else {
 					// Error recovery: we are missing the opening parenthesis.
-					syntax_errors.push(SyntaxErr::ExpectedParenAfterLayoutKw(
+					syntax_errors.push(Diag::ExpectedParenAfterLayoutKw(
 						kw_span.next_single_width(),
 					));
 					qualifiers.push(Qualifier {
@@ -346,7 +347,7 @@ fn try_parse_qualifier_list(
 								l_paren_span,
 							);
 							syntax_errors.push(
-								SyntaxErr::ExpectedParenAtEndOfLayout(
+								Diag::ExpectedParenAtEndOfLayout(
 									l_paren_span,
 									node_last_span.next_single_width(),
 								),
@@ -428,7 +429,7 @@ fn try_parse_qualifier_list(
 												syntax_errors,
 												l_paren_span,
 											);
-											syntax_errors.push(SyntaxErr::ExpectedEqAfterLayoutIdent(
+											syntax_errors.push(Diag::ExpectedEqAfterLayoutIdent(
 												node_last_span.next_single_width()
 											));
 											qualifiers.push(Qualifier {
@@ -454,9 +455,12 @@ fn try_parse_qualifier_list(
 										walker.advance();
 									} else {
 										// Error recovery: we are missing an equals sign.
-										syntax_errors.push(SyntaxErr::ExpectedEqAfterLayoutIdent(
-											layout_ident_span.next_single_width()
-										));
+										syntax_errors.push(
+											Diag::ExpectedEqAfterLayoutIdent(
+												layout_ident_span
+													.next_single_width(),
+											),
+										);
 										layouts.push_item(
 											layout_ident_token.to_layout_expr(
 												layout_ident_span,
@@ -468,31 +472,32 @@ fn try_parse_qualifier_list(
 									}
 
 									// Consume the next `expression` in `ident = expression`.
-									let expr = match expr_parser(
-										walker,
-										Mode::DisallowTopLevelList,
-										&[Token::Comma, Token::RParen],
-									) {
-										(Some(e), mut err) => {
-											syntax_errors.append(&mut err);
-											e
-										}
-										(None, _) => {
-											// Error recovery: we are missing an expression.
-											syntax_errors.push(SyntaxErr::ExpectedExprAfterLayoutEq(
+									let expr =
+										match expr_parser(
+											walker,
+											Mode::DisallowTopLevelList,
+											&[Token::Comma, Token::RParen],
+										) {
+											(Some(e), mut err) => {
+												syntax_errors.append(&mut err);
+												e
+											}
+											(None, _) => {
+												// Error recovery: we are missing an expression.
+												syntax_errors.push(Diag::ExpectedExprAfterLayoutEq(
 												eq_span.next_single_width()
 											));
-											layouts.push_item(
-												layout_ident_token
-													.to_layout_expr(
-														layout_ident_span,
-														Some(eq_span),
-														None,
-													),
-											);
-											continue 'layouts;
-										}
-									};
+												layouts.push_item(
+													layout_ident_token
+														.to_layout_expr(
+															layout_ident_span,
+															Some(eq_span),
+															None,
+														),
+												);
+												continue 'layouts;
+											}
+										};
 
 									layouts.push_item(
 										layout_ident_token.to_layout_expr(
@@ -508,11 +513,9 @@ fn try_parse_qualifier_list(
 							// We found a token which can not be a valid layout identifier.
 
 							// Error recovery: we have an invalid layout identifier.
-							syntax_errors.push(
-								SyntaxErr::InvalidLayoutIdentifier(
-									*current_span,
-								),
-							);
+							syntax_errors.push(Diag::InvalidLayoutIdentifier(
+								*current_span,
+							));
 							layouts.push_item(Layout {
 								ty: crate::cst::LayoutTy::Invalid,
 								span: *current_span,
@@ -566,7 +569,7 @@ fn try_parse_stmt_not_beginning_with_keyword(
 	qualifiers: &Vec<Qualifier>,
 	comments_after_qualifiers: Comments,
 	end_tokens: &[Token],
-) -> Option<(Vec<Node>, Option<Span>, Vec<SyntaxErr>)> {
+) -> Option<(Vec<Node>, Option<Span>, Vec<Diag>)> {
 	let mut errors = Vec::new();
 
 	// Test to see if we have an expression, as all statements in this parsing branch start with an expression.
@@ -588,7 +591,7 @@ fn try_parse_stmt_not_beginning_with_keyword(
 		// we want to remove any syntax error about a missing operator between operands, so that we don't get a
 		// syntax error for the fact that `int i` has no operator between `int` and `i`.
 		errs.retain(|e| match e {
-			SyntaxErr::ExprFoundOperandAfterOperand(_, _) => false,
+			Diag::ExprFoundOperandAfterOperand(_, _) => false,
 			_ => true,
 		});
 		errors.append(&mut errs);
@@ -635,7 +638,7 @@ fn try_parse_stmt_not_beginning_with_keyword(
 				// We have something like `int` or `ident`, and we've reached the end of the token stream.
 
 				// Error recovery: we are missing a semi colon after an expression statement.
-				errors.push(SyntaxErr::ExpectedStmtFoundExpr(type_.span));
+				errors.push(Diag::ExpectedStmtFoundExpr(type_.span));
 				let mut nodes = Vec::new();
 				// If we have any qualifiers, that's an error.
 				if !qualifiers.is_empty() {
@@ -778,7 +781,7 @@ fn try_parse_stmt_not_beginning_with_keyword(
 					// nothing), so we treat this as an expression statement.
 
 					// Error recovery: we are missing a semi-colon after an expression statement.
-					errors.push(SyntaxErr::ExpectedStmtFoundExpr(type_.span));
+					errors.push(Diag::ExpectedStmtFoundExpr(type_.span));
 					let mut nodes = Vec::new();
 					// If we have any qualifiers, that's an error.
 					if !qualifiers.is_empty() {
@@ -847,7 +850,7 @@ fn try_parse_stmt_not_beginning_with_keyword(
 
 			// Error recovery: we have an expression after the type expression that is not an identifier(s)
 			// expression. We don't try to save this.
-			errors.push(SyntaxErr::ExpectedIdentsAfterVarType(ident_expr.span));
+			errors.push(Diag::ExpectedIdentsAfterVarType(ident_expr.span));
 			let mut nodes = Vec::new();
 			// If we have any qualifiers, that's an error.
 			if !qualifiers.is_empty() {
@@ -1064,7 +1067,7 @@ fn try_parse_stmt_not_beginning_with_keyword(
 				// token stream.
 
 				// Error recovery: we are missing the semi colon or equals sign.
-				errors.push(SyntaxErr::ExpectedSemiOrEqAfterVarDef(
+				errors.push(Diag::ExpectedSemiOrEqAfterVarDef(
 					walker.get_last_span().next_single_width(),
 				));
 				return Some((
@@ -1118,7 +1121,7 @@ fn try_parse_stmt_not_beginning_with_keyword(
 					}
 					(None, _, _) => {
 						// Error recovery: we are missing the value expression.
-						errors.push(SyntaxErr::ExpectedExprAfterVarDeclEq(
+						errors.push(Diag::ExpectedExprAfterVarDeclEq(
 							eq_span.next_single_width(),
 						));
 						return Some((
@@ -1148,7 +1151,7 @@ fn try_parse_stmt_not_beginning_with_keyword(
 				Some(t) => t,
 				None => {
 					// Error recovery: we are missing the semi colon.
-					errors.push(SyntaxErr::ExpectedSemiAfterVarDeclExpr(
+					errors.push(Diag::ExpectedSemiAfterVarDeclExpr(
 						walker.get_last_span().next_single_width(),
 					));
 					return Some((
@@ -1242,7 +1245,7 @@ fn try_parse_stmt_not_beginning_with_keyword(
 			}
 		} else {
 			// Error recovery: we are missing the semi colon or equals sign.
-			errors.push(SyntaxErr::ExpectedSemiOrEqAfterVarDef(
+			errors.push(Diag::ExpectedSemiOrEqAfterVarDef(
 				ident_expr.span.next_single_width(),
 			));
 			let mut nodes = vec![var_def_constructor(
@@ -1349,7 +1352,7 @@ fn try_parse_stmt_not_beginning_with_keyword(
 			// We have an expression, and we've reached the end of the token stream.
 
 			// Error recovery: we are missing a semi-colon after the expression.
-			errors.push(SyntaxErr::ExpectedStmtFoundExpr(expr.span));
+			errors.push(Diag::ExpectedStmtFoundExpr(expr.span));
 			nodes.push(Node {
 				span: expr.span,
 				ty: NodeTy::ExprStmt {
@@ -1376,7 +1379,7 @@ fn try_parse_stmt_not_beginning_with_keyword(
 		Some((nodes, semi, errors))
 	} else {
 		// Error recovery: we are missing a semi-colon after the expression.
-		errors.push(SyntaxErr::ExpectedStmtFoundExpr(expr.span));
+		errors.push(Diag::ExpectedStmtFoundExpr(expr.span));
 		nodes.push(Node {
 			span: expr.span,
 			ty: NodeTy::ExprStmt {
@@ -1436,7 +1439,7 @@ fn try_parse_stmt_not_beginning_with_keyword(
 pub(super) fn parse_stmt(
 	walker: &mut Walker,
 	nodes: &mut Vec<Node>,
-	syntax_errors: &mut Vec<SyntaxErr>,
+	syntax_errors: &mut Vec<Diag>,
 ) {
 	// Panics: This is guaranteed to unwrap without panic because of the while-loop precondition.
 	let (current, current_span) = walker
@@ -1518,7 +1521,7 @@ pub(super) fn parse_stmt(
 		None => {
 			if let Some(span) = qualifiers_span {
 				// We have parsed some qualifiers, but we've now reached the end of the token stream.
-				syntax_errors.push(SyntaxErr::ExpectedDefDeclAfterQualifiers(
+				syntax_errors.push(Diag::ExpectedDefDeclAfterQualifiers(
 					span.next_single_width(),
 				));
 				qualifiers.into_iter().for_each(|q| {
@@ -1577,7 +1580,7 @@ pub(super) fn parse_stmt(
 
 	if *token != Token::Struct && !qualifiers.is_empty() {
 		// We cannot have qualifiers before any other keywords.
-		syntax_errors.push(SyntaxErr::ExpectedDefDeclAfterQualifiers(
+		syntax_errors.push(Diag::ExpectedDefDeclAfterQualifiers(
 			// Panics: This is assigned `Some` if `qualifiers` is not empty, and we have just checked for that
 			// condition.
 			qualifiers_span.unwrap().next_single_width(),
@@ -1638,7 +1641,7 @@ pub(super) fn parse_stmt(
 
 	match token {
 		Token::Invalid(c) => {
-			syntax_errors.push(SyntaxErr::FoundIllegalChar(token_span, *c));
+			syntax_errors.push(Diag::FoundIllegalChar(token_span, *c));
 			walker.advance();
 			nodes.push(Node {
 				ty: NodeTy::Invalid,
@@ -1647,7 +1650,7 @@ pub(super) fn parse_stmt(
 		}
 		Token::Reserved(_) => {
 			walker.advance();
-			syntax_errors.push(SyntaxErr::FoundIllegalReservedKw(token_span));
+			syntax_errors.push(Diag::FoundIllegalReservedKw(token_span));
 			nodes.push(Node {
 				ty: NodeTy::Keyword,
 				span: token_span,
@@ -1655,7 +1658,7 @@ pub(super) fn parse_stmt(
 		}
 		Token::RBrace => {
 			walker.advance();
-			syntax_errors.push(SyntaxErr::FoundLonelyRBrace(token_span));
+			syntax_errors.push(Diag::FoundLonelyRBrace(token_span));
 			nodes.push(Node {
 				ty: NodeTy::Punctuation,
 				span: token_span,
@@ -1759,7 +1762,7 @@ pub(super) fn parse_stmt(
 							Some(t) => (&t.0, t.1),
 							None => {
 								syntax_errors.push(
-									SyntaxErr::ExpectedIfOrBodyAfterElseKw(
+									Diag::ExpectedIfOrBodyAfterElseKw(
 										walker
 											.get_last_span()
 											.next_single_width(),
@@ -1813,7 +1816,7 @@ pub(super) fn parse_stmt(
 			let (current, current_span) = match walker.peek() {
 				Some(t) => (&t.0, t.1),
 				None => {
-					syntax_errors.push(SyntaxErr::ExpectedParenAfterSwitchKw(
+					syntax_errors.push(Diag::ExpectedParenAfterSwitchKw(
 						token_span.next_single_width(),
 					));
 
@@ -1833,7 +1836,7 @@ pub(super) fn parse_stmt(
 
 				// We are completely missing the condition expression, but we treat this as "valid" for
 				// better recovery.
-				syntax_errors.push(SyntaxErr::MissingSwitchHeader(
+				syntax_errors.push(Diag::MissingSwitchHeader(
 					Span::new_between(token_span, current_span),
 				));
 
@@ -1861,7 +1864,7 @@ pub(super) fn parse_stmt(
 			} else {
 				// Even though we are missing the token, we will still try to parse this syntax at
 				// least until we expect the body scope.
-				syntax_errors.push(SyntaxErr::ExpectedParenAfterWhileKw(
+				syntax_errors.push(Diag::ExpectedParenAfterWhileKw(
 					token_span.next_single_width(),
 				));
 				None
@@ -1886,7 +1889,7 @@ pub(super) fn parse_stmt(
 								Some(t) => (&t.0, t.1),
 								None => {
 									syntax_errors.push(
-										SyntaxErr::ExpectedExprInSwitchHeader(
+										Diag::ExpectedExprInSwitchHeader(
 											walker
 												.get_last_span()
 												.next_single_width(),
@@ -1912,14 +1915,18 @@ pub(super) fn parse_stmt(
 								Token::RParen | Token::RBrace => {
 									if let Some(l_paren_span) = l_paren_span {
 										syntax_errors.push(
-											SyntaxErr::ExpectedExprInSwitchHeader(
-												Span::new_between(l_paren_span, current_span)
+											Diag::ExpectedExprInSwitchHeader(
+												Span::new_between(
+													l_paren_span,
+													current_span,
+												),
 											),
 										);
 									} else {
 										syntax_errors.push(
-											SyntaxErr::ExpectedExprInSwitchHeader(
-												current_span.previous_single_width()
+											Diag::ExpectedExprInSwitchHeader(
+												current_span
+													.previous_single_width(),
 											),
 										);
 									}
@@ -1952,7 +1959,7 @@ pub(super) fn parse_stmt(
 					Some(t) => t,
 					None => {
 						syntax_errors.push(
-							SyntaxErr::ExpectedParenAfterSwitchHeader(
+							Diag::ExpectedParenAfterSwitchHeader(
 								l_paren_span,
 								walker.get_last_span().next_single_width(),
 							),
@@ -1986,7 +1993,7 @@ pub(super) fn parse_stmt(
 						// We don't do anything apart from creating a syntax error since the next check
 						// deals with the `{`.
 						syntax_errors.push(
-							SyntaxErr::ExpectedParenAfterSwitchHeader(
+							Diag::ExpectedParenAfterSwitchHeader(
 								l_paren_span,
 								current_span.previous_single_width(),
 							),
@@ -2017,11 +2024,9 @@ pub(super) fn parse_stmt(
 				None => {
 					// Even though switch statements without a body are illegal, we treat this as
 					// "valid" for better recovery.
-					syntax_errors.push(
-						SyntaxErr::ExpectedBraceAfterSwitchHeader(
-							walker.get_last_span().next_single_width(),
-						),
-					);
+					syntax_errors.push(Diag::ExpectedBraceAfterSwitchHeader(
+						walker.get_last_span().next_single_width(),
+					));
 
 					nodes.push(Node {
 						ty: NodeTy::Switch {
@@ -2045,7 +2050,7 @@ pub(super) fn parse_stmt(
 				walker.advance();
 				current_span
 			} else {
-				syntax_errors.push(SyntaxErr::ExpectedBraceAfterSwitchHeader(
+				syntax_errors.push(Diag::ExpectedBraceAfterSwitchHeader(
 					span_after_header.next_single_width(),
 				));
 
@@ -2096,7 +2101,7 @@ pub(super) fn parse_stmt(
 			let (current, current_span) = match walker.peek() {
 				Some(t) => (&t.0, t.1),
 				None => {
-					syntax_errors.push(SyntaxErr::ExpectedParenAfterForKw(
+					syntax_errors.push(Diag::ExpectedParenAfterForKw(
 						kw_span.next_single_width(),
 					));
 
@@ -2115,9 +2120,10 @@ pub(super) fn parse_stmt(
 
 				// We are completely missing the header, but we treat this as "valid" for better
 				// recovery.
-				syntax_errors.push(SyntaxErr::MissingForHeader(
-					Span::new_between(kw_span, current_span),
-				));
+				syntax_errors.push(Diag::MissingForHeader(Span::new_between(
+					kw_span,
+					current_span,
+				)));
 
 				// Consume the body, including the closing `}` brace.
 				let (body, mut errs) =
@@ -2138,7 +2144,7 @@ pub(super) fn parse_stmt(
 			} else {
 				// Even though we are missing the token, we will still try to parse this syntax at
 				// least until we expect the body scope.
-				syntax_errors.push(SyntaxErr::ExpectedParenAfterForKw(
+				syntax_errors.push(Diag::ExpectedParenAfterForKw(
 					kw_span.next_single_width(),
 				));
 				None
@@ -2153,12 +2159,10 @@ pub(super) fn parse_stmt(
 						// We haven't found the closing `)` parenthesis yet, but we've reached the end of the
 						// token stream.
 
-						syntax_errors.push(
-							SyntaxErr::ExpectedParenAfterForHeader(
-								l_paren_span,
-								walker.get_last_span().next_single_width(),
-							),
-						);
+						syntax_errors.push(Diag::ExpectedParenAfterForHeader(
+							l_paren_span,
+							walker.get_last_span().next_single_width(),
+						));
 
 						nodes.push(Node {
 							ty: NodeTy::Keyword,
@@ -2243,7 +2247,7 @@ pub(super) fn parse_stmt(
 				None => {
 					// Even though for loops without a body are illegal, we treat this as "valid" for
 					// better error recovery.
-					syntax_errors.push(SyntaxErr::ExpectedBraceAfterForHeader(
+					syntax_errors.push(Diag::ExpectedBraceAfterForHeader(
 						walker.get_last_span().next_single_width(),
 					));
 
@@ -2312,7 +2316,7 @@ pub(super) fn parse_stmt(
 			let (current, current_span) = match walker.peek() {
 				Some(t) => (&t.0, t.1),
 				None => {
-					syntax_errors.push(SyntaxErr::ExpectedParenAfterWhileKw(
+					syntax_errors.push(Diag::ExpectedParenAfterWhileKw(
 						kw_span.next_single_width(),
 					));
 
@@ -2331,7 +2335,7 @@ pub(super) fn parse_stmt(
 
 				// We are completely missing the condition expression, but we treat this as "valid" for
 				// better recovery.
-				syntax_errors.push(SyntaxErr::ExpectedCondExprAfterWhile(
+				syntax_errors.push(Diag::ExpectedCondExprAfterWhile(
 					Span::new_between(kw_span, current_span),
 				));
 
@@ -2354,7 +2358,7 @@ pub(super) fn parse_stmt(
 			} else {
 				// Even though we are missing the token, we will still try to parse this syntax at
 				// least until we expect the body scope.
-				syntax_errors.push(SyntaxErr::ExpectedParenAfterWhileKw(
+				syntax_errors.push(Diag::ExpectedParenAfterWhileKw(
 					kw_span.next_single_width(),
 				));
 				None
@@ -2379,7 +2383,7 @@ pub(super) fn parse_stmt(
 								Some(t) => (&t.0, t.1),
 								None => {
 									syntax_errors.push(
-										SyntaxErr::ExpectedCondExprAfterWhile(
+										Diag::ExpectedCondExprAfterWhile(
 											walker
 												.get_last_span()
 												.next_single_width(),
@@ -2405,14 +2409,18 @@ pub(super) fn parse_stmt(
 								Token::RParen | Token::LBrace => {
 									if let Some(l_paren_span) = l_paren_span {
 										syntax_errors.push(
-											SyntaxErr::ExpectedCondExprAfterWhile(
-												Span::new_between(l_paren_span, current_span)
+											Diag::ExpectedCondExprAfterWhile(
+												Span::new_between(
+													l_paren_span,
+													current_span,
+												),
 											),
 										);
 									} else {
 										syntax_errors.push(
-											SyntaxErr::ExpectedCondExprAfterWhile(
-												current_span.previous_single_width()
+											Diag::ExpectedCondExprAfterWhile(
+												current_span
+													.previous_single_width(),
 											),
 										);
 									}
@@ -2441,12 +2449,10 @@ pub(super) fn parse_stmt(
 				let (current, current_span) = match walker.peek() {
 					Some(t) => t,
 					None => {
-						syntax_errors.push(
-							SyntaxErr::ExpectedParenAfterWhileCond(
-								l_paren_span,
-								walker.get_last_span().next_single_width(),
-							),
-						);
+						syntax_errors.push(Diag::ExpectedParenAfterWhileCond(
+							l_paren_span,
+							walker.get_last_span().next_single_width(),
+						));
 
 						nodes.push(Node {
 							ty: NodeTy::Keyword,
@@ -2473,12 +2479,10 @@ pub(super) fn parse_stmt(
 					Token::LBrace => {
 						// We don't do anything apart from creating a syntax error since the next check
 						// deals with the `{`.
-						syntax_errors.push(
-							SyntaxErr::ExpectedParenAfterWhileCond(
-								l_paren_span,
-								current_span.previous_single_width(),
-							),
-						);
+						syntax_errors.push(Diag::ExpectedParenAfterWhileCond(
+							l_paren_span,
+							current_span.previous_single_width(),
+						));
 						break 'r_paren current_span.start_zero_width();
 					}
 					_ => {
@@ -2505,7 +2509,7 @@ pub(super) fn parse_stmt(
 					// Even though while loops without a body are illegal, we treat this as "valid" for
 					// better recovery.
 					syntax_errors.push(
-						SyntaxErr::ExpectedScopeAfterControlFlowExpr(
+						Diag::ExpectedScopeAfterControlFlowExpr(
 							walker.get_last_span().next_single_width(),
 						),
 					);
@@ -2529,11 +2533,9 @@ pub(super) fn parse_stmt(
 			if *current == Token::LBrace {
 				walker.advance();
 			} else {
-				syntax_errors.push(
-					SyntaxErr::ExpectedScopeAfterControlFlowExpr(
-						span_before_body.next_single_width(),
-					),
-				);
+				syntax_errors.push(Diag::ExpectedScopeAfterControlFlowExpr(
+					span_before_body.next_single_width(),
+				));
 
 				nodes.push(Node {
 					ty: NodeTy::While {
@@ -2578,7 +2580,7 @@ pub(super) fn parse_stmt(
 			let (current, current_span) = match walker.peek() {
 				Some(t) => (&t.0, t.1),
 				None => {
-					syntax_errors.push(SyntaxErr::ExpectedBraceAfterDoKw(
+					syntax_errors.push(Diag::ExpectedBraceAfterDoKw(
 						token_span.next_single_width(),
 					));
 
@@ -2602,12 +2604,12 @@ pub(super) fn parse_stmt(
 				// We are completely missing the body, but we treat this as "valid" for better error
 				// recovery; we still try to parse the condition. We do nothing because the next check
 				// deals with the `while` keyword.
-				syntax_errors.push(SyntaxErr::ExpectedScopeAfterDoKw(
+				syntax_errors.push(Diag::ExpectedScopeAfterDoKw(
 					token_span.next_single_width(),
 				));
 				(None, do_kw_span.end_zero_width())
 			} else {
-				syntax_errors.push(SyntaxErr::ExpectedBraceAfterDoKw(
+				syntax_errors.push(Diag::ExpectedBraceAfterDoKw(
 					token_span.next_single_width(),
 				));
 
@@ -2622,7 +2624,7 @@ pub(super) fn parse_stmt(
 			let (current, current_span) = match walker.peek() {
 				Some(t) => (&t.0, t.1),
 				None => {
-					syntax_errors.push(SyntaxErr::ExpectedWhileKwAfterDoBody(
+					syntax_errors.push(Diag::ExpectedWhileKwAfterDoBody(
 						walker.get_last_span(),
 					));
 
@@ -2650,7 +2652,7 @@ pub(super) fn parse_stmt(
 				// Since the position of a missing body and a missing `while` keyword can potentially
 				// overlap if both are missing, we avoid this error if we already have the first.
 				if let Some(_) = body {
-					syntax_errors.push(SyntaxErr::ExpectedWhileKwAfterDoBody(
+					syntax_errors.push(Diag::ExpectedWhileKwAfterDoBody(
 						span_after_body.next_single_width(),
 					));
 				}
@@ -2659,7 +2661,7 @@ pub(super) fn parse_stmt(
 				// Since the position of a missing body and a missing `while` keyword can potentially
 				// overlap if both are missing, we avoid this error if we already have the first.
 				if let Some(_) = body {
-					syntax_errors.push(SyntaxErr::ExpectedWhileKwAfterDoBody(
+					syntax_errors.push(Diag::ExpectedWhileKwAfterDoBody(
 						span_after_body.next_single_width(),
 					));
 				}
@@ -2685,11 +2687,9 @@ pub(super) fn parse_stmt(
 					// potentially overlap if both are missing, we avoid this error if we already have
 					// the first error.
 					if let Some(while_kw_span) = while_kw_span {
-						syntax_errors.push(
-							SyntaxErr::ExpectedParenAfterWhileKw(
-								while_kw_span.next_single_width(),
-							),
-						);
+						syntax_errors.push(Diag::ExpectedParenAfterWhileKw(
+							while_kw_span.next_single_width(),
+						));
 					}
 
 					nodes.push(Node {
@@ -2721,7 +2721,7 @@ pub(super) fn parse_stmt(
 				// potentially overlap if both are missing, we avoid this error if we already have the
 				// first error.
 				if let Some(while_kw_span) = while_kw_span {
-					syntax_errors.push(SyntaxErr::ExpectedCondExprAfterWhile(
+					syntax_errors.push(Diag::ExpectedCondExprAfterWhile(
 						Span::new_between(while_kw_span, current_span),
 					));
 				}
@@ -2747,7 +2747,7 @@ pub(super) fn parse_stmt(
 				// potentially overlap if both are missing, we avoid this error if we already have the
 				// first error.
 				if let Some(while_kw_span) = while_kw_span {
-					syntax_errors.push(SyntaxErr::ExpectedParenAfterWhileKw(
+					syntax_errors.push(Diag::ExpectedParenAfterWhileKw(
 						while_kw_span.next_single_width(),
 					));
 				}
@@ -2776,7 +2776,7 @@ pub(super) fn parse_stmt(
 							Some(t) => (&t.0, t.1),
 							None => {
 								syntax_errors.push(
-									SyntaxErr::ExpectedCondExprAfterWhile(
+									Diag::ExpectedCondExprAfterWhile(
 										walker
 											.get_last_span()
 											.next_single_width(),
@@ -2814,7 +2814,7 @@ pub(super) fn parse_stmt(
 							Token::RParen => {
 								if let Some(l_paren_span) = l_paren_span {
 									syntax_errors.push(
-										SyntaxErr::ExpectedCondExprAfterWhile(
+										Diag::ExpectedCondExprAfterWhile(
 											Span::new_between(
 												l_paren_span,
 												current_span,
@@ -2823,7 +2823,7 @@ pub(super) fn parse_stmt(
 									);
 								} else {
 									syntax_errors.push(
-										SyntaxErr::ExpectedCondExprAfterWhile(
+										Diag::ExpectedCondExprAfterWhile(
 											current_span
 												.previous_single_width(),
 										),
@@ -2834,7 +2834,7 @@ pub(super) fn parse_stmt(
 							Token::Semi => {
 								if let Some(l_paren_span) = l_paren_span {
 									syntax_errors.push(
-										SyntaxErr::ExpectedCondExprAfterWhile(
+										Diag::ExpectedCondExprAfterWhile(
 											l_paren_span.next_single_width(),
 										),
 									);
@@ -2867,12 +2867,10 @@ pub(super) fn parse_stmt(
 				let (current, current_span) = match walker.peek() {
 					Some(t) => t,
 					None => {
-						syntax_errors.push(
-							SyntaxErr::ExpectedParenAfterWhileCond(
-								l_paren_span,
-								walker.get_last_span().next_single_width(),
-							),
-						);
+						syntax_errors.push(Diag::ExpectedParenAfterWhileCond(
+							l_paren_span,
+							walker.get_last_span().next_single_width(),
+						));
 
 						nodes.push(Node {
 							ty: NodeTy::DoWhile {
@@ -2907,12 +2905,10 @@ pub(super) fn parse_stmt(
 					Token::Semi => {
 						// We don't do anything apart from creating a syntax error since the next check
 						// deals with the `;`.
-						syntax_errors.push(
-							SyntaxErr::ExpectedParenAfterWhileCond(
-								l_paren_span,
-								current_span.previous_single_width(),
-							),
-						);
+						syntax_errors.push(Diag::ExpectedParenAfterWhileCond(
+							l_paren_span,
+							current_span.previous_single_width(),
+						));
 						break 'r_paren_2 current_span.previous_single_width();
 					}
 					_ => {
@@ -2936,11 +2932,9 @@ pub(super) fn parse_stmt(
 			let (current, current_span) = match walker.peek() {
 				Some(t) => (&t.0, t.1),
 				None => {
-					syntax_errors.push(
-						SyntaxErr::ExpectedSemiAfterDoWhileStmt(
-							walker.get_last_span(),
-						),
-					);
+					syntax_errors.push(Diag::ExpectedSemiAfterDoWhileStmt(
+						walker.get_last_span(),
+					));
 
 					nodes.push(Node {
 						ty: NodeTy::DoWhile {
@@ -2966,7 +2960,7 @@ pub(super) fn parse_stmt(
 			} else {
 				// Even though we are missing a necessary token, it still makes sense to just treat
 				// this as a "valid" loop for analysis. We do produce an error about the missing token.
-				syntax_errors.push(SyntaxErr::ExpectedSemiAfterDoWhileStmt(
+				syntax_errors.push(Diag::ExpectedSemiAfterDoWhileStmt(
 					span_after_while_header.next_single_width(),
 				));
 				None
@@ -3033,15 +3027,13 @@ pub(super) fn parse_stmt(
 			};
 			if semi_span.is_none() {
 				if let Some(ref return_expr) = return_expr {
-					syntax_errors.push(SyntaxErr::ExpectedSemiAfterReturnExpr(
+					syntax_errors.push(Diag::ExpectedSemiAfterReturnExpr(
 						return_expr.span.next_single_width(),
 					))
 				} else {
-					syntax_errors.push(
-						SyntaxErr::ExpectedSemiOrExprAfterReturnKw(
-							kw_span.next_single_width(),
-						),
-					)
+					syntax_errors.push(Diag::ExpectedSemiOrExprAfterReturnKw(
+						kw_span.next_single_width(),
+					))
 				}
 			}
 
@@ -3081,7 +3073,7 @@ pub(super) fn parse_stmt(
 				None => None,
 			};
 			if semi_span.is_none() {
-				syntax_errors.push(SyntaxErr::ExpectedSemiAfterBreakKw(
+				syntax_errors.push(Diag::ExpectedSemiAfterBreakKw(
 					kw_span.next_single_width(),
 				));
 			}
@@ -3119,7 +3111,7 @@ pub(super) fn parse_stmt(
 				None => None,
 			};
 			if semi_span.is_none() {
-				syntax_errors.push(SyntaxErr::ExpectedSemiAfterContinueKw(
+				syntax_errors.push(Diag::ExpectedSemiAfterContinueKw(
 					kw_span.next_single_width(),
 				));
 			}
@@ -3157,7 +3149,7 @@ pub(super) fn parse_stmt(
 				None => None,
 			};
 			if semi_span.is_none() {
-				syntax_errors.push(SyntaxErr::ExpectedSemiAfterDiscardKw(
+				syntax_errors.push(Diag::ExpectedSemiAfterDiscardKw(
 					kw_span.next_single_width(),
 				));
 			}
@@ -3180,7 +3172,7 @@ pub(super) fn parse_stmt(
 		_ => {
 			if token.is_punctuation_for_stmt() {
 				syntax_errors
-					.push(SyntaxErr::PunctuationCannotStartStmt(token_span));
+					.push(Diag::PunctuationCannotStartStmt(token_span));
 				nodes.push(Node {
 					ty: NodeTy::Punctuation,
 					span: token_span,
@@ -3202,14 +3194,14 @@ pub(super) fn parse_stmt(
 ///
 /// This also takes a mutable reference to a vector of syntax errors, and a span of the opening delimiter, which
 /// allows for the creation of a syntax error if the function never encounters the desired ending delimiter.
-type EndScope = fn(&mut Walker, &mut Vec<SyntaxErr>, Span) -> Option<Span>;
+type EndScope = fn(&mut Walker, &mut Vec<Diag>, Span) -> Option<Span>;
 
 const BRACE_DELIMITER: EndScope = |walker, errors, l_brace_span| {
 	let (current, current_span) = match walker.peek() {
 		Some((t, s)) => (t, *s),
 		None => {
 			// We did not encounter a `}` at all.
-			errors.push(SyntaxErr::ExpectedBraceScopeEnd(
+			errors.push(Diag::ExpectedBraceScopeEnd(
 				l_brace_span,
 				walker.get_last_span().next_single_width(),
 			));
@@ -3230,7 +3222,7 @@ const SWITCH_CASE_DELIMITER: EndScope = |walker, errors, colon_span| {
 		Some((t, s)) => (t, *s),
 		None => {
 			// We did not encounter one of the closing tokens at all.
-			errors.push(SyntaxErr::MissingSwitchBodyClosingBrace(
+			errors.push(Diag::MissingSwitchBodyClosingBrace(
 				Some(colon_span),
 				walker.get_last_span().next_single_width(),
 			));
@@ -3254,7 +3246,7 @@ fn parse_scope(
 	walker: &mut Walker,
 	exit_condition: EndScope,
 	opening_delim: Span,
-) -> (Scope, Vec<SyntaxErr>) {
+) -> (Scope, Vec<Diag>) {
 	let mut inner_nodes = Vec::new();
 	let mut errors = Vec::new();
 
@@ -3302,7 +3294,7 @@ fn parse_if_header_body(
 	walker: &mut Walker,
 	ty: IfTy,
 	expects_condition: bool,
-) -> (IfBranch, Vec<SyntaxErr>) {
+) -> (IfBranch, Vec<Diag>) {
 	let mut errors = Vec::new();
 
 	let (l_paren_span, cond_node, r_paren_span) = if expects_condition {
@@ -3310,7 +3302,7 @@ fn parse_if_header_body(
 		let (current, current_span) = match walker.peek() {
 			Some(t) => (&t.0, t.1),
 			None => {
-				errors.push(SyntaxErr::ExpectedParenAfterIfKw(
+				errors.push(Diag::ExpectedParenAfterIfKw(
 					ty.span().next_single_width(),
 				));
 				return (
@@ -3330,7 +3322,7 @@ fn parse_if_header_body(
 			walker.advance();
 			Some(current_span)
 		} else {
-			errors.push(SyntaxErr::ExpectedParenAfterIfKw(
+			errors.push(Diag::ExpectedParenAfterIfKw(
 				ty.span().next_single_width(),
 			));
 			None
@@ -3357,7 +3349,7 @@ fn parse_if_header_body(
 						if *current == Token::RParen
 							|| *current == Token::LBrace
 						{
-							errors.push(SyntaxErr::ExpectedExprInIfHeader(
+							errors.push(Diag::ExpectedExprInIfHeader(
 								Span::new_between(
 									if let Some(l_paren_span) = l_paren_span {
 										l_paren_span
@@ -3368,12 +3360,12 @@ fn parse_if_header_body(
 								),
 							));
 						} else {
-							errors.push(SyntaxErr::ExpectedExprInIfHeader(
+							errors.push(Diag::ExpectedExprInIfHeader(
 								walker.get_current_span(),
 							));
 						}
 					} else {
-						errors.push(SyntaxErr::ExpectedExprInIfHeader(
+						errors.push(Diag::ExpectedExprInIfHeader(
 							walker.get_current_span(),
 						));
 					}
@@ -3386,7 +3378,7 @@ fn parse_if_header_body(
 		let (current, current_span) = match walker.peek() {
 			Some(t) => (&t.0, t.1),
 			None => {
-				errors.push(SyntaxErr::ExpectedParenAfterIfHeader(
+				errors.push(Diag::ExpectedParenAfterIfHeader(
 					l_paren_span,
 					walker.get_last_span().next_single_width(),
 				));
@@ -3418,13 +3410,13 @@ fn parse_if_header_body(
 		} else if *current == Token::LBrace {
 			// We don't do anything apart from creating a syntax error since the next check deals
 			// with the optional `{`.
-			errors.push(SyntaxErr::ExpectedParenAfterIfHeader(
+			errors.push(Diag::ExpectedParenAfterIfHeader(
 				l_paren_span,
 				current_span.previous_single_width(),
 			));
 			(l_paren_span, cond_node, None)
 		} else {
-			errors.push(SyntaxErr::ExpectedParenAfterIfHeader(
+			errors.push(Diag::ExpectedParenAfterIfHeader(
 				l_paren_span,
 				Span::new_between(walker.get_previous_span(), current_span),
 			));
@@ -3461,7 +3453,7 @@ fn parse_if_header_body(
 		None => {
 			// Even though if statements without a body are illegal, we treat this as "valid"
 			// to produce better error recovery.
-			errors.push(SyntaxErr::ExpectedBraceOrStmtAfterIfHeader(
+			errors.push(Diag::ExpectedBraceOrStmtAfterIfHeader(
 				walker.get_last_span().next_single_width(),
 			));
 			return (
@@ -3516,7 +3508,7 @@ fn parse_if_header_body(
 				closing: None,
 			})
 		} else {
-			errors.push(SyntaxErr::ExpectedStmtAfterIfHeader(
+			errors.push(Diag::ExpectedStmtAfterIfHeader(
 				// Panics: `r_paren_span` will be `None` if a `{` was encountered, but in that
 				// case, the branch above will be chosen instead, and if we didn't encounter a
 				// `)`, we will have already quit this parse, so this is always guaranteed to
@@ -3566,22 +3558,23 @@ fn parse_if_header_body(
 fn parse_switch_body(
 	walker: &mut Walker,
 	l_brace_span: Span,
-) -> (Vec<SwitchBranch>, Vec<SyntaxErr>, Option<Span>) {
+) -> (Vec<SwitchBranch>, Vec<Diag>, Option<Span>) {
 	let mut errors = Vec::new();
 
 	// Check if the body is empty.
 	match walker.peek() {
 		Some((token, token_span)) => match token {
 			Token::RBrace => {
-				errors.push(SyntaxErr::FoundEmptySwitchBody(
-					Span::new_between(l_brace_span, *token_span),
-				));
+				errors.push(Diag::FoundEmptySwitchBody(Span::new_between(
+					l_brace_span,
+					*token_span,
+				)));
 				return (vec![], errors, Some(*token_span));
 			}
 			_ => {}
 		},
 		None => {
-			errors.push(SyntaxErr::MissingSwitchBodyClosingBrace(
+			errors.push(Diag::MissingSwitchBodyClosingBrace(
 				Some(l_brace_span),
 				walker.get_last_span().next_single_width(),
 			));
@@ -3596,7 +3589,7 @@ fn parse_switch_body(
 		let (current, current_span) = match walker.peek() {
 			Some(t) => (&t.0, t.1),
 			None => {
-				errors.push(SyntaxErr::MissingSwitchBodyClosingBrace(
+				errors.push(Diag::MissingSwitchBodyClosingBrace(
 					Some(l_brace_span),
 					walker.get_last_span().next_single_width(),
 				));
@@ -3625,7 +3618,7 @@ fn parse_switch_body(
 					(None, _) => {
 						// We found tokens which cannot even start an expression. We loop until we come
 						// across either `case`, `default` or a `}`.
-						errors.push(SyntaxErr::ExpectedExprAfterCaseKw(
+						errors.push(Diag::ExpectedExprAfterCaseKw(
 							kw_span.next_single_width(),
 						));
 						let mut invalid_expr_nodes = Nodes::new();
@@ -3633,10 +3626,14 @@ fn parse_switch_body(
 							let (current, current_span) = match walker.peek() {
 								Some(t) => t,
 								None => {
-									errors.push(SyntaxErr::MissingSwitchBodyClosingBrace(
-										Some(l_brace_span),
-										walker.get_last_span().next_single_width()
-									));
+									errors.push(
+										Diag::MissingSwitchBodyClosingBrace(
+											Some(l_brace_span),
+											walker
+												.get_last_span()
+												.next_single_width(),
+										),
+									);
 									break 'cases;
 								}
 							};
@@ -3647,11 +3644,9 @@ fn parse_switch_body(
 									break 'expr;
 								}
 								Token::Case | Token::Default => {
-									errors.push(
-										SyntaxErr::ExpectedExprAfterCaseKw(
-											kw_span.next_single_width(),
-										),
-									);
+									errors.push(Diag::ExpectedExprAfterCaseKw(
+										kw_span.next_single_width(),
+									));
 									cases.push(SwitchBranch {
 										span: Span::new(
 											kw_span.start,
@@ -3672,11 +3667,9 @@ fn parse_switch_body(
 									continue 'cases;
 								}
 								Token::RBrace => {
-									errors.push(
-										SyntaxErr::ExpectedExprAfterCaseKw(
-											kw_span.next_single_width(),
-										),
-									);
+									errors.push(Diag::ExpectedExprAfterCaseKw(
+										kw_span.next_single_width(),
+									));
 									cases.push(SwitchBranch {
 										span: Span::new(
 											kw_span.start,
@@ -3717,7 +3710,7 @@ fn parse_switch_body(
 				let (current, current_span) = match walker.peek() {
 					Some(t) => (&t.0, t.1),
 					None => {
-						errors.push(SyntaxErr::ExpectedColonAfterCase(
+						errors.push(Diag::ExpectedColonAfterCase(
 							walker.get_last_span().next_single_width(),
 						));
 						break 'cases;
@@ -3731,7 +3724,7 @@ fn parse_switch_body(
 				} else {
 					// Even though we are missing a necessary token, we treat this as "valid" for better error
 					// recovery.
-					errors.push(SyntaxErr::ExpectedColonAfterCase(
+					errors.push(Diag::ExpectedColonAfterCase(
 						if let Some(expr_nodes) = &expr_nodes {
 							if let Some(last) = expr_nodes.last() {
 								last.span.next_single_width()
@@ -3770,7 +3763,7 @@ fn parse_switch_body(
 				let (current, current_span) = match walker.peek() {
 					Some(t) => (&t.0, t.1),
 					None => {
-						errors.push(SyntaxErr::ExpectedColonAfterCase(
+						errors.push(Diag::ExpectedColonAfterCase(
 							walker.get_last_span().next_single_width(),
 						));
 						break 'cases;
@@ -3784,7 +3777,7 @@ fn parse_switch_body(
 				} else {
 					// Even though we are missing a necessary token, we treat this as "valid" for better error
 					// recovery.
-					errors.push(SyntaxErr::ExpectedColonAfterCase(
+					errors.push(Diag::ExpectedColonAfterCase(
 						kw_span.next_single_width(),
 					));
 					kw_span.end_zero_width()
@@ -3815,17 +3808,15 @@ fn parse_switch_body(
 			_ => {
 				// We have a token which cannot begin a case, so loop until we hit either `case`, `default` or a
 				// `}`.
-				errors.push(SyntaxErr::InvalidSwitchCaseBegin(current_span));
+				errors.push(Diag::InvalidSwitchCaseBegin(current_span));
 				'inner: loop {
 					let (current, _) = match walker.peek() {
 						Some(t) => (&t.0, t.1),
 						None => {
-							errors.push(
-								SyntaxErr::MissingSwitchBodyClosingBrace(
-									Some(l_brace_span),
-									walker.get_last_span().next_single_width(),
-								),
-							);
+							errors.push(Diag::MissingSwitchBodyClosingBrace(
+								Some(l_brace_span),
+								walker.get_last_span().next_single_width(),
+							));
 							break 'cases;
 						}
 					};
@@ -3860,7 +3851,7 @@ fn parse_fn(
 	ident: Ident,
 	comments_after_fn_ident: Comments,
 	l_paren_span: Span,
-) -> (Node, Vec<SyntaxErr>) {
+) -> (Node, Vec<Diag>) {
 	let mut errors = Vec::new();
 
 	// Consume tokens until we've reached the closing `)` parenthesis.
@@ -3877,7 +3868,7 @@ fn parse_fn(
 				// Error recovery: we are missing the closing parenthesis.
 				let node_end_span = walker.get_last_span();
 				params.analyze_syntax_errors(&mut errors, l_paren_span);
-				errors.push(SyntaxErr::ExpectedParenAtEndOfParamList(
+				errors.push(Diag::ExpectedParenAtEndOfParamList(
 					l_paren_span,
 					node_end_span.next_single_width(),
 				));
@@ -3922,7 +3913,7 @@ fn parse_fn(
 			}
 			Token::Semi => {
 				// Error recovery: we are missing the closing parenthesis for the parameter list.
-				errors.push(SyntaxErr::ExpectedParenAtEndOfParamList(
+				errors.push(Diag::ExpectedParenAtEndOfParamList(
 					l_paren_span,
 					current_span,
 				));
@@ -3950,7 +3941,7 @@ fn parse_fn(
 				);
 			}
 			Token::LBrace => {
-				errors.push(SyntaxErr::ExpectedParenAtEndOfParamList(
+				errors.push(Diag::ExpectedParenAtEndOfParamList(
 					l_paren_span,
 					current_span,
 				));
@@ -3973,7 +3964,7 @@ fn parse_fn(
 			(Some(e), comments_after, errs) => {
 				for err in errs {
 					match err {
-						SyntaxErr::ExprFoundOperandAfterOperand(_, _) => {}
+						Diag::ExprFoundOperandAfterOperand(_, _) => {}
 						_ => errors.push(err),
 					}
 				}
@@ -3981,7 +3972,7 @@ fn parse_fn(
 				match Type::parse(&e) {
 					Some(_) => (e, comments_after),
 					None => {
-						errors.push(SyntaxErr::ExpectedType(e.span));
+						errors.push(Diag::ExpectedType(e.span));
 						continue 'params;
 					}
 				}
@@ -4000,7 +3991,7 @@ fn parse_fn(
 							Token::RParen => {
 								// Since we are here, that means we have at least one parameter separated by a
 								// comma and we've now come across the closing `)` parenthesis, i.e. `int,)`.
-								errors.push(SyntaxErr::MissingTypeInParamList(
+								errors.push(Diag::MissingTypeInParamList(
 									current_span.start_zero_width(),
 								));
 								r_paren_span = Some(*current_span);
@@ -4008,16 +3999,14 @@ fn parse_fn(
 								break 'params;
 							}
 							Token::Semi | Token::LBrace => {
-								errors.push(SyntaxErr::MissingTypeInParamList(
+								errors.push(Diag::MissingTypeInParamList(
 									current_span.start_zero_width(),
 								));
 								continue 'params;
 							}
 							_ => {
 								// We have something like a keyword which is illegal.
-								errors.push(SyntaxErr::ExpectedType(
-									*current_span,
-								));
+								errors.push(Diag::ExpectedType(*current_span));
 								walker.advance();
 								continue 'params;
 							}
@@ -4073,9 +4062,7 @@ fn parse_fn(
 							}
 							_ => {
 								// We have something like a keyword which is illegal.
-								errors.push(SyntaxErr::ExpectedIdent(
-									*current_span,
-								));
+								errors.push(Diag::ExpectedIdent(*current_span));
 								walker.advance();
 								continue 'params;
 							}
@@ -4107,7 +4094,7 @@ fn parse_fn(
 			// Even though we are missing a necessary token to make the syntax valid, it still makes sense to just
 			// treat this as a "valid" function definition for analysis/goto/etc purposes. We do produce an error
 			// though about the missing token.
-			errors.push(SyntaxErr::ExpectedSemiOrScopeAfterParamList(
+			errors.push(Diag::ExpectedSemiOrScopeAfterParamList(
 				walker.get_last_span().next_single_width(),
 			));
 			return (
@@ -4186,7 +4173,7 @@ fn parse_fn(
 		// Even though we are missing a necessary token to make the syntax valid, it still makes sense to just
 		// treat this as a "valid" function definition for analysis/goto/etc purposes. We do produce an error
 		// though about the missing token.
-		errors.push(SyntaxErr::ExpectedSemiOrScopeAfterParamList(
+		errors.push(Diag::ExpectedSemiOrScopeAfterParamList(
 			walker.get_previous_span().next_single_width(),
 		));
 		(
@@ -4222,7 +4209,7 @@ fn parse_fn(
 fn parse_struct(
 	walker: &mut Walker,
 	nodes: &mut Vec<Node>,
-	syntax_errors: &mut Vec<SyntaxErr>,
+	syntax_errors: &mut Vec<Diag>,
 	qualifiers: Vec<Qualifier>,
 	comments_after_qualifiers: Comments,
 	kw_span: Span,
@@ -4245,7 +4232,7 @@ fn parse_struct(
 			ExprTy::Ident { ident, .. } => (ident, comments_after_ident),
 			_ => {
 				// No error recovery: we are missing the identifier.
-				syntax_errors.push(SyntaxErr::ExpectedIdentAfterStructKw(
+				syntax_errors.push(Diag::ExpectedIdentAfterStructKw(
 					walker.get_current_span(),
 				));
 				comments_after_qualifiers
@@ -4264,7 +4251,7 @@ fn parse_struct(
 		// `comments` is guaranteed to be empty.
 		(None, _comments, _) => {
 			// No error recovery: we are missing the identifier.
-			syntax_errors.push(SyntaxErr::ExpectedIdentAfterStructKw(
+			syntax_errors.push(Diag::ExpectedIdentAfterStructKw(
 				walker.get_current_span(),
 			));
 			comments_after_qualifiers
@@ -4286,7 +4273,7 @@ fn parse_struct(
 		Some(t) => (&t.0, t.1),
 		None => {
 			// No error recovery: we are missing the body.
-			syntax_errors.push(SyntaxErr::ExpectedScopeAfterStructIdent(
+			syntax_errors.push(Diag::ExpectedScopeAfterStructIdent(
 				walker.get_last_span().next_single_width(),
 			));
 			comments_after_qualifiers
@@ -4313,7 +4300,7 @@ fn parse_struct(
 		current_span
 	} else if *current == Token::Semi {
 		// Error recovery: we have a struct definition, which is illegal in GLSL.
-		syntax_errors.push(SyntaxErr::StructDefIsIllegal(Span::new(
+		syntax_errors.push(Diag::StructDefIsIllegal(Span::new(
 			node_span_start,
 			ident.span.end,
 		)));
@@ -4333,7 +4320,7 @@ fn parse_struct(
 		return;
 	} else {
 		// No error recovery: we are missing the body.
-		syntax_errors.push(SyntaxErr::ExpectedScopeAfterStructIdent(
+		syntax_errors.push(Diag::ExpectedScopeAfterStructIdent(
 			Span::new_between(walker.get_previous_span(), current_span),
 		));
 		comments_after_qualifiers
@@ -4364,7 +4351,7 @@ fn parse_struct(
 	// error messages which would become confusing since they would be overlaid over each other.
 	let mut missing_body_delim = false;
 	errs.iter().for_each(|e| match e {
-		SyntaxErr::ExpectedBraceScopeEnd(_, _) => missing_body_delim = true,
+		Diag::ExpectedBraceScopeEnd(_, _) => missing_body_delim = true,
 		_ => {}
 	});
 	syntax_errors.append(&mut errs);
@@ -4391,14 +4378,11 @@ fn parse_struct(
 	let mut count = 0;
 	body.inner.iter().for_each(|node| match node.ty {
 		NodeTy::VarDef { .. } | NodeTy::VarDefs { .. } => count += 1,
-		_ => {
-			syntax_errors.push(SyntaxErr::ExpectedVarDefInStructBody(node.span))
-		}
+		_ => syntax_errors.push(Diag::ExpectedVarDefInStructBody(node.span)),
 	});
 	// Check that there is at least one variable definition within the body.
 	if count == 0 {
-		syntax_errors
-			.push(SyntaxErr::ExpectedAtLeastOneMemberInStruct(body.span));
+		syntax_errors.push(Diag::ExpectedAtLeastOneMemberInStruct(body.span));
 	}
 
 	let comments_after_body = walker.consume_comments();
@@ -4412,7 +4396,7 @@ fn parse_struct(
 				}
 				_ => {
 					// Error recovery: we are missing the semi colon.
-					syntax_errors.push(SyntaxErr::ExpectedSemiAfterStructBody(
+					syntax_errors.push(Diag::ExpectedSemiAfterStructBody(
 						body.span.next_single_width(),
 					));
 					nodes.push(Node {
@@ -4443,7 +4427,7 @@ fn parse_struct(
 		Some(t) => t,
 		None => {
 			// Error recovery: we are missing the semi colon.
-			syntax_errors.push(SyntaxErr::ExpectedSemiAfterStructBody(
+			syntax_errors.push(Diag::ExpectedSemiAfterStructBody(
 				body.span.next_single_width(),
 			));
 			nodes.push(Node {
@@ -4486,7 +4470,7 @@ fn parse_struct(
 		return;
 	} else {
 		// Error recovery: we are missing the semi colon.
-		syntax_errors.push(SyntaxErr::ExpectedSemiAfterStructBody(
+		syntax_errors.push(Diag::ExpectedSemiAfterStructBody(
 			body.span.next_single_width(),
 		));
 		nodes.push(Node {
@@ -4506,5 +4490,681 @@ fn parse_struct(
 			},
 		});
 		return;
+	}
+}
+
+fn parse_directive(
+	walker: &mut Walker,
+	nodes: &mut Vec<Node>,
+	syntax_errors: &mut Vec<Diag>,
+	token_stream: token::preprocessor::TokenStream,
+	directive_span: Span,
+) {
+	use crate::{
+		cst::Profile,
+		error::PreprocDiag,
+		token::preprocessor::{ExtensionToken, TokenStream, VersionToken},
+	};
+
+	match token_stream {
+		TokenStream::Version {
+			kw: kw_span,
+			tokens,
+		} => {
+			walker.advance();
+			let last_span = match tokens.last() {
+				Some(t) => t.1,
+				None => {
+					let span = Span::new(directive_span.start, kw_span.end);
+					syntax_errors.push(Diag::Preproc(
+						PreprocDiag::VersionExpectedNumber(
+							kw_span.next_single_width(),
+						),
+					));
+					nodes.push(Node {
+						span,
+						ty: NodeTy::Preproc(Preproc::Version {
+							kw: kw_span,
+							version: None,
+							profile: None,
+						}),
+					});
+					return;
+				}
+			};
+			let mut tokens = tokens.into_iter();
+			let (first_token, first_token_span) = match tokens.next() {
+				Some(t) => t,
+				None => unreachable!(),
+			};
+
+			let version = match first_token {
+				VersionToken::Num(num) => (num, first_token_span),
+				VersionToken::InvalidNum(_) => {
+					let span = Span::new(directive_span.start, kw_span.end);
+					syntax_errors.push(Diag::Preproc(
+						PreprocDiag::VersionInvalidNumber(first_token_span),
+					));
+					nodes.push(Node {
+						span,
+						ty: NodeTy::Preproc(Preproc::Version {
+							kw: kw_span,
+							version: None,
+							profile: None,
+						}),
+					});
+					if let Some((_, span)) = tokens.next() {
+						syntax_errors.push(Diag::Preproc(
+							PreprocDiag::VersionTrailingTokens(span),
+						));
+						nodes.push(Node {
+							span: Span::new(span.start, last_span.end),
+							ty: NodeTy::Invalid,
+						});
+					}
+					return;
+				}
+				VersionToken::Word(str) => {
+					match Profile::from_str(
+						&str,
+						first_token_span,
+						syntax_errors,
+					) {
+						Some(profile) => {
+							let span = Span::new(
+								directive_span.start,
+								first_token_span.end,
+							);
+							syntax_errors.push(Diag::Preproc(
+								PreprocDiag::VersionMissingNumber(
+									Span::new_between(
+										kw_span,
+										first_token_span,
+									),
+								),
+							));
+							nodes.push(Node {
+								span,
+								ty: NodeTy::Preproc(Preproc::Version {
+									kw: kw_span,
+									version: None,
+									profile: Some((profile, first_token_span)),
+								}),
+							});
+							if let Some((_, span)) = tokens.next() {
+								let span = Span::new(span.start, last_span.end);
+								syntax_errors.push(Diag::Preproc(
+									PreprocDiag::VersionTrailingTokens(span),
+								));
+								nodes.push(Node {
+									span,
+									ty: NodeTy::Invalid,
+								});
+							}
+							return;
+						}
+						None => {
+							let span =
+								Span::new(directive_span.start, kw_span.end);
+							syntax_errors.push(Diag::Preproc(
+								PreprocDiag::VersionExpectedNumber(
+									first_token_span,
+								),
+							));
+							nodes.push(Node {
+								span,
+								ty: NodeTy::Preproc(Preproc::Version {
+									kw: kw_span,
+									version: None,
+									profile: None,
+								}),
+							});
+							nodes.push(Node {
+								span: first_token_span,
+								ty: NodeTy::Invalid,
+							});
+							if let Some((_, span)) = tokens.next() {
+								let span = Span::new(span.start, last_span.end);
+								syntax_errors.push(Diag::Preproc(
+									PreprocDiag::VersionTrailingTokens(span),
+								));
+								nodes.push(Node {
+									span,
+									ty: NodeTy::Invalid,
+								});
+							}
+							return;
+						}
+					}
+				}
+				VersionToken::Invalid(_) => {
+					let span = Span::new(directive_span.start, kw_span.end);
+					syntax_errors.push(Diag::Preproc(
+						PreprocDiag::VersionExpectedNumber(first_token_span),
+					));
+					nodes.push(Node {
+						span,
+						ty: NodeTy::Preproc(Preproc::Version {
+							kw: kw_span,
+							version: None,
+							profile: None,
+						}),
+					});
+					if let Some((_, span)) = tokens.next() {
+						let span = Span::new(span.start, last_span.end);
+						syntax_errors.push(Diag::Preproc(
+							PreprocDiag::VersionTrailingTokens(span),
+						));
+						nodes.push(Node {
+							span,
+							ty: NodeTy::Invalid,
+						});
+					}
+					return;
+				}
+			};
+
+			match version.0 {
+				450 => {}
+				100 | 110 | 120 | 130 | 140 | 150 | 300 | 310 | 320 | 330
+				| 400 | 410 | 420 | 430 | 440 | 460 => {
+					syntax_errors.push(Diag::Preproc(
+						PreprocDiag::VersionUnsupportedNumber(version.1),
+					));
+				}
+				_ => {
+					let span = Span::new(directive_span.start, version.1.end);
+					syntax_errors.push(Diag::Preproc(
+						PreprocDiag::VersionInvalidNumber(version.1),
+					));
+					nodes.push(Node {
+						span,
+						ty: NodeTy::Preproc(Preproc::Version {
+							kw: kw_span,
+							version: Some(version),
+							profile: None,
+						}),
+					});
+					if let Some((_, span)) = tokens.next() {
+						let span = Span::new(span.start, last_span.end);
+						syntax_errors.push(Diag::Preproc(
+							PreprocDiag::VersionTrailingTokens(span),
+						));
+						nodes.push(Node {
+							span,
+							ty: NodeTy::Invalid,
+						});
+					}
+					return;
+				}
+			}
+
+			let (second_token, second_token_span) = match tokens.next() {
+				Some(t) => t,
+				None => {
+					nodes.push(Node {
+						span: directive_span,
+						ty: NodeTy::Preproc(Preproc::Version {
+							kw: kw_span,
+							version: Some(version),
+							profile: None,
+						}),
+					});
+					return;
+				}
+			};
+
+			let profile = match second_token {
+				VersionToken::Word(str) => match Profile::from_str(
+					&str,
+					second_token_span,
+					syntax_errors,
+				) {
+					Some(profile) => (profile, second_token_span),
+					None => {
+						let span =
+							Span::new(directive_span.start, version.1.end);
+						syntax_errors.push(Diag::Preproc(
+							PreprocDiag::VersionInvalidProfile(
+								second_token_span,
+							),
+						));
+						nodes.push(Node {
+							span,
+							ty: NodeTy::Preproc(Preproc::Version {
+								kw: kw_span,
+								version: Some(version),
+								profile: None,
+							}),
+						});
+						nodes.push(Node {
+							span: second_token_span,
+							ty: NodeTy::Invalid,
+						});
+						if let Some((_, span)) = tokens.next() {
+							let span = Span::new(span.start, last_span.end);
+							syntax_errors.push(Diag::Preproc(
+								PreprocDiag::VersionTrailingTokens(span),
+							));
+							nodes.push(Node {
+								span,
+								ty: NodeTy::Invalid,
+							});
+						}
+						return;
+					}
+				},
+				_ => {
+					let span = Span::new(directive_span.start, version.1.end);
+					syntax_errors.push(Diag::Preproc(
+						PreprocDiag::VersionExpectedProfile(second_token_span),
+					));
+					nodes.push(Node {
+						span,
+						ty: NodeTy::Preproc(Preproc::Version {
+							kw: kw_span,
+							version: Some(version),
+							profile: None,
+						}),
+					});
+					if let Some((_, span)) = tokens.next() {
+						let span = Span::new(span.start, last_span.end);
+						syntax_errors.push(Diag::Preproc(
+							PreprocDiag::VersionTrailingTokens(span),
+						));
+						nodes.push(Node {
+							span,
+							ty: NodeTy::Invalid,
+						});
+					}
+					return;
+				}
+			};
+
+			let span = Span::new(directive_span.start, profile.1.end);
+			nodes.push(Node {
+				span,
+				ty: NodeTy::Preproc(Preproc::Version {
+					kw: kw_span,
+					version: Some(version),
+					profile: Some(profile),
+				}),
+			});
+			if let Some((_, span)) = tokens.next() {
+				let span = Span::new(span.start, last_span.end);
+				syntax_errors.push(Diag::Preproc(
+					PreprocDiag::VersionTrailingTokens(span),
+				));
+				nodes.push(Node {
+					span,
+					ty: NodeTy::Invalid,
+				});
+			}
+			return;
+		}
+		TokenStream::Extension {
+			kw: kw_span,
+			tokens,
+		} => {
+			walker.advance();
+			let last_span = match tokens.last() {
+				Some(t) => t.1,
+				None => {
+					let span = Span::new(directive_span.start, kw_span.end);
+					syntax_errors.push(Diag::Preproc(
+						PreprocDiag::ExtensionExpectedName(span),
+					));
+					nodes.push(Node {
+						span,
+						ty: NodeTy::Preproc(Preproc::Extension {
+							kw: kw_span,
+							name: None,
+							colon: None,
+							behaviour: None,
+						}),
+					});
+					return;
+				}
+			};
+			let mut tokens = tokens.into_iter();
+			let (first_token, first_token_span) = match tokens.next() {
+				Some(t) => t,
+				None => unreachable!(),
+			};
+
+			let name = match first_token {
+				ExtensionToken::Word(str) => (str, first_token_span),
+				ExtensionToken::Colon => {
+					syntax_errors.push(Diag::Preproc(
+						PreprocDiag::ExtensionMissingName(Span::new_between(
+							kw_span,
+							first_token_span,
+						)),
+					));
+					let colon_span = first_token_span;
+
+					let (second_token, second_token_span) = match tokens.next()
+					{
+						Some(t) => t,
+						None => {
+							let span =
+								Span::new(directive_span.start, colon_span.end);
+							syntax_errors.push(Diag::Preproc(
+								PreprocDiag::ExtensionExpectedBehaviour(
+									colon_span.next_single_width(),
+								),
+							));
+							nodes.push(Node {
+								span,
+								ty: NodeTy::Preproc(Preproc::Extension {
+									kw: kw_span,
+									name: None,
+									colon: Some(colon_span),
+									behaviour: None,
+								}),
+							});
+							if let Some((_, span)) = tokens.next() {
+								let span = Span::new(span.start, last_span.end);
+								syntax_errors.push(Diag::Preproc(
+									PreprocDiag::ExtensionTrailingTokens(span),
+								));
+								nodes.push(Node {
+									span,
+									ty: NodeTy::Invalid,
+								});
+							}
+							return;
+						}
+					};
+
+					match second_token {
+						ExtensionToken::Word(str) => {
+							let behaviour = ExtBehaviour::from_str(
+								&str,
+								second_token_span,
+								syntax_errors,
+							);
+							let span = if behaviour.is_none() {
+								syntax_errors.push(Diag::Preproc(
+									PreprocDiag::ExtensionInvalidBehaviour(
+										second_token_span,
+									),
+								));
+								Span::new(directive_span.start, colon_span.end)
+							} else {
+								Span::new(
+									directive_span.start,
+									second_token_span.end,
+								)
+							};
+							nodes.push(Node {
+								span,
+								ty: NodeTy::Preproc(Preproc::Extension {
+									kw: kw_span,
+									name: None,
+									colon: Some(colon_span),
+									behaviour: behaviour
+										.map(|b| (b, second_token_span)),
+								}),
+							});
+							if let Some((_, span)) = tokens.next() {
+								let span = Span::new(span.start, last_span.end);
+								syntax_errors.push(Diag::Preproc(
+									PreprocDiag::ExtensionTrailingTokens(span),
+								));
+								nodes.push(Node {
+									span,
+									ty: NodeTy::Invalid,
+								});
+							}
+							return;
+						}
+						_ => {
+							syntax_errors.push(Diag::Preproc(
+								PreprocDiag::ExtensionExpectedName(
+									second_token_span,
+								),
+							));
+							let span =
+								Span::new(directive_span.start, colon_span.end);
+							nodes.push(Node {
+								span,
+								ty: NodeTy::Preproc(Preproc::Extension {
+									kw: kw_span,
+									name: None,
+									colon: Some(colon_span),
+									behaviour: None,
+								}),
+							});
+							if let Some((_, span)) = tokens.next() {
+								let span = Span::new(span.start, last_span.end);
+								syntax_errors.push(Diag::Preproc(
+									PreprocDiag::ExtensionTrailingTokens(span),
+								));
+								nodes.push(Node {
+									span,
+									ty: NodeTy::Invalid,
+								});
+							}
+							return;
+						}
+					}
+				}
+				ExtensionToken::Invalid(_) => {
+					let span = Span::new(directive_span.start, kw_span.end);
+					syntax_errors.push(Diag::Preproc(
+						PreprocDiag::ExtensionExpectedName(first_token_span),
+					));
+					nodes.push(Node {
+						span,
+						ty: NodeTy::Preproc(Preproc::Extension {
+							kw: kw_span,
+							name: None,
+							colon: None,
+							behaviour: None,
+						}),
+					});
+					if let Some((_, span)) = tokens.next() {
+						let span = Span::new(span.start, last_span.end);
+						syntax_errors.push(Diag::Preproc(
+							PreprocDiag::ExtensionTrailingTokens(span),
+						));
+						nodes.push(Node {
+							span,
+							ty: NodeTy::Invalid,
+						});
+					}
+					return;
+				}
+			};
+
+			let (second_token, second_token_span) = match tokens.next() {
+				Some(t) => t,
+				None => {
+					let span = Span::new(directive_span.start, name.1.end);
+					syntax_errors.push(Diag::Preproc(
+						PreprocDiag::ExtensionExpectedColon(
+							name.1.next_single_width(),
+						),
+					));
+					nodes.push(Node {
+						span,
+						ty: NodeTy::Preproc(Preproc::Extension {
+							kw: kw_span,
+							name: Some(name),
+							colon: None,
+							behaviour: None,
+						}),
+					});
+					return;
+				}
+			};
+
+			let colon_span = match second_token {
+				ExtensionToken::Colon => second_token_span,
+				ExtensionToken::Word(str) => {
+					let span = Span::new(directive_span.start, name.1.end);
+					syntax_errors.push(Diag::Preproc(
+						PreprocDiag::ExtensionMissingColon(Span::new_between(
+							name.1,
+							second_token_span,
+						)),
+					));
+					nodes.push(Node {
+						span,
+						ty: NodeTy::Preproc(Preproc::Extension {
+							kw: kw_span,
+							name: Some(name),
+							colon: None,
+							behaviour: match ExtBehaviour::from_str(
+								&str,
+								second_token_span,
+								syntax_errors,
+							) {
+								Some(b) => Some((b, second_token_span)),
+								None => {
+									syntax_errors.push(Diag::Preproc(
+										PreprocDiag::ExtensionInvalidBehaviour(
+											second_token_span,
+										),
+									));
+									None
+								}
+							},
+						}),
+					});
+					if let Some((_, span)) = tokens.next() {
+						let span = Span::new(span.start, last_span.end);
+						syntax_errors.push(Diag::Preproc(
+							PreprocDiag::ExtensionTrailingTokens(span),
+						));
+						nodes.push(Node {
+							span,
+							ty: NodeTy::Invalid,
+						});
+					}
+					return;
+				}
+				ExtensionToken::Invalid(_) => {
+					let span = Span::new(directive_span.start, name.1.end);
+					syntax_errors.push(Diag::Preproc(
+						PreprocDiag::ExtensionExpectedColon(second_token_span),
+					));
+					nodes.push(Node {
+						span,
+						ty: NodeTy::Preproc(Preproc::Extension {
+							kw: kw_span,
+							name: Some(name),
+							colon: None,
+							behaviour: None,
+						}),
+					});
+					if let Some((_, span)) = tokens.next() {
+						let span = Span::new(span.start, last_span.end);
+						syntax_errors.push(Diag::Preproc(
+							PreprocDiag::ExtensionTrailingTokens(span),
+						));
+						nodes.push(Node {
+							span,
+							ty: NodeTy::Invalid,
+						});
+					}
+					return;
+				}
+			};
+
+			let (third_token, third_token_span) = match tokens.next() {
+				Some(t) => t,
+				None => {
+					let span = Span::new(directive_span.start, colon_span.end);
+					syntax_errors.push(Diag::Preproc(
+						PreprocDiag::ExtensionExpectedBehaviour(
+							colon_span.next_single_width(),
+						),
+					));
+					nodes.push(Node {
+						span,
+						ty: NodeTy::Preproc(Preproc::Extension {
+							kw: kw_span,
+							name: Some(name),
+							colon: Some(colon_span),
+							behaviour: None,
+						}),
+					});
+					return;
+				}
+			};
+
+			match third_token {
+				ExtensionToken::Word(str) => {
+					let behaviour = ExtBehaviour::from_str(
+						&str,
+						third_token_span,
+						syntax_errors,
+					);
+					let span = if behaviour.is_none() {
+						syntax_errors.push(Diag::Preproc(
+							PreprocDiag::ExtensionInvalidBehaviour(
+								third_token_span,
+							),
+						));
+						Span::new(directive_span.start, colon_span.end)
+					} else {
+						Span::new(directive_span.start, third_token_span.end)
+					};
+					nodes.push(Node {
+						span,
+						ty: NodeTy::Preproc(Preproc::Extension {
+							kw: kw_span,
+							name: Some(name),
+							colon: Some(colon_span),
+							behaviour: behaviour.map(|b| (b, third_token_span)),
+						}),
+					});
+					if let Some((_, span)) = tokens.next() {
+						let span = Span::new(span.start, last_span.end);
+						syntax_errors.push(Diag::Preproc(
+							PreprocDiag::ExtensionTrailingTokens(span),
+						));
+						nodes.push(Node {
+							span,
+							ty: NodeTy::Invalid,
+						});
+					}
+					return;
+				}
+				_ => {
+					syntax_errors.push(Diag::Preproc(
+						PreprocDiag::ExtensionExpectedName(third_token_span),
+					));
+					let span = Span::new(directive_span.start, colon_span.end);
+					nodes.push(Node {
+						span,
+						ty: NodeTy::Preproc(Preproc::Extension {
+							kw: kw_span,
+							name: Some(name),
+							colon: Some(colon_span),
+							behaviour: None,
+						}),
+					});
+					if let Some((_, span)) = tokens.next() {
+						let span = Span::new(span.start, last_span.end);
+						syntax_errors.push(Diag::Preproc(
+							PreprocDiag::ExtensionTrailingTokens(span),
+						));
+						nodes.push(Node {
+							span,
+							ty: NodeTy::Invalid,
+						});
+					}
+					return;
+				}
+			}
+		}
+		TokenStream::Line {
+			kw: kw_span,
+			tokens,
+		} => {}
+		_ => {}
 	}
 }

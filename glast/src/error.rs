@@ -750,6 +750,13 @@ pub enum PreprocDiag {
 
 #[derive(Debug)]
 pub enum PreprocDefineDiag {
+	/* DEFINE */
+	/// ERROR - Did not find an identifier token after the define keyword.
+	///
+	/// - `0` - The span where the macro name is expected.
+	DefineExpectedMacroName(Span),
+
+	/* TOKEN CONCAT */
 	/// ERROR - Found a token concatenator (`##`) with no valid token on the left-hand side. E.g.
 	/// ```c
 	/// #define FOO ## 0
@@ -763,13 +770,6 @@ pub enum PreprocDefineDiag {
 	/// ```
 	/// - `0` - The span of the operator.
 	TokenConcatMissingRHS(Span),
-	/// WARNING - Found a token concatenator (`##`) between two tokens which cannot be concatenated. E.g.
-	/// ```c
-	/// #define FOO 500 ## ;
-	/// ```
-	///
-	/// - `0` - The span of the operator.
-	TokenConcatUnnecessary(Span),
 
 	/* UNDEF */
 	/// WARNING - The macro identifier in an undef directive could not be resolved.

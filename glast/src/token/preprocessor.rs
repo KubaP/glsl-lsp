@@ -1466,7 +1466,14 @@ pub(crate) fn concat_object_macro_body(
 							next.1.last_char(),
 						));
 					} else {
-						concat_tokens(&mut stack, prev, next)
+						// Panic: The `Token::to_string()` method panics with a directive, however `tokens` is a
+						// replacement-list of tokens in a macro and that will never contain any directive tokens
+						// within.
+						let mut new_string = prev.0.to_string();
+						new_string.push_str(&next.0.to_string());
+						let mut lexer = Lexer::new(&new_string);
+						let mut result = super::parse_tokens(&mut lexer, true);
+						stack.append(&mut result);
 					}
 				}
 				(Some(prev), None) => {
@@ -1528,47 +1535,4 @@ pub(crate) fn concat_object_macro_body(
 	}
 
 	stack
-}
-
-fn concat_tokens(
-	tokens: &mut super::TokenStream,
-	left: Spanned<super::Token>,
-	right: Spanned<super::Token>,
-) {
-	use super::Token;
-
-	// FIXME: Support dot, e.g. `5##.##0` should work.
-	let left_can_concat = match left.0 {
-		Token::Num { .. }
-		| Token::Bool(_)
-		| Token::Ident(_)
-		| Token::Invalid(_) => true,
-		_ => left.0.starts_statement(),
-	};
-
-	let right_can_concat = match right.0 {
-		Token::Num { .. }
-		| Token::Bool(_)
-		| Token::Ident(_)
-		| Token::Invalid(_) => true,
-		_ => right.0.starts_statement(),
-	};
-
-	// It only makes sense to concat certain types of tokens. For example `if` and `_foo` become `if_foo`, a new
-	// identifier. But something like `foo` and `;` cannot become a new single token; the concatenation operator
-	// does nothing in this case and just creates the two separate tokens.
-	if left_can_concat && right_can_concat {
-		let mut new_string = left.0.to_string();
-		new_string.push_str(&right.0.to_string());
-
-		// We run the lexer on the new concatenated string to produce our new token. This takes care of all the
-		// oddities, such as concatenating `con` and `st` to produce a `const` keyword.
-		let mut lexer = Lexer::new(&new_string);
-		let mut result = super::parse_tokens(&mut lexer, true);
-		tokens.append(&mut result);
-	} else {
-		// TODO: Emit warning
-		tokens.push(left);
-		tokens.push(right);
-	}
 }

@@ -5,7 +5,7 @@ pub use syntax::*;
 
 use crate::{
 	cst::{Comment, Comments},
-	error::Diag,
+	error::{Diag, PreprocDefineDiag},
 	span::{Span, Spanned},
 	token::{Token, TokenStream},
 };
@@ -24,7 +24,7 @@ pub fn parse_from_str(
 	(nodes, walker.diagnostics, walker.syntax_tokens)
 }
 
-struct Walker {
+pub(crate) struct Walker {
 	/// The active token streams.
 	///
 	/// - `(identifier, token_stream, cursor)`.
@@ -190,8 +190,9 @@ impl Walker {
 
 						if new_stream.is_empty() {
 							// The macro is empty, so we want to move to the next token of the existing stream.
-							self.diagnostics
-								.push(Diag::EmptyMacroCallSite(token_span));
+							self.push_diag(Diag::EmptyMacroCallSite(
+								token_span,
+							));
 							if self.streams.len() == 1 {
 								self.syntax_tokens.push((
 									SyntaxToken::ObjectMacro,
@@ -350,28 +351,35 @@ fn parse_stmt(walker: &mut Walker, nodes: &mut Vec<ast::Node>) {
 		}
 		Token::Directive(dir) => match dir {
 			preprocessor::TokenStream::Define {
-				kw,
+				kw: kw_span,
 				mut ident_tokens,
 				body_tokens,
 			} => {
 				walker.colour(token_span.first_char(), SyntaxToken::Directive);
-				walker.colour(kw, SyntaxToken::Directive);
+				walker.colour(kw_span, SyntaxToken::Directive);
 
 				if ident_tokens.is_empty() {
-					// TODO: Emit error and don't register the macro.
+					// We have a macro that's missing a name.
+
+					walker.push_diag(Diag::PreprocDefine(
+						PreprocDefineDiag::DefineExpectedMacroName(
+							kw_span.next_single_width(),
+						),
+					));
 					body_tokens.iter().for_each(|(_, s)| {
 						walker.colour(*s, SyntaxToken::Invalid)
 					});
 				} else if ident_tokens.len() == 1 {
 					// We have an object-like macro.
 
-					// Panic: If this has a length of `1`, it's guaranteed that the token is an `Ident` token.
 					let ident = match ident_tokens.remove(0) {
 						(DefineToken::Ident(s), span) => (s, span),
 						_ => unreachable!(),
 					};
 					walker.colour(ident.1, SyntaxToken::ObjectMacro);
 
+					// Since object-like macros don't have parameters, we can perform the concatenation once right
+					// here since we know the contents of the macro body will never change.
 					let body_tokens = preprocessor::concat_object_macro_body(
 						walker,
 						body_tokens,

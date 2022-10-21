@@ -368,16 +368,16 @@ Note that this is **unlike** function calls, where a trailing comma is invalid.
 ## Implicit Conversions
 The following implicit conversions are available:
 
-| From | To |
-|---|---|
-|`int` |`uint`|
-|`int`, `uint` |`float`|
-|`int`, `uint`, `float` |`double`|
-|`ivecx`|`uvecx`|
-|`ivecx`, `uvecx`|`vecx`|
-|`ivecx`, `uvecx`, `vecx`|`dvecx`|
-|`matnxm`|`dmatnxm`|
-|`mati`|`dmati`|
+| From                     | To        |
+| ------------------------ | --------- |
+| `int`                    | `uint`    |
+| `int`, `uint`            | `float`   |
+| `int`, `uint`, `float`   | `double`  |
+| `ivecx`                  | `uvecx`   |
+| `ivecx`, `uvecx`         | `vecx`    |
+| `ivecx`, `uvecx`, `vecx` | `dvecx`   |
+| `matnxm`                 | `dmatnxm` |
+| `mati`                   | `dmati`   |
 
 Arrays do not have any implicit conversions, even if the the element type does have conversions.
 
@@ -458,25 +458,25 @@ a ^^ b // Logical XOR
 !a     // Logical NOT
 ```
 
-|Precedence|Operator|
-|-|-|
-|1|`()` (bracket grouping)|
-|2|`[]` (index), `fn_call()`, `.` (object access), `++`, `--` (postfix)|
-|3|`++`, `--` (prefix), `-` (negation), `~` (repeatable), `!` (repeatable)|
-|4|`*`, `/`, `%`|
-|5|`+`, `-`|
-|6|`<<`, `>>`|
-|7|`<`, `>`, `<=`, `>=`|
-|8|`==`, `!=`|
-|9|`&`|
-|10|`^`|
-|11|`\|`|
-|12|`&&`|
-|13|`^^`|
-|14|`\|\|`|
-|15|`?:` (ternary)|
-|16|`=`, `+=`, `-=`, `*=`, `/=`, `%=`, `&=`, `^=`, `\|=`, `<<=`, `>>=`|
-|17|`,` (list seperator)|
+| Precedence | Operator                                                                |
+| ---------- | ----------------------------------------------------------------------- |
+| 1          | `()` (bracket grouping)                                                 |
+| 2          | `[]` (index), `fn_call()`, `.` (object access), `++`, `--` (postfix)    |
+| 3          | `++`, `--` (prefix), `-` (negation), `~` (repeatable), `!` (repeatable) |
+| 4          | `*`, `/`, `%`                                                           |
+| 5          | `+`, `-`                                                                |
+| 6          | `<<`, `>>`                                                              |
+| 7          | `<`, `>`, `<=`, `>=`                                                    |
+| 8          | `==`, `!=`                                                              |
+| 9          | `&`                                                                     |
+| 10         | `^`                                                                     |
+| 11         | `\|`                                                                    |
+| 12         | `&&`                                                                    |
+| 13         | `^^`                                                                    |
+| 14         | `\|\|`                                                                  |
+| 15         | `?:` (ternary)                                                          |
+| 16         | `=`, `+=`, `-=`, `*=`, `/=`, `%=`, `&=`, `^=`, `\|=`, `<<=`, `>>=`      |
+| 17         | `,` (list seperator)                                                    |
 
 Only the `.` object access, `==`, `!=` and `=` operators are allowed to operate on [Structs](#structs).
 
@@ -1162,6 +1162,40 @@ Open-ended multi-line comments containing the EOF produce an error:
 Note that single-line comments, even with the `\` continuation character, can never produce this error even if they also are at the end of the file.
 
 # Preprocessor
+The preprocessor is a single-pass scan. This means that, for example, a macro cannot create a new directive.
+
+The GLSL preprocessor is based off the C++98 standard: [ISO/IEC 14882:1998](https://www.lirmm.fr/~ducour/Doc-objets/ISO+IEC+14882-1998.pdf), but it:
+- has no support for digraphs or trigraphs,
+- has no support for string or character literals, and hence no support for the stringizing operator,
+- has no support for universal character names (`\uXXXX` notation),
+- has no support for any number literals other than integers (with no prefixes/suffixes),
+- has the extra [version](#version) and [extension](#extension) directives, and lacks the [include](#include) directive,
+- has different pre-defined macros, (which depend on the exact GLSL version).
+
+## Token Concatenation Operator (##)
+The token concatenation operator (sometimes referred to as the pasting operator) joins two tokens, removing any whitespace in the process:
+```glsl
+#define TEST 4##9
+
+// Spaces between the tokens and the operator are allowed:
+#define TEST 4 ## 9
+```
+Any use of `TEST` would expand to the number token `49`.
+
+This operator can only be used within the body of a [define](#define) directive; everywhere else it is treated as two individual `#` characters, (which may or may not be legal depending on the specific directive). An error is produced if there is no token before/after the operator. An error is produced if a `##` is located immediately after the operator, i.e. `####`. A warning may be produced if the two tokens can't be concatenated together, such as `500##+`.
+
+The main use of this operator is to concatenate an argument in a function-like macro with hardcoded tokens:
+```glsl
+#define TRAILING_2(a) a##00
+
+int i = TRAILING_2(5); // Expands to: int i = 500;
+```
+It is possible to chain the operator like so:
+```glsl
+#define DOT(a, b) a##.##b
+
+int i = DOT(5, 0); // Expands to: int i = 5.0;
+```
 
 ## Directives
 All preprocessor directives follow the syntax:
@@ -1175,51 +1209,61 @@ All preprocessor directives follow the syntax:
 #Directive ... \
     Directive continues here
 
+/* foo */ # Directive ...
+
 // This is ignored:
 #
 ```
-The `#` symbol must be the first (aside from whitespace) and the statement ends at EOL, unless a [Line-Continuation Character](#line-continuation-character) is present. The `#` can be followed by whitespace before the first directive letter.
+The `#` symbol must be the first (aside from whitespace or comments) and the statement ends at the EOL (taking into account any [Line-Continuation Characters](#line-continuation-character)). The `#` can be followed by whitespace before any other character.
 
-A `#` on its own without anything after is ignored.
+A `#` on its own without anything after until the EOL is ignored.
 
 ### Version
 The version directive is specified like so:
 ```glsl
-#version NUM PROFILE
+#version _NUM_
+#version _NUM_ _PROFILE_
 
-// E.g.
-#version 450 core
+// Examples:
 #version 460
+#version 450 core
+#version 310 es
 ```
-`NUM` is the version number as an integer without the dot (`.`), so version 4.50 is `450`. Unless specified, `110` is the default.
+`_NUM_` is the GLSL version number as an integer without the dot (`.`), so version 4.50 is `450`; only valid GLSL version numbers are accepted, any other value produces an error. It is mandatory. The default behaviour assumes `110`.
 
-`PROFILE` is either `core`, `compatibility` or `es`. Unless specified, `core` is the default. The profile can only be used if the version number is `150` or greater. You can omit the profile, but the version number must be present (unless the version number is `300` or `310`, in which case the profile **must** be `es`).
+`_PROFILE_` is either `core`, `compatibility` or `es`; any other value produces an error. It is optional, unless version is `300` or `310` in which case the profile must be `es`. It can only be used if the version number is `150` or greater. The default behaviour assumes `core`. 
 
-This directive must be the first statement in the file (aside from whitespace/comments), and it cannot be repeated.
+This directive, if present at all, must be the first statement in the file (aside from whitespace or comments), and it cannot be repeated.
 
 ### Extension
 The extension directive is specified like so:
 ```glsl
-#extension NAME : BEHAVIOUR
-```
-`NAME` specifies the name of the extension; the value `all` is also allowed.
+#extension _NAME_ : _BEHAVIOUR_
+#extension all : _BEHAVIOUR_
 
-`BEHAVIOUR` is one of the following:
-- `require` - Enables the extension. If not supported, it results in a compile-time error.
+// Examples:
+#extension ARB_vertex_buffer_object : enable
+#extension all : warn
+```
+`_NAME_` specifies the name of the extension. It is mandatory. It can be substituted with the string `all`.
+
+`_BEHAVIOUR_` is mandatory, and one of the following:
+- `require` - Enables the extension. If not supported, it produces an error.
 - `enable` - Enables the extension. If not supported, a warning is generated.
 - `warn` - Enables the extension. If used, it will produce warnings. If not supported, a warning is generated.
-- `disable` - Disabled the extension. If used, it results in a compile-time error.
+- `disable` - Disabled the extension. If used, it produces an error.
+- 
 
-If `all` is used:
+If `all` is used for `_NAME_`, the following behaviour is exhibited:
 ```glsl
-// Produce warnings any time an extension is used.
+// Produce warnings any time any extension is used.
 #extension all : warn
 
-// Produce errors any time an extension is used.
-// (This is effectively the default state of the compiler).
+// Produce errors any time any extension is used.
+// (This is the default state of the compiler).
 #extension all : disable
 
-// The following are invalid and result in compile-time errors.
+// The following are invalid and result in an error.
 #extension all : require
 #extension all : enable
 ```
@@ -1228,9 +1272,22 @@ The order of extension directives matters; configuring an extension overwrites a
 ### Line
 The line directive is specified like so:
 ```glsl
-#line LINE SRC-STR-NUM
+#line _LINE_ _SRC-STR-NUM_
+
+// Examples:
+#line 10
 ```
-`LINE` must be greater than `0`. The `SRC-STR-NUM` is optional.
+`_LINE_` is a number greater than `0`. 
+
+`_SRC-STR-NUM_` is a number greater than `0`. It is optional.
+
+⚠ This is the only directive within which macros are expanded. The following is valid:
+```glsl
+#define FOO 5
+
+// Expands to: #line 5
+#line FOO
+```
 
 After processing this directive, the compiler will behave as if it compiling at line number `LINE` and source string number `SRC-STR-NUM`. Subsequent lines will be numbered sequentially, until another `#line` directive overrides this.
 
@@ -1238,14 +1295,150 @@ After processing this directive, the compiler will behave as if it compiling at 
 These directives come from the C language.
 
 #### ~~include~~
-```glsl
-#include "FILE"
-```
-`FILE` is a path string.
-
 ⚠ Not supported natively by GLSL.
+```glsl
+#include _FILE_
+```
 
 #### define
+Defines a macro, which is textually substituted at any call site.
+
+##### Object-like
+An object-like macro is one which is simply substituted by replacement tokens:
+```glsl
+#define _NAME_ _REPLACEMENT-LIST_
+
+// Examples:
+#define TOGGLE
+#define INC ++
+#define RETURN if (true) return;
+```
+`_NAME_` is the name of the macro. It is mandatory.
+
+`_REPLACEMENT-LIST_` is a list of tokens which will replace any invocation of this macro. It is optional. It can contain any GLSL tokens in any order (mismatched braces, invalid tokens, etc.), but if the macro is expanded the tokens will be checked for validity as normal. If this list is empty, invoking the macro will replace it with an empty string, i.e. remove it.
+
+Token concatenation happens first, then any nested macros are expanded. Token concatenation operators are effectively unnecessary within an object-like macro since there's no possible way it will ever expand differently.
+
+##### Function-like
+A function-like macro is one which accepts arguments and is subsituted by replacement tokens:
+```glsl
+#define _NAME( ) _REPLACEMENT-LIST_
+#define _NAME_( _PARAM_ ) _REPLACEMENT-LIST_
+#define _NAME_( _PARAM_, ... ) _REPLACEMENT-LIST_
+
+// Examples:
+#define FOOBAR()
+#define ADD( A, B ) A + B
+#define CONCAT(A,B) A##B
+```
+`_NAME_` is the name of the macro. It is mandatory. For this to be a function-like macro, the immediate next token must an opening parenthesis `(` without any whitespace in-between.
+
+`_PARAM_` is a name of a parameter.
+
+`_REPLACEMENT-LIST_` is a list of tokens which will replace any invocation of this macro. It is optional. It can contain any GLSL tokens in any order (mismatched braces, invalid tokens, etc.), but if the macro is expanded the tokens will be checked for validity as normal. If this list is empty, invoking the macro will replace it with an empty string, i.e. remove it.
+
+To call a function-like macro, the name of the macro must be followed by parenthesis:
+```glsl
+#define FOO()
+
+// These call the macro:
+FOO()
+FOO ()
+
+// But this doesn't:
+FOO
+```
+
+When a function-like macro is called, the arguments passed in the brackets are mapped to the parameters in the definition. The arguments are split by a comma just like in a normal function call:
+```glsl
+#define ADD_10(A) (A) + 10
+
+ADD(5) // Expands to: 5 + 10
+ADD(5 * 8) // Expands to: (5 * 8) + 10
+```
+
+Arguments within a function-like macro are expanded before being passed into the macro:
+```glsl
+#define FOO 8
+#define BAR FOO
+#define ADD_10(A) A + 10
+
+ADD_10(BAR)
+// Equivalent to:
+ADD_10(8)
+
+// BAR -> FOO -> 8    The BAR macro is first expanded.
+//               |
+//              \/
+//      ADD_10( 8 )   Then the result is actually passed to the macro call.
+```
+
+If a function-like macro, the parameters are first replaced with the argument tokens, then any token concatenation occurs, then any further macro expansions occur. Note that an argument of `##` is not taken into account in regards to token concatenation.
+
+##### Nesting
+Macros can be nested within other macros, and they will be expanded fully:
+```glsl
+#define FOO 5
+#define BAR FOO + 8
+
+int i = BAR; // Expands to: int i = 5 + 8;
+```
+The only limitation is that a macro which has already been visited in an expansion cannot be expanded again. Effectively, recursion is not allowed:
+```glsl
+#define FOO BAR
+#define BAR FOO
+#define BAZ BAR
+
+BAZ // Expands to: BAR
+// BAZ -> BAR -> FOO -> BAR
+//                      ~~~ we've already visited this macro,
+//                          it is not expanded, but inserted verbatim
+```
+
+##### Re-defining
+Macros can be re-defined only if:
+- both are the same type of macro,
+- the tokens in the `_REPLACEMENT-LIST_` are identical,
+- if a function-like macro, the parameters are identical,
+- whitespace appears in the same places,
+
+For whitespace to appear in the same places, consult the examples below. The gist is that if there already is a whitespace, comments can be added since they are treated as whitespace. But if there is no whitespace, neither whitespace nor comments can be introduced in the re-definition. The whitespace rule only applies to the `_REPLACEMENT-LIST_`; whitespace can be introduced within the parameter list.
+```glsl
+#define FOO
+
+// Valid:
+#define FOO
+
+// Invalid:
+#define FOO 5
+#define FOO( )
+
+//---
+
+#define BAR (1-1)
+
+// Valid:
+#define BAR      (1-1)
+#define BAR /* aaa */ (1-1) // bbb
+
+// Invalid:
+#define BAR (1 - 1)
+#define BAR (/* ooo */ 1 -1)
+
+//---
+
+#define BAZ(A) 5 -- - 8
+
+// Valid:
+#define BAZ(A)     5 --      -  8
+#define BAZ(/* z */ A ) 5 /* ... */ -- - 8 // .......
+
+// Invalid:
+#define BAZ(B) 5 -- - 8
+#define BAZ(A) 5 --- 8
+```
+A macro can always be un-defined and then defined as a new macro.
+
 ##### Built-in
 ```glsl
 // Always defined
@@ -1258,12 +1451,14 @@ These directives come from the C language.
 #define GL_es_profile 1
 ```
 #### undef
+Un-defines a macro:
 ```glsl
-#undef SYMBOL
+#undef _IDENTIFIER_
 ```
-`SYMBOL` is any identifier string.
+`_IDENTIFIER_` specifies the name of the macro. If there is no macro with such a name, this directive is ignored. Even if the macro is a function-like macro, only the name is specified; the parenthesis are omitted.
 
 #### ifdef
+⚠ `defined` can also be a valid macro name
 ```glsl
 #ifdef SYMBOL
 ```
@@ -1288,18 +1483,18 @@ These directives come from the C language.
 ```
 
 #### error
-Causes the compiler to error and print the text in the compile debug log output:
+Causes the compiler to produce a compile-time error and print the text in the debug log output:
 ```glsl
 #error TEXT
 ```
-`TEXT` is any string of characters until a new line.
+`TEXT` is any stream of tokens until a EOL.
 
 #### pragma
 Controls compiler options:
 ```glsl
 #pragma OPTIONS
 ```
-`OPTIONS` is any string of characters until a new line.
+`OPTIONS` is any stream of tokens until a EOL.
 
 ## Macros
 Macro names starting with the `GL_` prefix are reserved for OpenGL; they cannot de (un)defined. Macro names starting with a `__` prefix are by convention reserved; they can be (un)defined but it may cause unintended behaviour if a previous implementation definition exists.

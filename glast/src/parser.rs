@@ -180,30 +180,34 @@ impl Walker {
 			match token {
 				Token::Ident(s) => {
 					if let Some((_, new_stream)) = self.macros.get(s) {
-						// The identifier matches a macro.
-
 						if self.active_macros.contains(s) {
 							// We have already visited a macro with this identifier. Recursion is not supported so
 							// we don't continue.
 							break;
 						}
 
+						let token_span = *token_span;
+
 						if new_stream.is_empty() {
 							// The macro is empty, so we want to move to the next token of the existing stream.
 							self.diagnostics
-								.push(Diag::EmptyMacroCallSite(*token_span));
-
+								.push(Diag::EmptyMacroCallSite(token_span));
+							if self.streams.len() == 1 {
+								self.syntax_tokens.push((
+									SyntaxToken::ObjectMacro,
+									token_span,
+								));
+							}
 							continue;
 						}
 
-						let token_span = *token_span;
 						let ident = s.to_owned();
 
 						// We only syntax highlight and note the macro call site when it is the first macro call.
 						if self.streams.len() == 1 {
+							self.macro_call_site = Some(token_span);
 							self.syntax_tokens
 								.push((SyntaxToken::ObjectMacro, token_span));
-							self.macro_call_site = Some(token_span);
 						}
 
 						self.active_macros.insert(ident.clone());
@@ -262,11 +266,25 @@ impl Walker {
 	/// Registers a define macro. Note: currently only supports object-like macros.
 	fn register_macro(&mut self, ident: Spanned<String>, tokens: TokenStream) {
 		if let Some(_prev) = self.macros.insert(ident.0, (ident.1, tokens)) {
-			// MAYBE: Emit warning about overwriting a macro?
+			// TODO: Emit error if the macros aren't identical (will require scanning the tokenstream to compare).
 		}
 	}
 
-	fn push_diag(&mut self, diag: Diag) {
+	/// Un-registers a defined macro. Note: currently only supports object-like macros.
+	fn unregister_macro(&mut self, ident: String, span: Span) {
+		match self.macros.remove(&ident) {
+			Some(_) => self.colour(span, SyntaxToken::ObjectMacro),
+			None => {
+				self.push_diag(Diag::PreprocDefine(
+					PreprocDefineDiag::UndefMacroNameUnresolved(span),
+				));
+				self.colour(span, SyntaxToken::Unresolved);
+			}
+		}
+	}
+
+	/// Pushes a diagnostic.
+	pub(crate) fn push_diag(&mut self, diag: Diag) {
 		self.diagnostics.push(diag);
 	}
 
@@ -317,7 +335,7 @@ impl Walker {
 
 /// Parses an individual statement at the current position.
 fn parse_stmt(walker: &mut Walker, nodes: &mut Vec<ast::Node>) {
-	use crate::token::preprocessor::{self, DefineToken};
+	use crate::token::preprocessor::{self, DefineToken, UndefToken};
 
 	let (token, token_span) = walker.get().expect("This function should be called from a loop that checks this invariant!");
 
@@ -354,8 +372,10 @@ fn parse_stmt(walker: &mut Walker, nodes: &mut Vec<ast::Node>) {
 					};
 					walker.colour(ident.1, SyntaxToken::ObjectMacro);
 
-					let body_tokens =
-						preprocessor::concat_object_macro_body(body_tokens);
+					let body_tokens = preprocessor::concat_object_macro_body(
+						walker,
+						body_tokens,
+					);
 					body_tokens.iter().for_each(|(t, s)| {
 						walker.colour(*s, t.non_semantic_colour())
 					});
@@ -363,6 +383,46 @@ fn parse_stmt(walker: &mut Walker, nodes: &mut Vec<ast::Node>) {
 				} else {
 					// We have a function-like macro.
 					// TODO: Implement
+				}
+
+				walker.advance();
+			}
+			preprocessor::TokenStream::Undef {
+				kw: kw_span,
+				mut tokens,
+			} => {
+				walker.colour(token_span.first_char(), SyntaxToken::Directive);
+				walker.colour(kw_span, SyntaxToken::Directive);
+
+				if tokens.is_empty() {
+					walker.push_diag(Diag::PreprocDefine(
+						PreprocDefineDiag::UndefExpectedMacroName(
+							kw_span.next_single_width(),
+						),
+					));
+				} else {
+					let (token, token_span) = tokens.remove(0);
+
+					match token {
+						UndefToken::Ident(s) => {
+							walker.unregister_macro(s, token_span)
+						}
+						_ => {
+							walker.push_diag(Diag::PreprocDefine(
+								PreprocDefineDiag::UndefExpectedMacroName(
+									token_span,
+								),
+							));
+						}
+					}
+
+					if !tokens.is_empty() {
+						let (_, first) = tokens.first().unwrap();
+						let (_, last) = tokens.last().unwrap();
+						walker.push_diag(Diag::PreprocTrailingTokens(
+							Span::new(first.start, last.end),
+						));
+					}
 				}
 
 				walker.advance();

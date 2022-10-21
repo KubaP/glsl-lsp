@@ -628,6 +628,12 @@ pub enum Diag {
 
 	/// A preprocessor diagnostic.
 	Preproc(PreprocDiag),
+	/// Diagnostics for the `#define` and `#undef` directives.
+	PreprocDefine(PreprocDefineDiag),
+	/// ERROR - Found trailing tokens in a directive.
+	///
+	/// - `0` - The span of the tokens.
+	PreprocTrailingTokens(Span),
 }
 
 /// A preprocessor syntax diagnostic.
@@ -740,4 +746,38 @@ pub enum PreprocDiag {
 	///
 	/// - `0` - the span of the operator.
 	FoundTokenConcatOutsideOfDirective(Span),
+}
+
+#[derive(Debug)]
+pub enum PreprocDefineDiag {
+	/// ERROR - Found a token concatenator (`##`) with no valid token on the left-hand side. E.g.
+	/// ```c
+	/// #define FOO ## 0
+	/// ```
+	/// - `0` - The span of the operator.
+	TokenConcatMissingLHS(Span),
+	/// ERROR - Found a token concatenator (`##`) with no valid token on the right-hand side. E.g.
+	/// ```c
+	/// #define FOO 500 ##
+	/// #define FOO 90 ## ## 00
+	/// ```
+	/// - `0` - The span of the operator.
+	TokenConcatMissingRHS(Span),
+	/// WARNING - Found a token concatenator (`##`) between two tokens which cannot be concatenated. E.g.
+	/// ```c
+	/// #define FOO 500 ## ;
+	/// ```
+	///
+	/// - `0` - The span of the operator.
+	TokenConcatUnnecessary(Span),
+
+	/* UNDEF */
+	/// WARNING - The macro identifier in an undef directive could not be resolved.
+	///
+	/// - `0` - The span of the identifier.
+	UndefMacroNameUnresolved(Span),
+	/// ERROR - Found an invalid token after the undef keyword.
+	///
+	/// - `0` - The span where the name is expected.
+	UndefExpectedMacroName(Span),
 }

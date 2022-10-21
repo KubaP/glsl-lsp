@@ -5,8 +5,6 @@ pub enum SyntaxToken {
 	Num,
 	/// A boolean.
 	Bool,
-	/// An identifier.
-	Ident,
 	/// A keyword.
 	Keyword,
 	/// A punctuation symbol.
@@ -15,6 +13,8 @@ pub enum SyntaxToken {
 	Operator,
 	/// A comment.
 	Comment,
+	/// An unresolved identifier.
+	Unresolved,
 	/// An invalid character.
 	Invalid,
 	/* PREPROCESSOR */
@@ -24,6 +24,8 @@ pub enum SyntaxToken {
 	ObjectMacro,
 	/// A function-like macro identifier. This is used at the macro definition site, and at any instances.
 	FunctionMacro,
+	/// A general identifier.
+	Ident,
 	/// The macro concatenation operator.
 	MacroConcat,
 }

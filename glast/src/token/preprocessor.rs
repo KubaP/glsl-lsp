@@ -1427,8 +1427,11 @@ fn match_condition_punctuation(lexer: &mut Lexer) -> ConditionToken {
 
 /// Perform token concatenation on the given token stream.
 pub(crate) fn concat_object_macro_body(
+	walker: &mut crate::parser::Walker,
 	tokens: super::TokenStream,
 ) -> super::TokenStream {
+	use crate::error::{Diag, PreprocDefineDiag};
+
 	let mut stack = Vec::new();
 
 	let mut tokens = tokens.into_iter();
@@ -1439,16 +1442,85 @@ pub(crate) fn concat_object_macro_body(
 
 			match (previous, next) {
 				(Some(prev), Some(next)) => {
-					concat_tokens(&mut stack, prev, next)
+					if next.0 == super::Token::MacroConcat {
+						// We have something like `foobar ## ##`. We cannot concatenate two concat operators, so we
+						// just emit the tokens as-is.
+						walker.push_diag(Diag::PreprocDefine(
+							PreprocDefineDiag::TokenConcatMissingRHS(token.1),
+						));
+						stack.push(prev);
+						stack.push((
+							super::Token::Invalid('#'),
+							token.1.first_char(),
+						));
+						stack.push((
+							super::Token::Invalid('#'),
+							token.1.last_char(),
+						));
+						stack.push((
+							super::Token::Invalid('#'),
+							next.1.first_char(),
+						));
+						stack.push((
+							super::Token::Invalid('#'),
+							next.1.last_char(),
+						));
+					} else {
+						concat_tokens(&mut stack, prev, next)
+					}
 				}
-				// TODO: Emit errors when missing tokens.
 				(Some(prev), None) => {
+					walker.push_diag(Diag::PreprocDefine(
+						PreprocDefineDiag::TokenConcatMissingRHS(token.1),
+					));
 					stack.push(prev);
 				}
 				(None, Some(next)) => {
+					walker.push_diag(Diag::PreprocDefine(
+						PreprocDefineDiag::TokenConcatMissingLHS(token.1),
+					));
+					if next.0 == super::Token::MacroConcat {
+						// We begin the replacement-list with `## ##`. We cannot concatenate two concat operators,
+						// so we just emit the tokens as-is.
+						walker.push_diag(Diag::PreprocDefine(
+							PreprocDefineDiag::TokenConcatMissingRHS(token.1),
+						));
+						stack.push((
+							super::Token::Invalid('#'),
+							token.1.first_char(),
+						));
+						stack.push((
+							super::Token::Invalid('#'),
+							token.1.last_char(),
+						));
+						stack.push((
+							super::Token::Invalid('#'),
+							next.1.first_char(),
+						));
+						stack.push((
+							super::Token::Invalid('#'),
+							next.1.last_char(),
+						));
+					}
 					stack.push(next);
 				}
-				(None, None) => {}
+				(None, None) => {
+					// The entire replacement-list is just `##`.
+					walker.push_diag(Diag::PreprocDefine(
+						PreprocDefineDiag::TokenConcatMissingLHS(token.1),
+					));
+					walker.push_diag(Diag::PreprocDefine(
+						PreprocDefineDiag::TokenConcatMissingRHS(token.1),
+					));
+					stack.push((
+						super::Token::Invalid('#'),
+						token.1.first_char(),
+					));
+					stack.push((
+						super::Token::Invalid('#'),
+						token.1.last_char(),
+					));
+				}
 			}
 		} else {
 			stack.push(token);
@@ -1465,6 +1537,7 @@ fn concat_tokens(
 ) {
 	use super::Token;
 
+	// FIXME: Support dot, e.g. `5##.##0` should work.
 	let left_can_concat = match left.0 {
 		Token::Num { .. }
 		| Token::Bool(_)
@@ -1494,6 +1567,7 @@ fn concat_tokens(
 		let mut result = super::parse_tokens(&mut lexer, true);
 		tokens.append(&mut result);
 	} else {
+		// TODO: Emit warning
 		tokens.push(left);
 		tokens.push(right);
 	}

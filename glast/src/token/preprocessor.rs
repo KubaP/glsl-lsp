@@ -390,6 +390,7 @@ pub enum ConditionToken {
 
 /// Construct a directive with no tokens, just the keyword.
 pub(super) fn construct_empty(
+	lexer: &mut Lexer,
 	directive_kw: String,
 	directive_kw_span: Span,
 ) -> TokenStream {
@@ -415,30 +416,48 @@ pub(super) fn construct_empty(
 			kw: directive_kw_span,
 			tokens: vec![],
 		},
-		"ifdef" => TokenStream::IfDef {
-			kw: directive_kw_span,
-			tokens: vec![],
-		},
-		"ifndef" => TokenStream::IfNotDef {
-			kw: directive_kw_span,
-			tokens: vec![],
-		},
-		"if" => TokenStream::If {
-			kw: directive_kw_span,
-			tokens: vec![],
-		},
-		"elif" => TokenStream::ElseIf {
-			kw: directive_kw_span,
-			tokens: vec![],
-		},
-		"else" => TokenStream::Else {
-			kw: directive_kw_span,
-			tokens: vec![],
-		},
-		"endif" => TokenStream::EndIf {
-			kw: directive_kw_span,
-			tokens: vec![],
-		},
+		"ifdef" => {
+			lexer.metadata.contains_conditional_compilation = true;
+			TokenStream::IfDef {
+				kw: directive_kw_span,
+				tokens: vec![],
+			}
+		}
+		"ifndef" => {
+			lexer.metadata.contains_conditional_compilation = true;
+			TokenStream::IfNotDef {
+				kw: directive_kw_span,
+				tokens: vec![],
+			}
+		}
+		"if" => {
+			lexer.metadata.contains_conditional_compilation = true;
+			TokenStream::If {
+				kw: directive_kw_span,
+				tokens: vec![],
+			}
+		}
+		"elif" => {
+			lexer.metadata.contains_conditional_compilation = true;
+			TokenStream::ElseIf {
+				kw: directive_kw_span,
+				tokens: vec![],
+			}
+		}
+		"else" => {
+			lexer.metadata.contains_conditional_compilation = true;
+			TokenStream::Else {
+				kw: directive_kw_span,
+				tokens: vec![],
+			}
+		}
+		"endif" => {
+			lexer.metadata.contains_conditional_compilation = true;
+			TokenStream::EndIf {
+				kw: directive_kw_span,
+				tokens: vec![],
+			}
+		}
 		"error" => TokenStream::Error {
 			kw: directive_kw_span,
 			message: None,

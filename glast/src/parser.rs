@@ -14,14 +14,120 @@ use std::collections::{HashMap, HashSet};
 
 pub fn parse_from_str(
 	source: &str,
-) -> (Vec<ast::Node>, Vec<Diag>, Vec<Spanned<SyntaxToken>>) {
-	let token_stream = crate::token::parse_from_str(source);
-	let mut walker = Walker::new(token_stream);
-	let mut nodes = Vec::new();
-	while !walker.is_done() {
-		parse_stmt(&mut walker, &mut nodes);
-	}
-	(nodes, walker.diagnostics, walker.syntax_tokens)
+) -> HashMap<Vec<usize>, (Vec<ast::Node>, Vec<Diag>, Vec<Spanned<SyntaxToken>>)>
+{
+	let (token_stream, metadata) = crate::token::parse_from_str(source);
+
+	let token_streams = if metadata.contains_conditional_compilation {
+		// Work out conditional nesting.
+
+		// This numbers by order in each group. Replace with // alt: to number by order of appearance irrespective
+		// of nesting.
+		//alt: let mut num = 0;
+		let mut numbers = vec![0];
+		let mut streams = HashMap::new();
+		streams.insert(numbers.clone(), vec![]);
+		for (token, token_span) in token_stream {
+			match token {
+				Token::Directive(d) => match d {
+					PreprocStream::IfDef { .. }
+					| PreprocStream::IfNotDef { .. }
+					| PreprocStream::If { .. } => {
+						//alt: num += 1;
+						let existing = streams.get(&numbers).unwrap();
+						//alt: numbers.push(num);
+						numbers.push(0);
+						streams.insert(numbers.clone(), existing.clone());
+					}
+					PreprocStream::ElseIf { .. }
+					| PreprocStream::Else { .. } => {
+						//alt: num += 1;
+						if numbers.len() == 1 {
+							// TODO: Emit error.
+						} else {
+							//numbers.pop();
+							//alt: let existing = streams.get(&numbers).unwrap(); delete this \/
+							let existing = streams
+								.get(&numbers[..(numbers.len() - 1)])
+								.unwrap();
+							*numbers.last_mut().unwrap() += 1;
+							//alt: numbers.push(num);
+							streams.insert(numbers.clone(), existing.clone());
+						}
+					}
+					PreprocStream::EndIf { .. } => {
+						if numbers.len() == 1 {
+							// TODO: Emit error.
+						} else {
+							numbers.pop();
+						}
+					}
+					_ => {
+						'streams: for (k, v) in streams.iter_mut() {
+							if k == &numbers {
+								v.push((
+									Token::Directive(d.clone()),
+									token_span,
+								));
+								continue;
+							}
+
+							if k.len() >= 2 {
+								for i in (0..(k.len() - 1)).rev() {
+									if &k[..=i] == &numbers {
+										v.push((
+											Token::Directive(d.clone()),
+											token_span,
+										));
+										continue 'streams;
+									}
+								}
+							}
+						}
+					}
+				},
+				_ => {
+					'streams: for (k, v) in streams.iter_mut() {
+						if k == &numbers {
+							v.push((token.clone(), token_span));
+							continue;
+						}
+
+						if k.len() >= 2 {
+							for i in (0..(k.len() - 1)).rev() {
+								if &k[..=i] == &numbers {
+									v.push((token.clone(), token_span));
+									continue 'streams;
+								}
+							}
+						}
+					}
+				}
+			}
+		}
+
+		// Invariant: `numbers` will never be empty because all `pop()` calls are guarded by `len > 1`.
+		if numbers.len() != 1 {
+			// TODO: Emit errors for each unclosed conditional block.
+		}
+		streams
+	} else {
+		let mut stream = HashMap::new();
+		stream.insert(vec![0], token_stream);
+		stream
+	};
+
+	token_streams
+		.into_iter()
+		.map(|(k, v)| {
+			let mut walker = Walker::new(v);
+			let mut nodes = Vec::new();
+			while !walker.is_done() {
+				parse_stmt(&mut walker, &mut nodes);
+			}
+			(k, (nodes, walker.diagnostics, walker.syntax_tokens))
+		})
+		.collect()
 }
 
 pub(crate) struct Walker {
@@ -350,7 +456,7 @@ fn parse_stmt(walker: &mut Walker, nodes: &mut Vec<ast::Node>) {
 			});
 		}
 		Token::Directive(dir) => match dir {
-			preprocessor::TokenStream::Define {
+			PreprocStream::Define {
 				kw: kw_span,
 				mut ident_tokens,
 				body_tokens,
@@ -395,7 +501,7 @@ fn parse_stmt(walker: &mut Walker, nodes: &mut Vec<ast::Node>) {
 
 				walker.advance();
 			}
-			preprocessor::TokenStream::Undef {
+			PreprocStream::Undef {
 				kw: kw_span,
 				mut tokens,
 			} => {

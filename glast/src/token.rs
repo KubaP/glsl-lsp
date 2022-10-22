@@ -70,9 +70,10 @@ pub type TokenStream = Vec<Spanned<Token>>;
 /// "#;
 /// let token_stream = parse_from_str(&src);
 /// ```
-pub fn parse_from_str(source: &str) -> TokenStream {
+pub fn parse_from_str(source: &str) -> (TokenStream, Metadata) {
 	let mut lexer = Lexer::new(source);
-	parse_tokens(&mut lexer, false)
+	let tokens = parse_tokens(&mut lexer, false);
+	(tokens, lexer.metadata)
 }
 
 /// Parses GLSL tokens, continuing off from the current position of the lexer.
@@ -746,6 +747,7 @@ fn parse_tokens(lexer: &mut Lexer, parsing_define_body: bool) -> TokenStream {
 						// We have reached the end of the source string, and hence of this directive.
 						tokens.push((
 							Token::Directive(preprocessor::construct_empty(
+								lexer,
 								buffer,
 								Span {
 									start: directive_kw_start,
@@ -831,8 +833,9 @@ fn parse_tokens(lexer: &mut Lexer, parsing_define_body: bool) -> TokenStream {
 						end: lexer.position(),
 					},
 				)),
-				"ifdef" | "ifndef" | "if" | "elif" | "else" | "endif" => tokens
-					.push((
+				"ifdef" | "ifndef" | "if" | "elif" | "else" | "endif" => {
+					lexer.metadata.contains_conditional_compilation = true;
+					tokens.push((
 						Token::Directive(preprocessor::parse_condition(
 							lexer,
 							&buffer,
@@ -842,7 +845,8 @@ fn parse_tokens(lexer: &mut Lexer, parsing_define_body: bool) -> TokenStream {
 							start: directive_start,
 							end: lexer.position(),
 						},
-					)),
+					));
+				}
 				"error" => {
 					buffer.clear();
 					let content_start = lexer.position();
@@ -996,6 +1000,13 @@ fn parse_tokens(lexer: &mut Lexer, parsing_define_body: bool) -> TokenStream {
 	}
 
 	tokens
+}
+
+#[derive(Debug, Clone, PartialEq)]
+#[non_exhaustive]
+pub struct Metadata {
+	/// Whether the GLSL source string contains any condition compilation directives.
+	pub contains_conditional_compilation: bool,
 }
 
 /// A token representing a unit of text in the GLSL source string.
@@ -1671,7 +1682,42 @@ impl std::fmt::Display for Token {
 			Token::Restrict => write!(f, "restrict"),
 			Token::Readonly => write!(f, "readonly"),
 			Token::Writeonly => write!(f, "writeonly"),
-			Token::Op(_) => todo!(),
+			Token::Op(op) => match op {
+				OpTy::Add => write!(f, "+"),
+				OpTy::Sub => write!(f, "-"),
+				OpTy::Mul => write!(f, "*"),
+				OpTy::Div => write!(f, "/"),
+				OpTy::Rem => write!(f, "%"),
+				OpTy::And => write!(f, "&"),
+				OpTy::Or => write!(f, "|"),
+				OpTy::Xor => write!(f, "^"),
+				OpTy::LShift => write!(f, "<<"),
+				OpTy::RShift => write!(f, ">>"),
+				OpTy::Flip => write!(f, "~"),
+				OpTy::Eq => write!(f, "="),
+				OpTy::AddAdd => write!(f, "++"),
+				OpTy::SubSub => write!(f, "--"),
+				OpTy::AddEq => write!(f, "+="),
+				OpTy::SubEq => write!(f, "-="),
+				OpTy::MulEq => write!(f, "*="),
+				OpTy::DivEq => write!(f, "/="),
+				OpTy::RemEq => write!(f, "%="),
+				OpTy::AndEq => write!(f, "&="),
+				OpTy::OrEq => write!(f, "|="),
+				OpTy::XorEq => write!(f, "^="),
+				OpTy::LShiftEq => write!(f, "<<="),
+				OpTy::RShiftEq => write!(f, ">>="),
+				OpTy::EqEq => write!(f, "=="),
+				OpTy::NotEq => write!(f, "!="),
+				OpTy::Not => write!(f, "!"),
+				OpTy::Gt => write!(f, ">"),
+				OpTy::Lt => write!(f, "<"),
+				OpTy::Ge => write!(f, ">="),
+				OpTy::Le => write!(f, "<="),
+				OpTy::AndAnd => write!(f, "&&"),
+				OpTy::OrOr => write!(f, "||"),
+				OpTy::XorXor => write!(f, "^^"),
+			},
 			Token::Comma => write!(f, ","),
 			Token::Dot => write!(f, "."),
 			Token::Semi => write!(f, ";"),
@@ -1692,10 +1738,12 @@ impl std::fmt::Display for Token {
 /// This includes a lot of helper methods to make it easier to match patterns and correctly deal with things such
 /// as line-continuators which a naive iteration would mess up.
 struct Lexer {
-	/// The string stored as a vector of characters.
+	/// The source string stored as a vector of characters.
 	chars: Vec<char>,
 	/// The index of the current character.
 	cursor: usize,
+	/// Metadata about this source string.
+	metadata: Metadata,
 }
 
 impl Lexer {
@@ -1706,6 +1754,9 @@ impl Lexer {
 			// strings must use the UTF-8 encoding as per the specification.
 			chars: source.chars().collect(),
 			cursor: 0,
+			metadata: Metadata {
+				contains_conditional_compilation: false,
+			},
 		};
 
 		// Deal with a line-continuation character if it's the first thing in the source file. If we didn't do
@@ -2005,39 +2056,157 @@ fn match_word(str: String) -> Token {
 #[cfg(test)]
 use crate::span::span;
 
+#[cfg(test)]
+macro_rules! assert_tokens2 {
+	($src:expr, $($token:expr),*) => {
+		let (tokens, _metadata) = parse_from_str($src);
+		assert_eq!(tokens, vec![
+			$(
+				$token,
+			)*
+		])
+	};
+}
+
 #[test]
-#[rustfmt::skip]
 fn spans() {
 	// Identifiers/keywords
-	assert_eq!(parse_from_str("return"), vec![(Token::Return, span(0, 6))]);
-	assert_eq!(parse_from_str("break "), vec![(Token::Break, span(0, 5))]);
-	assert_eq!(parse_from_str("return break"), vec![(Token::Return, span(0, 6)), (Token::Break, span(7, 12))]);
+	assert_tokens2!("return", (Token::Return, span(0, 6)));
+	assert_tokens2!("break ", (Token::Break, span(0, 5)));
+	assert_tokens2!(
+		"return break",
+		(Token::Return, span(0, 6)),
+		(Token::Break, span(7, 12))
+	);
 	// Punctuation
-	assert_eq!(parse_from_str(";"), vec![(Token::Semi, span(0, 1))]);
-	assert_eq!(parse_from_str(": "), vec![(Token::Colon, span(0, 1))]);
-	assert_eq!(parse_from_str("; :"), vec![(Token::Semi, span(0, 1)), (Token::Colon, span(2, 3))]);
+	assert_tokens2!(";", (Token::Semi, span(0, 1)));
+	assert_tokens2!(": ", (Token::Colon, span(0, 1)));
+	assert_tokens2!(
+		"; :",
+		(Token::Semi, span(0, 1)),
+		(Token::Colon, span(2, 3))
+	);
 	// Comments
-	assert_eq!(parse_from_str("// comment"), vec![(Token::LineComment(" comment".into()), span(0, 10))]);
-	assert_eq!(parse_from_str("/* a */"), vec![(Token::BlockComment { str: " a ".into(), contains_eof: false }, span(0, 7))]);
-	assert_eq!(parse_from_str("/* a"), vec![(Token::BlockComment { str: " a".into(), contains_eof: true }, span(0, 4))]);
+	assert_tokens2!(
+		"// comment",
+		(Token::LineComment(" comment".into()), span(0, 10))
+	);
+	assert_tokens2!(
+		"/* a */",
+		(
+			Token::BlockComment {
+				str: " a ".into(),
+				contains_eof: false
+			},
+			span(0, 7)
+		)
+	);
+	assert_tokens2!(
+		"/* a",
+		(
+			Token::BlockComment {
+				str: " a".into(),
+				contains_eof: true
+			},
+			span(0, 4)
+		)
+	);
 	// Directive
 	//assert_eq!(parse_from_str("#dir"), vec![(Token::Directive("dir".into()), span(0, 4))]);
 	//assert_eq!(parse_from_str("#dir a "), vec![(Token::Directive("dir a ".into()), span(0, 7))]);
 	// Invalid
-	assert_eq!(parse_from_str("@"), vec![(Token::Invalid('@'), span(0, 1))]);
-	assert_eq!(parse_from_str("¬"), vec![(Token::Invalid('¬'), span(0, 1))]);
-	assert_eq!(parse_from_str("@  ¬"), vec![(Token::Invalid('@'), span(0, 1)), (Token::Invalid('¬'), span(3, 4))]);
+	assert_tokens2!("@", (Token::Invalid('@'), span(0, 1)));
+	assert_tokens2!("¬", (Token::Invalid('¬'), span(0, 1)));
+	assert_tokens2!(
+		"@ ¬",
+		(Token::Invalid('@'), span(0, 1)),
+		(Token::Invalid('¬'), span(3, 4))
+	);
 	// Numbers
-	assert_eq!(parse_from_str("."), vec![(Token::Dot, span(0, 1))]);
-	assert_eq!(parse_from_str(". "), vec![(Token::Dot, span(0, 1))]);
-	assert_eq!(parse_from_str("0xF."), vec![(Token::Num { num: "F".into(), suffix: None, type_: NumType::Hex }, span(0, 3)), (Token::Dot, span(3, 4))]);
-	assert_eq!(parse_from_str("123u."), vec![(Token::Num { num: "123".into(), suffix: Some("u".into()), type_: NumType::Dec }, span(0, 4)), (Token::Dot, span(4, 5))]);
-	assert_eq!(parse_from_str("1.2."), vec![(Token::Num { num: "1.2".into(), suffix: None, type_: NumType::Float }, span(0, 3)), (Token::Dot, span(3, 4))]);
-	assert_eq!(parse_from_str("1.2."), vec![(Token::Num { num: "1.2".into(), suffix: None, type_: NumType::Float }, span(0, 3)), (Token::Dot, span(3, 4))]);
-	assert_eq!(parse_from_str("1e"), vec![(Token::Num { num: "1".into(), suffix: Some("e".into()), type_: NumType::Dec }, span(0, 2))]);
-	assert_eq!(parse_from_str("123 "), vec![(Token::Num { num: "123".into(), suffix: None, type_: NumType::Dec }, span(0, 3))]);
-	assert_eq!(parse_from_str("1e+="), vec![(Token::Num { num: "1".into(), suffix: Some("e".into()), type_: NumType::Dec }, span(0, 2)), (Token::Op(OpTy::AddEq), span(2, 4))]);
-	assert_eq!(parse_from_str("1e+"), vec![(Token::Num { num: "1".into(), suffix: Some("e".into()), type_: NumType::Dec }, span(0, 2)), (Token::Op(OpTy::Add), span(2, 3))]);
+	assert_tokens2!(".", (Token::Dot, span(0, 1)));
+	assert_tokens2!(". ", (Token::Dot, span(0, 1)));
+	assert_tokens2!(
+		"0xF.",
+		(
+			Token::Num {
+				num: "F".into(),
+				suffix: None,
+				type_: NumType::Hex
+			},
+			span(0, 3)
+		),
+		(Token::Dot, span(3, 4))
+	);
+	assert_tokens2!(
+		"123u.",
+		(
+			Token::Num {
+				num: "123".into(),
+				suffix: Some("u".into()),
+				type_: NumType::Dec
+			},
+			span(0, 4)
+		),
+		(Token::Dot, span(4, 5))
+	);
+	assert_tokens2!(
+		"1.2.",
+		(
+			Token::Num {
+				num: "1.2".into(),
+				suffix: None,
+				type_: NumType::Float
+			},
+			span(0, 3)
+		),
+		(Token::Dot, span(3, 4))
+	);
+	assert_tokens2!(
+		"1e",
+		(
+			Token::Num {
+				num: "1".into(),
+				suffix: Some("e".into()),
+				type_: NumType::Dec
+			},
+			span(0, 2)
+		)
+	);
+	assert_tokens2!(
+		"123 ",
+		(
+			Token::Num {
+				num: "123".into(),
+				suffix: None,
+				type_: NumType::Dec
+			},
+			span(0, 3)
+		)
+	);
+	assert_tokens2!(
+		"1e+=",
+		(
+			Token::Num {
+				num: "1".into(),
+				suffix: Some("e".into()),
+				type_: NumType::Dec
+			},
+			span(0, 2)
+		),
+		(Token::Op(OpTy::AddEq), span(2, 4))
+	);
+	assert_tokens2!(
+		"1e+",
+		(
+			Token::Num {
+				num: "1".into(),
+				suffix: Some("e".into()),
+				type_: NumType::Dec
+			},
+			span(0, 2)
+		),
+		(Token::Op(OpTy::Add), span(2, 3))
+	);
 }
 
 /// Asserts whether the token output of the `parse_from_str()` function matches the right hand side; this ignores
@@ -2045,7 +2214,7 @@ fn spans() {
 #[cfg(test)]
 macro_rules! assert_tokens {
     ($src:expr, $($token:expr),*) => {
-		let output = parse_from_str($src).into_iter().map(|(t, _)| t).collect::<Vec<_>>();
+		let output = parse_from_str($src).0.into_iter().map(|(t, _)| t).collect::<Vec<_>>();
         assert_eq!(output, vec![
             $(
                 $token,

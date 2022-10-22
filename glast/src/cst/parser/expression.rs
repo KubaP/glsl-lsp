@@ -27,7 +27,7 @@ mod ternary_tests;
 macro_rules! assert_expr {
 	($source:expr, $rest:expr) => {
 		let mut walker = Walker {
-			token_stream: parse_from_str($source),
+			token_stream: parse_from_str($source).0,
 			cursor: 0,
 		};
 		assert_eq!(
@@ -45,7 +45,7 @@ use crate::{
 		BinOp, BinOpTy, Comment, Comments, Expr, ExprTy, Ident, List, Lit,
 		PostOp, PostOpTy, PreOp, PreOpTy,
 	},
-	error::SyntaxErr,
+	error::Diag,
 	log,
 	span::{span, Span},
 	token::{self, Token},
@@ -76,7 +76,7 @@ pub(super) fn expr_parser(
 	walker: &mut Walker,
 	mode: Mode,
 	end_tokens: &[Token],
-) -> (Option<Expr>, Vec<SyntaxErr>) {
+) -> (Option<Expr>, Vec<Diag>) {
 	let start_position = match walker.peek() {
 		Some((_, span)) => span.start,
 		// If we are at the end of the token stream, we can return early with nothing.
@@ -108,7 +108,7 @@ pub(super) fn expr_parser_2(
 	walker: &mut Walker,
 	mode: Mode,
 	end_tokens: &[Token],
-) -> (Option<Expr>, Comments, Vec<SyntaxErr>) {
+) -> (Option<Expr>, Comments, Vec<Diag>) {
 	let start_position = match walker.peek() {
 		Some((_, span)) => span.start,
 		// If we are at the end of the token stream, we can return early with nothing.
@@ -501,7 +501,7 @@ struct ShuntingYard {
 	/// The behavioural mode of the parser.
 	mode: Mode,
 	/// Syntax errors encountered during the parser execution.
-	errors: Vec<SyntaxErr>,
+	errors: Vec<Diag>,
 }
 
 impl ShuntingYard {
@@ -1645,12 +1645,10 @@ impl ShuntingYard {
 					} else {
 						// We are not in a delimited arity group. We don't perform error recovery because in this
 						// situation it's not as obvious what the behaviour should be, so we avoid any surprises.
-						self.errors.push(
-							SyntaxErr::ExprFoundOperandAfterOperand(
-								self.get_previous_span().unwrap(),
-								*span,
-							),
-						);
+						self.errors.push(Diag::ExprFoundOperandAfterOperand(
+							self.get_previous_span().unwrap(),
+							*span,
+						));
 						break 'main;
 					}
 					arity_state = Arity::PotentialEnd;
@@ -1726,12 +1724,10 @@ impl ShuntingYard {
 					} else {
 						// We are not in a delimited arity group. We don't perform error recovery because in this
 						// situation it's not as obvious what the behaviour should be, so we avoid any surprises.
-						self.errors.push(
-							SyntaxErr::ExprFoundOperandAfterOperand(
-								self.get_previous_span().unwrap(),
-								*span,
-							),
-						);
+						self.errors.push(Diag::ExprFoundOperandAfterOperand(
+							self.get_previous_span().unwrap(),
+							*span,
+						));
 						break 'main;
 					}
 					arity_state = Arity::PotentialEnd;
@@ -1784,9 +1780,8 @@ impl ShuntingYard {
 							self.set_op_rhs_toggle();
 						}
 						_ => {
-							self.errors.push(
-								SyntaxErr::ExprInvalidPrefixOperator(*span),
-							);
+							self.errors
+								.push(Diag::ExprInvalidPrefixOperator(*span));
 							break 'main;
 						}
 					}
@@ -1833,7 +1828,7 @@ impl ShuntingYard {
 					match op {
 						token::OpTy::Flip | token::OpTy::Not => {
 							self.errors.push(
-								SyntaxErr::ExprInvalidBinOrPostOperator(*span),
+								Diag::ExprInvalidBinOrPostOperator(*span),
 							);
 							break 'main;
 						}
@@ -1946,7 +1941,7 @@ impl ShuntingYard {
 							// surprises.
 							if self.mode != Mode::TakeOneUnit {
 								self.errors.push(
-									SyntaxErr::ExprFoundOperandAfterOperand(
+									Diag::ExprFoundOperandAfterOperand(
 										self.get_previous_span().unwrap(),
 										*span,
 									),
@@ -2011,12 +2006,12 @@ impl ShuntingYard {
 					}
 
 					self.errors.push(if empty_group {
-						SyntaxErr::ExprFoundEmptyParenGroup(Span::new_between(
+						Diag::ExprFoundEmptyParenGroup(Span::new_between(
 							prev_op_span.unwrap(),
 							*span,
 						))
 					} else {
-						SyntaxErr::ExprFoundRParenInsteadOfOperand(
+						Diag::ExprFoundRParenInsteadOfOperand(
 							prev_op_span.unwrap(),
 							*span,
 						)
@@ -2045,7 +2040,7 @@ impl ShuntingYard {
 				Token::LBracket if state == State::Operand => {
 					if self.mode != Mode::TakeOneUnit {
 						self.errors.push(
-							SyntaxErr::ExprFoundLBracketInsteadOfOperand(
+							Diag::ExprFoundLBracketInsteadOfOperand(
 								self.get_previous_span(),
 								*span,
 							),
@@ -2090,7 +2085,7 @@ impl ShuntingYard {
 						}
 
 						self.errors.push(
-							SyntaxErr::ExprFoundRBracketInsteadOfOperand(
+							Diag::ExprFoundRBracketInsteadOfOperand(
 								prev_op_span.unwrap(),
 								*span,
 							),
@@ -2144,7 +2139,7 @@ impl ShuntingYard {
 					} else {
 						if self.mode != Mode::TakeOneUnit {
 							self.errors.push(
-								SyntaxErr::ExprFoundOperandAfterOperand(
+								Diag::ExprFoundOperandAfterOperand(
 									self.get_previous_span().unwrap(),
 									*span,
 								),
@@ -2209,11 +2204,12 @@ impl ShuntingYard {
 					}
 
 					self.errors.push(if empty_group {
-						SyntaxErr::ExprFoundEmptyInitializerGroup(
-							Span::new_between(prev_op_span.unwrap(), *span),
-						)
+						Diag::ExprFoundEmptyInitializerGroup(Span::new_between(
+							prev_op_span.unwrap(),
+							*span,
+						))
 					} else {
-						SyntaxErr::ExprFoundRBraceInsteadOfOperand(
+						Diag::ExprFoundRBraceInsteadOfOperand(
 							prev_op_span.unwrap(),
 							*span,
 						)
@@ -2265,12 +2261,10 @@ impl ShuntingYard {
 					// the list analysis will produce an error anyway, and we don't want two errors for the same
 					// incorrect syntax.
 					if !self.operators.is_empty() {
-						self.errors.push(
-							SyntaxErr::ExprFoundCommaInsteadOfOperand(
-								self.get_previous_span().unwrap(),
-								*span,
-							),
-						);
+						self.errors.push(Diag::ExprFoundCommaInsteadOfOperand(
+							self.get_previous_span().unwrap(),
+							*span,
+						));
 					} else if !self.stack.is_empty() {
 						if let Some(Either::Left(Node {
 							span: _,
@@ -2279,7 +2273,7 @@ impl ShuntingYard {
 						{
 						} else {
 							self.errors.push(
-								SyntaxErr::ExprFoundCommaInsteadOfOperand(
+								Diag::ExprFoundCommaInsteadOfOperand(
 									self.get_previous_span().unwrap(),
 									*span,
 								),
@@ -2339,7 +2333,7 @@ impl ShuntingYard {
 					//
 					// MAYBE: Should we make this a recoverable situation? (If so we need to consider arity)
 
-					self.errors.push(SyntaxErr::ExprFoundDotInsteadOfOperand(
+					self.errors.push(Diag::ExprFoundDotInsteadOfOperand(
 						self.get_previous_span(),
 						*span,
 					));
@@ -2349,7 +2343,7 @@ impl ShuntingYard {
 					if state == State::Operand {
 						// We have encountered something like: `foo + ?`.
 						self.errors.push(
-							SyntaxErr::ExprFoundQuestionInsteadOfOperand(
+							Diag::ExprFoundQuestionInsteadOfOperand(
 								self.get_previous_span(),
 								*span,
 							),
@@ -2378,12 +2372,10 @@ impl ShuntingYard {
 
 					if state == State::Operand {
 						// We have encountered something like: `foo ? a + :`.
-						self.errors.push(
-							SyntaxErr::ExprFoundColonInsteadOfOperand(
-								self.get_previous_span(),
-								*span,
-							),
-						);
+						self.errors.push(Diag::ExprFoundColonInsteadOfOperand(
+							self.get_previous_span(),
+							*span,
+						));
 					}
 
 					let comments = std::mem::take(&mut self.comments);
@@ -2402,7 +2394,7 @@ impl ShuntingYard {
 				}
 				_ => {
 					// We have encountered an unexpected token that's not allowed to be part of an expression.
-					self.errors.push(SyntaxErr::ExprFoundInvalidToken(*span));
+					self.errors.push(Diag::ExprFoundInvalidToken(*span));
 					break 'main;
 				}
 			}
@@ -2446,37 +2438,33 @@ impl ShuntingYard {
 				let group = self.groups.pop_back().unwrap();
 				match group {
 					Group::Paren(_, l_paren) => {
-						self.errors.push(SyntaxErr::ExprUnclosedParenthesis(
+						self.errors.push(Diag::ExprUnclosedParenthesis(
 							l_paren, group_end,
 						));
 						self.collapse_bracket(group, group_end, vec![]);
 					}
 					Group::Index(_, l_bracket) => {
-						self.errors.push(SyntaxErr::ExprUnclosedIndexOperator(
+						self.errors.push(Diag::ExprUnclosedIndexOperator(
 							l_bracket, group_end,
 						));
 						self.collapse_index(group, group_end, vec![])
 					}
 					Group::FnCall(_, l_paren) => {
-						self.errors.push(SyntaxErr::ExprUnclosedFunctionCall(
+						self.errors.push(Diag::ExprUnclosedFunctionCall(
 							l_paren, group_end,
 						));
 						self.collapse_fn(group, group_end, vec![])
 					}
 					Group::Init(_, l_brace) => {
-						self.errors.push(
-							SyntaxErr::ExprUnclosedInitializerList(
-								l_brace, group_end,
-							),
-						);
+						self.errors.push(Diag::ExprUnclosedInitializerList(
+							l_brace, group_end,
+						));
 						self.collapse_init(group, group_end, vec![])
 					}
 					Group::ArrInit(_, l_paren) => {
-						self.errors.push(
-							SyntaxErr::ExprUnclosedArrayConstructor(
-								l_paren, group_end,
-							),
-						);
+						self.errors.push(Diag::ExprUnclosedArrayConstructor(
+							l_paren, group_end,
+						));
 						self.collapse_arr_init(group, group_end, vec![])
 					}
 					Group::List(_, _) => {

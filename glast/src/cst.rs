@@ -88,7 +88,7 @@ pub type Cst = Vec<Node>;
 pub fn parse_from_str(source: &str) -> (Cst, Vec<Diag>) {
 	use self::parser::{parse_stmt, Walker};
 
-	let token_stream = crate::token::parse_from_str(source);
+	let (token_stream, _) = crate::token::parse_from_str(source);
 
 	let mut walker = Walker {
 		token_stream,

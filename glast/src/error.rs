@@ -1,6 +1,6 @@
 //! All error types that can be emitted.
 
-use crate::span::Span;
+use crate::Span;
 
 /// A syntactical/gramatical error.
 ///

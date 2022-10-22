@@ -40,8 +40,7 @@ pub mod preprocessor;
 
 use crate::{
 	cst::{Expr, Layout, LayoutTy},
-	span::{Span, Spanned},
-	Either,
+	Either, Span, Spanned,
 };
 
 /// A vector of tokens representing a GLSL source string.

@@ -50,7 +50,7 @@
 //! - The pre-defined macros differ depending on the GLSL version.
 
 use super::{is_word, is_word_start, match_op, Lexer};
-use crate::span::{Span, Spanned};
+use crate::{Span, Spanned};
 
 /// A vector of tokens representing a specific preprocessor directive.
 #[derive(Debug, Clone, PartialEq)]

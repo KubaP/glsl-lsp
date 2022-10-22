@@ -1,4 +1,4 @@
-use crate::span::Span;
+use crate::Span;
 
 /// A node within the abstract syntax tree.
 #[derive(Debug, Clone, PartialEq)]

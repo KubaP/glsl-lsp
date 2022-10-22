@@ -6,8 +6,8 @@ pub use syntax::*;
 use crate::{
 	cst::{Comment, Comments},
 	error::{Diag, PreprocDefineDiag},
-	span::{Span, Spanned},
-	token::{Token, TokenStream},
+	token::{preprocessor::TokenStream as PreprocStream, Token, TokenStream},
+	Span, Spanned,
 };
 use ast::*;
 use std::collections::{HashMap, HashSet};

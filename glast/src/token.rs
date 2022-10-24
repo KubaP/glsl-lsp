@@ -1,7 +1,8 @@
 //! Types and functionality related to the Token Stream.
 //!
 //! This module contains the structs and enums used to represent tokens, and the [`parse_from_str()`] function
-//! which returns a [`TokenStream`]. The [`preprocessor`] submodule contains things related to the preprocessor.
+//! which returns a [`TokenStream`] and accompanied [`Metadata`]. The [`preprocessor`] submodule contains types
+//! used to represent tokens within preprocessor directives.
 //!
 //! # Differences in behaviour
 //! Since this crate is part of a larger language extension effort, it is designed to handle syntax errors in a UX
@@ -24,14 +25,16 @@
 //!   valid: `#define TEST +5 \n uint i = 5uTEST`. Currently, this crate doesn't work according to this behaviour,
 //!   hence for now the lexer will treat the suffix as `uTEST` instead.
 //!
+//! See the [`preprocessor`] module about behavioural differences for each individual directive.
+//!
 //! To be certain that the source is valid, these cases (apart from the define issue) must be checked afterwards by
-//! iterating over the [`TokenStream`]. The parsing functions provided in the `ast`/`cst` modules do this for you,
-//! but if you are performing your own manipulation you must perform these checks yourself.
+//! iterating over the [`TokenStream`]. The parsing functions provided in the `parser` module do this for you, but
+//! if you are performing your own manipulation you must perform these checks yourself.
 //!
 //! A potential idea for consideration would be to include the official-spec behaviour behind a flag (i.e. stop
 //! parsing after encountering an error). This is currently not a priority, but if you would like such
-//! functionality please file an issue on the github repository to show interest. An alternative would be to
-//! produce a flag along with the `TokenStream` which signifies whether any errors were encountered.
+//! functionality please file an issue on the github repository to show interest. An alternative would be to set a
+//! flag in the `Metadata` which signifies whether any errors were encountered.
 //!
 //! For a BNF notation of the official lexer grammar, see
 //! [this](https://github.com/KubaP/glsl-lsp/blob/release/glast/docs/lexer_grammar.bnf) file.
@@ -57,9 +60,9 @@ pub type TokenStream = Vec<Spanned<Token>>;
 /// i-----7    becomes (i) (--) (--) (-) (7)
 /// i-- - --7  becomes (i) (--) (-) (--) (7)
 /// ```
-/// The longest possible tokens are produced even if they form an invalid expression, for example, `i----7`
-/// could've been a valid GLSL expression if it was parsed as `(i) (--) (-) (-) (7)` but this behaviour is not
-/// exhibited.
+/// The longest possible tokens are produced even if they form an invalid expression. For example, `i----7`
+/// could've been a valid GLSL expression if it was parsed as `(i) (--) (-) (-) (7)`, but this behaviour is not
+/// exhibited as that would require knowing the context and the lexer is not context-aware.
 ///
 /// # Examples
 /// Parse a simple GLSL expression:
@@ -68,7 +71,7 @@ pub type TokenStream = Vec<Spanned<Token>>;
 /// let src = r#"
 /// int i = 5.0 + 1;
 /// "#;
-/// let token_stream = parse_from_str(&src);
+/// let (token_stream, metadata) = parse_from_str(&src);
 /// ```
 pub fn parse_from_str(source: &str) -> (TokenStream, Metadata) {
 	let mut lexer = Lexer::new(source);
@@ -1002,6 +1005,16 @@ fn parse_tokens(lexer: &mut Lexer, parsing_define_body: bool) -> TokenStream {
 	tokens
 }
 
+/// Metadata about the GLSL source string.
+///
+/// This is returned by the lexer along with the [`TokenStream`] and describes certain properties of the source,
+/// such as wether the source contains any conditional compilation directives. These properties can be useful in
+/// order to optimize later processing steps, such as skipping a large chunk of code if a certain condition is not
+/// met.
+///
+/// The purpose of this struct is to hold structured data that gets extracted out and checked-against if needed.
+/// Hence, this struct is marked as `non_exhaustive` and new fields may be added at any time without causing a
+/// breaking change.
 #[derive(Debug, Clone, PartialEq)]
 #[non_exhaustive]
 pub struct Metadata {
@@ -1245,8 +1258,8 @@ impl Token {
 	pub fn non_semantic_colour(&self) -> crate::parser::SyntaxToken {
 		use crate::parser::SyntaxToken;
 		match self {
-			Token::Num { .. } => SyntaxToken::Num,
-			Token::Bool(_) => SyntaxToken::Bool,
+			Token::Num { .. } => SyntaxToken::Number,
+			Token::Bool(_) => SyntaxToken::Boolean,
 			Token::Ident(_) => SyntaxToken::Ident,
 			Token::Directive(_) => SyntaxToken::Directive,
 			Token::MacroConcat => SyntaxToken::MacroConcat,
@@ -2118,7 +2131,7 @@ fn spans() {
 	assert_tokens2!("@", (Token::Invalid('@'), span(0, 1)));
 	assert_tokens2!("¬", (Token::Invalid('¬'), span(0, 1)));
 	assert_tokens2!(
-		"@ ¬",
+		"@  ¬",
 		(Token::Invalid('@'), span(0, 1)),
 		(Token::Invalid('¬'), span(3, 4))
 	);

@@ -133,23 +133,25 @@ pub fn parse_from_str(
 pub(crate) struct Walker {
 	/// The active token streams.
 	///
-	/// - `(identifier, token_stream, cursor)`.
+	/// - `0` - The macro identifier, (for the root source stream this is just `""`),
+	/// - `1` - The token stream,
+	/// - `2` - The cursor.
 	streams: Vec<(String, TokenStream, usize)>,
 
 	/// The currently defined macros.
 	///
-	/// Key: The macro identifier
+	/// Key: The macro identifier.
 	///
 	/// Value:
 	/// - `0` - The span of the identifier,
 	/// - `1` - The body/replacement-list of tokens.
 	macros: HashMap<String, (Span, TokenStream)>,
-	/// The span of an initial macro call site. Only the first macro call site is registered.
+	/// The span of an initial macro call site. Only the first macro call site is registered here.
 	macro_call_site: Option<Span>,
-	/// The actively called macros.
+	/// The actively-called macro identifiers.
 	active_macros: HashSet<String>,
 
-	/// The diagnostics created from the tokens parsed so-far.
+	/// Any diagnostics created from the tokens parsed so-far.
 	diagnostics: Vec<Diag>,
 
 	/// The syntax highlighting tokens created from the tokens parsed so-far.
@@ -274,12 +276,10 @@ impl Walker {
 
 				// Panic: Anytime a stream is added the identifier is inserted into the set.
 				self.active_macros.remove(identifier);
-				// Panic: We checked the length.
 				self.streams.remove(self.streams.len() - 1);
 				continue;
 			}
 
-			// Panic: We check the length.
 			let (token, token_span) = stream.get(*cursor).unwrap();
 
 			// We now check if the new token is a macro call site.
@@ -300,6 +300,7 @@ impl Walker {
 								token_span,
 							));
 							if self.streams.len() == 1 {
+								// We only syntax highlight when it is the first macro call.
 								self.syntax_tokens.push((
 									SyntaxToken::ObjectMacro,
 									token_span,
@@ -395,6 +396,7 @@ impl Walker {
 		self.diagnostics.push(diag);
 	}
 
+	/// Creates a syntax highlighting token over the given span.
 	fn colour(&mut self, span: Span, token: SyntaxToken) {
 		// When we are within a macro, we don't want to produce syntax tokens.
 		if self.streams.len() == 1 {
@@ -402,7 +404,7 @@ impl Walker {
 		}
 	}
 
-	/// Returns whether the `Lexer` has reached the end of the token list.
+	/// Returns whether the walker has reached the end of the token streams.
 	fn is_done(&self) -> bool {
 		self.streams.is_empty()
 	}
@@ -484,8 +486,8 @@ fn parse_stmt(walker: &mut Walker, nodes: &mut Vec<ast::Node>) {
 					};
 					walker.colour(ident.1, SyntaxToken::ObjectMacro);
 
-					// Since object-like macros don't have parameters, we can perform the concatenation once right
-					// here since we know the contents of the macro body will never change.
+					// Since object-like macros don't have parameters, we can perform the concatenation right here
+					// since we know the contents of the macro body will never change.
 					let body_tokens = preprocessor::concat_object_macro_body(
 						walker,
 						body_tokens,

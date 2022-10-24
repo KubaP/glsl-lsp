@@ -1,3 +1,5 @@
+//! Types and functionality related to the Abstract Syntax Tree.
+
 use crate::Span;
 
 /// A node within the abstract syntax tree.

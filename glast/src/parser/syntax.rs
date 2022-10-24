@@ -2,9 +2,9 @@
 #[derive(Debug, Clone, PartialEq)]
 pub enum SyntaxToken {
 	/// A number.
-	Num,
+	Number,
 	/// A boolean.
-	Bool,
+	Boolean,
 	/// A keyword.
 	Keyword,
 	/// A punctuation symbol.
@@ -24,7 +24,7 @@ pub enum SyntaxToken {
 	ObjectMacro,
 	/// A function-like macro identifier. This is used at the macro definition site, and at any instances.
 	FunctionMacro,
-	/// A general identifier.
+	/// A general identifier that was not attempted to be resolved.
 	Ident,
 	/// The macro concatenation operator.
 	MacroConcat,

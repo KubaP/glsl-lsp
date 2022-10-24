@@ -776,8 +776,8 @@ pub enum PreprocDefineDiag {
 	///
 	/// - `0` - The span of the identifier.
 	UndefMacroNameUnresolved(Span),
-	/// ERROR - Found an invalid token after the undef keyword.
+	/// ERROR - Did not find an identifier token after the undef keyword.
 	///
-	/// - `0` - The span where the name is expected.
+	/// - `0` - The span where the macro name is expected.
 	UndefExpectedMacroName(Span),
 }

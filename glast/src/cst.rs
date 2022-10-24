@@ -112,7 +112,7 @@ pub fn parse_from_str(source: &str) -> (Cst, Vec<Diag>) {
 /// let src = r#"
 /// int i = 5.0 + 1;
 /// "#;
-/// let token_stream = token::parse_from_str(&src);
+/// let (token_stream, _metadata) = token::parse_from_str(&src);
 /// // .. do some logic
 /// let (cst, syntax_errors) = cst::parse_from_token_stream(token_stream);
 /// ```

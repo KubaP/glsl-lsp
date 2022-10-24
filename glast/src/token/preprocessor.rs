@@ -7,8 +7,8 @@
 //! a `#define` directive.
 //!
 //! # Macro expansion
-//! Macro expansion within directives is limited; only the `#line` and `#define` directives accept a macro instead
-//! of an expected token:
+//! Macro expansion within directives is limited; only the `#line` directive accepts a macro instead of an expected
+//! token:
 //! ```c
 //! #define FOO 450
 //!
@@ -18,34 +18,35 @@
 //! // But this isn't:
 //! #version FOO compatability
 //! ```
-//! The `#define` macro does expand previously-defined macros:
+//!
+//! The `#define` macro follows through existing macros, but it does not expand them at the definition site:
 //! ```c
 //! #define FOO 5
 //! #define BAR FOO
 //!
-//! // This is valid:
-//! int i = BAR;
-//! ```
+//! #define FOO 10
 //!
-//! This shouldn't be confused with using macro names. The `#undef` and all of the conditional directives accept
-//! macro names, but they do not expand them:
+//! int i = BAR; // Expands to: int i = 10;
+//! ```
+//! As you can see, within the `BAR` macro the `FOO` macro is evaluated, but this takes the latest value of `FOO`
+//! whenever `BAR` is called. It does not, strictly speaking, expand the `FOO` macro when `BAR` is defined.
+//!
+//! The `#undef` and all of the conditional directives accept macro names, but they also do not expand them:
 //! ```c
 //! #define FOO -7
 //!
 //! // This is valid:
 //! #if 1 * FOO
-//!
 //! #endif
 //!
 //! // But this isn't:
 //! #if 1 FOO
-//!
 //! #endif
 //! ```
 //!
-//! # Differences from C/C++
+//! # Differences from the C++98 preprocessor
 //! - The GLSL preprocessor has no support for digraphs or trigraphs.
-//! - The GLSL preprocessor has the extra `#version` and `#extension` directives, but it lacks the `#include`
+//! - The GLSL preprocessor has the extra `#version` and `#extension` directives, and it lacks the `#include`
 //!   directive.
 //! - The pre-defined macros differ depending on the GLSL version.
 
@@ -53,6 +54,8 @@ use super::{is_word, is_word_start, match_op, Lexer};
 use crate::{Span, Spanned};
 
 /// A vector of tokens representing a specific preprocessor directive.
+///
+/// See the individual token types for an overview of the directive and the behaviour of the lexer.
 #[derive(Debug, Clone, PartialEq)]
 pub enum TokenStream {
 	/// An empty directive; just a `#` with nothing else on the same line.

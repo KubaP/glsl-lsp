@@ -11,33 +11,173 @@ use crate::{
 use ast::*;
 use std::collections::{HashMap, HashSet};
 
-pub type TranslationUnit = (Vec<ast::Node>, Vec<Diag>, Vec<Spanned<SyntaxToken>>);
+/// The result of a parsed GLSL source string.
+///
+/// - `0` - The abstract syntax tree,
+/// - `1` - Any diagnostics created during parsing,
+/// - `2` - Syntax highlighting tokens.
+pub type ParseResult = (Vec<Node>, Vec<Diag>, Vec<Spanned<SyntaxToken>>);
 
+/// An error type for parsing operations.
+#[derive(Debug)]
+pub enum ParseErr {
+	/// This number doesn't map to a conditional branch.
+	InvalidNum(usize),
+	/// This number has a dependent number that was not specified in the key.
+	InvalidChain(usize),
+	/// This tree contains no conditional compilation branches.
+	NoConditionalBranches,
+}
+
+/// Parses a GLSL source string into a tree of tokens that can be then parsed into an abstract syntax tree.
+///
+/// This parser returns a [`TokenTree`] rather than the AST itself; this is required to support conditional
+/// compilation. Because conditional compilation is enabled through the preprocessor, there are no rules as to
+/// where the parser can branch - a conditional branch could be introduced in the middle of a variable declaration
+/// for instance. This makes it effectively impossible to represent all branches of a source string within a single
+/// AST, multiple ASTs are needed to represent all the conditional permutations.
+///
+/// The [`TokenTree`] struct allows you to pick which conditional compilation permutations to enable, and then
+/// parse the source string with those conditions to produce a [`Shader`]. Each permutation of all possible ASTs
+/// can be accessed with a key that describes which of the conditional options is selected. The example below
+/// illustrates this:
+/// ```c
+///                         // Ordered by appearance    Ordered by nesting
+///                         //  0 (root)
+/// foo                     //  │                        
+///                         //  │                        
+/// #ifdef ...              //  │  1                     0-0
+///     AAA                 //  │  │                     │
+///                         //  │  │                     │
+///         #ifdef ...      //  │  │  2                  │    0-0
+///             50          //  │  │  │                  │    │
+///         #else           //  │  │  3                  │    0-1
+///             60          //  │  │  │                  │    │
+///         #endif          //  │  │  ┴                  │    ┴
+///                         //  │  │                     │
+///     BBB                 //  │  │                     │
+/// #elif ...               //  │  4                     0-1
+///     CCC                 //  │  │                     │
+/// #else                   //  │  5                     0-2
+///     DDD                 //  │  │                     │
+/// #endif                  //  │  ┴                     ┴
+///                         //  │                        
+/// #ifdef ...              //  │  6                     1-0
+///     EEE                 //  │  │                     │
+///                         //  │  │                     │
+///         #ifdef ...      //  │  │  7                  │    0-0
+///             100         //  │  │  │                  │    │
+///         #endif          //  │  │  ┴                  │    ┴
+/// #endif                  //  │  ┴                     ┴
+///                         //  │                        
+/// bar                     //  │                        
+///                         //  ┴                        
+/// ```
+/// There is always a root token stream which has no conditional branches enabled. This can be accessed through the
+/// [`root()`](TokenTree::root) method. There are two ways of controlling which conditions are enabled, by order
+/// of appearance or by order of nesting.
+///
+/// ## Order by appearance
+/// Each encountered condition (an `ifdef`/`ifndef`/`if`/`elif`/`else` directive) is given an incrementing number.
+/// You pass a slice of numbers that denote which conditions to enable into the
+/// [`parse_by_order_of_appearance()`](TokenTree::parse_by_order_of_appearance) method.
+///
+/// Some examples to visualise:
+/// - `[1, 3]` will produce: `foo AAA 60 BBB bar`,
+/// - `[4]` will produce: `foo CCC bar`,
+/// - `[6, 7]` will produce: `foo EEE 100 bar`,
+/// - `[1, 2, 6, 7]` will produce: `foo AAA 50 BBB EEE 100 bar`.
+///
+/// ## Order by nesting
+/// Each encountered group of conditions (an `ifdef`/`ifndef`/`if` - `elif`/`else` - `endif`) creates a newly
+/// nested group. Within each group the individual conditions are numbered by order of appearance from 0. You pass
+/// slices of numbers that denote which conditions to enable into the
+/// [`parse_by_order_of_nesting()`](TokenTree::parse_by_order_of_nesting) method.
+///
+/// Some examples to visualise:
+/// - `[[0-0, 0-1]]` will produce: `foo AAA 60 BBB bar`,
+/// - `[[0-1]]` will produce: `foo CCC bar`,
+/// - `[[1-0, 0-0]]` will produce: `foo EEE 100 bar`,
+/// - `[[0-0, 0-0], [1-0, 0-0]]` will produce: `foo AAA 50 BBB EEE 100 bar`.
+///
+/// ## Invalid permutations
+/// If you pass a key which doesn't form a valid permutation, the parsing functions will return an error.
+///
+/// # Examples
+/// Parse a simple GLSL expression:
+/// ```rust
+/// # use glast::parser::parse_from_str;
+/// let src = r#"
+/// int i = 5.0 + 1;
+/// "#;
+/// let trees = parse_from_str(&src);
+/// let (ast, _, _) = trees.root();
+/// ```
 pub fn parse_from_str(source: &str) -> TokenTree {
 	let (mut token_stream, metadata) = crate::token::parse_from_str(source);
 
 	// Skip tree generation if there are no conditional compilation blocks.
 	if !metadata.contains_conditional_compilation {
 		return TokenTree {
-			content: vec![TreeNode {
+			arena: vec![TreeNode {
 				parent: None,
-				content: vec![Content::Tokens(token_stream)],
+				contents: vec![Content::Tokens(token_stream)],
 			}],
 			order_by_appearance: vec![],
 			contains_conditional_compilation: false,
 		};
 	}
 
-	fn push_condition(arena: &mut Vec<TreeNode>, id: usize) -> usize {
+	// Below is a simple arena-based tree structure. Here is an example of how the source would be represented in
+	// the tree:
+	//
+	// foo
+	// #ifdef T
+	//   AAA
+	//     #ifdef Z
+	//       90
+	//
+	//     #endif
+	//   BBB
+	// #else
+	//   EEE
+	// #endif
+	// bar
+	// baz
+	//
+	// tree representation:
+	//
+	// Node(                                   0
+	//     Tokens[foo],                        |
+	//     Conditional{                        |
+	//         if: Node(                       |  1
+	//             Tokens[AAA],                |  |
+	//             Conditional{                |  |
+	//                 if: Node(               |  |  2
+	//                     Tokens[90],         |  |  |
+	//                 ),                      |  |  |
+	//             },                          |  |
+	//             Tokens[BBB],                |  |
+	//         ),                              |  |
+	//         else: Node(                     |  3
+	//             Tokens[EEE],                |  |
+	//         )                               |  |
+	//     },                                  |
+	//     Tokens[bar, baz],                   |
+	// )
+	//
+	// order-by-appearance: [(0, 0), (1, 0), (2, 1), (3, 0)]
+
+	fn push_condition(arena: &mut Vec<TreeNode>, id: NodeId) -> NodeId {
 		let new_id = arena.len();
 		arena.push(TreeNode {
 			parent: Some(id),
-			content: vec![Content::Tokens(vec![])],
+			contents: vec![Content::Tokens(vec![])],
 		});
 		arena
 			.get_mut(id)
-			.unwrap()
-			.content
+			.unwrap() // Panic: `id` is always valid.
+			.contents
 			.push(Content::ConditionalBlock {
 				if_: new_id,
 				completed_if: false,
@@ -46,25 +186,37 @@ pub fn parse_from_str(source: &str) -> TokenTree {
 		new_id
 	}
 
-	fn push_token(arena: &mut Vec<TreeNode>, id: usize, token: Spanned<Token>) {
-		let node = arena.get_mut(id).unwrap();
-		match node.content.last_mut() {
+	fn push_token(
+		arena: &mut Vec<TreeNode>,
+		id: NodeId,
+		token: Spanned<Token>,
+	) {
+		let node = arena.get_mut(id).unwrap(); // Panic: `id` is always valid.
+		match node.contents.last_mut() {
 			Some(content) => match content {
 				Content::Tokens(v) => v.push(token),
 				Content::ConditionalBlock { .. } => {
-					node.content.push(Content::Tokens(vec![token]));
+					node.contents.push(Content::Tokens(vec![token]));
 				}
 			},
-			None => node.content.push(Content::Tokens(vec![token])),
+			None => node.contents.push(Content::Tokens(vec![token])),
 		};
 	}
 
+	// The arena containing all of the nodes. The IDs are just `usize` indexes into this vector.
 	let mut arena = vec![TreeNode {
 		parent: None,
-		content: vec![Content::Tokens(vec![])],
+		contents: vec![Content::Tokens(vec![])],
 	}];
+	// The stack representing the IDs of currently nested nodes. The first ID always refers to the root node.
+	// Invariant: Any time this is `pop()`ed a length check is made to ensure that `[0]` is always valid.
 	let mut stack = vec![0];
+	// A vector which creates a mapping between `order-of-appearance` -> `node ID, parent node ID`. The parent node
+	// ID is tracked so that in the `parse_by_order_of_appearance()` method we can validate whether the order is
+	// valid.
 	let mut order_by_appearance = vec![(0, 0)];
+
+	// We consume all of the tokens from the beginning.
 	loop {
 		let (token, token_span) = if !token_stream.is_empty() {
 			token_stream.remove(0)
@@ -88,15 +240,16 @@ pub fn parse_from_str(source: &str) -> TokenTree {
 						let new_id = arena.len();
 						arena.push(TreeNode {
 							parent: Some(*stack.last().unwrap()),
-							content: vec![],
+							contents: vec![],
 						});
+
 						let container =
-							arena.get_mut(*stack.last().unwrap()).unwrap();
+							arena.get_mut(*stack.last().unwrap()).unwrap(); // Panic: the `id` is always valid.
 						if let Some(Content::ConditionalBlock {
 							if_: _,
 							completed_if,
 							elses,
-						}) = container.content.last_mut()
+						}) = container.contents.last_mut()
 						{
 							*completed_if = true;
 							elses.push((Condition::ElseIf, new_id));
@@ -104,7 +257,7 @@ pub fn parse_from_str(source: &str) -> TokenTree {
 								.push((new_id, *stack.last().unwrap()));
 							stack.push(new_id);
 						} else {
-							// TODO: Error.
+							// TODO: Emit error.
 						}
 					} else {
 						// TODO: Emit error.
@@ -116,15 +269,16 @@ pub fn parse_from_str(source: &str) -> TokenTree {
 						let new_id = arena.len();
 						arena.push(TreeNode {
 							parent: Some(*stack.last().unwrap()),
-							content: vec![],
+							contents: vec![],
 						});
+
 						let container =
 							arena.get_mut(*stack.last().unwrap()).unwrap();
 						if let Some(Content::ConditionalBlock {
 							if_: _,
 							completed_if,
 							elses,
-						}) = container.content.last_mut()
+						}) = container.contents.last_mut()
 						{
 							*completed_if = true;
 							elses.push((Condition::Else, new_id));
@@ -132,7 +286,7 @@ pub fn parse_from_str(source: &str) -> TokenTree {
 								.push((new_id, *stack.last().unwrap()));
 							stack.push(new_id);
 						} else {
-							// TODO: Error.
+							// TODO: Emit error.
 						}
 					} else {
 						// TODO: Emit error.
@@ -160,22 +314,119 @@ pub fn parse_from_str(source: &str) -> TokenTree {
 	}
 
 	TokenTree {
-		content: arena,
+		arena,
 		order_by_appearance,
 		contains_conditional_compilation: true,
 	}
 }
 
+/// A tree of token streams generated from a GLSL source string.
+///
+/// The tree represents all possible conditional compilation branches. Call the
+/// [`parse_by_order_of_appearance()`](Self::parse_by_order_of_appearance) or
+/// [`parse_by_order_of_nesting()`](Self::parse_by_order_of_nesting) methods to parse a tree with the selected
+/// conditional branches into a [`ParseResult`].
+///
+/// # Examples
+/// For a fully detailed example on how to use this struct to create an abstract syntax tree, see the documentation
+/// for the [`parse_from_str()`] function.
+///
+/// # Why is this necessary?
+/// Conditional compilation is implemented through the preprocessor, which sets no rules as to where conditional
+/// branching can take place, (apart from the fact that a preprocessor directive must exist on its own line). This
+/// means that a conditional branch could, for example, completely change the entire signature of a program:
+/// ```c
+///  1| void foo() {
+///  2|
+///  3|     int i = 5;
+///  4|
+///  5|     #ifdef TOGGLE
+///  6|     }
+///  7|     void bar() {
+///  8|     #endif
+///  9|
+/// 10|     int p = 0;
+/// 11| }
+/// ```
+/// In the example above, if `TOGGLE` is not defined, we have a function `foo` who's scope ends on line `11` and
+/// includes two variable declarations `i` and `p`. However, if `TOGGLE` is defined, the function `foo` ends on
+/// line `6` instead and only contains the variable `i`, and we have a completely new function `bar` which has the
+/// variable `p`.
+///
+/// This technically can be representable in the AST, it's just that it would look something like this:
+/// ```text
+/// Root(
+///     Either(
+///         (
+///             Function(
+///                 name="foo"
+///                 start=1
+///                 end=11
+///                 contents(
+///                     Variable(name="i" value=5)
+///                     Variable(name="p" value=0)
+///                 )
+///             )
+///         ),
+///         (
+///             Function(
+///                 name="foo"
+///                 start=1
+///                 end=6
+///                 contents(
+///                     Variable(name="i" value=5)
+///                 )
+///             ),
+///             Function(
+///                 name="bar"
+///                 start=7
+///                 end=11
+///                 contents(
+///                     Variable(name="p" value=0)
+///                 )
+///             ),
+///         )
+///     )
+/// )
+/// ```
+/// Notice how this AST is effectively `Either(AST_with_condition_false, AST_with_condition_true)`. This is because
+/// the function `foo` could potentially be split in the middle, but an AST node cannot have multiple end points,
+/// which means that we can't include both permutations in the function node; we need separate function nodes
+/// instead. And since we have two separate possibilities for `foo`, we need to branch in the node above `foo`,
+/// which in this example is effectively the root node.
+///
+/// It is arguable whether such a representation would be better than the current solution. On one hand all
+/// possibilities are within the single AST, but on the other hand such an AST would quickly become confusing to
+/// work with, manipulate, analyse, etc.
+///
+/// The main reason this option wasn't chosen is because it would immensely complicate the parsing logic, and in
+/// turn the maintainability of this project. As with all recursive-descent parsers, the individual parsing
+/// functions hold onto any temporary state. In this example, the function for parsing functions holds information
+/// such as the name, the starting position, etc. If we would encounter the conditional branching within this
+/// parsing function, we would somehow need to be able to return up the call stack to split the parser, whilst also
+/// somehow not loosing the temporary state. This should be technically possible, but it would make writing the
+/// parsing code absolutely awful in many ways and that is not a trade-off I'm willing to take.
+///
+/// This complication occurs because the preprocessor is a separate pass ran before the main compiler and does not
+/// follow the GLSL grammar rules, which means that preprocessor directives and macros can be included literally
+/// anywhere and the file may still be valid after expansion. In comparison, some newer languages include
+/// conditional compilation as part of the language grammar itself. In Rust for example, conditional compilation is
+/// applied via attributes to entire expressions/statements, which means that you can't run into this mess where a
+/// conditional branch splits a function mid-way through parsing. GLSL unfortunately uses the C preprocessor, which
+/// results in this sort of stuff (the approach taken by this crate) being necessary to achieve 100%
+/// specification-defined behaviour.
 pub struct TokenTree {
+	/// The arena of [`TreeNode`]s.
+	///
 	/// # Invariants
-	/// If `contains_conditional_compilation` is `false`, this is:
-	/// ```
-	/// vec![TreeNode {
+	/// `[0]` always contains a value. If `contains_conditional_compilation` is `false`, this is:
+	/// ```ignore
+	/// TreeNode {
 	///		parent: None,
-	///		content: vec![Content::Tokens(token_stream)],
-	///	}]
+	///		content: vec![Content::Tokens(entire_token_stream)],
+	///	}
 	/// ```
-	content: Vec<TreeNode>,
+	arena: Vec<TreeNode>,
 	/// IDs of the relevant nodes ordered by appearance.
 	///
 	/// - `0` - The ID of the `[n]`th conditional node,
@@ -183,7 +434,7 @@ pub struct TokenTree {
 	///
 	/// # Invariants
 	/// If `contains_conditional_compilation` is `false`, this is empty.
-	order_by_appearance: Vec<(usize, usize)>,
+	order_by_appearance: Vec<(NodeId, NodeId)>,
 
 	/// Whether there are any conditional compilation brances.
 	contains_conditional_compilation: bool,
@@ -194,17 +445,22 @@ impl TokenTree {
 	///
 	/// Whilst this is guaranteed to succeed, if the entire source string is wrapped within a conditional block
 	/// this will return an empty AST.
-	pub fn root(&self) -> TranslationUnit {
+	///
+	/// # Examples
+	/// For a fully detailed example on how to use this method to create an abstract syntax tree, see the
+	/// documentation for the [`parse_from_str()`] function.
+	pub fn root(&self) -> ParseResult {
+		// Get the relevant streams for the root branch.
 		let streams = if !self.contains_conditional_compilation {
-			// Panics: See invariant.
-			match self.content.get(0).unwrap().content.first().unwrap() {
+			// Panic: See invariant.
+			match self.arena.get(0).unwrap().contents.first().unwrap() {
 				Content::Tokens(s) => vec![s.clone()],
 				Content::ConditionalBlock { .. } => unreachable!(),
 			}
 		} else {
 			let mut streams = Vec::new();
-			let node = self.content.get(0).unwrap();
-			for content in &node.content {
+			let node = self.arena.get(0).unwrap();
+			for content in &node.contents {
 				match content {
 					Content::Tokens(s) => streams.push(s.clone()),
 					Content::ConditionalBlock { .. } => {}
@@ -226,19 +482,23 @@ impl TokenTree {
 	/// Parses a token tree by enabling conditional branches in the order of their appearance.
 	///
 	/// This method can return an `Err` in the following cases:
-	/// - The `order` has a number which doesn't exist,
-	/// - The `order` has a number which depends on another number that is missing.
+	/// - The `key` has a number which doesn't map to a conditional compilation branch,
+	/// - The `key` has a number which depends on another number that is missing.
+	///
+	/// # Examples
+	/// For a fully detailed example on how to use this method to create an abstract syntax tree, see the
+	/// documentation for the [`parse_from_str()`] function.
 	pub fn parse_by_order_of_appearance(
 		&self,
-		order: impl AsRef<[usize]>,
-	) -> Result<TranslationUnit, ParseErr> {
-		let order = order.as_ref();
+		key: impl AsRef<[usize]>,
+	) -> Result<ParseResult, ParseErr> {
+		let order = key.as_ref();
 
 		if !self.contains_conditional_compilation {
-			return Err(ParseErr::NoConditionalCompilation);
+			return Err(ParseErr::NoConditionalBranches);
 		}
 
-		// Check that the order is valid.
+		// Check that the key is valid.
 		{
 			let mut visited_node_ids = vec![0];
 			for num in order {
@@ -255,14 +515,16 @@ impl TokenTree {
 			}
 		}
 
-		let mut order_idx = 0;
+		let mut key_idx = 0;
 		let mut streams = Vec::new();
 		let mut nodes = vec![(0, 0)];
 		'outer: loop {
-			let current_order_id = {
-				match order.get(order_idx) {
+			// Get the ID of the conditional node that the current key points to.
+			let current_key_node_id = {
+				match order.get(key_idx) {
 					Some(num) => match self.order_by_appearance.get(*num) {
 						Some((arena_id, _)) => Some(*arena_id),
+						// Panic: We have validated above that all the numbers are valid.
 						None => unreachable!(),
 					},
 					None => None,
@@ -270,24 +532,25 @@ impl TokenTree {
 			};
 
 			let (node_id, content_idx) = nodes.last_mut().unwrap();
-			let node = self.content.get(*node_id).unwrap();
+			let node = self.arena.get(*node_id).unwrap();
 
-			while let Some(inner) = &node.content.get(*content_idx) {
+			// Consume the next content element in this node.
+			while let Some(inner) = &node.contents.get(*content_idx) {
 				*content_idx += 1;
 				match inner {
 					Content::Tokens(s) => streams.push(s.clone()),
 					Content::ConditionalBlock { if_, elses, .. } => {
-						// Check if any of the conditional branches match the current order number.
-						if let Some(current_order_id) = current_order_id {
+						// Check if any of the conditional branches match the current key number.
+						if let Some(current_order_id) = current_key_node_id {
 							if *if_ == current_order_id {
 								nodes.push((*if_, 0));
-								order_idx += 1;
+								key_idx += 1;
 								continue 'outer;
 							} else {
 								for (_, else_) in elses {
 									if *else_ == current_order_id {
 										nodes.push((*else_, 0));
-										order_idx += 1;
+										key_idx += 1;
 										continue 'outer;
 									}
 								}
@@ -315,41 +578,49 @@ impl TokenTree {
 		Ok((nodes, walker.diagnostics, walker.syntax_tokens))
 	}
 
+	/// TODO: Implement.
 	#[allow(unused)]
 	pub fn parse_by_order_of_nesting(
 		&self,
-		order: impl AsRef<[(usize, usize)]>,
-	) -> Option<TranslationUnit> {
+		key: impl AsRef<[(usize, usize)]>,
+	) -> Option<ParseResult> {
 		todo!()
 	}
 }
 
-#[derive(Debug)]
-pub enum ParseErr {
-	/// The number doesn't exist.
-	InvalidNum(usize),
-	/// The number has a dependent number that was not specified.
-	InvalidChain(usize),
-	/// This tree contains no conditional compilation branches.
-	NoConditionalCompilation,
-}
+type NodeId = usize;
 
+/// A node within the token tree.
 #[derive(Debug)]
 struct TreeNode {
-	parent: Option<usize>,
-	content: Vec<Content>,
+	#[allow(unused)]
+	parent: Option<NodeId>,
+	/// The contents of this node.
+	contents: Vec<Content>,
 }
 
+/// This enum is used to group together tokens into logical groups.
+///
+/// Individual tokens are grouped together as much as possible within the [`Tokens`](Content::Tokens) variant,
+/// until a [`ConditionalBlock`](Content::ConditionalBlock) is encountered. Once the block is over however, another
+/// `Tokens` group is created.
 #[derive(Debug)]
 enum Content {
+	/// A vector of tokens appearing one after another.
 	Tokens(Vec<Spanned<Token>>),
+	/// A conditional block. Each branch points to a node in the tree arena; each node contains further nested
+	/// content.
 	ConditionalBlock {
-		if_: usize,
+		/// Tokens by default are pushed into this node.
+		if_: NodeId,
+		/// This flag is set to `true` when we encounter an `elif`/`else`.
 		completed_if: bool,
-		elses: Vec<(Condition, usize)>,
+		/// If `completed_if` is set to `true`, tokens are pushed into the last node in this vector.
+		elses: Vec<(Condition, NodeId)>,
 	},
 }
 
+/// The type of an extra conditional branch.
 #[derive(Debug)]
 enum Condition {
 	ElseIf,
@@ -357,14 +628,14 @@ enum Condition {
 }
 
 pub(crate) struct Walker {
+	/// The token streams of the source string with the preselected conditional branches.
+	source_streams: Vec<TokenStream>,
 	/// The active token streams.
 	///
 	/// - `0` - The macro identifier, (for the root source stream this is just `""`),
 	/// - `1` - The token stream,
 	/// - `2` - The cursor.
 	streams: Vec<(String, TokenStream, usize)>,
-
-	original_sources: Vec<TokenStream>,
 
 	/// The currently defined macros.
 	///
@@ -395,11 +666,11 @@ impl Walker {
 		// with valid macros. By using "" we can avoid having a special case for the root source stream.
 		active_macros.insert("".into());
 
-		let first_source = token_streams.remove(0);
+		let first_source = token_streams.remove(0); // Panic: Ensured by the caller.
 
 		Self {
+			source_streams: token_streams,
 			streams: vec![("".into(), first_source, 0)],
-			original_sources: token_streams,
 			macros: HashMap::new(),
 			macro_call_site: None,
 			active_macros,
@@ -508,14 +779,13 @@ impl Walker {
 				let ident = identifier.clone();
 				if self.streams.len() == 1 {
 					// If we aren't in a macro, that means we've finished the current source stream but there may
-					// be another one (as they can be split up due to conditional compilation).
-
-					if self.original_sources.is_empty() {
+					// be another one, (since they can be split up due to conditional compilation).
+					if self.source_streams.is_empty() {
 						// We have reached the final end.
 						self.streams.remove(0);
 						break;
 					} else {
-						let mut next_source = self.original_sources.remove(0);
+						let mut next_source = self.source_streams.remove(0);
 						let (_, s, c) = self.streams.get_mut(0).unwrap();
 						std::mem::swap(s, &mut next_source);
 						*c = 0;
@@ -691,6 +961,8 @@ impl Walker {
 			.map_or(Span::new_zero_width(0), |t| t.1)
 	} */
 }
+
+/* STATEMENT PARSING LOGIC BELOW */
 
 /// Parses an individual statement at the current position.
 fn parse_stmt(walker: &mut Walker, nodes: &mut Vec<ast::Node>) {

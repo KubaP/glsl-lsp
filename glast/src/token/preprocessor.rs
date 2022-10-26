@@ -1,4 +1,4 @@
-//! Types related to lexing preprocessor directives.
+//! Types related to preprocessor token streams.
 //!
 //! This module contains the enums use to represent tokens in the different preprocessor directives.
 //!
@@ -7,8 +7,8 @@
 //! a `#define` directive.
 //!
 //! # Macro expansion
-//! Macro expansion within directives is limited; only the `#line` directive accepts a macro instead of an expected
-//! token:
+//! Macro expansion within directives is limited; only the `#line` directive accepts a macro expansion instead of
+//! an expected token:
 //! ```c
 //! #define FOO 450
 //!
@@ -44,11 +44,14 @@
 //! #endif
 //! ```
 //!
-//! # Differences from the C++98 preprocessor
-//! - The GLSL preprocessor has no support for digraphs or trigraphs.
-//! - The GLSL preprocessor has the extra `#version` and `#extension` directives, and it lacks the `#include`
-//!   directive.
-//! - The pre-defined macros differ depending on the GLSL version.
+//! # Differences from the C preprocessor
+//! The GLSL preprocessor is based off the C++98 preprocessor, but it:
+//! - has no support for digraphs or trigraphs.
+//! - has no support for string or character literals, and hence no support for the stringizing operator,
+//! - has no support for universal character names (`\uXXXX` notation),
+//! - has no support for any number literals other than integers (with no prefixes/suffixes),
+//! - has the extra `version` and `extension` directives, and lacks the `include` directive,
+//! - has different pre-defined macros, (which depend on the exact GLSL version).
 
 use super::{is_word, is_word_start, match_op, Lexer};
 use crate::{Span, Spanned};
@@ -1489,7 +1492,7 @@ pub(crate) fn concat_object_macro_body(
 						));
 					} else {
 						// Panic: The `Token::to_string()` method panics with a directive, however `tokens` is a
-						// replacement-list of tokens in a macro and that will never contain any directive tokens
+						// replacement-list of tokens in a macro and it will never contain any directive tokens
 						// within.
 						let mut new_string = prev.0.to_string();
 						new_string.push_str(&next.0.to_string());

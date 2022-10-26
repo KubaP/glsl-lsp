@@ -1,4 +1,4 @@
-//! Types and functionality related to the Token Stream.
+//! Types and functionality related to the token stream.
 //!
 //! This module contains the structs and enums used to represent tokens, and the [`parse_from_str()`] function
 //! which returns a [`TokenStream`] and accompanied [`Metadata`]. The [`preprocessor`] submodule contains types
@@ -10,22 +10,21 @@
 //! lexer as specified by the official GLSL specification. The differences are listed below:
 //!
 //! - When the lexer comes across a character which is not part of the allowed character set it emits the
-//!   [`Invalid`](Token::Invalid) token. The only exception is in preprocessor directives where any characters are
-//!   allowed, but after preprocessor expansion only the allowed characters can remain. The specification says that
-//!   upon such a case a compile-time error must be produced.
+//!   [`Invalid`](Token::Invalid) token. The specification says that upon such a case a compile-time error must be
+//!   produced.
 //! - When the lexer comes across a block comment which does not have a delimiter (and therefore goes to the
 //!   end-of-file) it still produces a [`BlockComment`](Token::BlockComment) token with the `contains_eof` field
 //!   set to `true`. The specification does not mention what should technically happen in such a case, but
 //!   compilers seem to produce a compile-time error.
 //! - The lexer treats any number that matches the following pattern `0[0-9]+` as an octal number. The
-//!   specification says that an octal number can only contain digits `[0-7]`.
+//!   specification says that an octal number can only contain digits `0-7`.
 //! - The lexer treats any identifier immediately after a number (without separating whitespace) as a valid suffix.
 //!   The specification only defines the `u|U` suffix as valid for integers, and the `f|F` & `lf|LF` suffix as
 //!   valid for floating point numbers. Anything afterwards should be treated as a new token, so this would be
 //!   valid: `#define TEST +5 \n uint i = 5uTEST`. Currently, this crate doesn't work according to this behaviour,
 //!   hence for now the lexer will treat the suffix as `uTEST` instead.
 //!
-//! See the [`preprocessor`] module about behavioural differences for each individual directive.
+//! See the [`preprocessor`] module for behavioural differences for each individual directive.
 //!
 //! To be certain that the source is valid, these cases (apart from the define issue) must be checked afterwards by
 //! iterating over the [`TokenStream`]. The parsing functions provided in the `parser` module do this for you, but
@@ -49,7 +48,7 @@ use crate::{
 /// A vector of tokens representing a GLSL source string.
 pub type TokenStream = Vec<Spanned<Token>>;
 
-/// Parses a GLSL source string into a Token Stream.
+/// Parses a GLSL source string into a token stream.
 ///
 /// This lexer uses the "Maximal munch" principle to greedily create tokens. This means the longest possible valid
 /// token is always produced. Some examples:
@@ -77,6 +76,747 @@ pub fn parse_from_str(source: &str) -> (TokenStream, Metadata) {
 	let mut lexer = Lexer::new(source);
 	let tokens = parse_tokens(&mut lexer, false);
 	(tokens, lexer.metadata)
+}
+
+/// Metadata about the GLSL source string.
+///
+/// This is returned by the lexer along with the [`TokenStream`] and describes certain properties of the source,
+/// such as wether the source contains any conditional compilation directives. These properties can be useful in
+/// order to optimize later processing steps, such as skipping a large chunk of code if a certain condition is not
+/// met.
+///
+/// The purpose of this struct is to hold structured data that gets extracted out and checked-against if needed.
+/// Hence, this struct is marked as `non_exhaustive` and new fields may be added at any time without causing a
+/// breaking change.
+#[derive(Debug, Clone, PartialEq)]
+#[non_exhaustive]
+pub struct Metadata {
+	/// Whether the GLSL source string contains any condition compilation directives.
+	pub contains_conditional_compilation: bool,
+}
+
+/// A token representing a unit of text in the GLSL source string.
+#[derive(Debug, Clone, PartialEq)]
+pub enum Token {
+	/// A number, e.g. `1`, `517u`, `0xA9C`, `07113`, `7.3e-2`, `.015LF`.
+	Num {
+		/// The type of number.
+		type_: NumType,
+		/// The numeric contents, (this excludes any prefixes or suffixes).
+		num: String,
+		/// An optional suffix after the numeric contents.
+		suffix: Option<String>,
+	},
+	/// A boolean, either `true` or `false`.
+	Bool(bool),
+	/// An identifier, e.g. `foo_bar`, `_900_a`.
+	Ident(String),
+	/// A preprocessor directive, e.g. `#version 450 core`, `#define FOO 42`, `#ifdef TOGGLE`.
+	Directive(preprocessor::TokenStream),
+	/// The `##` punctuation symbol. This token is only emitted when parsing the body of a `#define` preprocessor
+	/// directive.
+	MacroConcat,
+	/// A line comment, e.g. `// comment`.
+	LineComment(String),
+	/// A block comment, e.g. `/* comment */`.
+	BlockComment {
+		str: String,
+		/// Only `true` if this comment is missing the closing delimiter.
+		contains_eof: bool,
+	},
+	/// An invalid character, e.g. `@`, `"`, `'`.
+	Invalid(char),
+	/* Keywords */
+	/// The `if` keyword.
+	If,
+	/// The `else` keyword.
+	Else,
+	/// The `for` keyword.
+	For,
+	/// The `do` keyword.
+	Do,
+	/// The `while` keyword.
+	While,
+	/// The `continue` keyword.
+	Continue,
+	/// The `switch` keyword.
+	Switch,
+	/// The `case` keyword.
+	Case,
+	/// The `default` keyword.
+	Default,
+	/// The `break` keyword.
+	Break,
+	/// The `return` keyword.
+	Return,
+	/// The `discard` keyword.
+	Discard,
+	/// The `struct` keyword.
+	Struct,
+	/// The `subroutine` keyword.
+	Subroutine,
+	/// A reserved keyword, e.g. `class`, `public`, `typedef`, `union`.
+	Reserved(String),
+	/* Qualifiers */
+	/// The `const` keyword.
+	Const,
+	/// The `in` keyword.
+	In,
+	/// The `out` keyword.
+	Out,
+	/// The `inout` keyword.
+	InOut,
+	/// The `attribute` keyword.
+	Attribute,
+	/// The `uniform` keyword.
+	Uniform,
+	/// The `varying` keyword.
+	Varying,
+	/// The `buffer` keyword.
+	Buffer,
+	/// The `shared` keyword.
+	Shared,
+	/// The `centroid` keyword.
+	Centroid,
+	/// The `sample` keyword.
+	Sample,
+	/// The `patch` keyword.
+	Patch,
+	/// The `layout` keyword.
+	Layout,
+	/// The `flat` keyword.
+	Flat,
+	/// The `smooth` keyword.
+	Smooth,
+	/// The `noperspective` keyword.
+	NoPerspective,
+	/// The `highp` keyword.
+	HighP,
+	/// The `mediump` keyword.
+	MediumP,
+	/// The `lowp` keyword.
+	LowP,
+	/// The `invariant` keyword.
+	Invariant,
+	/// The `precise` keyword.
+	Precise,
+	/// The `coherent` keyword.
+	Coherent,
+	/// The `volatile` keyword.
+	Volatile,
+	/// The `restrict` keyword.
+	Restrict,
+	/// The `readonly` keyword.
+	Readonly,
+	/// The `writeonly` keyword.
+	Writeonly,
+	/* Punctuation tokens */
+	/// A punctuation token.
+	Op(OpTy),
+	/// A comma `,`.
+	Comma,
+	/// A dot `.`.
+	Dot,
+	/// A semi-colon `;`.
+	Semi,
+	/// A colon `:`.
+	Colon,
+	/// A question mark `?`.
+	Question,
+	/// An opening parenthesis `(`.
+	LParen,
+	/// A closing parenthesis `)`.
+	RParen,
+	/// An opening bracket `[`.
+	LBracket,
+	/// A closing bracket `]`.
+	RBracket,
+	/// An opening brace `{`.
+	LBrace,
+	/// A closing brace `}`.
+	RBrace,
+}
+
+/// The type/notation of a number token.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum NumType {
+	/// A decimal is any number beginning with `1-9` without a decimal point or an exponent, or just the digit `0` on it's own.
+	Dec,
+	/// An octal is any number beginning with `0` without a decimal point or an exponent.
+	Oct,
+	/// A hexadecimal is any number beginning with `0x` without a decimal point or an exponent.
+	Hex,
+	/// A float is any number that contains a decimal point or an exponent.
+	Float,
+}
+
+/// A mathematical/comparison operator.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum OpTy {
+	/* Maths */
+	/// The `+` symbol.
+	Add,
+	/// The `-` symbol.
+	Sub,
+	/// The `*` symbol.
+	Mul,
+	/// The `/` symbol.
+	Div,
+	/// The `%` symbol.
+	Rem,
+	/// The `&` symbol.
+	And,
+	/// The `|` symbol.
+	Or,
+	/// The `^` symbol.
+	Xor,
+	/// The `<<` symbol.
+	LShift,
+	/// The `>>` symbol.
+	RShift,
+	/// The `-` symbol.
+	Flip,
+	/// The `=` symbol.
+	Eq,
+	/// The `++` symbol.
+	AddAdd,
+	/// The `--` symbol.
+	SubSub,
+	/// The `+=` symbol.
+	AddEq,
+	/// The `-=` symbol.
+	SubEq,
+	/// The `*=` symbol.
+	MulEq,
+	/// The `/=` symbol.
+	DivEq,
+	/// The `%=` symbol.
+	RemEq,
+	/// The `&=` symbol.
+	AndEq,
+	/// The `|=` symbol.
+	OrEq,
+	/// The `^=` symbol.
+	XorEq,
+	/// The `<<=` symbol.
+	LShiftEq,
+	/// The `>>=` symbol.
+	RShiftEq,
+	/* Comparison */
+	/// The `==` symbol.
+	EqEq,
+	/// The `!=` symbol.
+	NotEq,
+	/// The `!` symbol.
+	Not,
+	/// The `>` symbol.
+	Gt,
+	/// The `<` symbol.
+	Lt,
+	/// The `>=` symbol.
+	Ge,
+	/// The `<=` symbol.
+	Le,
+	/// The `&&` symbol.
+	AndAnd,
+	/// The `||` symbol.
+	OrOr,
+	/// The `^^` symbol.
+	XorXor,
+}
+
+impl Token {
+	/// Produces a syntax token corresponding to the type of this token. This performs simple, non-semantically
+	/// aware colouring.
+	pub fn non_semantic_colour(&self) -> crate::parser::SyntaxToken {
+		use crate::parser::SyntaxToken;
+		match self {
+			Token::Num { .. } => SyntaxToken::Number,
+			Token::Bool(_) => SyntaxToken::Boolean,
+			Token::Ident(_) => SyntaxToken::Ident,
+			Token::Directive(_) => SyntaxToken::Directive,
+			Token::MacroConcat => SyntaxToken::MacroConcat,
+			Token::LineComment(_) | Token::BlockComment { .. } => {
+				SyntaxToken::Comment
+			}
+			Token::Invalid(_) => SyntaxToken::Invalid,
+			Token::If
+			| Token::Else
+			| Token::For
+			| Token::Do
+			| Token::While
+			| Token::Continue
+			| Token::Switch
+			| Token::Case
+			| Token::Default
+			| Token::Break
+			| Token::Return
+			| Token::Discard
+			| Token::Struct
+			| Token::Subroutine
+			| Token::Reserved(_)
+			| Token::Const
+			| Token::In
+			| Token::Out
+			| Token::InOut
+			| Token::Attribute
+			| Token::Uniform
+			| Token::Varying
+			| Token::Buffer
+			| Token::Shared
+			| Token::Centroid
+			| Token::Sample
+			| Token::Patch
+			| Token::Layout
+			| Token::Flat
+			| Token::Smooth
+			| Token::NoPerspective
+			| Token::HighP
+			| Token::MediumP
+			| Token::LowP
+			| Token::Invariant
+			| Token::Precise
+			| Token::Coherent
+			| Token::Volatile
+			| Token::Restrict
+			| Token::Readonly
+			| Token::Writeonly => SyntaxToken::Keyword,
+			Token::Op(_) => SyntaxToken::Operator,
+			Token::Comma
+			| Token::Dot
+			| Token::Semi
+			| Token::Colon
+			| Token::Question
+			| Token::LParen
+			| Token::RParen
+			| Token::LBracket
+			| Token::RBracket
+			| Token::LBrace
+			| Token::RBrace => SyntaxToken::Punctuation,
+		}
+	}
+	/// Returns whether the current token is a keyword that can start a statement.
+	pub fn starts_statement(&self) -> bool {
+		match self {
+			Self::If
+			| Self::Else
+			| Self::For
+			| Self::Do
+			| Self::While
+			| Self::Continue
+			| Self::Switch
+			| Self::Case
+			| Self::Default
+			| Self::Break
+			| Self::Return
+			| Self::Discard
+			| Self::Struct
+			| Self::Subroutine
+			| Self::Reserved(_)
+			| Self::Const
+			| Self::In
+			| Self::Out
+			| Self::InOut
+			| Self::Attribute
+			| Self::Uniform
+			| Self::Varying
+			| Self::Buffer
+			| Self::Shared
+			| Self::Centroid
+			| Self::Sample
+			| Self::Patch
+			| Self::Layout
+			| Self::Flat
+			| Self::Smooth
+			| Self::NoPerspective
+			| Self::HighP
+			| Self::MediumP
+			| Self::LowP
+			| Self::Invariant
+			| Self::Precise
+			| Self::Coherent
+			| Self::Volatile
+			| Self::Restrict
+			| Self::Readonly
+			| Self::Writeonly => true,
+			_ => false,
+		}
+	}
+
+	/// Returns whether the current token is a punctuation assuming we are at the beginning of parsing a statement.
+	pub fn is_punctuation_for_stmt(&self) -> bool {
+		match self {
+			Self::Op(_)
+			| Self::Comma
+			| Self::Dot
+			| Self::Colon
+			| Self::Question
+			| Self::LParen
+			| Self::RParen
+			| Self::LBracket
+			| Self::RBracket => true,
+			_ => false,
+		}
+	}
+
+	/// Tries to convert the current token into a [`LayoutTy`] identifier.
+	///
+	/// If the token matches a layout identifier that doesn't take an expression, e.g. `early_fragment_tests`, then
+	/// `Left` is returned with the converted `LayoutTy`. If the token matches a layout identifier that takes an
+	/// expression, e.g. `location = n`, then `Right` is returned; after the expression has been parsed, call
+	/// [`to_layout_expr()`](Self::to_layout_expr).
+	///
+	/// If `None` is returned, the current token is not a valid layout identifier.
+	pub fn to_layout(&self) -> Option<Either<LayoutTy, ()>> {
+		match self {
+			// `shared` is a keyword in all circumstances, apart from when it is used as a qualifier, hence it's a
+			// distinct variant rather than a string.
+			Self::Shared => Some(Either::Left(LayoutTy::Shared)),
+			Self::Ident(s) => match s.as_ref() {
+				"packed" => Some(Either::Left(LayoutTy::Packed)),
+				"std140" => Some(Either::Left(LayoutTy::Std140)),
+				"std430" => Some(Either::Left(LayoutTy::Std430)),
+				"row_major" => Some(Either::Left(LayoutTy::RowMajor)),
+				"column_major" => Some(Either::Left(LayoutTy::ColumnMajor)),
+				"binding" => Some(Either::Right(())),
+				"offset" => Some(Either::Right(())),
+				"align" => Some(Either::Right(())),
+				"location" => Some(Either::Right(())),
+				"component" => Some(Either::Right(())),
+				"index" => Some(Either::Right(())),
+				"points" => Some(Either::Left(LayoutTy::Points)),
+				"lines" => Some(Either::Left(LayoutTy::Lines)),
+				"isolines" => Some(Either::Left(LayoutTy::Isolines)),
+				"triangles" => Some(Either::Left(LayoutTy::Triangles)),
+				"quads" => Some(Either::Left(LayoutTy::Quads)),
+				"equal_spacing" => Some(Either::Left(LayoutTy::EqualSpacing)),
+				"fractional_even_spacing" => {
+					Some(Either::Left(LayoutTy::FractionalEvenSpacing))
+				}
+				"fractional_odd_spacing" => {
+					Some(Either::Left(LayoutTy::FractionalOddSpacing))
+				}
+				"cw" => Some(Either::Left(LayoutTy::Clockwise)),
+				"ccw" => Some(Either::Left(LayoutTy::CounterClockwise)),
+				"point_mode" => Some(Either::Left(LayoutTy::PointMode)),
+				"line_adjacency" => {
+					Some(Either::Left(LayoutTy::LinesAdjacency))
+				}
+				"triangle_adjacency" => {
+					Some(Either::Left(LayoutTy::TrianglesAdjacency))
+				}
+				"invocations" => Some(Either::Right(())),
+				"origin_upper_left" => {
+					Some(Either::Left(LayoutTy::OriginUpperLeft))
+				}
+				"pixel_center_integer" => {
+					Some(Either::Left(LayoutTy::PixelCenterInteger))
+				}
+				"early_fragment_tests" => {
+					Some(Either::Left(LayoutTy::EarlyFragmentTests))
+				}
+				"local_size_x" => Some(Either::Right(())),
+				"local_size_y" => Some(Either::Right(())),
+				"local_size_z" => Some(Either::Right(())),
+				"xfb_buffer" => Some(Either::Right(())),
+				"xfb_stride" => Some(Either::Right(())),
+				"xfb_offset" => Some(Either::Right(())),
+				"vertices" => Some(Either::Right(())),
+				"line_strip" => Some(Either::Left(LayoutTy::LineStrip)),
+				"triangle_strip" => Some(Either::Left(LayoutTy::TriangleStrip)),
+				"max_vertices" => Some(Either::Right(())),
+				"stream" => Some(Either::Right(())),
+				"depth_any" => Some(Either::Left(LayoutTy::DepthAny)),
+				"depth_greater" => Some(Either::Left(LayoutTy::DepthGreater)),
+				"depth_less" => Some(Either::Left(LayoutTy::DepthLess)),
+				"depth_unchanged" => {
+					Some(Either::Left(LayoutTy::DepthUnchanged))
+				}
+				_ => None,
+			},
+			_ => None,
+		}
+	}
+
+	/// Constructs a [`Layout`] given the identifier, expression and spans.
+	///
+	/// # Panics
+	/// This is only for layout identifiers which take a value expression. See the documentation for
+	/// [`to_layout()`](Self::to_layout) for more information.
+	#[rustfmt::skip]
+	pub fn to_layout_expr(
+		&self,
+		kw_span: Span,
+		eq_span: Option<Span>,
+		expr: Option<Expr>,
+	) -> Layout {
+		// Calculate the span.
+		let span = if let Some(expr) = &expr {
+			Span::new(kw_span.start, expr.span.end)
+		} else if let Some(eq_span) = eq_span {
+			Span::new(kw_span.start, eq_span.end)
+		} else {
+			kw_span
+		};
+
+		match self {
+			Self::Ident(s) => match s.as_ref() {
+				"binding" => Layout {
+					span,
+					ty: LayoutTy::Binding {
+						kw: kw_span,
+						eq: eq_span,
+						value: expr,
+					}
+				},
+				"offset" => Layout {
+					span,
+					ty: LayoutTy::Offset {
+						kw: kw_span,
+						eq: eq_span,
+						value: expr,
+					}
+				},
+				"align" => Layout {
+					span,
+					ty: LayoutTy::Align {
+						kw: kw_span,
+						eq: eq_span,
+						value: expr,
+					}
+				},
+				"location" => Layout {
+					span,
+					ty: LayoutTy::Location {
+						kw: kw_span,
+						eq: eq_span,
+						value: expr,
+					}
+				},
+				"component" => Layout {
+					span,
+					ty: LayoutTy::Component {
+						kw: kw_span,
+						eq: eq_span,
+						value: expr,
+					}
+				},
+				"index" => Layout {
+					span,
+					ty: LayoutTy::Index {
+						kw: kw_span,
+						eq: eq_span,
+						value: expr,
+					}
+				},
+				"invocations" => Layout {
+					span,
+					ty: LayoutTy::Invocations {
+						kw: kw_span,
+						eq: eq_span,
+						value: expr,
+					}
+				},
+				"local_size_x" => Layout{
+					span,
+					ty: LayoutTy::LocalSizeX {
+						kw: kw_span,
+						eq: eq_span,
+						value: expr,
+					}
+				},
+				"local_size_y" => Layout {
+					span,
+					ty: LayoutTy::LocalSizeY {
+						kw: kw_span,
+						eq: eq_span,
+						value: expr,
+					}
+				},
+				"local_size_z" => Layout {
+					span,
+					ty: LayoutTy::LocalSizeZ {
+						kw: kw_span,
+						eq: eq_span,
+						value: expr,
+					}
+				},
+				"xfb_buffer" => Layout {
+					span,
+					ty: LayoutTy::XfbBuffer {
+						kw: kw_span,
+						eq: eq_span,
+						value: expr,
+					}
+				},
+				"xfb_stride" => Layout {
+					span,
+					ty: LayoutTy::XfbStride {
+						kw: kw_span,
+						eq: eq_span,
+						value: expr,
+					}
+				},
+				"xfb_offset" => Layout {
+					span,
+					ty: LayoutTy::XfbOffset {
+						kw: kw_span,
+						eq: eq_span,
+						value: expr,
+					}
+				},
+				"vertices" => Layout {
+					span,
+					ty: LayoutTy::Vertices {
+						kw: kw_span,
+						eq: eq_span,
+						value: expr,
+					}
+				},
+				"max_vertices" => Layout {
+					span,
+					ty: LayoutTy::MaxVertices {
+						kw: kw_span,
+						eq: eq_span,
+						value: expr,
+					}
+				},
+				"stream" => Layout {
+					span,
+					ty: LayoutTy::Stream {
+						kw: kw_span,
+						eq: eq_span,
+						value: expr,
+					}
+				},
+				_ => unreachable!("[Token::to_layout_expr] Given a layout `identifier: {s}` that doesn't take an expression value."),
+			},
+			_ => unreachable!("[Token::to_layout_expr] Given a token which is cannot be a valid layout identifier."),
+		}
+	}
+}
+
+impl std::fmt::Display for Token {
+	fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+		match self {
+			Token::Num { type_, num, suffix } => {
+				match type_ {
+					NumType::Dec => {}
+					NumType::Oct => write!(f, "0")?,
+					NumType::Hex => write!(f, "0x")?,
+					NumType::Float => {}
+				}
+				write!(f, "{num}")?;
+				if let Some(suffix) = suffix {
+					write!(f, "{suffix}")
+				} else {
+					Ok(())
+				}
+			}
+			Token::Bool(b) => write!(f, "{b}"),
+			Token::Ident(s) => write!(f, "{s}"),
+			Token::Directive(_) => todo!(),
+			Token::MacroConcat => write!(f, "##"),
+			Token::LineComment(s) => write!(f, "//{s}"),
+			Token::BlockComment { str, contains_eof } => {
+				write!(f, "/*{str}")?;
+				if *contains_eof {
+					write!(f, "*/")
+				} else {
+					Ok(())
+				}
+			}
+			Token::Invalid(c) => write!(f, "{c}"),
+			Token::If => write!(f, "if"),
+			Token::Else => write!(f, "else"),
+			Token::For => write!(f, "for"),
+			Token::Do => write!(f, "do"),
+			Token::While => write!(f, "while"),
+			Token::Continue => write!(f, "continue"),
+			Token::Switch => write!(f, "switch"),
+			Token::Case => write!(f, "case"),
+			Token::Default => write!(f, "default"),
+			Token::Break => write!(f, "break"),
+			Token::Return => write!(f, "return"),
+			Token::Discard => write!(f, "discard"),
+			Token::Struct => write!(f, "struct"),
+			Token::Subroutine => write!(f, "subroutine"),
+			Token::Reserved(s) => write!(f, "{s}"),
+			Token::Const => write!(f, "const"),
+			Token::In => write!(f, "in"),
+			Token::Out => write!(f, "out"),
+			Token::InOut => write!(f, "inout"),
+			Token::Attribute => write!(f, "attribute"),
+			Token::Uniform => write!(f, "uniform"),
+			Token::Varying => write!(f, "varying"),
+			Token::Buffer => write!(f, "buffer"),
+			Token::Shared => write!(f, "shared"),
+			Token::Centroid => write!(f, "centroid"),
+			Token::Sample => write!(f, "sample"),
+			Token::Patch => write!(f, "patch"),
+			Token::Layout => write!(f, "layout"),
+			Token::Flat => write!(f, "flat"),
+			Token::Smooth => write!(f, "smooth"),
+			Token::NoPerspective => write!(f, "noperspective"),
+			Token::HighP => write!(f, "highp"),
+			Token::MediumP => write!(f, "mediump"),
+			Token::LowP => write!(f, "lowp"),
+			Token::Invariant => write!(f, "invariant"),
+			Token::Precise => write!(f, "precise"),
+			Token::Coherent => write!(f, "coherent"),
+			Token::Volatile => write!(f, "volatile"),
+			Token::Restrict => write!(f, "restrict"),
+			Token::Readonly => write!(f, "readonly"),
+			Token::Writeonly => write!(f, "writeonly"),
+			Token::Op(op) => match op {
+				OpTy::Add => write!(f, "+"),
+				OpTy::Sub => write!(f, "-"),
+				OpTy::Mul => write!(f, "*"),
+				OpTy::Div => write!(f, "/"),
+				OpTy::Rem => write!(f, "%"),
+				OpTy::And => write!(f, "&"),
+				OpTy::Or => write!(f, "|"),
+				OpTy::Xor => write!(f, "^"),
+				OpTy::LShift => write!(f, "<<"),
+				OpTy::RShift => write!(f, ">>"),
+				OpTy::Flip => write!(f, "~"),
+				OpTy::Eq => write!(f, "="),
+				OpTy::AddAdd => write!(f, "++"),
+				OpTy::SubSub => write!(f, "--"),
+				OpTy::AddEq => write!(f, "+="),
+				OpTy::SubEq => write!(f, "-="),
+				OpTy::MulEq => write!(f, "*="),
+				OpTy::DivEq => write!(f, "/="),
+				OpTy::RemEq => write!(f, "%="),
+				OpTy::AndEq => write!(f, "&="),
+				OpTy::OrEq => write!(f, "|="),
+				OpTy::XorEq => write!(f, "^="),
+				OpTy::LShiftEq => write!(f, "<<="),
+				OpTy::RShiftEq => write!(f, ">>="),
+				OpTy::EqEq => write!(f, "=="),
+				OpTy::NotEq => write!(f, "!="),
+				OpTy::Not => write!(f, "!"),
+				OpTy::Gt => write!(f, ">"),
+				OpTy::Lt => write!(f, "<"),
+				OpTy::Ge => write!(f, ">="),
+				OpTy::Le => write!(f, "<="),
+				OpTy::AndAnd => write!(f, "&&"),
+				OpTy::OrOr => write!(f, "||"),
+				OpTy::XorXor => write!(f, "^^"),
+			},
+			Token::Comma => write!(f, ","),
+			Token::Dot => write!(f, "."),
+			Token::Semi => write!(f, ";"),
+			Token::Colon => write!(f, ":"),
+			Token::Question => write!(f, "?"),
+			Token::LParen => write!(f, "("),
+			Token::RParen => write!(f, ")"),
+			Token::LBracket => write!(f, "["),
+			Token::RBracket => write!(f, "]"),
+			Token::LBrace => write!(f, "{{"),
+			Token::RBrace => write!(f, "}}"),
+		}
+	}
 }
 
 /// Parses GLSL tokens, continuing off from the current position of the lexer.
@@ -1005,747 +1745,6 @@ fn parse_tokens(lexer: &mut Lexer, parsing_define_body: bool) -> TokenStream {
 	tokens
 }
 
-/// Metadata about the GLSL source string.
-///
-/// This is returned by the lexer along with the [`TokenStream`] and describes certain properties of the source,
-/// such as wether the source contains any conditional compilation directives. These properties can be useful in
-/// order to optimize later processing steps, such as skipping a large chunk of code if a certain condition is not
-/// met.
-///
-/// The purpose of this struct is to hold structured data that gets extracted out and checked-against if needed.
-/// Hence, this struct is marked as `non_exhaustive` and new fields may be added at any time without causing a
-/// breaking change.
-#[derive(Debug, Clone, PartialEq)]
-#[non_exhaustive]
-pub struct Metadata {
-	/// Whether the GLSL source string contains any condition compilation directives.
-	pub contains_conditional_compilation: bool,
-}
-
-/// A token representing a unit of text in the GLSL source string.
-#[derive(Debug, Clone, PartialEq)]
-pub enum Token {
-	/// A number, e.g. `1`, `517u`, `0xA9C`, `07113`, `7.3e-2`, `.015LF`.
-	Num {
-		/// The type of number.
-		type_: NumType,
-		/// The numeric contents, (this excludes any prefixes or suffixes).
-		num: String,
-		/// An optional suffix after the numeric contents.
-		suffix: Option<String>,
-	},
-	/// A boolean, either `true` or `false`.
-	Bool(bool),
-	/// An identifier, e.g. `foo_bar`, `_900_a`.
-	Ident(String),
-	/// A preprocessor directive, e.g. `#version 450 core`, `#define FOO 42`, `#ifdef TOGGLE`.
-	Directive(preprocessor::TokenStream),
-	/// The `##` punctuation symbol. This token is only emitted when parsing the body of a `#define` preprocessor
-	/// directive.
-	MacroConcat,
-	/// A line comment, e.g. `// comment`.
-	LineComment(String),
-	/// A block comment, e.g. `/* comment */`.
-	BlockComment {
-		str: String,
-		/// Only `true` if this comment is missing the closing delimiter.
-		contains_eof: bool,
-	},
-	/// An invalid character, e.g. `@`, `"`, `'`.
-	Invalid(char),
-	/* Keywords */
-	/// The `if` keyword.
-	If,
-	/// The `else` keyword.
-	Else,
-	/// The `for` keyword.
-	For,
-	/// The `do` keyword.
-	Do,
-	/// The `while` keyword.
-	While,
-	/// The `continue` keyword.
-	Continue,
-	/// The `switch` keyword.
-	Switch,
-	/// The `case` keyword.
-	Case,
-	/// The `default` keyword.
-	Default,
-	/// The `break` keyword.
-	Break,
-	/// The `return` keyword.
-	Return,
-	/// The `discard` keyword.
-	Discard,
-	/// The `struct` keyword.
-	Struct,
-	/// The `subroutine` keyword.
-	Subroutine,
-	/// A reserved keyword, e.g. `class`, `public`, `typedef`, `union`.
-	Reserved(String),
-	/* Qualifiers */
-	/// The `const` keyword.
-	Const,
-	/// The `in` keyword.
-	In,
-	/// The `out` keyword.
-	Out,
-	/// The `inout` keyword.
-	InOut,
-	/// The `attribute` keyword.
-	Attribute,
-	/// The `uniform` keyword.
-	Uniform,
-	/// The `varying` keyword.
-	Varying,
-	/// The `buffer` keyword.
-	Buffer,
-	/// The `shared` keyword.
-	Shared,
-	/// The `centroid` keyword.
-	Centroid,
-	/// The `sample` keyword.
-	Sample,
-	/// The `patch` keyword.
-	Patch,
-	/// The `layout` keyword.
-	Layout,
-	/// The `flat` keyword.
-	Flat,
-	/// The `smooth` keyword.
-	Smooth,
-	/// The `noperspective` keyword.
-	NoPerspective,
-	/// The `highp` keyword.
-	HighP,
-	/// The `mediump` keyword.
-	MediumP,
-	/// The `lowp` keyword.
-	LowP,
-	/// The `invariant` keyword.
-	Invariant,
-	/// The `precise` keyword.
-	Precise,
-	/// The `coherent` keyword.
-	Coherent,
-	/// The `volatile` keyword.
-	Volatile,
-	/// The `restrict` keyword.
-	Restrict,
-	/// The `readonly` keyword.
-	Readonly,
-	/// The `writeonly` keyword.
-	Writeonly,
-	/* Punctuation tokens */
-	/// A punctuation token.
-	Op(OpTy),
-	/// A comma `,`.
-	Comma,
-	/// A dot `.`.
-	Dot,
-	/// A semi-colon `;`.
-	Semi,
-	/// A colon `:`.
-	Colon,
-	/// A question mark `?`.
-	Question,
-	/// An opening parenthesis `(`.
-	LParen,
-	/// A closing parenthesis `)`.
-	RParen,
-	/// An opening bracket `[`.
-	LBracket,
-	/// A closing bracket `]`.
-	RBracket,
-	/// An opening brace `{`.
-	LBrace,
-	/// A closing brace `}`.
-	RBrace,
-}
-
-/// The type/notation of a number token.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum NumType {
-	/// A decimal is any number beginning with `1-9` without a decimal point or an exponent, or just the digit `0` on it's own.
-	Dec,
-	/// An octal is any number beginning with `0` without a decimal point or an exponent.
-	Oct,
-	/// A hexadecimal is any number beginning with `0x` without a decimal point or an exponent.
-	Hex,
-	/// A float is any number that contains a decimal point or an exponent.
-	Float,
-}
-
-/// A mathematical/comparison operator.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum OpTy {
-	/* Maths */
-	/// The `+` symbol.
-	Add,
-	/// The `-` symbol.
-	Sub,
-	/// The `*` symbol.
-	Mul,
-	/// The `/` symbol.
-	Div,
-	/// The `%` symbol.
-	Rem,
-	/// The `&` symbol.
-	And,
-	/// The `|` symbol.
-	Or,
-	/// The `^` symbol.
-	Xor,
-	/// The `<<` symbol.
-	LShift,
-	/// The `>>` symbol.
-	RShift,
-	/// The `-` symbol.
-	Flip,
-	/// The `=` symbol.
-	Eq,
-	/// The `++` symbol.
-	AddAdd,
-	/// The `--` symbol.
-	SubSub,
-	/// The `+=` symbol.
-	AddEq,
-	/// The `-=` symbol.
-	SubEq,
-	/// The `*=` symbol.
-	MulEq,
-	/// The `/=` symbol.
-	DivEq,
-	/// The `%=` symbol.
-	RemEq,
-	/// The `&=` symbol.
-	AndEq,
-	/// The `|=` symbol.
-	OrEq,
-	/// The `^=` symbol.
-	XorEq,
-	/// The `<<=` symbol.
-	LShiftEq,
-	/// The `>>=` symbol.
-	RShiftEq,
-	/* Comparison */
-	/// The `==` symbol.
-	EqEq,
-	/// The `!=` symbol.
-	NotEq,
-	/// The `!` symbol.
-	Not,
-	/// The `>` symbol.
-	Gt,
-	/// The `<` symbol.
-	Lt,
-	/// The `>=` symbol.
-	Ge,
-	/// The `<=` symbol.
-	Le,
-	/// The `&&` symbol.
-	AndAnd,
-	/// The `||` symbol.
-	OrOr,
-	/// The `^^` symbol.
-	XorXor,
-}
-
-impl Token {
-	/// Produces a syntax token corresponding to the type of this token. This performs simple, non-semantically
-	/// aware colouring.
-	pub fn non_semantic_colour(&self) -> crate::parser::SyntaxToken {
-		use crate::parser::SyntaxToken;
-		match self {
-			Token::Num { .. } => SyntaxToken::Number,
-			Token::Bool(_) => SyntaxToken::Boolean,
-			Token::Ident(_) => SyntaxToken::Ident,
-			Token::Directive(_) => SyntaxToken::Directive,
-			Token::MacroConcat => SyntaxToken::MacroConcat,
-			Token::LineComment(_) | Token::BlockComment { .. } => {
-				SyntaxToken::Comment
-			}
-			Token::Invalid(_) => SyntaxToken::Invalid,
-			Token::If
-			| Token::Else
-			| Token::For
-			| Token::Do
-			| Token::While
-			| Token::Continue
-			| Token::Switch
-			| Token::Case
-			| Token::Default
-			| Token::Break
-			| Token::Return
-			| Token::Discard
-			| Token::Struct
-			| Token::Subroutine
-			| Token::Reserved(_)
-			| Token::Const
-			| Token::In
-			| Token::Out
-			| Token::InOut
-			| Token::Attribute
-			| Token::Uniform
-			| Token::Varying
-			| Token::Buffer
-			| Token::Shared
-			| Token::Centroid
-			| Token::Sample
-			| Token::Patch
-			| Token::Layout
-			| Token::Flat
-			| Token::Smooth
-			| Token::NoPerspective
-			| Token::HighP
-			| Token::MediumP
-			| Token::LowP
-			| Token::Invariant
-			| Token::Precise
-			| Token::Coherent
-			| Token::Volatile
-			| Token::Restrict
-			| Token::Readonly
-			| Token::Writeonly => SyntaxToken::Keyword,
-			Token::Op(_) => SyntaxToken::Operator,
-			Token::Comma
-			| Token::Dot
-			| Token::Semi
-			| Token::Colon
-			| Token::Question
-			| Token::LParen
-			| Token::RParen
-			| Token::LBracket
-			| Token::RBracket
-			| Token::LBrace
-			| Token::RBrace => SyntaxToken::Punctuation,
-		}
-	}
-	/// Returns whether the current token is a keyword that can start a statement.
-	pub fn starts_statement(&self) -> bool {
-		match self {
-			Self::If
-			| Self::Else
-			| Self::For
-			| Self::Do
-			| Self::While
-			| Self::Continue
-			| Self::Switch
-			| Self::Case
-			| Self::Default
-			| Self::Break
-			| Self::Return
-			| Self::Discard
-			| Self::Struct
-			| Self::Subroutine
-			| Self::Reserved(_)
-			| Self::Const
-			| Self::In
-			| Self::Out
-			| Self::InOut
-			| Self::Attribute
-			| Self::Uniform
-			| Self::Varying
-			| Self::Buffer
-			| Self::Shared
-			| Self::Centroid
-			| Self::Sample
-			| Self::Patch
-			| Self::Layout
-			| Self::Flat
-			| Self::Smooth
-			| Self::NoPerspective
-			| Self::HighP
-			| Self::MediumP
-			| Self::LowP
-			| Self::Invariant
-			| Self::Precise
-			| Self::Coherent
-			| Self::Volatile
-			| Self::Restrict
-			| Self::Readonly
-			| Self::Writeonly => true,
-			_ => false,
-		}
-	}
-
-	/// Returns whether the current token is a punctuation assuming we are at the beginning of parsing a statement.
-	pub fn is_punctuation_for_stmt(&self) -> bool {
-		match self {
-			Self::Op(_)
-			| Self::Comma
-			| Self::Dot
-			| Self::Colon
-			| Self::Question
-			| Self::LParen
-			| Self::RParen
-			| Self::LBracket
-			| Self::RBracket => true,
-			_ => false,
-		}
-	}
-
-	/// Tries to convert the current token into a [`LayoutTy`] identifier.
-	///
-	/// If the token matches a layout identifier that doesn't take an expression, e.g. `early_fragment_tests`, then
-	/// `Left` is returned with the converted `LayoutTy`. If the token matches a layout identifier that takes an
-	/// expression, e.g. `location = n`, then `Right` is returned; after the expression has been parsed, call
-	/// [`to_layout_expr()`](Self::to_layout_expr).
-	///
-	/// If `None` is returned, the current token is not a valid layout identifier.
-	pub fn to_layout(&self) -> Option<Either<LayoutTy, ()>> {
-		match self {
-			// `shared` is a keyword in all circumstances, apart from when it is used as a qualifier, hence it's a
-			// distinct variant rather than a string.
-			Self::Shared => Some(Either::Left(LayoutTy::Shared)),
-			Self::Ident(s) => match s.as_ref() {
-				"packed" => Some(Either::Left(LayoutTy::Packed)),
-				"std140" => Some(Either::Left(LayoutTy::Std140)),
-				"std430" => Some(Either::Left(LayoutTy::Std430)),
-				"row_major" => Some(Either::Left(LayoutTy::RowMajor)),
-				"column_major" => Some(Either::Left(LayoutTy::ColumnMajor)),
-				"binding" => Some(Either::Right(())),
-				"offset" => Some(Either::Right(())),
-				"align" => Some(Either::Right(())),
-				"location" => Some(Either::Right(())),
-				"component" => Some(Either::Right(())),
-				"index" => Some(Either::Right(())),
-				"points" => Some(Either::Left(LayoutTy::Points)),
-				"lines" => Some(Either::Left(LayoutTy::Lines)),
-				"isolines" => Some(Either::Left(LayoutTy::Isolines)),
-				"triangles" => Some(Either::Left(LayoutTy::Triangles)),
-				"quads" => Some(Either::Left(LayoutTy::Quads)),
-				"equal_spacing" => Some(Either::Left(LayoutTy::EqualSpacing)),
-				"fractional_even_spacing" => {
-					Some(Either::Left(LayoutTy::FractionalEvenSpacing))
-				}
-				"fractional_odd_spacing" => {
-					Some(Either::Left(LayoutTy::FractionalOddSpacing))
-				}
-				"cw" => Some(Either::Left(LayoutTy::Clockwise)),
-				"ccw" => Some(Either::Left(LayoutTy::CounterClockwise)),
-				"point_mode" => Some(Either::Left(LayoutTy::PointMode)),
-				"line_adjacency" => {
-					Some(Either::Left(LayoutTy::LinesAdjacency))
-				}
-				"triangle_adjacency" => {
-					Some(Either::Left(LayoutTy::TrianglesAdjacency))
-				}
-				"invocations" => Some(Either::Right(())),
-				"origin_upper_left" => {
-					Some(Either::Left(LayoutTy::OriginUpperLeft))
-				}
-				"pixel_center_integer" => {
-					Some(Either::Left(LayoutTy::PixelCenterInteger))
-				}
-				"early_fragment_tests" => {
-					Some(Either::Left(LayoutTy::EarlyFragmentTests))
-				}
-				"local_size_x" => Some(Either::Right(())),
-				"local_size_y" => Some(Either::Right(())),
-				"local_size_z" => Some(Either::Right(())),
-				"xfb_buffer" => Some(Either::Right(())),
-				"xfb_stride" => Some(Either::Right(())),
-				"xfb_offset" => Some(Either::Right(())),
-				"vertices" => Some(Either::Right(())),
-				"line_strip" => Some(Either::Left(LayoutTy::LineStrip)),
-				"triangle_strip" => Some(Either::Left(LayoutTy::TriangleStrip)),
-				"max_vertices" => Some(Either::Right(())),
-				"stream" => Some(Either::Right(())),
-				"depth_any" => Some(Either::Left(LayoutTy::DepthAny)),
-				"depth_greater" => Some(Either::Left(LayoutTy::DepthGreater)),
-				"depth_less" => Some(Either::Left(LayoutTy::DepthLess)),
-				"depth_unchanged" => {
-					Some(Either::Left(LayoutTy::DepthUnchanged))
-				}
-				_ => None,
-			},
-			_ => None,
-		}
-	}
-
-	/// Constructs a [`Layout`] given the identifier, expression and spans.
-	///
-	/// # Panics
-	/// This is only for layout identifiers which take a value expression. See the documentation for
-	/// [`to_layout()`](Self::to_layout) for more information.
-	#[rustfmt::skip]
-	pub fn to_layout_expr(
-		&self,
-		kw_span: Span,
-		eq_span: Option<Span>,
-		expr: Option<Expr>,
-	) -> Layout {
-		// Calculate the span.
-		let span = if let Some(expr) = &expr {
-			Span::new(kw_span.start, expr.span.end)
-		} else if let Some(eq_span) = eq_span {
-			Span::new(kw_span.start, eq_span.end)
-		} else {
-			kw_span
-		};
-
-		match self {
-			Self::Ident(s) => match s.as_ref() {
-				"binding" => Layout {
-					span,
-					ty: LayoutTy::Binding {
-						kw: kw_span,
-						eq: eq_span,
-						value: expr,
-					}
-				},
-				"offset" => Layout {
-					span,
-					ty: LayoutTy::Offset {
-						kw: kw_span,
-						eq: eq_span,
-						value: expr,
-					}
-				},
-				"align" => Layout {
-					span,
-					ty: LayoutTy::Align {
-						kw: kw_span,
-						eq: eq_span,
-						value: expr,
-					}
-				},
-				"location" => Layout {
-					span,
-					ty: LayoutTy::Location {
-						kw: kw_span,
-						eq: eq_span,
-						value: expr,
-					}
-				},
-				"component" => Layout {
-					span,
-					ty: LayoutTy::Component {
-						kw: kw_span,
-						eq: eq_span,
-						value: expr,
-					}
-				},
-				"index" => Layout {
-					span,
-					ty: LayoutTy::Index {
-						kw: kw_span,
-						eq: eq_span,
-						value: expr,
-					}
-				},
-				"invocations" => Layout {
-					span,
-					ty: LayoutTy::Invocations {
-						kw: kw_span,
-						eq: eq_span,
-						value: expr,
-					}
-				},
-				"local_size_x" => Layout{
-					span,
-					ty: LayoutTy::LocalSizeX {
-						kw: kw_span,
-						eq: eq_span,
-						value: expr,
-					}
-				},
-				"local_size_y" => Layout {
-					span,
-					ty: LayoutTy::LocalSizeY {
-						kw: kw_span,
-						eq: eq_span,
-						value: expr,
-					}
-				},
-				"local_size_z" => Layout {
-					span,
-					ty: LayoutTy::LocalSizeZ {
-						kw: kw_span,
-						eq: eq_span,
-						value: expr,
-					}
-				},
-				"xfb_buffer" => Layout {
-					span,
-					ty: LayoutTy::XfbBuffer {
-						kw: kw_span,
-						eq: eq_span,
-						value: expr,
-					}
-				},
-				"xfb_stride" => Layout {
-					span,
-					ty: LayoutTy::XfbStride {
-						kw: kw_span,
-						eq: eq_span,
-						value: expr,
-					}
-				},
-				"xfb_offset" => Layout {
-					span,
-					ty: LayoutTy::XfbOffset {
-						kw: kw_span,
-						eq: eq_span,
-						value: expr,
-					}
-				},
-				"vertices" => Layout {
-					span,
-					ty: LayoutTy::Vertices {
-						kw: kw_span,
-						eq: eq_span,
-						value: expr,
-					}
-				},
-				"max_vertices" => Layout {
-					span,
-					ty: LayoutTy::MaxVertices {
-						kw: kw_span,
-						eq: eq_span,
-						value: expr,
-					}
-				},
-				"stream" => Layout {
-					span,
-					ty: LayoutTy::Stream {
-						kw: kw_span,
-						eq: eq_span,
-						value: expr,
-					}
-				},
-				_ => unreachable!("[Token::to_layout_expr] Given a layout `identifier: {s}` that doesn't take an expression value."),
-			},
-			_ => unreachable!("[Token::to_layout_expr] Given a token which is cannot be a valid layout identifier."),
-		}
-	}
-}
-
-impl std::fmt::Display for Token {
-	fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-		match self {
-			Token::Num { type_, num, suffix } => {
-				match type_ {
-					NumType::Dec => {}
-					NumType::Oct => write!(f, "0")?,
-					NumType::Hex => write!(f, "0x")?,
-					NumType::Float => {}
-				}
-				write!(f, "{num}")?;
-				if let Some(suffix) = suffix {
-					write!(f, "{suffix}")
-				} else {
-					Ok(())
-				}
-			}
-			Token::Bool(b) => write!(f, "{b}"),
-			Token::Ident(s) => write!(f, "{s}"),
-			Token::Directive(_) => todo!(),
-			Token::MacroConcat => write!(f, "##"),
-			Token::LineComment(s) => write!(f, "//{s}"),
-			Token::BlockComment { str, contains_eof } => {
-				write!(f, "/*{str}")?;
-				if *contains_eof {
-					write!(f, "*/")
-				} else {
-					Ok(())
-				}
-			}
-			Token::Invalid(c) => write!(f, "{c}"),
-			Token::If => write!(f, "if"),
-			Token::Else => write!(f, "else"),
-			Token::For => write!(f, "for"),
-			Token::Do => write!(f, "do"),
-			Token::While => write!(f, "while"),
-			Token::Continue => write!(f, "continue"),
-			Token::Switch => write!(f, "switch"),
-			Token::Case => write!(f, "case"),
-			Token::Default => write!(f, "default"),
-			Token::Break => write!(f, "break"),
-			Token::Return => write!(f, "return"),
-			Token::Discard => write!(f, "discard"),
-			Token::Struct => write!(f, "struct"),
-			Token::Subroutine => write!(f, "subroutine"),
-			Token::Reserved(s) => write!(f, "{s}"),
-			Token::Const => write!(f, "const"),
-			Token::In => write!(f, "in"),
-			Token::Out => write!(f, "out"),
-			Token::InOut => write!(f, "inout"),
-			Token::Attribute => write!(f, "attribute"),
-			Token::Uniform => write!(f, "uniform"),
-			Token::Varying => write!(f, "varying"),
-			Token::Buffer => write!(f, "buffer"),
-			Token::Shared => write!(f, "shared"),
-			Token::Centroid => write!(f, "centroid"),
-			Token::Sample => write!(f, "sample"),
-			Token::Patch => write!(f, "patch"),
-			Token::Layout => write!(f, "layout"),
-			Token::Flat => write!(f, "flat"),
-			Token::Smooth => write!(f, "smooth"),
-			Token::NoPerspective => write!(f, "noperspective"),
-			Token::HighP => write!(f, "highp"),
-			Token::MediumP => write!(f, "mediump"),
-			Token::LowP => write!(f, "lowp"),
-			Token::Invariant => write!(f, "invariant"),
-			Token::Precise => write!(f, "precise"),
-			Token::Coherent => write!(f, "coherent"),
-			Token::Volatile => write!(f, "volatile"),
-			Token::Restrict => write!(f, "restrict"),
-			Token::Readonly => write!(f, "readonly"),
-			Token::Writeonly => write!(f, "writeonly"),
-			Token::Op(op) => match op {
-				OpTy::Add => write!(f, "+"),
-				OpTy::Sub => write!(f, "-"),
-				OpTy::Mul => write!(f, "*"),
-				OpTy::Div => write!(f, "/"),
-				OpTy::Rem => write!(f, "%"),
-				OpTy::And => write!(f, "&"),
-				OpTy::Or => write!(f, "|"),
-				OpTy::Xor => write!(f, "^"),
-				OpTy::LShift => write!(f, "<<"),
-				OpTy::RShift => write!(f, ">>"),
-				OpTy::Flip => write!(f, "~"),
-				OpTy::Eq => write!(f, "="),
-				OpTy::AddAdd => write!(f, "++"),
-				OpTy::SubSub => write!(f, "--"),
-				OpTy::AddEq => write!(f, "+="),
-				OpTy::SubEq => write!(f, "-="),
-				OpTy::MulEq => write!(f, "*="),
-				OpTy::DivEq => write!(f, "/="),
-				OpTy::RemEq => write!(f, "%="),
-				OpTy::AndEq => write!(f, "&="),
-				OpTy::OrEq => write!(f, "|="),
-				OpTy::XorEq => write!(f, "^="),
-				OpTy::LShiftEq => write!(f, "<<="),
-				OpTy::RShiftEq => write!(f, ">>="),
-				OpTy::EqEq => write!(f, "=="),
-				OpTy::NotEq => write!(f, "!="),
-				OpTy::Not => write!(f, "!"),
-				OpTy::Gt => write!(f, ">"),
-				OpTy::Lt => write!(f, "<"),
-				OpTy::Ge => write!(f, ">="),
-				OpTy::Le => write!(f, "<="),
-				OpTy::AndAnd => write!(f, "&&"),
-				OpTy::OrOr => write!(f, "||"),
-				OpTy::XorXor => write!(f, "^^"),
-			},
-			Token::Comma => write!(f, ","),
-			Token::Dot => write!(f, "."),
-			Token::Semi => write!(f, ";"),
-			Token::Colon => write!(f, ":"),
-			Token::Question => write!(f, "?"),
-			Token::LParen => write!(f, "("),
-			Token::RParen => write!(f, ")"),
-			Token::LBracket => write!(f, "["),
-			Token::RBracket => write!(f, "]"),
-			Token::LBrace => write!(f, "{{"),
-			Token::RBrace => write!(f, "}}"),
-		}
-	}
-}
-
 /// A lexer which allows stepping through a GLSL source string character by character.
 ///
 /// This includes a lot of helper methods to make it easier to match patterns and correctly deal with things such
@@ -2567,4 +2566,670 @@ fn illegal(){
 	assert_tokens!("£", Token::Invalid('£'));
 	assert_tokens!("$", Token::Invalid('$'));
 	assert_tokens!("€", Token::Invalid('€'));
+}
+
+#[cfg(test)]
+mod preproc_tests {
+	use super::{
+		parse_from_str,
+		preprocessor::{
+			ConditionToken, DefineToken, ExtensionToken, LineToken,
+			TokenStream, UndefToken, VersionToken,
+		},
+		Token,
+	};
+	use crate::span::span;
+
+	#[test]
+	fn empty() {
+		assert_tokens2!(
+			"#",
+			(Token::Directive(TokenStream::Empty), span(0, 1))
+		);
+
+		assert_tokens2!(
+			"#    ",
+			(Token::Directive(TokenStream::Empty), span(0, 5))
+		);
+	}
+
+	#[test]
+	fn custom() {
+		assert_tokens2!(
+			"#custom",
+			(
+				Token::Directive(TokenStream::Custom {
+					kw: ("custom".into(), span(1, 7)),
+					content: None
+				}),
+				span(0, 7)
+			)
+		);
+
+		assert_tokens2!(
+			"# custom      ",
+			(
+				Token::Directive(TokenStream::Custom {
+					kw: ("custom".into(), span(2, 8)),
+					content: Some(("      ".into(), span(8, 14)))
+				}),
+				span(0, 14)
+			)
+		);
+
+		assert_tokens2!(
+			"#custom foobar 5 @;#",
+			(
+				Token::Directive(TokenStream::Custom {
+					kw: ("custom".into(), span(1, 7)),
+					content: Some((" foobar 5 @;#".into(), span(7, 20)))
+				}),
+				span(0, 20)
+			)
+		);
+
+		assert_tokens2!(
+			"# custom-5 bar",
+			(
+				Token::Directive(TokenStream::Custom {
+					kw: ("custom".into(), span(2, 8)),
+					content: Some(("-5 bar".into(), span(8, 14))),
+				}),
+				span(0, 14)
+			)
+		);
+	}
+
+	#[test]
+	fn invalid() {
+		assert_tokens2!(
+			"# # 55 @ `!",
+			(
+				Token::Directive(TokenStream::Invalid {
+					content: ("# 55 @ `!".into(), span(2, 11))
+				}),
+				span(0, 11)
+			)
+		);
+	}
+
+	#[test]
+	fn version() {
+		assert_tokens2!(
+			"#version",
+			(
+				Token::Directive(TokenStream::Version {
+					kw: span(1, 8),
+					tokens: vec![]
+				}),
+				span(0, 8)
+			)
+		);
+
+		assert_tokens2!(
+			"#version 450 core",
+			(
+				Token::Directive(TokenStream::Version {
+					kw: span(1, 8),
+					tokens: vec![
+						(VersionToken::Num(450), span(9, 12)),
+						(VersionToken::Word("core".into()), span(13, 17)),
+					]
+				}),
+				span(0, 17)
+			)
+		);
+
+		assert_tokens2!(
+			"#   version 330 es",
+			(
+				Token::Directive(TokenStream::Version {
+					kw: span(4, 11),
+					tokens: vec![
+						(VersionToken::Num(330), span(12, 15)),
+						(VersionToken::Word("es".into()), span(16, 18)),
+					]
+				}),
+				span(0, 18)
+			)
+		);
+
+		assert_tokens2!(
+			"#version foobar     ",
+			(
+				Token::Directive(TokenStream::Version {
+					kw: span(1, 8),
+					tokens: vec![(
+						VersionToken::Word("foobar".into()),
+						span(9, 15)
+					)]
+				}),
+				span(0, 20)
+			)
+		);
+
+		assert_tokens2!(
+			"# version 100compatability ##@;",
+			(
+				Token::Directive(TokenStream::Version {
+					kw: span(2, 9),
+					tokens: vec![
+						(
+							VersionToken::InvalidNum("100compatability".into()),
+							span(10, 26)
+						),
+						(VersionToken::Invalid('#'), span(27, 28)),
+						(VersionToken::Invalid('#'), span(28, 29)),
+						(VersionToken::Invalid('@'), span(29, 30)),
+						(VersionToken::Invalid(';'), span(30, 31))
+					]
+				}),
+				span(0, 31)
+			)
+		);
+	}
+
+	#[test]
+	fn extension() {
+		assert_tokens2!(
+			"#extension",
+			(
+				Token::Directive(TokenStream::Extension {
+					kw: span(1, 10),
+					tokens: vec![]
+				}),
+				span(0, 10)
+			)
+		);
+		assert_tokens2!(
+			"#  extension foobar : enable",
+			(
+				Token::Directive(TokenStream::Extension {
+					kw: span(3, 12),
+					tokens: vec![
+						(ExtensionToken::Word("foobar".into()), span(13, 19)),
+						(ExtensionToken::Colon, span(20, 21)),
+						(ExtensionToken::Word("enable".into()), span(22, 28))
+					]
+				}),
+				span(0, 28)
+			)
+		);
+		assert_tokens2!(
+			"#extension: 600   ",
+			(
+				Token::Directive(TokenStream::Extension {
+					kw: span(1, 10),
+					tokens: vec![
+						(ExtensionToken::Colon, span(10, 11)),
+						(ExtensionToken::Invalid('6'), span(12, 13)),
+						(ExtensionToken::Invalid('0'), span(13, 14)),
+						(ExtensionToken::Invalid('0'), span(14, 15))
+					]
+				}),
+				span(0, 18)
+			)
+		);
+	}
+
+	#[test]
+	fn line() {
+		assert_tokens2!(
+			"#line",
+			(
+				Token::Directive(TokenStream::Line {
+					kw: span(1, 5),
+					tokens: vec![]
+				}),
+				span(0, 5)
+			)
+		);
+
+		assert_tokens2!(
+			"# line 5 1007",
+			(
+				Token::Directive(TokenStream::Line {
+					kw: span(2, 6),
+					tokens: vec![
+						(LineToken::Num(5), span(7, 8)),
+						(LineToken::Num(1007), span(9, 13))
+					]
+				}),
+				span(0, 13)
+			)
+		);
+
+		assert_tokens2!(
+			"#line FOO",
+			(
+				Token::Directive(TokenStream::Line {
+					kw: span(1, 5),
+					tokens: vec![(LineToken::Ident("FOO".into()), span(6, 9))]
+				}),
+				span(0, 9)
+			)
+		);
+
+		assert_tokens2!(
+			"#  line  734abc     ",
+			(
+				Token::Directive(TokenStream::Line {
+					kw: span(3, 7),
+					tokens: vec![(
+						LineToken::InvalidNum("734abc".into()),
+						span(9, 15)
+					)]
+				}),
+				span(0, 20)
+			)
+		);
+	}
+
+	#[test]
+	fn define() {
+		use super::{NumType, OpTy};
+
+		// Object-like
+		assert_tokens2!(
+			"#define",
+			(
+				Token::Directive(TokenStream::Define {
+					kw: span(1, 7),
+					ident_tokens: vec![],
+					body_tokens: vec![],
+				}),
+				span(0, 7)
+			)
+		);
+
+		assert_tokens2!(
+			"#define foobar",
+			(
+				Token::Directive(TokenStream::Define {
+					kw: span(1, 7),
+					ident_tokens: vec![(
+						DefineToken::Ident("foobar".into()),
+						span(8, 14)
+					)],
+					body_tokens: vec![],
+				}),
+				span(0, 14)
+			)
+		);
+
+		assert_tokens2!(
+			"#  define FOO 5   ",
+			(
+				Token::Directive(TokenStream::Define {
+					kw: span(3, 9),
+					ident_tokens: vec![(
+						DefineToken::Ident("FOO".into()),
+						span(10, 13)
+					)],
+					body_tokens: vec![(
+						Token::Num {
+							type_: NumType::Dec,
+							num: "5".into(),
+							suffix: None
+						},
+						span(14, 15)
+					)]
+				}),
+				span(0, 18)
+			)
+		);
+
+		assert_tokens2!(
+			"#define FOO_5  if [bar##0x6}",
+			(
+				Token::Directive(TokenStream::Define {
+					kw: span(1, 7),
+					ident_tokens: vec![(
+						DefineToken::Ident("FOO_5".into()),
+						span(8, 13)
+					)],
+					body_tokens: vec![
+						(Token::If, span(15, 17)),
+						(Token::LBracket, span(18, 19)),
+						(Token::Ident("bar".into()), span(19, 22)),
+						(Token::MacroConcat, span(22, 24)),
+						(
+							Token::Num {
+								type_: NumType::Hex,
+								num: "6".into(),
+								suffix: None
+							},
+							span(24, 27)
+						),
+						(Token::RBrace, span(27, 28))
+					]
+				}),
+				span(0, 28)
+			)
+		);
+
+		assert_tokens2!(
+			"#define baz ( )",
+			(
+				Token::Directive(TokenStream::Define {
+					kw: span(1, 7),
+					ident_tokens: vec![(
+						DefineToken::Ident("baz".into()),
+						span(8, 11)
+					),],
+					body_tokens: vec![
+						(Token::LParen, span(12, 13)),
+						(Token::RParen, span(14, 15))
+					]
+				}),
+				span(0, 15)
+			)
+		);
+
+		assert_tokens2!(
+			"#define 5 @@ ` ",
+			(
+				Token::Directive(TokenStream::Define {
+					kw: span(1, 7),
+					ident_tokens: vec![],
+					body_tokens: vec![
+						(
+							Token::Num {
+								type_: NumType::Dec,
+								num: "5".into(),
+								suffix: None
+							},
+							span(8, 9)
+						),
+						(Token::Invalid('@'), span(10, 11)),
+						(Token::Invalid('@'), span(11, 12)),
+						(Token::Invalid('`'), span(13, 14)),
+					]
+				}),
+				span(0, 15)
+			)
+		);
+
+		// Function-like
+		assert_tokens2!(
+			"#define FOOBAR()",
+			(
+				Token::Directive(TokenStream::Define {
+					kw: span(1, 7),
+					ident_tokens: vec![
+						(DefineToken::Ident("FOOBAR".into()), span(8, 14)),
+						(DefineToken::LParen, span(14, 15)),
+						(DefineToken::RParen, span(15, 16)),
+					],
+					body_tokens: vec![]
+				}),
+				span(0, 16)
+			)
+		);
+
+		assert_tokens2!(
+			"#define baz( )",
+			(
+				Token::Directive(TokenStream::Define {
+					kw: span(1, 7),
+					ident_tokens: vec![
+						(DefineToken::Ident("baz".into()), span(8, 11)),
+						(DefineToken::LParen, span(11, 12)),
+						(DefineToken::RParen, span(13, 14))
+					],
+					body_tokens: vec![]
+				}),
+				span(0, 14)
+			)
+		);
+
+		assert_tokens2!(
+			"#define FOOBAR( a, b)",
+			(
+				Token::Directive(TokenStream::Define {
+					kw: span(1, 7),
+					ident_tokens: vec![
+						(DefineToken::Ident("FOOBAR".into()), span(8, 14)),
+						(DefineToken::LParen, span(14, 15)),
+						(DefineToken::Ident("a".into()), span(16, 17)),
+						(DefineToken::Comma, span(17, 18)),
+						(DefineToken::Ident("b".into()), span(19, 20)),
+						(DefineToken::RParen, span(20, 21)),
+					],
+					body_tokens: vec![]
+				}),
+				span(0, 21)
+			)
+		);
+
+		assert_tokens2!(
+			"#define FOOBAR( a # @@",
+			(
+				Token::Directive(TokenStream::Define {
+					kw: span(1, 7),
+					ident_tokens: vec![
+						(DefineToken::Ident("FOOBAR".into()), span(8, 14)),
+						(DefineToken::LParen, span(14, 15)),
+						(DefineToken::Ident("a".into()), span(16, 17)),
+						(DefineToken::Invalid('#'), span(18, 19)),
+						(DefineToken::Invalid('@'), span(20, 21)),
+						(DefineToken::Invalid('@'), span(21, 22)),
+					],
+					body_tokens: vec![]
+				}),
+				span(0, 22)
+			)
+		);
+
+		assert_tokens2!(
+			"#define FOOBAR( a)  if [0x7u## %!",
+			(
+				Token::Directive(TokenStream::Define {
+					kw: span(1, 7),
+					ident_tokens: vec![
+						(DefineToken::Ident("FOOBAR".into()), span(8, 14)),
+						(DefineToken::LParen, span(14, 15)),
+						(DefineToken::Ident("a".into()), span(16, 17)),
+						(DefineToken::RParen, span(17, 18)),
+					],
+					body_tokens: vec![
+						(Token::If, span(20, 22)),
+						(Token::LBracket, span(23, 24)),
+						(
+							Token::Num {
+								type_: NumType::Hex,
+								num: "7".into(),
+								suffix: Some("u".into())
+							},
+							span(24, 28)
+						),
+						(Token::MacroConcat, span(28, 30)),
+						(Token::Op(OpTy::Rem), span(31, 32)),
+						(Token::Op(OpTy::Not), span(32, 33)),
+					]
+				}),
+				span(0, 33)
+			)
+		);
+	}
+
+	#[test]
+	fn undef() {
+		assert_tokens2!(
+			"#undef",
+			(
+				Token::Directive(TokenStream::Undef {
+					kw: span(1, 6),
+					tokens: vec![]
+				}),
+				span(0, 6)
+			)
+		);
+
+		assert_tokens2!(
+			"# undef foo ",
+			(
+				Token::Directive(TokenStream::Undef {
+					kw: span(2, 7),
+					tokens: vec![(
+						UndefToken::Ident("foo".into()),
+						span(8, 11)
+					)]
+				}),
+				span(0, 12)
+			)
+		);
+
+		assert_tokens2!(
+			"#    undef foobar @ `` 4    ",
+			(
+				Token::Directive(TokenStream::Undef {
+					kw: span(5, 10),
+					tokens: vec![
+						(UndefToken::Ident("foobar".into()), span(11, 17)),
+						(UndefToken::Invalid('@'), span(18, 19)),
+						(UndefToken::Invalid('`'), span(20, 21)),
+						(UndefToken::Invalid('`'), span(21, 22)),
+						(UndefToken::Invalid('4'), span(23, 24)),
+					]
+				}),
+				span(0, 28)
+			)
+		);
+	}
+
+	#[test]
+	fn conditional() {
+		assert_tokens2!(
+			"#if",
+			(
+				Token::Directive(TokenStream::If {
+					kw: span(1, 3),
+					tokens: vec![]
+				}),
+				span(0, 3)
+			)
+		);
+
+		assert_tokens2!(
+			"# if FOO > 5",
+			(
+				Token::Directive(TokenStream::If {
+					kw: span(2, 4),
+					tokens: vec![
+						(ConditionToken::Ident("FOO".into()), span(5, 8)),
+						(ConditionToken::Gt, span(9, 10)),
+						(ConditionToken::Num(5), span(11, 12))
+					]
+				}),
+				span(0, 12)
+			)
+		);
+
+		assert_tokens2!(
+			"#if 5001bar",
+			(
+				Token::Directive(TokenStream::If {
+					kw: span(1, 3),
+					tokens: vec![(
+						ConditionToken::InvalidNum("5001bar".into()),
+						span(4, 11)
+					)]
+				}),
+				span(0, 11)
+			)
+		);
+
+		assert_tokens2!(
+			"#if (defined foobar) && 5 <8",
+			(
+				Token::Directive(TokenStream::If {
+					kw: span(1, 3),
+					tokens: vec![
+						(ConditionToken::LParen, span(4, 5)),
+						(ConditionToken::Defined, span(5, 12)),
+						(ConditionToken::Ident("foobar".into()), span(13, 19)),
+						(ConditionToken::RParen, span(19, 20)),
+						(ConditionToken::AndAnd, span(21, 23)),
+						(ConditionToken::Num(5), span(24, 25)),
+						(ConditionToken::Lt, span(26, 27)),
+						(ConditionToken::Num(8), span(27, 28))
+					]
+				}),
+				span(0, 28)
+			)
+		);
+		assert_tokens2!(
+			"#if baz @ ## :   ",
+			(
+				Token::Directive(TokenStream::If {
+					kw: span(1, 3),
+					tokens: vec![
+						(ConditionToken::Ident("baz".into()), span(4, 7)),
+						(ConditionToken::Invalid('@'), span(8, 9)),
+						(ConditionToken::Invalid('#'), span(10, 11)),
+						(ConditionToken::Invalid('#'), span(11, 12)),
+						(ConditionToken::Invalid(':'), span(13, 14)),
+					]
+				}),
+				span(0, 17)
+			)
+		);
+	}
+
+	#[test]
+	fn error() {
+		assert_tokens2!(
+			"#error",
+			(
+				Token::Directive(TokenStream::Error {
+					kw: span(1, 6),
+					message: None
+				}),
+				span(0, 6)
+			)
+		);
+
+		assert_tokens2!(
+			"# error foo bar ## @ ;      ",
+			(
+				Token::Directive(TokenStream::Error {
+					kw: span(2, 7),
+					message: Some((
+						" foo bar ## @ ;      ".into(),
+						span(7, 28)
+					))
+				}),
+				span(0, 28)
+			)
+		);
+	}
+
+	#[test]
+	fn pragma() {
+		assert_tokens2!(
+			"#pragma",
+			(
+				Token::Directive(TokenStream::Pragma {
+					kw: span(1, 7),
+					options: None
+				}),
+				span(0, 7)
+			)
+		);
+
+		assert_tokens2!(
+			"# pragma foo bar ## @ ;      ",
+			(
+				Token::Directive(TokenStream::Pragma {
+					kw: span(2, 8),
+					options: Some((
+						" foo bar ## @ ;      ".into(),
+						span(8, 29)
+					))
+				}),
+				span(0, 29)
+			)
+		);
+	}
 }

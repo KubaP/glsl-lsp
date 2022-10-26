@@ -11,7 +11,7 @@ use crate::{
 	},
 	error::Diag,
 	span::{Span, Spanned},
-	token::{self, OpTy, Token, TokenStream},
+	lexer::{self, OpTy, Token, TokenStream},
 	Either,
 };
 
@@ -4497,13 +4497,13 @@ fn parse_directive(
 	walker: &mut Walker,
 	nodes: &mut Vec<Node>,
 	syntax_errors: &mut Vec<Diag>,
-	token_stream: token::preprocessor::TokenStream,
+	token_stream: lexer::preprocessor::TokenStream,
 	directive_span: Span,
 ) {
 	use crate::{
 		cst::Profile,
 		error::PreprocDiag,
-		token::preprocessor::{ExtensionToken, TokenStream, VersionToken},
+		lexer::preprocessor::{ExtensionToken, TokenStream, VersionToken},
 	};
 
 	match token_stream {

@@ -67,7 +67,7 @@ use crate::{
 	ast::ArrSize,
 	error::Diag,
 	span::Span,
-	token::{NumType, Token},
+	lexer::{NumType, Token},
 	Either, Spanned,
 };
 
@@ -88,7 +88,7 @@ pub type Cst = Vec<Node>;
 pub fn parse_from_str(source: &str) -> (Cst, Vec<Diag>) {
 	use self::parser::{parse_stmt, Walker};
 
-	let (token_stream, _) = crate::token::parse_from_str(source);
+	let (token_stream, _) = crate::lexer::parse_from_str(source);
 
 	let mut walker = Walker {
 		token_stream,
@@ -117,7 +117,7 @@ pub fn parse_from_str(source: &str) -> (Cst, Vec<Diag>) {
 /// let (cst, syntax_errors) = cst::parse_from_token_stream(token_stream);
 /// ```
 pub fn parse_from_token_stream(
-	stream: crate::token::TokenStream,
+	stream: crate::lexer::TokenStream,
 ) -> (Cst, Vec<Diag>) {
 	use self::parser::{parse_stmt, Walker};
 

@@ -74,10 +74,11 @@
 
 pub mod ast;
 pub mod cst;
+pub mod diag;
 pub mod error;
+pub mod lexer;
 pub mod parser;
 mod span;
-pub mod token;
 
 pub use span::*;
 

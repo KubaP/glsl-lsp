@@ -1455,7 +1455,7 @@ pub(crate) fn concat_object_macro_body(
 	walker: &mut crate::parser::Walker,
 	tokens: super::TokenStream,
 ) -> super::TokenStream {
-	use crate::error::{Diag, PreprocDefineDiag};
+	use crate::diag::{PreprocDefineDiag, Syntax};
 
 	let mut stack = Vec::new();
 
@@ -1470,7 +1470,7 @@ pub(crate) fn concat_object_macro_body(
 					if next.0 == super::Token::MacroConcat {
 						// We have something like `foobar ## ##`. We cannot concatenate two concat operators, so we
 						// just emit the tokens as-is.
-						walker.push_diag(Diag::PreprocDefine(
+						walker.push_syntax_diag(Syntax::PreprocDefine(
 							PreprocDefineDiag::TokenConcatMissingRHS(token.1),
 						));
 						stack.push(prev);
@@ -1502,19 +1502,19 @@ pub(crate) fn concat_object_macro_body(
 					}
 				}
 				(Some(prev), None) => {
-					walker.push_diag(Diag::PreprocDefine(
+					walker.push_syntax_diag(Syntax::PreprocDefine(
 						PreprocDefineDiag::TokenConcatMissingRHS(token.1),
 					));
 					stack.push(prev);
 				}
 				(None, Some(next)) => {
-					walker.push_diag(Diag::PreprocDefine(
+					walker.push_syntax_diag(Syntax::PreprocDefine(
 						PreprocDefineDiag::TokenConcatMissingLHS(token.1),
 					));
 					if next.0 == super::Token::MacroConcat {
 						// We begin the replacement-list with `## ##`. We cannot concatenate two concat operators,
 						// so we just emit the tokens as-is.
-						walker.push_diag(Diag::PreprocDefine(
+						walker.push_syntax_diag(Syntax::PreprocDefine(
 							PreprocDefineDiag::TokenConcatMissingRHS(token.1),
 						));
 						stack.push((
@@ -1538,10 +1538,10 @@ pub(crate) fn concat_object_macro_body(
 				}
 				(None, None) => {
 					// The entire replacement-list is just `##`.
-					walker.push_diag(Diag::PreprocDefine(
+					walker.push_syntax_diag(Syntax::PreprocDefine(
 						PreprocDefineDiag::TokenConcatMissingLHS(token.1),
 					));
-					walker.push_diag(Diag::PreprocDefine(
+					walker.push_syntax_diag(Syntax::PreprocDefine(
 						PreprocDefineDiag::TokenConcatMissingRHS(token.1),
 					));
 					stack.push((

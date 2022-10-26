@@ -4,8 +4,8 @@ mod syntax;
 pub use syntax::*;
 
 use crate::{
-	error::{Diag, PreprocDefineDiag},
-	token::{preprocessor::TokenStream as PreprocStream, Token, TokenStream},
+	diag::{PreprocDefineDiag, Semantic, StmtDiag, Syntax},
+	lexer::{preprocessor::TokenStream as PreprocStream, Token, TokenStream},
 	Span, Spanned,
 };
 use ast::*;
@@ -16,7 +16,7 @@ use std::collections::{HashMap, HashSet};
 /// - `0` - The abstract syntax tree,
 /// - `1` - Any diagnostics created during parsing,
 /// - `2` - Syntax highlighting tokens.
-pub type ParseResult = (Vec<Node>, Vec<Diag>, Vec<Spanned<SyntaxToken>>);
+pub type ParseResult = (Vec<Node>, Vec<Syntax>, Vec<Spanned<SyntaxToken>>);
 
 /// An error type for parsing operations.
 #[derive(Debug)]
@@ -114,7 +114,7 @@ pub enum ParseErr {
 /// let (ast, _, _) = trees.root();
 /// ```
 pub fn parse_from_str(source: &str) -> TokenTree {
-	let (mut token_stream, metadata) = crate::token::parse_from_str(source);
+	let (mut token_stream, metadata) = crate::lexer::parse_from_str(source);
 
 	// Skip tree generation if there are no conditional compilation blocks.
 	if !metadata.contains_conditional_compilation {
@@ -476,7 +476,7 @@ impl TokenTree {
 			parse_stmt(&mut walker, &mut nodes);
 		}
 
-		(nodes, walker.diagnostics, walker.syntax_tokens)
+		(nodes, walker.syntax_diags, walker.syntax_tokens)
 	}
 
 	/// Parses a token tree by enabling conditional branches in the order of their appearance.
@@ -575,7 +575,7 @@ impl TokenTree {
 			parse_stmt(&mut walker, &mut nodes);
 		}
 
-		Ok((nodes, walker.diagnostics, walker.syntax_tokens))
+		Ok((nodes, walker.syntax_diags, walker.syntax_tokens))
 	}
 
 	/// TODO: Implement.
@@ -650,8 +650,10 @@ pub(crate) struct Walker {
 	/// The actively-called macro identifiers.
 	active_macros: HashSet<String>,
 
-	/// Any diagnostics created from the tokens parsed so-far.
-	diagnostics: Vec<Diag>,
+	/// Any syntax diagnostics created from the tokens parsed so-far.
+	syntax_diags: Vec<Syntax>,
+	/// Any semantic diagnostics created from the tokens parsed so-far.
+	semantic_diags: Vec<Semantic>,
 
 	/// The syntax highlighting tokens created from the tokens parsed so-far.
 	syntax_tokens: Vec<Spanned<SyntaxToken>>,
@@ -674,7 +676,8 @@ impl Walker {
 			macros: HashMap::new(),
 			macro_call_site: None,
 			active_macros,
-			diagnostics: Vec::new(),
+			syntax_diags: Vec::new(),
+			semantic_diags: Vec::new(),
 			syntax_tokens: Vec::new(),
 		}
 	}
@@ -816,9 +819,9 @@ impl Walker {
 
 						if new_stream.is_empty() {
 							// The macro is empty, so we want to move to the next token of the existing stream.
-							self.push_diag(Diag::EmptyMacroCallSite(
-								token_span,
-							));
+							self.push_semantic_diag(
+								Semantic::EmptyMacroCallSite(token_span),
+							);
 							if self.streams.len() == 1 {
 								// We only syntax highlight when it is the first macro call.
 								self.syntax_tokens.push((
@@ -903,7 +906,7 @@ impl Walker {
 		match self.macros.remove(&ident) {
 			Some(_) => self.colour(span, SyntaxToken::ObjectMacro),
 			None => {
-				self.push_diag(Diag::PreprocDefine(
+				self.push_syntax_diag(Syntax::PreprocDefine(
 					PreprocDefineDiag::UndefMacroNameUnresolved(span),
 				));
 				self.colour(span, SyntaxToken::Unresolved);
@@ -912,8 +915,12 @@ impl Walker {
 	}
 
 	/// Pushes a diagnostic.
-	pub(crate) fn push_diag(&mut self, diag: Diag) {
-		self.diagnostics.push(diag);
+	pub(crate) fn push_syntax_diag(&mut self, diag: Syntax) {
+		self.syntax_diags.push(diag);
+	}
+
+	pub(crate) fn push_semantic_diag(&mut self, diag: Semantic) {
+		self.semantic_diags.push(diag);
 	}
 
 	/// Creates a syntax highlighting token over the given span.
@@ -966,7 +973,7 @@ impl Walker {
 
 /// Parses an individual statement at the current position.
 fn parse_stmt(walker: &mut Walker, nodes: &mut Vec<ast::Node>) {
-	use crate::token::preprocessor::{self, DefineToken, UndefToken};
+	use crate::lexer::preprocessor::{self, DefineToken, UndefToken};
 
 	let (token, token_span) = walker.get().expect("This function should be called from a loop that checks this invariant!");
 
@@ -991,7 +998,7 @@ fn parse_stmt(walker: &mut Walker, nodes: &mut Vec<ast::Node>) {
 				if ident_tokens.is_empty() {
 					// We have a macro that's missing a name.
 
-					walker.push_diag(Diag::PreprocDefine(
+					walker.push_syntax_diag(Syntax::PreprocDefine(
 						PreprocDefineDiag::DefineExpectedMacroName(
 							kw_span.next_single_width(),
 						),
@@ -1033,7 +1040,7 @@ fn parse_stmt(walker: &mut Walker, nodes: &mut Vec<ast::Node>) {
 				walker.colour(kw_span, SyntaxToken::Directive);
 
 				if tokens.is_empty() {
-					walker.push_diag(Diag::PreprocDefine(
+					walker.push_syntax_diag(Syntax::PreprocDefine(
 						PreprocDefineDiag::UndefExpectedMacroName(
 							kw_span.next_single_width(),
 						),
@@ -1046,7 +1053,7 @@ fn parse_stmt(walker: &mut Walker, nodes: &mut Vec<ast::Node>) {
 							walker.unregister_macro(s, token_span)
 						}
 						_ => {
-							walker.push_diag(Diag::PreprocDefine(
+							walker.push_syntax_diag(Syntax::PreprocDefine(
 								PreprocDefineDiag::UndefExpectedMacroName(
 									token_span,
 								),
@@ -1057,7 +1064,7 @@ fn parse_stmt(walker: &mut Walker, nodes: &mut Vec<ast::Node>) {
 					if !tokens.is_empty() {
 						let (_, first) = tokens.first().unwrap();
 						let (_, last) = tokens.last().unwrap();
-						walker.push_diag(Diag::PreprocTrailingTokens(
+						walker.push_syntax_diag(Syntax::PreprocTrailingTokens(
 							Span::new(first.start, last.end),
 						));
 					}
@@ -1074,21 +1081,21 @@ fn parse_stmt(walker: &mut Walker, nodes: &mut Vec<ast::Node>) {
 			nodes,
 			token_span,
 			|| NodeTy::Break,
-			|span| Diag::ExpectedSemiAfterBreakKw(span),
+			|span| Syntax::Stmt(StmtDiag::ExpectedSemiAfterBreakKw(span)),
 		),
 		Token::Continue => parse_break_continue_discard(
 			walker,
 			nodes,
 			token_span,
 			|| NodeTy::Continue,
-			|span| Diag::ExpectedSemiAfterContinueKw(span),
+			|span| Syntax::Stmt(StmtDiag::ExpectedSemiAfterContinueKw(span)),
 		),
 		Token::Discard => parse_break_continue_discard(
 			walker,
 			nodes,
 			token_span,
 			|| NodeTy::Discard,
-			|span| Diag::ExpectedSemiAfterDiscardKw(span),
+			|span| Syntax::Stmt(StmtDiag::ExpectedSemiAfterDiscardKw(span)),
 		),
 		_ => {
 			walker.advance();
@@ -1104,7 +1111,7 @@ fn parse_break_continue_discard(
 	nodes: &mut Vec<Node>,
 	kw_span: Span,
 	ty: impl FnOnce() -> NodeTy,
-	error: impl FnOnce(Span) -> Diag,
+	error: impl FnOnce(Span) -> Syntax,
 ) {
 	walker.colour(kw_span, SyntaxToken::Keyword);
 	walker.advance();
@@ -1124,7 +1131,7 @@ fn parse_break_continue_discard(
 	};
 
 	if semi_span.is_none() {
-		walker.push_diag(error(kw_span.next_single_width()));
+		walker.push_syntax_diag(error(kw_span.next_single_width()));
 	}
 
 	nodes.push(Node {

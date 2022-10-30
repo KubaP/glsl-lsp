@@ -765,6 +765,9 @@ impl Walker {
 	} */
 
 	/// Advances the cursor by one.
+	///
+	/// This method correctly steps into/out-of macros, jumps between conditional compilation branches, and
+	/// consumes any comments.
 	fn advance(&mut self) {
 		let mut dont_increment = false;
 		'outer: while let Some((identifier, stream, cursor)) =
@@ -805,8 +808,8 @@ impl Walker {
 
 			let (token, token_span) = stream.get(*cursor).unwrap();
 
-			// We now check if the new token is a macro call site.
 			match token {
+				// We check if the new token is a macro call site.
 				Token::Ident(s) => {
 					if let Some((_, new_stream)) = self.macros.get(s) {
 						if self.active_macros.contains(s) {
@@ -851,6 +854,24 @@ impl Walker {
 					}
 					break;
 				}
+				// We want to consume any comments since they are semantically ignored.
+				Token::LineComment(_) => {
+					let token_span = *token_span;
+					if self.streams.len() == 1 {
+						// We only syntax highlight when we are not in a macro call.
+						self.syntax_tokens
+							.push((SyntaxToken::Comment, token_span));
+					}
+				}
+				Token::BlockComment { .. } => {
+					// TODO: Emit error if missing end.
+					let token_span = *token_span;
+					if self.streams.len() == 1 {
+						// We only syntax highlight when we are not in a macro call.
+						self.syntax_tokens
+							.push((SyntaxToken::Comment, token_span));
+					}
+				}
 				_ => break,
 			}
 		}
@@ -873,25 +894,6 @@ impl Walker {
 			}
 			None => None,
 		}
-	} */
-
-	/* /// Returns any potential comment tokens until the next non-comment token.
-	fn consume_comments(&mut self) -> Comments {
-		// FIXME: replacement
-		let mut comments = Vec::new();
-		while let Some((token, span)) = self.get() {
-			match token {
-				Token::LineComment(str) => {
-					comments.push((Comment::Line(str.clone()), span));
-				}
-				Token::BlockComment { str, .. } => {
-					comments.push((Comment::Block(str.clone()), span));
-				}
-				_ => break,
-			}
-			self.advance();
-		}
-		comments
 	} */
 
 	/// Registers a define macro. Note: currently only supports object-like macros.

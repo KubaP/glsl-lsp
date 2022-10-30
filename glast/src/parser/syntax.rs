@@ -1,10 +1,17 @@
 /// A syntax highlighting token.
+///
+/// This type represents a context-free categorization, i.e. any identifier is given `Ident` and is not checked
+/// whether it's valid. For semantic highlighting, name resolution must be done.
 #[derive(Debug, Clone, PartialEq)]
 pub enum SyntaxToken {
 	/// A number.
 	Number,
 	/// A boolean.
 	Boolean,
+	/// An identifier that has not gone through name resolution.
+	Ident,
+	/// An unresolved identifier.
+	Unresolved,
 	/// A keyword.
 	Keyword,
 	/// A punctuation symbol.
@@ -13,19 +20,15 @@ pub enum SyntaxToken {
 	Operator,
 	/// A comment.
 	Comment,
-	/// An unresolved identifier.
-	Unresolved,
 	/// An invalid character.
 	Invalid,
 	/* PREPROCESSOR */
 	/// A directive.
 	Directive,
-	/// An object-like macro identifier. This is used at the macro definition site, and at any instances.
+	/// An object-like macro identifier. This is used at the macro definition site, and at any call sites.
 	ObjectMacro,
-	/// A function-like macro identifier. This is used at the macro definition site, and at any instances.
+	/// A function-like macro identifier. This is used at the macro definition site, and at any call sites.
 	FunctionMacro,
-	/// A general identifier that was not attempted to be resolved.
-	Ident,
 	/// The macro concatenation operator.
 	MacroConcat,
 }

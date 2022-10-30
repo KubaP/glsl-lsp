@@ -1,4 +1,5 @@
 pub mod ast;
+mod expression;
 mod syntax;
 
 pub use syntax::*;
@@ -9,6 +10,7 @@ use crate::{
 	Span, Spanned,
 };
 use ast::*;
+use expression::{expr_parser, Mode};
 use std::collections::{HashMap, HashSet};
 
 /// The result of a parsed GLSL source string.
@@ -768,6 +770,7 @@ impl Walker {
 	///
 	/// This method correctly steps into/out-of macros, jumps between conditional compilation branches, and
 	/// consumes any comments.
+	/// FIXME: Implement function macro support here!!! Doesn't abide by expression parser's rules
 	fn advance(&mut self) {
 		let mut dont_increment = false;
 		'outer: while let Some((identifier, stream, cursor)) =
@@ -908,19 +911,25 @@ impl Walker {
 		match self.macros.remove(&ident) {
 			Some(_) => self.colour(span, SyntaxToken::ObjectMacro),
 			None => {
-				self.push_syntax_diag(Syntax::PreprocDefine(
-					PreprocDefineDiag::UndefMacroNameUnresolved(span),
+				self.push_semantic_diag(Semantic::UndefMacroNameUnresolved(
+					span,
 				));
 				self.colour(span, SyntaxToken::Unresolved);
 			}
 		}
 	}
 
-	/// Pushes a diagnostic.
+	/// Pushes a syntax diagnostic.
 	pub(crate) fn push_syntax_diag(&mut self, diag: Syntax) {
 		self.syntax_diags.push(diag);
 	}
 
+	/// Appends a collection of syntax diagnostics.
+	fn append_syntax_diags(&mut self, diags: &mut Vec<Syntax>) {
+		self.syntax_diags.append(diags);
+	}
+
+	/// Pushes a semantic diagnostic.
 	pub(crate) fn push_semantic_diag(&mut self, diag: Semantic) {
 		self.semantic_diags.push(diag);
 	}
@@ -931,6 +940,11 @@ impl Walker {
 		if self.streams.len() == 1 {
 			self.syntax_tokens.push((token, span));
 		}
+	}
+
+	/// Appends a collection of syntax highlighting tokens.
+	fn append_colours(&mut self, colours: &mut Vec<Spanned<SyntaxToken>>) {
+		self.syntax_tokens.append(colours);
 	}
 
 	/// Returns whether the walker has reached the end of the token streams.
@@ -1099,6 +1113,7 @@ fn parse_stmt(walker: &mut Walker, nodes: &mut Vec<ast::Node>) {
 			|| NodeTy::Discard,
 			|span| Syntax::Stmt(StmtDiag::ExpectedSemiAfterDiscardKw(span)),
 		),
+		Token::Return => parse_return(walker, nodes, token_span),
 		_ => {
 			walker.advance();
 		}
@@ -1107,7 +1122,7 @@ fn parse_stmt(walker: &mut Walker, nodes: &mut Vec<ast::Node>) {
 
 /// Parses a break/continue/discard statement.
 ///
-/// This assumes that the keyword has already been parsed.
+/// This assumes that the keyword is not yet consumed.
 fn parse_break_continue_discard(
 	walker: &mut Walker,
 	nodes: &mut Vec<Node>,
@@ -1146,5 +1161,65 @@ fn parse_break_continue_discard(
 			},
 		),
 		ty: ty(),
+	});
+}
+
+/// Parses a break/continue/discard statement.
+///
+/// This assumes that the keyword is not yet consumed.
+fn parse_return(walker: &mut Walker, nodes: &mut Vec<Node>, kw_span: Span) {
+	walker.colour(kw_span, SyntaxToken::Keyword);
+	walker.advance();
+
+	// Look for the optional return value expression.
+	let return_expr = match expr_parser(walker, Mode::Default, [Token::Semi]) {
+		(Some(expr), mut diags, mut colours) => {
+			walker.append_syntax_diags(&mut diags);
+			walker.append_colours(&mut colours);
+			Some(expr)
+		}
+		(None, _, _) => None,
+	};
+
+	// Consume the `;` to end the statement.
+	let semi_span = match walker.peek() {
+		Some((token, token_span)) => {
+			if *token == Token::Semi {
+				walker.colour(token_span, SyntaxToken::Punctuation);
+				walker.advance();
+				Some(token_span)
+			} else {
+				None
+			}
+		}
+		None => None,
+	};
+
+	if semi_span.is_none() {
+		if let Some(ref return_expr) = return_expr {
+			walker.push_syntax_diag(Syntax::Stmt(
+				StmtDiag::ExpectedSemiAfterReturnExpr(
+					return_expr.span.next_single_width(),
+				),
+			));
+		} else {
+			walker.push_syntax_diag(Syntax::Stmt(
+				StmtDiag::ExpectedSemiOrExprAfterReturnKw(
+					kw_span.next_single_width(),
+				),
+			));
+		}
+	}
+
+	nodes.push(Node {
+		span: Span::new(
+			kw_span.start,
+			if let Some(s) = semi_span {
+				s.end
+			} else {
+				kw_span.end
+			},
+		),
+		ty: NodeTy::Return { value: return_expr },
 	});
 }

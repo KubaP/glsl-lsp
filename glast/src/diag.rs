@@ -16,17 +16,26 @@ pub enum Severity {
 }
 
 /// All semantic diagnostics.
+#[derive(Debug)]
+#[non_exhaustive]
 pub enum Semantic {
+	/* MACROS */
 	/// WARNING - Found a macro call site, but the macro contains no replacement tokens.
 	///
 	/// - `0` - The span of the call site.
 	EmptyMacroCallSite(Span),
+	/// WARNING - The macro name in an undef directive could not be resolved.
+	///
+	/// - `0` - The span of the name.
+	UndefMacroNameUnresolved(Span),
 }
 
 impl Semantic {
 	pub fn get_severity(&self) -> Severity {
 		match self {
+			/* MACROS */
 			Semantic::EmptyMacroCallSite(_) => Severity::Warning,
+			Semantic::UndefMacroNameUnresolved(_) => Severity::Warning,
 		}
 	}
 }
@@ -35,9 +44,10 @@ impl Semantic {
 #[derive(Debug)]
 #[non_exhaustive]
 pub enum Syntax {
+	/// Diagnostics for expressions.
+	Expr(ExprDiag),
 	/// Diagnostics for statement.
 	Stmt(StmtDiag),
-
 	/// Diagnostics for the `#define` and `#undef` directives.
 	PreprocDefine(PreprocDefineDiag),
 	/// ERROR - Found trailing tokens in a directive.
@@ -49,9 +59,243 @@ pub enum Syntax {
 impl Syntax {
 	pub fn get_severity(&self) -> Severity {
 		match self {
+			Syntax::Expr(e) => e.get_severity(),
 			Syntax::Stmt(s) => s.get_severity(),
 			Syntax::PreprocDefine(d) => d.get_severity(),
 			Syntax::PreprocTrailingTokens(_) => Severity::Error,
+		}
+	}
+}
+
+/// Syntax diagnostics for expressions.
+#[derive(Debug)]
+#[non_exhaustive]
+pub enum ExprDiag {
+	// TODO: Track the spans of the suffixes and generate errors when a suffix mismatches the number type.
+
+	/* LITERALS */
+	/// ERROR - Found a number literal that has an invalid suffix.
+	///
+	/// - `0` - The span of the number.
+	InvalidNumber(Span),
+	/// ERROR - Found a number literal that has no digits, e.g. `0xu` or `.f`.
+	///
+	/// - `0` - The span of the number.
+	EmptyNumber(Span),
+	/// ERROR - Found a number literal that could not be parsed.
+	///
+	/// - `0` - The span of the number.
+	UnparsableNumber(Span),
+
+	/* COMPOUND EXPRESSIONS */
+	/// ERROR - In the position that either a binary or postfix operator or the end-of-expression were expected to
+	/// occur, we found an operand. E.g.
+	/// - `foo bar`
+	/// - `5 10`
+	///
+	/// Note that this error is not produced if we are within a delimited arity group, e.g. `fn(foo bar)`. In such
+	/// cases [`ExpectedCommaAfterArg`](Self::ExpectedCommaAfterArg) is produced instead.
+	///
+	/// - `0` - The span of the previous operand,
+	/// - `1` - The span of the current operand.
+	FoundOperandAfterOperand(Span, Span),
+	/// ERROR - In the position that a prefix operator or an operand were expected to occur, we found an operator
+	/// which is not a valid prefix operator. E.g.
+	/// - `foo + *bar`
+	/// - `foo + %bar`
+	///
+	/// Layout:
+	/// - `0` - The span of the operator.
+	InvalidPrefixOperator(Span),
+	/// ERROR - In the position that either a binary or postfix operator, or the end-of-expression, were expected
+	/// to occur, we found an operator which is only valid as a prefix. E.g.
+	/// - `foo!`
+	/// - `foo~`
+	///
+	/// Layout:
+	/// - `0` - The span of the operator.
+	InvalidBinOrPostOperator(Span),
+	/// ERROR - In the position that either a prefix operator or an operand were expected to occur, we found a dot
+	/// (`.`). E.g.
+	/// - `foo + .`
+	/// - `foo.bar(). .`
+	/// - `.`
+	///
+	/// Note that this error is generated if the first token encountered when parsing a new expression is a dot.
+	///
+	/// - `0` - The span of the previous operator (if there is one),
+	/// - `1` - The span of the dot.
+	FoundDotInsteadOfOperand(Option<Span>, Span),
+	/// ERROR - In the position that either a prefix operator or operand were expected to occur, we found a comma.
+	/// E.g. `foo + ,`.
+	///
+	/// - `0` - The span of the previous operator,
+	/// - `1` - The span of the current comma.
+	FoundCommaInsteadOfOperand(Span, Span),
+	/// ERROR - In the position that either a prefix operator or operand were expected to occur, we found a
+	/// question mark. E.g. `foo + ?`.
+	///
+	/// Note that this error is generated if the first token encountered when parsing a new expression is a
+	/// question mark.
+	///
+	/// - `0` - The span of the previous operator,
+	/// - `1` - The span of the current question mark.
+	FoundQuestionInsteadOfOperand(Option<Span>, Span),
+	/// ERROR - In the position that either a prefix operator or operand were expected to occur, we found a colon.
+	/// E.g. `foo ? bar + :`.
+	///
+	/// Note that this error is generated if the first token encountered when parsing a new expression is a colon
+	/// mark.
+	///
+	/// - `0` - The span of the previous operator,
+	/// - `1` - The span of the current colon.
+	FoundColonInsteadOfOperand(Option<Span>, Span),
+	/// ERROR - Found a [`Token`](crate::lexer::Token) which cannot be part of an expression. E.g. `;`.
+	///
+	/// - `0` - The span of the token.
+	FoundInvalidToken(Span),
+
+	/* GROUPS */
+	/// ERROR - Found a set of parenthesis that contains no expression. E.g. `()`.
+	///
+	/// - `0` - The span where the expression is expected.
+	FoundEmptyParens(Span),
+	/// ERROR - In the position that either a prefix operator or an operand were expected to occur, we found the
+	/// start of an index operator (`[`). E.g. `foo + [`.
+	///
+	/// - `0` - The span of the previous operator (if there is one),
+	/// - `1` - The span of the opening bracket.
+	FoundLBracketInsteadOfOperand(Option<Span>, Span),
+	/// ERROR - In the position that either a prefix operator or an operand were expected to occur, we found a
+	/// closing parenthesis (`)`). E.g.
+	/// - `(foo + )`
+	/// - `fn(bar - )`
+	///
+	/// Note: This error is not generated if the first token encountered when parsing a new expression is the
+	/// closing parenthesis.
+	///
+	/// - `0` - The span of the previous operator,
+	/// - `1` - The span on the closing parenthesis.
+	FoundRParenInsteadOfOperand(Span, Span),
+	/// ERROR - In the position that either a prefix operator or an operand were expected to occur, we found a
+	/// closing bracket (`]`). E.g. `i[5 + ]`.
+	///
+	/// Note: This error is not generated if the first token encountered when parsing a new expression is the
+	/// closing bracket.
+	///
+	/// - `0` - The span of the previous operator,
+	/// - `1` - The span of the closing parenthesis.
+	FoundRBracketInsteadOfOperand(Span, Span),
+	/// ERROR - In the position that either a prefix operator or an operand were expected to occur, we found a
+	/// closing brace (`}`). E.g. `{foo + }`.
+	///
+	/// Note: This error is not generated if the first token encountered when parsing a new expression is the
+	/// closing brace.
+	///
+	/// - `0` - The span of the previous operator,
+	/// - `1` - The span on the closing brace.
+	FoundRBraceInsteadOfOperand(Span, Span),
+
+	/* ARITY */
+	/// ERROR - Did not find a comma after an argument expression in a delimited arity group. E.g.
+	/// - `fn(foo bar`
+	/// - `{foo bar`
+	///
+	/// Layout:
+	/// - `0` - The span where the comma is expected.
+	ExpectedCommaAfterArg(Span),
+	/// ERROR - Did not find an argument expression after a comma in a delimited arity group. E.g.
+	/// - `fn(foo, `
+	/// - `{foo, `
+	///
+	/// Layout:
+	/// - `0` - The span where the argument is expected.
+	ExpectedArgAfterComma(Span),
+	/// ERROR - Did not find an argument between the opening parenthesis and the comma. E.g. `fn( , bar`.
+	///
+	/// - `0` - The span where the argument is expected.
+	ExpectedArgBetweenParenComma(Span),
+	/// ERROR - Did not find an argument between the opening brace and the comma. E.g. `{ , bar`.
+	///
+	/// - `0` The span where the argument is expected.
+	ExpectedArgBetweenBraceComma(Span),
+	/// ERROR - Did not find a comma after an expression in a list. E.g. `foo bar`.
+	///
+	/// - `0` - The span where the comma is expected.
+	ExpectedCommaAfterExpr(Span),
+	/// ERROR - Did not find an expression after a comma in a list. E.g. `foo, `.
+	///
+	/// - `0 - The span where the expression is expected.
+	ExpectedExprAfterComma(Span),
+	/// ERROR - Did not find an expression before the first comma in a list. E.g. `, bar`.
+	///
+	/// - `0` - The span where the expression is expected.
+	ExpectedExprBeforeComma(Span),
+
+	/* UNCLOSED GROUPS */
+	/// ERROR - Found an unclosed set of parenthesis, e.g. `(...`.
+	///
+	/// - `0` - The span of the opening `(`,
+	/// - `1` - The zero-width span at the end of the expression.
+	UnclosedParens(Span, Span),
+	/// ERROR - Found an unclosed index operator, e.g. `i[...`.
+	///
+	/// - `0` - The span of the opening `[`,
+	/// - `1` - The zero-width span at the end of the expression.
+	UnclosedIndexOperator(Span, Span),
+	/// ERROR - Found an unclosed function call, e.g. `fn(...`.
+	///
+	/// - `0` - The span of the opening `(`,
+	/// - `1` - The zero-width span at the end of the expression.
+	UnclosedFunctionCall(Span, Span),
+	/// ERROR - Found an unclosed initializer list, e.g. `{...`.
+	///
+	/// - `0` - The span of the opening `{`,
+	/// - `1` - The zero-width span at the end of the expression.
+	UnclosedInitializerList(Span, Span),
+	/// ERROR - Found an unclosed array constructor, e.g. `int[](...`.
+	///
+	/// - `0` - The span of the opening `(`,
+	/// - `1` - The zero-width span at the end of the expression.
+	UnclosedArrayConstructor(Span, Span),
+}
+
+impl ExprDiag {
+	pub fn get_severity(&self) -> Severity {
+		match self {
+			/* LITERALS */
+			ExprDiag::InvalidNumber(_) => Severity::Error,
+			ExprDiag::EmptyNumber(_) => Severity::Error,
+			ExprDiag::UnparsableNumber(_) => Severity::Error,
+			/* COMPOUND EXPRESSIONS */
+			ExprDiag::FoundOperandAfterOperand(_, _) => Severity::Error,
+			ExprDiag::InvalidPrefixOperator(_) => Severity::Error,
+			ExprDiag::InvalidBinOrPostOperator(_) => Severity::Error,
+			ExprDiag::FoundDotInsteadOfOperand(_, _) => Severity::Error,
+			ExprDiag::FoundCommaInsteadOfOperand(_, _) => Severity::Error,
+			ExprDiag::FoundQuestionInsteadOfOperand(_, _) => Severity::Error,
+			ExprDiag::FoundColonInsteadOfOperand(_, _) => Severity::Error,
+			ExprDiag::FoundInvalidToken(_) => Severity::Error,
+			/* GROUPS */
+			ExprDiag::FoundEmptyParens(_) => Severity::Error,
+			ExprDiag::FoundLBracketInsteadOfOperand(_, _) => Severity::Error,
+			ExprDiag::FoundRParenInsteadOfOperand(_, _) => Severity::Error,
+			ExprDiag::FoundRBracketInsteadOfOperand(_, _) => Severity::Error,
+			ExprDiag::FoundRBraceInsteadOfOperand(_, _) => Severity::Error,
+			/* ARITY */
+			ExprDiag::ExpectedCommaAfterArg(_) => Severity::Error,
+			ExprDiag::ExpectedArgAfterComma(_) => Severity::Error,
+			ExprDiag::ExpectedArgBetweenParenComma(_) => Severity::Error,
+			ExprDiag::ExpectedArgBetweenBraceComma(_) => Severity::Error,
+			ExprDiag::ExpectedCommaAfterExpr(_) => Severity::Error,
+			ExprDiag::ExpectedExprAfterComma(_) => Severity::Error,
+			ExprDiag::ExpectedExprBeforeComma(_) => Severity::Error,
+			/* UNCLOSED GROUPS */
+			ExprDiag::UnclosedParens(_, _) => Severity::Error,
+			ExprDiag::UnclosedIndexOperator(_, _) => Severity::Error,
+			ExprDiag::UnclosedFunctionCall(_, _) => Severity::Error,
+			ExprDiag::UnclosedInitializerList(_, _) => Severity::Error,
+			ExprDiag::UnclosedArrayConstructor(_, _) => Severity::Error,
 		}
 	}
 }
@@ -120,10 +364,6 @@ pub enum PreprocDefineDiag {
 	TokenConcatMissingRHS(Span),
 
 	/* UNDEF */
-	/// WARNING - The macro identifier in an undef directive could not be resolved.
-	///
-	/// - `0` - The span of the identifier.
-	UndefMacroNameUnresolved(Span),
 	/// ERROR - Did not find an identifier token after the `undef` keyword.
 	///
 	/// - `0` - The span where the macro name is expected.
@@ -133,10 +373,12 @@ pub enum PreprocDefineDiag {
 impl PreprocDefineDiag {
 	pub fn get_severity(&self) -> Severity {
 		match self {
+			/* DEFINE */
 			PreprocDefineDiag::DefineExpectedMacroName(_) => Severity::Error,
+			/* TOKEN CONCAT */
 			PreprocDefineDiag::TokenConcatMissingLHS(_) => Severity::Error,
 			PreprocDefineDiag::TokenConcatMissingRHS(_) => Severity::Error,
-			PreprocDefineDiag::UndefMacroNameUnresolved(_) => Severity::Warning,
+			/* UNDEF */
 			PreprocDefineDiag::UndefExpectedMacroName(_) => Severity::Error,
 		}
 	}

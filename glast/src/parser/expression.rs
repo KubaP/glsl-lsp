@@ -52,11 +52,12 @@ pub(super) fn expr_parser(
 		start_position,
 		mode,
 		diagnostics: Vec::new(),
+		syntax_tokens: Vec::new(),
 	};
 	parser.parse(walker, end_tokens.as_ref());
 
-	if let Some((expr, syntax)) = parser.create_ast() {
-		(Some(expr), parser.diagnostics, syntax)
+	if let Some(expr) = parser.create_ast() {
+		(Some(expr), parser.diagnostics, parser.syntax_tokens)
 	} else {
 		(None, parser.diagnostics, vec![])
 	}
@@ -411,6 +412,9 @@ struct ShuntingYard {
 
 	/// Syntax diagnostics encountered during the parser execution.
 	diagnostics: Vec<Syntax>,
+
+	/// Syntax highlighting tokens created during the parser execution.
+	syntax_tokens: Vec<Spanned<SyntaxToken>>,
 }
 
 impl ShuntingYard {
@@ -1321,6 +1325,13 @@ impl ShuntingYard {
 		}
 	}
 
+	fn colour(&mut self, walker: &Walker, span: Span, token: SyntaxToken) {
+		// When we are within a macro, we don't want to produce syntax tokens.
+		if walker.streams.len() == 1 {
+			self.syntax_tokens.push((token, span));
+		}
+	}
+
 	/// Parses a list of tokens. Populates the internal `stack` with a RPN output.
 	fn parse(&mut self, walker: &mut Walker, end_tokens: &[Token]) {
 		#[derive(PartialEq)]
@@ -1413,6 +1424,15 @@ impl ShuntingYard {
 				Token::Num { .. } | Token::Bool(_)
 					if state == State::Operand =>
 				{
+					self.colour(
+						walker, 
+						span,
+						match token {
+							Token::Num { .. } => SyntaxToken::Number,
+							Token::Bool(_) => SyntaxToken::Boolean,
+							_ => unreachable!(),
+						},
+					);
 					// If we previously had a token which can end an argument of an arity group, and we are in a
 					// delimited arity group, we want to increase the arity, for example:
 					// `fn(10, 5` or `fn(10 5` or `{1+1  100`
@@ -1450,6 +1470,14 @@ impl ShuntingYard {
 				Token::Num { .. } | Token::Bool(_)
 					if state == State::AfterOperand =>
 				{
+					self.colour(walker, 
+						span,
+						match token {
+							Token::Num { .. } => SyntaxToken::Number,
+							Token::Bool(_) => SyntaxToken::Boolean,
+							_ => unreachable!(),
+						},
+					);
 					if self.mode == Mode::TakeOneUnit {
 						break 'main;
 					}
@@ -1496,6 +1524,7 @@ impl ShuntingYard {
 					// this operand we will still be expecting an operator.
 				}
 				Token::Ident(s) if state == State::Operand => {
+					self.colour(walker, span, SyntaxToken::UncheckedIdent);
 					// If we previously had a token which can end an argument of an arity group, and we are in a
 					// delimited arity group, we want to increase the arity, for example:
 					// `fn(10, i` or `fn(10 i` or `{1+1  i`
@@ -1526,6 +1555,7 @@ impl ShuntingYard {
 					self.set_op_rhs_toggle();
 				}
 				Token::Ident(s) if state == State::AfterOperand => {
+					self.colour(walker, span, SyntaxToken::UncheckedIdent);
 					if self.mode == Mode::TakeOneUnit {
 						break 'main;
 					}
@@ -1567,6 +1597,7 @@ impl ShuntingYard {
 					// this operand we will still be expecting an operator.
 				}
 				Token::Op(op) if state == State::Operand => {
+					self.colour(walker, span, SyntaxToken::Operator);
 					if (self.mode == Mode::BreakAtEq
 						|| self.mode == Mode::TakeOneUnit)
 						&& *op == lexer::OpTy::Eq
@@ -1635,6 +1666,7 @@ impl ShuntingYard {
 					can_start = Start::None;
 				}
 				Token::Op(op) if state == State::AfterOperand => {
+					self.colour(walker, span, SyntaxToken::Operator);
 					if (self.mode == Mode::BreakAtEq
 						|| self.mode == Mode::TakeOneUnit)
 						&& *op == lexer::OpTy::Eq
@@ -1677,6 +1709,7 @@ impl ShuntingYard {
 					can_start = Start::None;
 				}
 				Token::LParen if state == State::Operand => {
+					self.colour(walker, span, SyntaxToken::Punctuation);
 					// If we previously had a token which can end an argument of an arity group, and we are in a
 					// delimited arity group, we want to increase the arity, for example:
 					// `fn(10, (` or `fn(10 (` or `{1+1  (`
@@ -1703,6 +1736,7 @@ impl ShuntingYard {
 					// `..+ ( 1 *` rather than `..+ ( *`.
 				}
 				Token::LParen if state == State::AfterOperand => {
+					self.colour(walker, span, SyntaxToken::Punctuation);
 					if can_start == Start::FnOrArr {
 						// We have `ident(` which makes this a function call.
 						self.operators.push_back(Op {
@@ -1774,6 +1808,7 @@ impl ShuntingYard {
 					arity_state = Arity::Operator;
 				}
 				Token::RParen if state == State::AfterOperand => {
+					self.colour(walker, span, SyntaxToken::Punctuation);
 					if !self.just_started_fn_arr_init()
 						&& self.is_in_variable_arg_group()
 					{
@@ -1794,6 +1829,7 @@ impl ShuntingYard {
 					// `..) + 5` rather than `..) 5`.
 				}
 				Token::RParen if state == State::Operand => {
+					self.colour(walker, span, SyntaxToken::Punctuation);
 					if self.is_in_variable_arg_group()
 						&& !just_started_arity_group
 					{
@@ -1827,6 +1863,7 @@ impl ShuntingYard {
 					can_start = Start::None;
 				}
 				Token::LBracket if state == State::AfterOperand => {
+					self.colour(walker, span, SyntaxToken::Punctuation);
 					// We switch state since after a `[`, we are expecting an operand, i.e.
 					// `i[5 +..` rather than `i[+..`.
 					self.operators.push_back(Op {
@@ -1842,6 +1879,7 @@ impl ShuntingYard {
 					can_start = Start::EmptyIndex;
 				}
 				Token::LBracket if state == State::Operand => {
+					self.colour(walker, span, SyntaxToken::Punctuation);
 					if self.mode != Mode::TakeOneUnit {
 						self.diagnostics.push(Syntax::Expr(
 							ExprDiag::FoundLBracketInsteadOfOperand(
@@ -1853,6 +1891,7 @@ impl ShuntingYard {
 					break 'main;
 				}
 				Token::RBracket if state == State::AfterOperand => {
+					self.colour(walker, span, SyntaxToken::Punctuation);
 					// We don't switch state since after a `]`, we are expecting an operator, i.e.
 					// `..] + 5` instead of `..] 5`.
 					match self.end_index(span) {
@@ -1868,6 +1907,7 @@ impl ShuntingYard {
 					arity_state = Arity::PotentialEnd;
 				}
 				Token::RBracket if state == State::Operand => {
+					self.colour(walker, span, SyntaxToken::Punctuation);
 					if can_start == Start::EmptyIndex {
 						match self.end_index(span) {
 							Ok(_) => {}
@@ -1899,6 +1939,7 @@ impl ShuntingYard {
 					arity_state = Arity::PotentialEnd;
 				}
 				Token::LBrace if state == State::Operand => {
+					self.colour(walker, span, SyntaxToken::Punctuation);
 					// If we previously had a token which can end an argument of an arity group, and we are in a
 					// delimited arity group, we want to increase the arity, for example:
 					// `{10, {` or `{10 {` or `{1+1  {`
@@ -1927,6 +1968,7 @@ impl ShuntingYard {
 					// `..+ {1,` rather than `..+ {,`.
 				}
 				Token::LBrace if state == State::AfterOperand => {
+					self.colour(walker, span, SyntaxToken::Punctuation);
 					// If we previously had a token which can end an argument of an arity group, and we are in a
 					// delimited arity group, we want to increase the arity, for example:
 					// `{10, {` or `{10 {` or `{1+1  {`
@@ -1964,6 +2006,7 @@ impl ShuntingYard {
 					just_started_arity_group = true;
 				}
 				Token::RBrace if state == State::AfterOperand => {
+					self.colour(walker, span, SyntaxToken::Punctuation);
 					if self.is_in_variable_arg_group() {
 						self.register_arity_argument(span.start_zero_width());
 					}
@@ -1982,6 +2025,7 @@ impl ShuntingYard {
 					// `..}, {..` rather than `..} {..`.
 				}
 				Token::RBrace if state == State::Operand => {
+					self.colour(walker, span, SyntaxToken::Punctuation);
 					if self.is_in_variable_arg_group()
 						&& !just_started_arity_group
 					{
@@ -2016,6 +2060,7 @@ impl ShuntingYard {
 					can_start = Start::None;
 				}
 				Token::Comma if state == State::AfterOperand => {
+					self.colour(walker, span, SyntaxToken::Punctuation);
 					if (self.mode == Mode::DisallowTopLevelList
 						|| self.mode == Mode::TakeOneUnit)
 						&& self.groups.is_empty()
@@ -2041,6 +2086,7 @@ impl ShuntingYard {
 					can_start = Start::None;
 				}
 				Token::Comma if state == State::Operand => {
+					self.colour(walker, span, SyntaxToken::Punctuation);
 					if (self.mode == Mode::DisallowTopLevelList
 						|| self.mode == Mode::TakeOneUnit)
 						&& self.groups.is_empty()
@@ -2102,6 +2148,7 @@ impl ShuntingYard {
 					can_start = Start::None;
 				}
 				Token::Dot if state == State::AfterOperand => {
+					self.colour(walker, span, SyntaxToken::Operator);
 					// We don't need to consider arity because a dot after an operand will always be a valid object
 					// access notation, and in the alternate branch we don't recover from the error.
 
@@ -2117,6 +2164,7 @@ impl ShuntingYard {
 					can_start = Start::None;
 				}
 				Token::Dot if state == State::Operand => {
+					self.colour(walker, span, SyntaxToken::Operator);
 					// We have encountered something like: `foo + . ` or `foo.bar(). . `.
 					//
 					// We do not recover from this error because we currently mandate that the `ExprTy::ObjAccess`
@@ -2133,6 +2181,7 @@ impl ShuntingYard {
 					break 'main;
 				}
 				Token::Question => {
+					self.colour(walker, span, SyntaxToken::Operator);
 					if state == State::Operand {
 						// We have encountered something like: `foo + ?`.
 						self.diagnostics.push(Syntax::Expr(
@@ -2158,6 +2207,7 @@ impl ShuntingYard {
 					arity_state = Arity::Operator;
 				}
 				Token::Colon => {
+					self.colour(walker, span, SyntaxToken::Operator);
 					if !self.is_in_ternary() {
 						break 'main;
 					}
@@ -2284,17 +2334,13 @@ impl ShuntingYard {
 	}
 
 	/// Converts the internal RPN stack into a singular `Expr` node, which contains the entire expression.
-	fn create_ast(&mut self) -> Option<(Expr, Vec<Spanned<SyntaxToken>>)> {
+	fn create_ast(&mut self) -> Option<Expr> {
 		if self.stack.len() == 0 {
 			return None;
 		}
 
 		let mut stack: VecDeque<Expr> = VecDeque::new();
-		let mut colours = Vec::new();
 		let pop_back = |stack: &mut VecDeque<Expr>| stack.pop_back().unwrap();
-
-		// FIXME: Push literal/ident colours whenever they get popped within each branch, so that the colours are
-		// done in order.
 
 		// Consume the stack from the front. If we have an expression, we move it to the back of a temporary stack.
 		// If we have an operator, we take the n-most expressions from the back of the temporary stack, process
@@ -2302,41 +2348,21 @@ impl ShuntingYard {
 		while let Some(item) = self.stack.pop_front() {
 			match item {
 				Either::Left(node) => match node.ty {
-					NodeTy::Lit(lit) => {
-						colours.push((
-							match lit {
-								Lit::Bool(_) => SyntaxToken::Boolean,
-								Lit::Int(_) => SyntaxToken::Number,
-								Lit::UInt(_) => SyntaxToken::Number,
-								Lit::Float(_) => SyntaxToken::Number,
-								Lit::Double(_) => SyntaxToken::Number,
-								Lit::InvalidNum => SyntaxToken::Number,
-							},
-							node.span,
-						));
-						stack.push_back(Expr {
-							span: node.span,
-							ty: ExprTy::Lit(lit),
-						});
-					}
-					NodeTy::Ident(ident) => {
-						colours.push((SyntaxToken::Ident, node.span));
-						stack.push_back(Expr {
-							span: node.span,
-							ty: ExprTy::Ident(ident),
-						});
-					}
-					NodeTy::Separator => {
-						colours.push((SyntaxToken::Punctuation, node.span));
-						stack.push_back(Expr {
-							span: node.span,
-							ty: ExprTy::Separator,
-						});
-					}
+					NodeTy::Lit(lit) => stack.push_back(Expr {
+						span: node.span,
+						ty: ExprTy::Lit(lit),
+					}),
+					NodeTy::Ident(ident) => stack.push_back(Expr {
+						span: node.span,
+						ty: ExprTy::Ident(ident),
+					}),
+					NodeTy::Separator => stack.push_back(Expr {
+						span: node.span,
+						ty: ExprTy::Separator,
+					}),
 				},
 				Either::Right(op) => match op.ty {
 					OpTy::AddPre(has_operand) => {
-						colours.push((SyntaxToken::Operator, op.span));
 						let expr = if has_operand {
 							Some(pop_back(&mut stack))
 						} else {
@@ -2347,6 +2373,7 @@ impl ShuntingYard {
 						} else {
 							op.span
 						};
+
 						stack.push_back(Expr {
 							span,
 							ty: ExprTy::Prefix {
@@ -2359,7 +2386,6 @@ impl ShuntingYard {
 						});
 					}
 					OpTy::SubPre(has_operand) => {
-						colours.push((SyntaxToken::Operator, op.span));
 						let expr = if has_operand {
 							Some(pop_back(&mut stack))
 						} else {
@@ -2370,6 +2396,7 @@ impl ShuntingYard {
 						} else {
 							op.span
 						};
+
 						stack.push_back(Expr {
 							span,
 							ty: ExprTy::Prefix {
@@ -2382,9 +2409,9 @@ impl ShuntingYard {
 						});
 					}
 					OpTy::AddPost => {
-						colours.push((SyntaxToken::Operator, op.span));
 						let expr = pop_back(&mut stack);
 						let span = Span::new(expr.span.start, op.span.end);
+
 						stack.push_back(Expr {
 							span,
 							ty: ExprTy::Postfix {
@@ -2397,9 +2424,9 @@ impl ShuntingYard {
 						});
 					}
 					OpTy::SubPost => {
-						colours.push((SyntaxToken::Operator, op.span));
 						let expr = pop_back(&mut stack);
 						let span = Span::new(expr.span.start, op.span.end);
+
 						stack.push_back(Expr {
 							span,
 							ty: ExprTy::Postfix {
@@ -2412,7 +2439,6 @@ impl ShuntingYard {
 						});
 					}
 					OpTy::Neg(has_operand) => {
-						colours.push((SyntaxToken::Operator, op.span));
 						let expr = if has_operand {
 							Some(pop_back(&mut stack))
 						} else {
@@ -2423,6 +2449,7 @@ impl ShuntingYard {
 						} else {
 							op.span
 						};
+
 						stack.push_back(Expr {
 							span,
 							ty: ExprTy::Prefix {
@@ -2435,7 +2462,6 @@ impl ShuntingYard {
 						});
 					}
 					OpTy::Flip(has_operand) => {
-						colours.push((SyntaxToken::Operator, op.span));
 						let expr = if has_operand {
 							Some(pop_back(&mut stack))
 						} else {
@@ -2446,6 +2472,7 @@ impl ShuntingYard {
 						} else {
 							op.span
 						};
+
 						stack.push_back(Expr {
 							span,
 							ty: ExprTy::Prefix {
@@ -2458,7 +2485,6 @@ impl ShuntingYard {
 						});
 					}
 					OpTy::Not(has_operand) => {
-						colours.push((SyntaxToken::Operator, op.span));
 						let expr = if has_operand {
 							Some(pop_back(&mut stack))
 						} else {
@@ -2469,6 +2495,7 @@ impl ShuntingYard {
 						} else {
 							op.span
 						};
+
 						stack.push_back(Expr {
 							span,
 							ty: ExprTy::Prefix {
@@ -2481,7 +2508,6 @@ impl ShuntingYard {
 						});
 					}
 					OpTy::TernaryQ(has_rhs) => {
-						colours.push((SyntaxToken::Operator, op.span));
 						let last = pop_back(&mut stack);
 						let (cond, true_) = if has_rhs {
 							(pop_back(&mut stack), Some(last))
@@ -2505,7 +2531,6 @@ impl ShuntingYard {
 						});
 					}
 					OpTy::TernaryC(has_rhs) => {
-						colours.push((SyntaxToken::Operator, op.span));
 						let last = pop_back(&mut stack);
 						let (prev, false_) = if has_rhs {
 							(pop_back(&mut stack), Some(last))
@@ -2540,8 +2565,6 @@ impl ShuntingYard {
 						});
 					}
 					OpTy::Paren(has_inner, l_paren, end) => {
-						colours.push((SyntaxToken::Operator, l_paren));
-						colours.push((SyntaxToken::Operator, end));
 						let expr = if has_inner {
 							Some(pop_back(&mut stack))
 						} else {
@@ -2556,18 +2579,16 @@ impl ShuntingYard {
 						});
 					}
 					OpTy::FnCall(count, l_paren, end) => {
-						colours.push((SyntaxToken::Operator, l_paren));
-						colours.push((SyntaxToken::Operator, end));
 						let mut temp = VecDeque::new();
 						for _ in 0..count {
 							temp.push_front(pop_back(&mut stack));
 						}
+
 						// Get the identifier (which is the first expression).
 						let ident = match temp.pop_front().unwrap().ty {
 							ExprTy::Ident(ident) => ident,
 							_ => panic!("The first expression of a function call operator is not an identifier!")
 						};
-
 						let args = process_fn_arr_constructor_args(
 							temp,
 							&mut self.diagnostics,
@@ -2580,14 +2601,13 @@ impl ShuntingYard {
 						});
 					}
 					OpTy::Index(contains_i, l_bracket, end) => {
-						colours.push((SyntaxToken::Operator, l_bracket));
-						colours.push((SyntaxToken::Operator, end));
 						let i = if contains_i {
 							Some(Box::from(pop_back(&mut stack)))
 						} else {
 							None
 						};
 						let expr = pop_back(&mut stack);
+
 						stack.push_back(Expr {
 							span: Span::new(expr.span.start, end.end),
 							ty: ExprTy::Index {
@@ -2597,8 +2617,6 @@ impl ShuntingYard {
 						});
 					}
 					OpTy::Init(count, l_brace, end) => {
-						colours.push((SyntaxToken::Operator, l_brace));
-						colours.push((SyntaxToken::Operator, end));
 						let mut temp = VecDeque::new();
 						for _ in 0..count {
 							temp.push_front(pop_back(&mut stack));
@@ -2616,8 +2634,6 @@ impl ShuntingYard {
 						});
 					}
 					OpTy::ArrInit(count, l_paren, end) => {
-						colours.push((SyntaxToken::Operator, l_paren));
-						colours.push((SyntaxToken::Operator, end));
 						let mut temp = VecDeque::new();
 						for _ in 0..count {
 							temp.push_front(pop_back(&mut stack));
@@ -2661,7 +2677,6 @@ impl ShuntingYard {
 						});
 					}
 					OpTy::ObjAccess(has_rhs) => {
-						colours.push((SyntaxToken::Operator, op.span));
 						let last = pop_back(&mut stack);
 						let (left, right) = if has_rhs {
 							(pop_back(&mut stack), Some(last))
@@ -2713,7 +2728,6 @@ impl ShuntingYard {
 					| OpTy::XorEq(has_rhs)
 					| OpTy::LShiftEq(has_rhs)
 					| OpTy::RShiftEq(has_rhs) => {
-						colours.push((SyntaxToken::Operator, op.span));
 						let last = pop_back(&mut stack);
 						let (left, right) = if has_rhs {
 							(pop_back(&mut stack), Some(last))
@@ -2726,7 +2740,6 @@ impl ShuntingYard {
 						} else {
 							Span::new(left.span.start, op.span.end)
 						};
-
 						let bin_op = op.to_bin_op();
 
 						stack.push_back(Expr {
@@ -2756,7 +2769,7 @@ impl ShuntingYard {
 		}
 
 		// Return the one root expression.
-		Some((stack.pop_back().unwrap(), colours))
+		Some(stack.pop_back().unwrap())
 	}
 }
 

@@ -937,6 +937,7 @@ impl Walker {
 	/// Creates a syntax highlighting token over the given span.
 	fn colour(&mut self, span: Span, token: SyntaxToken) {
 		// When we are within a macro, we don't want to produce syntax tokens.
+		// Note: This functionality is duplicated in the `ShuntingYard::colour()` method.
 		if self.streams.len() == 1 {
 			self.syntax_tokens.push((token, span));
 		}

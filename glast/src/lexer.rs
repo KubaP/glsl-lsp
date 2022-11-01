@@ -395,24 +395,21 @@ impl Token {
 			| Token::RBrace => SyntaxToken::Punctuation,
 		}
 	}
-	/// Returns whether the current token is a keyword that can start a statement.
+	
+	/// Returns whether the current token is a keyword which can start a statement.
 	pub fn starts_statement(&self) -> bool {
 		match self {
 			Self::If
-			| Self::Else
 			| Self::For
 			| Self::Do
 			| Self::While
 			| Self::Continue
 			| Self::Switch
-			| Self::Case
-			| Self::Default
 			| Self::Break
 			| Self::Return
 			| Self::Discard
 			| Self::Struct
 			| Self::Subroutine
-			| Self::Reserved(_)
 			| Self::Const
 			| Self::In
 			| Self::Out

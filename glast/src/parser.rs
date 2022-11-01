@@ -5,7 +5,7 @@ mod syntax;
 pub use syntax::*;
 
 use crate::{
-	diag::{PreprocDefineDiag, Semantic, StmtDiag, Syntax},
+	diag::{ExprDiag, PreprocDefineDiag, Semantic, StmtDiag, Syntax},
 	lexer::{preprocessor::TokenStream as PreprocStream, Token, TokenStream},
 	Span, Spanned,
 };
@@ -724,57 +724,87 @@ impl Walker {
 		}
 	}
 
-	/// Peeks the next token without advancing the cursor; (returns the token under `cursor + 1`).
-	/* fn lookahead_1(&self) -> Option<&Spanned<Token>> {
-		let token = self.token_stream.get(self.cursor + 1);
-		if let Some((token, _)) = token {
-			match token {
-				Token::Ident(s) => {
-					if let Some((_, replacement_stream)) = self.macros.get(s) {
-						if let Some(first_replacement_token) =
-							replacement_stream.get(0)
-						{
-							return Some(first_replacement_token);
-						}
-						// FIXME: Deal with empty replacement stream.
-					}
-				}
-				_ => {}
-			}
-		}
+	/// Peeks the next token without advancing the cursor.
+	///
+	/// **This method is expensive** to call because it needs to correctly deal with macros. Avoid calling this
+	/// often.
+	///
+	/// This method correctly steps into/out-of macros, jumps between conditional compilation branches, and
+	/// consumes any comments.
+	fn lookahead_1(&mut self) -> Option<Spanned<Token>> {
+		let mut source_streams = self.source_streams.clone();
+		let mut streams = self.streams.clone();
+		let mut macros = self.macros.clone();
+		let mut active_macros = self.active_macros.clone();
+		let mut macro_call_site = self.macro_call_site.clone();
+		let mut semantic_diags = Vec::new();
+		let mut syntax_tokens = Vec::new();
+		Self::move_cursor(
+			&mut source_streams,
+			&mut streams,
+			&mut macros,
+			&mut active_macros,
+			&mut macro_call_site,
+			&mut semantic_diags,
+			&mut syntax_tokens,
+		);
 
-		token
-	} */
-
-	/// Peeks the next token without advancing the cursor whilst ignoring any comments.
-	/* fn lookahead_1_ignore_comments(&self) -> Option<&Spanned<Token>> {
-		// FIXME: replacement
-		let mut cursor = self.cursor + 1;
-		while let Some(i) = self.token_stream.get(cursor) {
-			match i.0 {
-				Token::LineComment(_)
-				| Token::BlockComment {
-					str: _,
-					contains_eof: _,
-				} => {
-					cursor += 1;
-					continue;
-				}
-				_ => return Some(i),
-			}
+		// Copy of `Self::get()`.
+		if streams.is_empty() {
+			None
+		} else if streams.len() == 1 {
+			let (_, stream, cursor) = streams.last().unwrap();
+			stream.get(*cursor).cloned()
+		} else {
+			let (_, stream, cursor) = streams.last().unwrap();
+			let token = stream.get(*cursor).map(|(t, _)| t).cloned();
+			token.map(|t| {
+				(
+					t,
+					// Panic: This is guaranteed to be some if `streams.len() > 1`.
+					macro_call_site.unwrap(),
+				)
+			})
 		}
-		None
-	} */
+	}
 
 	/// Advances the cursor by one.
 	///
 	/// This method correctly steps into/out-of macros, jumps between conditional compilation branches, and
 	/// consumes any comments.
-	/// FIXME: Implement function macro support here!!! Doesn't abide by expression parser's rules
 	fn advance(&mut self) {
+		Self::move_cursor(
+			&mut self.source_streams,
+			&mut self.streams,
+			&mut self.macros,
+			&mut self.active_macros,
+			&mut self.macro_call_site,
+			&mut self.semantic_diags,
+			&mut self.syntax_tokens,
+		);
+	}
+
+	/// Returns whether the walker has reached the end of the token streams.
+	fn is_done(&self) -> bool {
+		self.streams.is_empty()
+	}
+
+	/// Moves the cursor to the next token. This function takes all the necessary data by parameter so that the
+	/// functionality can be re-used between the `Self::advance()` and `Self::lookahead_1()` methods.
+	///
+	/// FIXME: Implement function macro support here!!! Doesn't abide by expression parser's rules
+	fn move_cursor(
+		source_streams: &mut Vec<TokenStream>,
+		streams: &mut Vec<(String, TokenStream, usize)>,
+		macros: &mut HashMap<String, (Span, TokenStream)>,
+		active_macros: &mut HashSet<String>,
+		macro_call_site: &mut Option<Span>,
+		semantic_diags: &mut Vec<Semantic>,
+		syntax_tokens: &mut Vec<Spanned<SyntaxToken>>,
+	) {
 		let mut dont_increment = false;
 		'outer: while let Some((identifier, stream, cursor)) =
-			self.streams.last_mut()
+			streams.last_mut()
 		{
 			if !dont_increment {
 				*cursor += 1;
@@ -786,16 +816,16 @@ impl Walker {
 				// there is one).
 
 				let ident = identifier.clone();
-				if self.streams.len() == 1 {
+				if streams.len() == 1 {
 					// If we aren't in a macro, that means we've finished the current source stream but there may
 					// be another one, (since they can be split up due to conditional compilation).
-					if self.source_streams.is_empty() {
+					if source_streams.is_empty() {
 						// We have reached the final end.
-						self.streams.remove(0);
+						streams.remove(0);
 						break;
 					} else {
-						let mut next_source = self.source_streams.remove(0);
-						let (_, s, c) = self.streams.get_mut(0).unwrap();
+						let mut next_source = source_streams.remove(0);
+						let (_, s, c) = streams.get_mut(0).unwrap();
 						std::mem::swap(s, &mut next_source);
 						*c = 0;
 						dont_increment = true;
@@ -803,8 +833,8 @@ impl Walker {
 					}
 				} else {
 					// Panic: Anytime a stream is added the identifier is inserted into the set.
-					self.active_macros.remove(&ident);
-					self.streams.remove(self.streams.len() - 1);
+					active_macros.remove(&ident);
+					streams.remove(streams.len() - 1);
 					continue;
 				}
 			}
@@ -814,8 +844,8 @@ impl Walker {
 			match token {
 				// We check if the new token is a macro call site.
 				Token::Ident(s) => {
-					if let Some((_, new_stream)) = self.macros.get(s) {
-						if self.active_macros.contains(s) {
+					if let Some((_, new_stream)) = macros.get(s) {
+						if active_macros.contains(s) {
 							// We have already visited a macro with this identifier. Recursion is not supported so
 							// we don't continue.
 							break;
@@ -825,12 +855,11 @@ impl Walker {
 
 						if new_stream.is_empty() {
 							// The macro is empty, so we want to move to the next token of the existing stream.
-							self.push_semantic_diag(
-								Semantic::EmptyMacroCallSite(token_span),
-							);
-							if self.streams.len() == 1 {
+							semantic_diags
+								.push(Semantic::EmptyMacroCallSite(token_span));
+							if streams.len() == 1 {
 								// We only syntax highlight when it is the first macro call.
-								self.syntax_tokens.push((
+								syntax_tokens.push((
 									SyntaxToken::ObjectMacro,
 									token_span,
 								));
@@ -841,14 +870,14 @@ impl Walker {
 						let ident = s.to_owned();
 
 						// We only syntax highlight and note the macro call site when it is the first macro call.
-						if self.streams.len() == 1 {
-							self.macro_call_site = Some(token_span);
-							self.syntax_tokens
+						if streams.len() == 1 {
+							*macro_call_site = Some(token_span);
+							syntax_tokens
 								.push((SyntaxToken::ObjectMacro, token_span));
 						}
 
-						self.active_macros.insert(ident.clone());
-						self.streams.push((ident, new_stream.clone(), 0));
+						active_macros.insert(ident.clone());
+						streams.push((ident, new_stream.clone(), 0));
 
 						// The first token in the new stream could be another macro call, so we re-run the loop on
 						// this new stream in case.
@@ -860,44 +889,27 @@ impl Walker {
 				// We want to consume any comments since they are semantically ignored.
 				Token::LineComment(_) => {
 					let token_span = *token_span;
-					if self.streams.len() == 1 {
+					if streams.len() == 1 {
 						// We only syntax highlight when we are not in a macro call.
-						self.syntax_tokens
-							.push((SyntaxToken::Comment, token_span));
+						syntax_tokens.push((SyntaxToken::Comment, token_span));
 					}
 				}
 				Token::BlockComment { .. } => {
 					// TODO: Emit error if missing end.
 					let token_span = *token_span;
-					if self.streams.len() == 1 {
+					if streams.len() == 1 {
 						// We only syntax highlight when we are not in a macro call.
-						self.syntax_tokens
-							.push((SyntaxToken::Comment, token_span));
+						syntax_tokens.push((SyntaxToken::Comment, token_span));
 					}
 				}
 				_ => break,
 			}
 		}
 
-		if self.streams.len() <= 1 {
-			self.macro_call_site = None;
+		if streams.len() <= 1 {
+			*macro_call_site = None;
 		}
 	}
-
-	/// Returns the current token under the cursor and advances the cursor by one.
-	///
-	/// Equivalent to [`peek()`](Self::peek) followed by [`advance()`](Self::advance).
-	/* fn next(&mut self) -> Option<Spanned<Token>> {
-		// FIXME: replacement
-		// If we are successful in getting the token, advance the cursor.
-		match self.token_stream.get(self.cursor) {
-			Some(i) => {
-				self.cursor += 1;
-				Some(i.clone())
-			}
-			None => None,
-		}
-	} */
 
 	/// Registers a define macro. Note: currently only supports object-like macros.
 	fn register_macro(&mut self, ident: Spanned<String>, tokens: TokenStream) {
@@ -948,11 +960,6 @@ impl Walker {
 		self.syntax_tokens.append(colours);
 	}
 
-	/// Returns whether the walker has reached the end of the token streams.
-	fn is_done(&self) -> bool {
-		self.streams.is_empty()
-	}
-
 	/* /// Returns the [`Span`] of the current `Token`.
 	///
 	/// *Note:* If we have reached the end of the tokens, this will return the value of
@@ -986,7 +993,33 @@ impl Walker {
 	} */
 }
 
-/* STATEMENT PARSING LOGIC BELOW */
+/* ACTUAL STATEMENT PARSING LOGIC BELOW */
+
+/// Consumes tokens until a beginning of a new statement is reached.
+///
+/// This function consumes tokens until a keyword which can begin a statement is found, or until a semi-colon is
+/// reached (which is consumed). This is used for some instances of error recovery, where no more specific
+/// strategies can be employed.
+fn seek_next_stmt(walker: &mut Walker) {
+	loop {
+		match walker.peek() {
+			Some((token, span)) => {
+				if token.starts_statement() {
+					return;
+				} else if *token == Token::Semi {
+					walker.colour(span, SyntaxToken::Punctuation);
+					walker.advance();
+					return;
+				} else {
+					walker.colour(span, SyntaxToken::Invalid);
+					walker.advance();
+					continue;
+				}
+			}
+			None => return,
+		}
+	}
+}
 
 /// Parses an individual statement at the current position.
 fn parse_stmt(walker: &mut Walker, nodes: &mut Vec<ast::Node>) {
@@ -1115,15 +1148,418 @@ fn parse_stmt(walker: &mut Walker, nodes: &mut Vec<ast::Node>) {
 			|span| Syntax::Stmt(StmtDiag::ExpectedSemiAfterDiscardKw(span)),
 		),
 		Token::Return => parse_return(walker, nodes, token_span),
-		_ => {
+		_ => try_parse_definition_declaration_expr(walker, nodes),
+	}
+}
+
+/// Tries to parse a variable/function definition/declaration or an expression statement.
+///
+/// This function attempts to look for a statement at the current position. If this fails, error recovery till the
+/// next clear statement delineation occurs.
+fn try_parse_definition_declaration_expr(
+	walker: &mut Walker,
+	nodes: &mut Vec<Node>,
+) {
+	// We attempt to parse an expression at the current position.
+	let (start, mut start_diags, mut start_colours) =
+		match expr_parser(walker, Mode::Default, [Token::Semi]) {
+			(Some(expr), diags, colours) => (expr, diags, colours),
+			(None, _, _) => {
+				// The current token cannot begin any sort of expression. Since this function gets called if all
+				// other statement branches have failed to match, it means that whatever we have cannot be a valid
+				// statement at all.
+				seek_next_stmt(walker);
+				return;
+			}
+		};
+
+	// We test if the expression can be converted into a type.
+	if let Some(type_) = Type::parse(&start) {
+		// Since we ran the expression parser in the Default mode, what we have so far must be something like
+		// `foobar`, `int`, `vec2[3]`, `MyStruct` etc. This can be the type part of a definition/declaration, but
+		// it could be just an expression statement depending on what comes next.
+
+		let (token, token_span) = match walker.peek() {
+			Some(t) => t,
+			None => {
+				// We lack any identifiers necessary for a definition/declaration, so this must be an expression
+				// statement.
+				walker.append_colours(&mut start_colours);
+				walker.append_syntax_diags(&mut start_diags);
+				walker.push_syntax_diag(Syntax::Stmt(
+					StmtDiag::ExprStmtExpectedSemiAfterExpr(
+						start.span.next_single_width(),
+					),
+				));
+				nodes.push(Node {
+					span: start.span,
+					ty: NodeTy::Expr(start),
+				});
+				return;
+			}
+		};
+
+		// Check whether we have a function definition/declaration, or whether this is an expression immediately
+		// followed by a semi-colon.
+		match token {
+			Token::Ident(i) => match walker.lookahead_1() {
+				Some(next) => match next.0 {
+					Token::LParen => {
+						// We have a function definition/declaration.
+						// TODO:
+						return;
+					}
+					_ => {}
+				},
+				None => {}
+			},
+			Token::Semi => {
+				// We have an expression statement.
+				let semi_span = token_span;
+				walker.append_colours(&mut start_colours);
+				walker.append_syntax_diags(&mut start_diags);
+				walker.colour(semi_span, SyntaxToken::Punctuation);
+				walker.advance();
+				nodes.push(Node {
+					span: Span::new(start.span.start, semi_span.end),
+					ty: NodeTy::Expr(start),
+				});
+				return;
+			}
+			_ => {}
+		}
+
+		// We don't have a function definition/declaration, so this must be a variable definition/declaration or an
+		// expression statement.
+
+		// We attempt to parse an expression for the identifier(s).
+		let (ident_expr, mut ident_diags, mut ident_colours) =
+			match expr_parser(walker, Mode::BreakAtEq, [Token::Semi]) {
+				(Some(e), diags, colours) => (e, diags, colours),
+				(None, _, _) => {
+					// We have an expression followed by neither another expression nor a semi-colon. We treat this
+					// as an expression statement since that's the closest possible match.
+					walker.append_colours(&mut start_colours);
+					walker.append_syntax_diags(&mut start_diags);
+					walker.push_syntax_diag(Syntax::Stmt(
+						StmtDiag::ExprStmtExpectedSemiAfterExpr(
+							start.span.next_single_width(),
+						),
+					));
+					nodes.push(Node {
+						span: start.span,
+						ty: NodeTy::Expr(start),
+					});
+					return;
+				}
+			};
+		let ident_span = ident_expr.span;
+
+		// We test if the identifier(s) expression can be converted into one or more variable identifiers.
+		let ident_info = if let Some(i) = Type::parse_var_idents(&ident_expr) {
+			i
+		} else {
+			// We have a second expression after the first expression, but the second expression can't be converted
+			// to one or more identifiers for a variable definition/declaration. We treat the first expression as
+			// an expression statement, and the second expression as invalid.
+			walker.append_colours(&mut start_colours);
+			walker.append_syntax_diags(&mut start_diags);
+			walker.push_syntax_diag(Syntax::Stmt(
+				StmtDiag::ExprStmtExpectedSemiAfterExpr(
+					start.span.next_single_width(),
+				),
+			));
+			nodes.push(Node {
+				span: start.span,
+				ty: NodeTy::Expr(start),
+			});
+			for (_, span) in ident_colours {
+				walker.colour(span, SyntaxToken::Invalid);
+			}
+			seek_next_stmt(walker);
+			return;
+		};
+
+		// We have one expression which can be converted to a type, and a second expression which can be converted
+		// to one or more identifiers. That means the first expression will have a syntax error about a missing
+		// operator between the two; we remove that error since in this case it's not applicable.
+		start_diags.retain(|e| {
+			if let Syntax::Expr(ExprDiag::FoundOperandAfterOperand(_, _)) = e {
+				false
+			} else {
+				true
+			}
+		});
+		walker.append_colours(&mut start_colours);
+		walker.append_syntax_diags(&mut start_diags);
+		walker.append_colours(&mut ident_colours);
+		walker.append_syntax_diags(&mut ident_diags);
+
+		/// Combines the ident information with the type to create one or more type-ident pairs. This step is
+		/// necessary because the idents can contain type information, e.g. `int[3] i[9]`.
+		fn combine_type_with_idents(
+			type_: Type,
+			ident_info: Vec<(Ident, Vec<Option<Expr>>)>,
+		) -> Vec<(Type, Ident)> {
+			let mut vars = Vec::new();
+			for (ident, sizes) in ident_info {
+				if sizes.is_empty() {
+					vars.push((type_.clone(), ident));
+				} else {
+					let mut sizes = sizes.clone();
+					let Type { ty, span } = type_.clone();
+					let primitive = match ty {
+						TypeTy::Single(p) => p,
+						TypeTy::Array(p, i) => {
+							sizes.push(i);
+							p
+						}
+						TypeTy::Array2D(p, i, j) => {
+							sizes.push(i);
+							sizes.push(j);
+							p
+						}
+						TypeTy::ArrayND(p, mut v) => {
+							sizes.append(&mut v);
+							p
+						}
+					};
+
+					let type_ = if sizes.len() == 0 {
+						Type {
+							span,
+							ty: TypeTy::Single(primitive),
+						}
+					} else if sizes.len() == 1 {
+						Type {
+							span,
+							ty: TypeTy::Array(primitive, sizes.remove(0)),
+						}
+					} else if sizes.len() == 2 {
+						Type {
+							span,
+							ty: TypeTy::Array2D(
+								primitive,
+								sizes.remove(0),
+								sizes.remove(0),
+							),
+						}
+					} else {
+						Type {
+							span,
+							ty: TypeTy::ArrayND(primitive, sizes),
+						}
+					};
+
+					vars.push((type_, ident))
+				}
+			}
+			vars
+		}
+
+		fn var_def(
+			type_: Type,
+			idents: Vec<(Ident, Vec<Option<Expr>>)>,
+			end_pos: usize,
+		) -> Node {
+			let span = Span::new(type_.span.start, end_pos);
+			let mut vars = combine_type_with_idents(type_, idents);
+			match vars.len() {
+				1 => {
+					let (type_, ident) = vars.remove(0);
+					Node {
+						span,
+						ty: NodeTy::VarDef { type_, ident },
+					}
+				}
+				_ => Node {
+					span,
+					ty: NodeTy::VarDefs(vars),
+				},
+			}
+		}
+
+		fn var_decl(
+			type_: Type,
+			idents: Vec<(Ident, Vec<Option<Expr>>)>,
+			value: Option<Expr>,
+			end_pos: usize,
+		) -> Node {
+			let span = Span::new(type_.span.start, end_pos);
+			let mut vars = combine_type_with_idents(type_, idents);
+			match vars.len() {
+				1 => {
+					let (type_, ident) = vars.remove(0);
+					Node {
+						span,
+						ty: NodeTy::VarDecl {
+							type_,
+							ident,
+							value,
+						},
+					}
+				}
+				_ => Node {
+					span,
+					ty: NodeTy::VarDecls(vars, value),
+				},
+			}
+		}
+
+		// Consume the `;` for a definition, or a `=` for a declaration.
+		let (token, token_span) = match walker.peek() {
+			Some(t) => t,
+			None => {
+				// We have something that matches the start of a variable definition/declaration. Since we have
+				// neither the `;` or `=`, we assume that this is a definition which is missing the semi-colon.
+				walker.push_syntax_diag(Syntax::Stmt(
+					StmtDiag::VarDefExpectedSemiOrEqAfterIdents(
+						ident_span.next_single_width(),
+					),
+				));
+				nodes.push(var_def(type_, ident_info, ident_span.end));
+				return;
+			}
+		};
+		if *token == Token::Semi {
+			// We have a variable definition.
+			let semi_span = token_span;
+			walker.colour(semi_span, SyntaxToken::Punctuation);
 			walker.advance();
+			nodes.push(var_def(type_, ident_info, semi_span.end));
+			return;
+		} else if *token == Token::Op(crate::lexer::OpTy::Eq) {
+			// We have a variable declaration.
+			let eq_span = token_span;
+			walker.colour(eq_span, SyntaxToken::Operator);
+			walker.advance();
+
+			// Consume the value expression.
+			let value_expr =
+				match expr_parser(walker, Mode::Default, [Token::Semi]) {
+					(Some(e), mut diags, mut colours) => {
+						walker.append_colours(&mut colours);
+						walker.append_syntax_diags(&mut diags);
+						e
+					}
+					(None, _, _) => {
+						walker.push_syntax_diag(Syntax::Stmt(
+							StmtDiag::VarDeclExpectedValueAfterEq(
+								eq_span.next_single_width(),
+							),
+						));
+						nodes.push(var_decl(
+							type_,
+							ident_info,
+							None,
+							eq_span.end,
+						));
+						seek_next_stmt(walker);
+						return;
+					}
+				};
+
+			// Consume the semi-colon.
+			let (token, token_span) = match walker.peek() {
+				Some(t) => t,
+				None => {
+					let value_span = value_expr.span;
+					walker.push_syntax_diag(Syntax::Stmt(
+						StmtDiag::VarDeclExpectedSemiAfterValue(
+							value_span.next_single_width(),
+						),
+					));
+					nodes.push(var_decl(
+						type_,
+						ident_info,
+						Some(value_expr),
+						value_span.end,
+					));
+					return;
+				}
+			};
+			if *token == Token::Semi {
+				let semi_span = token_span;
+				walker.colour(semi_span, SyntaxToken::Punctuation);
+				walker.advance();
+				nodes.push(var_decl(
+					type_,
+					ident_info,
+					Some(value_expr),
+					semi_span.end,
+				));
+				return;
+			} else {
+				let end_span = token_span;
+				walker.push_syntax_diag(Syntax::Stmt(
+					StmtDiag::VarDeclExpectedSemiAfterValue(
+						end_span.next_single_width(),
+					),
+				));
+				nodes.push(var_decl(
+					type_,
+					ident_info,
+					Some(value_expr),
+					end_span.end,
+				));
+				seek_next_stmt(walker);
+				return;
+			}
+		} else {
+			// We have something that matches the start of a variable definition/declaration. Since we have
+			// neither the `;` or `=`, we assume that this is a definition which is missing the semi-colon.
+			walker.push_syntax_diag(Syntax::Stmt(
+				StmtDiag::VarDefExpectedSemiOrEqAfterIdents(
+					ident_span.next_single_width(),
+				),
+			));
+			nodes.push(var_def(type_, ident_info, ident_span.end));
+			seek_next_stmt(walker);
+			return;
 		}
 	}
+
+	// We have an expression which cannot be parsed as a type, so this cannot start a definition/declaration; it
+	// must therefore be a standalone expression statement.
+	let expr = start;
+	walker.append_colours(&mut start_colours);
+	walker.append_syntax_diags(&mut start_diags);
+
+	// Consume the `;` to end the statement.
+	let semi_span = match walker.peek() {
+		Some((token, span)) => {
+			if *token == Token::Semi {
+				walker.colour(span, SyntaxToken::Punctuation);
+				walker.advance();
+				Some(span)
+			} else {
+				None
+			}
+		}
+		None => None,
+	};
+	if semi_span.is_none() {
+		walker.push_syntax_diag(Syntax::Stmt(
+			StmtDiag::ExprStmtExpectedSemiAfterExpr(
+				expr.span.next_single_width(),
+			),
+		));
+		seek_next_stmt(walker);
+	}
+
+	nodes.push(Node {
+		span: if let Some(semi_span) = semi_span {
+			Span::new(expr.span.start, semi_span.end)
+		} else {
+			expr.span
+		},
+		ty: NodeTy::Expr(expr),
+	});
 }
 
 /// Parses a break/continue/discard statement.
 ///
-/// This assumes that the keyword is not yet consumed.
+/// This function assumes that the keyword is not yet consumed.
 fn parse_break_continue_discard(
 	walker: &mut Walker,
 	nodes: &mut Vec<Node>,
@@ -1136,18 +1572,17 @@ fn parse_break_continue_discard(
 
 	// Consume the `;` to end the statement.
 	let semi_span = match walker.peek() {
-		Some((token, token_span)) => {
+		Some((token, span)) => {
 			if *token == Token::Semi {
-				walker.colour(token_span, SyntaxToken::Punctuation);
+				walker.colour(span, SyntaxToken::Punctuation);
 				walker.advance();
-				Some(token_span)
+				Some(span)
 			} else {
 				None
 			}
 		}
 		None => None,
 	};
-
 	if semi_span.is_none() {
 		walker.push_syntax_diag(error(kw_span.next_single_width()));
 	}
@@ -1165,9 +1600,9 @@ fn parse_break_continue_discard(
 	});
 }
 
-/// Parses a break/continue/discard statement.
+/// Parses a return statement.
 ///
-/// This assumes that the keyword is not yet consumed.
+/// This function assumes that the keyword is not yet consumed.
 fn parse_return(walker: &mut Walker, nodes: &mut Vec<Node>, kw_span: Span) {
 	walker.colour(kw_span, SyntaxToken::Keyword);
 	walker.advance();
@@ -1184,18 +1619,17 @@ fn parse_return(walker: &mut Walker, nodes: &mut Vec<Node>, kw_span: Span) {
 
 	// Consume the `;` to end the statement.
 	let semi_span = match walker.peek() {
-		Some((token, token_span)) => {
+		Some((token, span)) => {
 			if *token == Token::Semi {
-				walker.colour(token_span, SyntaxToken::Punctuation);
+				walker.colour(span, SyntaxToken::Punctuation);
 				walker.advance();
-				Some(token_span)
+				Some(span)
 			} else {
 				None
 			}
 		}
 		None => None,
 	};
-
 	if semi_span.is_none() {
 		if let Some(ref return_expr) = return_expr {
 			walker.push_syntax_diag(Syntax::Stmt(

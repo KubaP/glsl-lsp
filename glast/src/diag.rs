@@ -304,6 +304,26 @@ impl ExprDiag {
 #[derive(Debug)]
 #[non_exhaustive]
 pub enum StmtDiag {
+	/// ERROR - Did not find a semi-colon after an expression (to make it into a valid expression statement).
+	///
+	/// - `0` - The span where the semi-colon is expected.
+	ExprStmtExpectedSemiAfterExpr(Span),
+
+	/* VARIABLES */
+	/// ERROR - Did not find a semi-colon or an equals-sign after the identifiers in a variable definition.
+	///
+	/// - `0` - The span where the semi-colon or equals-sign is expected.
+	VarDefExpectedSemiOrEqAfterIdents(Span),
+	/// ERROR - Did not find a value expression after the equals-sign in a variable declaration.
+	///
+	/// - `0` - The span where the expression is expected.
+	VarDeclExpectedValueAfterEq(Span),
+	/// ERROR - Did not find a semi-colon after the value expression in a variable declaration.
+	///
+	/// - `0` - The span where the semi-colon is expected.
+	VarDeclExpectedSemiAfterValue(Span),
+
+	/* SINGLE-KEYWORD CONTROL FLOW */
 	/// ERROR - Did not find a semi-colon after the `break` keyword.
 	///
 	/// - `0` - The span where the semi-colon is expected.
@@ -329,6 +349,12 @@ pub enum StmtDiag {
 impl StmtDiag {
 	pub fn get_severity(&self) -> Severity {
 		match self {
+			StmtDiag::ExprStmtExpectedSemiAfterExpr(_) => Severity::Error,
+			/* VARIABLES */
+			StmtDiag::VarDefExpectedSemiOrEqAfterIdents(_) => Severity::Error,
+			StmtDiag::VarDeclExpectedSemiAfterValue(_) => Severity::Error,
+			StmtDiag::VarDeclExpectedValueAfterEq(_) => Severity::Error,
+			/* SINGLE-KEYWORD CONTROL FLOW */
 			StmtDiag::ExpectedSemiAfterBreakKw(_) => Severity::Error,
 			StmtDiag::ExpectedSemiAfterContinueKw(_) => Severity::Error,
 			StmtDiag::ExpectedSemiAfterDiscardKw(_) => Severity::Error,

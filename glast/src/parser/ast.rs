@@ -38,6 +38,19 @@ pub enum NodeTy {
 	},
 	/// A variable declaration containing multiple variables, e.g. `int i, j, k = 0;`.
 	VarDecls(Vec<(Type, Ident)>, Option<Expr>),
+	/// A function definition, e.g. `int foo(int i);`.
+	FnDef {
+		return_type: Type,
+		ident: Ident,
+		params: Vec<Param>,
+	},
+	/// A function declaration, e.g. `int foo(int i) { return i + 1; }`.
+	FnDecl {
+		return_type: Type,
+		ident: Ident,
+		params: Vec<Param>,
+		body: Scope,
+	},
 	/// A break control-flow statement, i.e. `break;`.
 	Break,
 	/// A continue control-flow statement, i.e. `continue;`.
@@ -46,6 +59,21 @@ pub enum NodeTy {
 	Discard,
 	/// A return control-flow statement, i.e. `return 5;`.
 	Return { value: Option<Expr> },
+}
+
+/// A scope of nodes.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Scope {
+	pub contents: Vec<Node>,
+	pub span: Span,
+}
+
+/// A parameter in a function definition/declaration.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Param {
+	pub type_: Type,
+	pub ident: Option<Ident>,
+	pub span: Span,
 }
 
 /// A type.
@@ -522,6 +550,8 @@ impl Primitive {
 		}
 	}
 }
+
+/* EXPRESSION-RELATED TYPES BELOW */
 
 /// An expression node.
 #[derive(Debug, Clone, PartialEq)]

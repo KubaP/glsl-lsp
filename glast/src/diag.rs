@@ -323,6 +323,36 @@ pub enum StmtDiag {
 	/// - `0` - The span where the semi-colon is expected.
 	VarDeclExpectedSemiAfterValue(Span),
 
+	/* FUNCTIONS */
+	/// ERROR - Did not find a comma after a parameter in a function's parameter list. E.g. `void fn(foo bar)`.
+	///
+	/// - `0` - The span where the comma is expected.
+	ParamsExpectedCommaAfterParam(Span),
+	/// ERROR - Did not find a paramater after a comma in a function's parameter list. E.g. `void fn(foo, )`.
+	///
+	/// - `0` - The span where the parameter is expected.
+	ParamsExpectedParamAfterComma(Span),
+	/// ERROR - Did not find a parameter between the opening parenthesis and the comma. E.g. `void fn( , bar)`.
+	///
+	/// - `0` - The span where the parameter is expected.
+	ParamsExpectedParamBetweenParenComma(Span),
+	/// ERROR - Found an expression which could not be parsed as a type. E.g. `void fn(500)`.
+	///
+	/// - `0` - The span of the expression.
+	ParamsInvalidTypeExpr(Span),
+	/// ERROR - Found an expression which could not be parsed as an identifier. E.g. `void fn(int 55)`.
+	///
+	/// - `0` - The span of the expression.
+	ParamsInvalidIdentExpr(Span),
+	/// ERROR - Did not find a closing parenthesis before a semi-colon or opening brace. E.g. `void fn(bar ;`.
+	///
+	/// - `0` - The span where the closing parenthesis is expected.
+	ParamsExpectedRParen(Span),
+	/// ERROR - Did not find either a semi-colon or an opening brace after the parameter list. E.g. `void fn()`.
+	///
+	/// - `0` - The span where the semi-colon or opening brace is expected.
+	FnExpectedSemiOrLBraceAfterParams(Span),
+
 	/* SINGLE-KEYWORD CONTROL FLOW */
 	/// ERROR - Did not find a semi-colon after the `break` keyword.
 	///
@@ -354,6 +384,16 @@ impl StmtDiag {
 			StmtDiag::VarDefExpectedSemiOrEqAfterIdents(_) => Severity::Error,
 			StmtDiag::VarDeclExpectedSemiAfterValue(_) => Severity::Error,
 			StmtDiag::VarDeclExpectedValueAfterEq(_) => Severity::Error,
+			/* FUNCTIONS */
+			StmtDiag::ParamsExpectedCommaAfterParam(_) => Severity::Error,
+			StmtDiag::ParamsExpectedParamAfterComma(_) => Severity::Error,
+			StmtDiag::ParamsExpectedParamBetweenParenComma(_) => {
+				Severity::Error
+			}
+			StmtDiag::ParamsInvalidTypeExpr(_) => Severity::Error,
+			StmtDiag::ParamsInvalidIdentExpr(_) => Severity::Error,
+			StmtDiag::ParamsExpectedRParen(_) => Severity::Error,
+			StmtDiag::FnExpectedSemiOrLBraceAfterParams(_) => Severity::Error,
 			/* SINGLE-KEYWORD CONTROL FLOW */
 			StmtDiag::ExpectedSemiAfterBreakKw(_) => Severity::Error,
 			StmtDiag::ExpectedSemiAfterContinueKw(_) => Severity::Error,

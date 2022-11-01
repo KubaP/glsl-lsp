@@ -659,6 +659,9 @@ pub(crate) struct Walker {
 
 	/// The syntax highlighting tokens created from the tokens parsed so-far.
 	syntax_tokens: Vec<Spanned<SyntaxToken>>,
+
+	/// The last span in the source string.
+	last_span: Span,
 }
 
 #[allow(unused)]
@@ -669,6 +672,17 @@ impl Walker {
 		// Invariant: A macro cannot have no name (an empty identifier), so this won't cause any hashing clashes
 		// with valid macros. By using "" we can avoid having a special case for the root source stream.
 		active_macros.insert("".into());
+
+		let mut last_span = Span::new(0, 0);
+		for stream in token_streams.iter().rev() {
+			match stream.last() {
+				Some((_, span)) => {
+					last_span = *span;
+					break;
+				}
+				None => continue,
+			}
+		}
 
 		let first_source = token_streams.remove(0); // Panic: Ensured by the caller.
 
@@ -681,6 +695,7 @@ impl Walker {
 			syntax_diags: Vec::new(),
 			semantic_diags: Vec::new(),
 			syntax_tokens: Vec::new(),
+			last_span,
 		}
 	}
 
@@ -731,7 +746,7 @@ impl Walker {
 	///
 	/// This method correctly steps into/out-of macros, jumps between conditional compilation branches, and
 	/// consumes any comments.
-	fn lookahead_1(&mut self) -> Option<Spanned<Token>> {
+	fn lookahead_1(&self) -> Option<Spanned<Token>> {
 		let mut source_streams = self.source_streams.clone();
 		let mut streams = self.streams.clone();
 		let mut macros = self.macros.clone();
@@ -787,6 +802,11 @@ impl Walker {
 	/// Returns whether the walker has reached the end of the token streams.
 	fn is_done(&self) -> bool {
 		self.streams.is_empty()
+	}
+
+	/// Returns the span of the last token in the token stream.
+	fn get_last_span(&self) -> Span {
+		self.last_span
 	}
 
 	/// Moves the cursor to the next token. This function takes all the necessary data by parameter so that the
@@ -959,38 +979,6 @@ impl Walker {
 	fn append_colours(&mut self, colours: &mut Vec<Spanned<SyntaxToken>>) {
 		self.syntax_tokens.append(colours);
 	}
-
-	/* /// Returns the [`Span`] of the current `Token`.
-	///
-	/// *Note:* If we have reached the end of the tokens, this will return the value of
-	/// [`get_last_span()`](Self::get_last_span).
-	fn get_current_span(&self) -> Span {
-		// FIXME: replacement
-		match self.token_stream.get(self.cursor) {
-			Some(t) => t.1,
-			None => self.get_last_span(),
-		}
-	} */
-
-	/* /// Returns the [`Span`] of the previous `Token`.
-	///
-	/// *Note:* If the current token is the first, the span returned will be `0-0`.
-	fn get_previous_span(&self) -> Span {
-		// FIXME: replacement
-		self.token_stream
-			.get(self.cursor - 1)
-			.map_or(Span::new_zero_width(0), |t| t.1)
-	} */
-
-	/* /// Returns the [`Span`] of the last `Token`.
-	///
-	/// *Note:* If there are no tokens, the span returned will be `0-0`.
-	fn get_last_span(&self) -> Span {
-		// FIXME: replacement
-		self.token_stream
-			.last()
-			.map_or(Span::new_zero_width(0), |t| t.1)
-	} */
 }
 
 /* ACTUAL STATEMENT PARSING LOGIC BELOW */
@@ -1152,6 +1140,53 @@ fn parse_stmt(walker: &mut Walker, nodes: &mut Vec<ast::Node>) {
 	}
 }
 
+/// Parses a scope of statements.
+///
+/// This function assumes that the opening delimiter is already consumed.
+fn parse_scope(
+	walker: &mut Walker,
+	exit_condition: ScopeEnd,
+	opening_span: Span,
+) -> Scope {
+	let mut nodes = Vec::new();
+	// If this scope never finished and we run out of tokens, the scope will reach the EOF.
+	let mut ending_span = walker.get_last_span().end_zero_width();
+	while let Some(_) = walker.peek() {
+		// Check if we have reached the closing delimiter.
+		if let Some(span) = exit_condition(walker, opening_span) {
+			ending_span = span;
+			break;
+		}
+		parse_stmt(walker, &mut nodes);
+	}
+
+	Scope {
+		contents: nodes,
+		span: Span::new(opening_span.start, ending_span.end),
+	}
+}
+
+/// A function, which given the `walker`, determines whether to end parsing the current scope of
+/// statements and return back to the caller. If this returns `Some`, we have reached the end of the scope. If the
+/// span returned is zero-width, that means we have no closing delimiter.
+///
+/// This also takes a mutable reference to a vector of syntax errors, and a span of the opening delimiter, which
+/// allows for the creation of a syntax error if the function never encounters the desired ending delimiter.
+type ScopeEnd = fn(&mut Walker, Span) -> Option<Span>;
+
+const BRACE_SCOPE: ScopeEnd = |walker, _| match walker.peek() {
+	Some((token, span)) => {
+		if *token == Token::RBrace {
+			walker.colour(span, SyntaxToken::Punctuation);
+			walker.advance();
+			return Some(span);
+		} else {
+			return None;
+		}
+	}
+	None => unreachable!(),
+};
+
 /// Tries to parse a variable/function definition/declaration or an expression statement.
 ///
 /// This function attempts to look for a statement at the current position. If this fails, error recovery till the
@@ -1206,7 +1241,22 @@ fn try_parse_definition_declaration_expr(
 				Some(next) => match next.0 {
 					Token::LParen => {
 						// We have a function definition/declaration.
-						// TODO:
+						let l_paren_span = next.1;
+						let ident = Ident {
+							name: i.clone(),
+							span: token_span,
+						};
+						walker.colour(token_span, SyntaxToken::UncheckedIdent);
+						walker.advance();
+						walker.colour(next.1, SyntaxToken::Punctuation);
+						walker.advance();
+						parse_function(
+							walker,
+							nodes,
+							type_,
+							ident,
+							l_paren_span,
+						);
 						return;
 					}
 					_ => {}
@@ -1294,68 +1344,6 @@ fn try_parse_definition_declaration_expr(
 		walker.append_syntax_diags(&mut start_diags);
 		walker.append_colours(&mut ident_colours);
 		walker.append_syntax_diags(&mut ident_diags);
-
-		/// Combines the ident information with the type to create one or more type-ident pairs. This step is
-		/// necessary because the idents can contain type information, e.g. `int[3] i[9]`.
-		fn combine_type_with_idents(
-			type_: Type,
-			ident_info: Vec<(Ident, Vec<Option<Expr>>)>,
-		) -> Vec<(Type, Ident)> {
-			let mut vars = Vec::new();
-			for (ident, sizes) in ident_info {
-				if sizes.is_empty() {
-					vars.push((type_.clone(), ident));
-				} else {
-					let mut sizes = sizes.clone();
-					let Type { ty, span } = type_.clone();
-					let primitive = match ty {
-						TypeTy::Single(p) => p,
-						TypeTy::Array(p, i) => {
-							sizes.push(i);
-							p
-						}
-						TypeTy::Array2D(p, i, j) => {
-							sizes.push(i);
-							sizes.push(j);
-							p
-						}
-						TypeTy::ArrayND(p, mut v) => {
-							sizes.append(&mut v);
-							p
-						}
-					};
-
-					let type_ = if sizes.len() == 0 {
-						Type {
-							span,
-							ty: TypeTy::Single(primitive),
-						}
-					} else if sizes.len() == 1 {
-						Type {
-							span,
-							ty: TypeTy::Array(primitive, sizes.remove(0)),
-						}
-					} else if sizes.len() == 2 {
-						Type {
-							span,
-							ty: TypeTy::Array2D(
-								primitive,
-								sizes.remove(0),
-								sizes.remove(0),
-							),
-						}
-					} else {
-						Type {
-							span,
-							ty: TypeTy::ArrayND(primitive, sizes),
-						}
-					};
-
-					vars.push((type_, ident))
-				}
-			}
-			vars
-		}
 
 		fn var_def(
 			type_: Type,
@@ -1557,6 +1545,287 @@ fn try_parse_definition_declaration_expr(
 	});
 }
 
+/// Parses a function definition/declaration.
+///
+/// This function assumes that the return type, ident, and opening parenthesis have been consumed.
+fn parse_function(
+	walker: &mut Walker,
+	nodes: &mut Vec<Node>,
+	return_type: Type,
+	ident: Ident,
+	l_paren_span: Span,
+) {
+	// Look for any parameters until we hit a closing `)` parenthesis.
+	#[derive(PartialEq)]
+	enum Prev {
+		None,
+		Param,
+		Comma,
+		Invalid,
+	}
+	let mut prev = Prev::None;
+	let mut prev_span = l_paren_span;
+	let mut params = Vec::new();
+	let param_end_span = loop {
+		let (token, token_span) = match walker.peek() {
+			Some(t) => t,
+			None => {
+				// We have not yet finished parsing the parameter list, but we treat this as a valid definition.
+				let span = Span::new(return_type.span.start, prev_span.end);
+				walker.push_syntax_diag(Syntax::Stmt(
+					StmtDiag::ParamsExpectedRParen(
+						prev_span.next_single_width(),
+					),
+				));
+				nodes.push(Node {
+					span,
+					ty: NodeTy::FnDef {
+						return_type,
+						ident,
+						params,
+					},
+				});
+				return;
+			}
+		};
+
+		match token {
+			Token::Comma => {
+				walker.colour(token_span, SyntaxToken::Punctuation);
+				walker.advance();
+				if prev == Prev::Comma {
+					walker.push_syntax_diag(Syntax::Stmt(
+						StmtDiag::ParamsExpectedParamAfterComma(
+							Span::new_between(prev_span, token_span),
+						),
+					));
+				} else if prev == Prev::None {
+					walker.push_syntax_diag(Syntax::Stmt(
+						StmtDiag::ParamsExpectedParamBetweenParenComma(
+							Span::new_between(l_paren_span, token_span),
+						),
+					));
+				}
+				prev = Prev::Comma;
+				prev_span = token_span;
+				continue;
+			}
+			Token::RParen => {
+				walker.colour(token_span, SyntaxToken::Punctuation);
+				walker.advance();
+				break token_span;
+			}
+			Token::Semi => {
+				walker.colour(token_span, SyntaxToken::Punctuation);
+				walker.advance();
+				// We have not yet finished parsing the parameter list but we've encountered a semi-colon. We treat
+				// this as a valid definition.
+				walker.push_syntax_diag(Syntax::Stmt(
+					StmtDiag::ParamsExpectedRParen(
+						prev_span.next_single_width(),
+					),
+				));
+				nodes.push(Node {
+					span: Span::new(return_type.span.start, token_span.end),
+					ty: NodeTy::FnDef {
+						return_type,
+						ident,
+						params,
+					},
+				});
+				return;
+			}
+			Token::LBrace => {
+				walker.colour(token_span, SyntaxToken::Punctuation);
+				// We don't advance because the next check after this loop checks for a l-brace.
+
+				// We have not yet finished parsing the parameter list but we've encountered a l-brace. We treat
+				// this as a valid declaration.
+				walker.push_syntax_diag(Syntax::Stmt(
+					StmtDiag::ParamsExpectedRParen(
+						prev_span.next_single_width(),
+					),
+				));
+				break token_span;
+			}
+			_ => {}
+		}
+
+		if prev == Prev::Param {
+			walker.push_syntax_diag(Syntax::Stmt(
+				StmtDiag::ParamsExpectedCommaAfterParam(
+					prev_span.next_single_width(),
+				),
+			));
+		}
+		let param_span_start = token_span.start;
+
+		// Consume the type.
+		let type_ = match expr_parser(
+			walker,
+			Mode::TakeOneUnit,
+			[Token::Semi, Token::LBrace],
+		) {
+			(Some(e), _, mut colours) => {
+				if let Some(type_) = Type::parse(&e) {
+					walker.append_colours(&mut colours);
+					type_
+				} else {
+					// We have an expression which cannot be parsed into a type. We ignore this and continue
+					// searching for the next parameter.
+					for (_, span) in colours {
+						walker.colour(span, SyntaxToken::Invalid);
+					}
+					walker.push_syntax_diag(Syntax::Stmt(
+						StmtDiag::ParamsInvalidTypeExpr(e.span),
+					));
+					prev = Prev::Invalid;
+					prev_span = Span::new(param_span_start, e.span.end);
+					continue;
+				}
+			}
+			(None, _, _) => {
+				// We immediately have a token that is not an expression.
+				// TODO: Decide on error recovery strategy.
+				prev = Prev::Invalid;
+				prev_span = token_span;
+				continue;
+			}
+		};
+
+		// Look for the optional ident.
+		let (ident_expr, ident_colours) = match expr_parser(
+			walker,
+			Mode::TakeOneUnit,
+			[Token::Semi, Token::LBrace],
+		) {
+			(Some(e), _, colours) => (e, colours),
+			(None, _, _) => {
+				// We have a first expression and then something that is not an expression. We treat this as an
+				// ident-less parameter, whatever the current token is will be dealt with in the next iteration.
+				let param_span = Span::new(param_span_start, type_.span.end);
+				params.push(Param {
+					span: param_span,
+					type_,
+					ident: None,
+				});
+				prev = Prev::Param;
+				prev_span = param_span;
+				continue;
+			}
+		};
+		let ident_span = ident_expr.span;
+
+		// Invariant: This vector is guaranteed to have a length of 1 because the `ident_expr` was parsed with the
+		// `TakeOneUnit` mode which prevents lists.
+		let ident_info = if let Some(i) = Type::parse_var_idents(&ident_expr) {
+			i
+		} else {
+			// We have a second expression after the first expression, but the second expression can't be converted
+			// to an identifier for the parameter. We treat the first type expression as an ident-less parameter,
+			// and the second expression as invalid.
+			let param_span = Span::new(param_span_start, type_.span.end);
+			params.push(Param {
+				span: Span::new(param_span_start, type_.span.end),
+				type_,
+				ident: None,
+			});
+			walker.push_syntax_diag(Syntax::Stmt(
+				StmtDiag::ParamsInvalidIdentExpr(ident_expr.span),
+			));
+			for (_, span) in ident_colours {
+				walker.colour(span, SyntaxToken::Invalid);
+			}
+			prev = Prev::Param;
+			prev_span = param_span;
+			continue;
+		};
+
+		let (type_, ident) =
+			combine_type_with_idents(type_, ident_info).remove(0);
+		let param_span = Span::new(param_span_start, ident_span.end);
+		params.push(Param {
+			span: param_span,
+			type_,
+			ident: Some(ident),
+		});
+		prev = Prev::Param;
+		prev_span = param_span;
+	};
+
+	// Consume the `;` for a definition or a `{` for a declaration.
+	let (token, token_span) = match walker.peek() {
+		Some(t) => t,
+		None => {
+			// This branch will only be triggered if we exited the param loop with a `)`, it will not trigger if we
+			// exit with a `{` because that token is not consumed.
+
+			// We are missing a `;` for a definition, but it's the closest match, so that's what we assume.
+			walker.push_syntax_diag(Syntax::Stmt(
+				StmtDiag::FnExpectedSemiOrLBraceAfterParams(
+					param_end_span.next_single_width(),
+				),
+			));
+			nodes.push(Node {
+				span: Span::new(return_type.span.start, param_end_span.end),
+				ty: NodeTy::FnDef {
+					return_type,
+					ident,
+					params,
+				},
+			});
+			return;
+		}
+	};
+	if *token == Token::Semi {
+		// We have a definition.
+		walker.colour(token_span, SyntaxToken::Punctuation);
+		walker.advance();
+		nodes.push(Node {
+			span: Span::new(return_type.span.start, param_end_span.end),
+			ty: NodeTy::FnDef {
+				return_type,
+				ident,
+				params,
+			},
+		});
+	} else if *token == Token::LBrace {
+		// We have a declaration.
+		let l_brace_span = token_span;
+		walker.colour(l_brace_span, SyntaxToken::Punctuation);
+		walker.advance();
+		let body = parse_scope(walker, BRACE_SCOPE,l_brace_span);
+		nodes.push(Node {
+			span: Span::new(
+				return_type.span.start,
+				body.span.end,
+			),
+			ty: NodeTy::FnDecl {
+				return_type,
+				ident,
+				params,
+				body,
+			},
+		});
+	} else {
+		// We are missing a `;` for a definition, but it's the closest match, so that's what we assume.
+		walker.push_syntax_diag(Syntax::Stmt(
+			StmtDiag::FnExpectedSemiOrLBraceAfterParams(
+				param_end_span.next_single_width(),
+			),
+		));
+		nodes.push(Node {
+			span: Span::new(return_type.span.start, param_end_span.end),
+			ty: NodeTy::FnDef {
+				return_type,
+				ident,
+				params,
+			},
+		});
+		seek_next_stmt(walker);
+	}
+}
+
 /// Parses a break/continue/discard statement.
 ///
 /// This function assumes that the keyword is not yet consumed.
@@ -1657,4 +1926,66 @@ fn parse_return(walker: &mut Walker, nodes: &mut Vec<Node>, kw_span: Span) {
 		),
 		ty: NodeTy::Return { value: return_expr },
 	});
+}
+
+/// Combines the ident information with the type to create one or more type-ident pairs. This step is
+/// necessary because the idents can contain type information, e.g. `int[3] i[9]`.
+fn combine_type_with_idents(
+	type_: Type,
+	ident_info: Vec<(Ident, Vec<Option<Expr>>)>,
+) -> Vec<(Type, Ident)> {
+	let mut vars = Vec::new();
+	for (ident, sizes) in ident_info {
+		if sizes.is_empty() {
+			vars.push((type_.clone(), ident));
+		} else {
+			let mut sizes = sizes.clone();
+			let Type { ty, span } = type_.clone();
+			let primitive = match ty {
+				TypeTy::Single(p) => p,
+				TypeTy::Array(p, i) => {
+					sizes.push(i);
+					p
+				}
+				TypeTy::Array2D(p, i, j) => {
+					sizes.push(i);
+					sizes.push(j);
+					p
+				}
+				TypeTy::ArrayND(p, mut v) => {
+					sizes.append(&mut v);
+					p
+				}
+			};
+
+			let type_ = if sizes.len() == 0 {
+				Type {
+					span,
+					ty: TypeTy::Single(primitive),
+				}
+			} else if sizes.len() == 1 {
+				Type {
+					span,
+					ty: TypeTy::Array(primitive, sizes.remove(0)),
+				}
+			} else if sizes.len() == 2 {
+				Type {
+					span,
+					ty: TypeTy::Array2D(
+						primitive,
+						sizes.remove(0),
+						sizes.remove(0),
+					),
+				}
+			} else {
+				Type {
+					span,
+					ty: TypeTy::ArrayND(primitive, sizes),
+				}
+			};
+
+			vars.push((type_, ident))
+		}
+	}
+	vars
 }

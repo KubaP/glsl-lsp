@@ -323,6 +323,45 @@ pub enum StmtDiag {
 	/// - `0` - The span of the scope's opening brace.
 	/// - `1` - The span where the closing brace is expected.
 	ScopeMissingRBrace(Span, Span),
+	/// ERROR - Found one or more qualifiers before a statement which cannot be preceded by qualifiers. E.g. `const
+	/// return;`.
+	///
+	/// - `0` - The span of the qualifiers.
+	FoundQualifiersBeforeStmt(Span),
+
+	/* QUALIFIERS */
+	/// ERROR - Did not find an opening parenthesis after the `layout` keyword.
+	///
+	/// - `0` - The span where the opening parenthesis is expected.
+	LayoutExpectedLParenAfterKw(Span),
+	/// ERROR - Found a token which is not a valid layout. E.g. `layout(foobar)`.
+	///
+	/// - `0` - The span of the ident.
+	LayoutInvalidIdent(Span),
+	/// ERROR - Did not find an equals-sign after an ident which expects a value. E.g. `layout(location)`.
+	///
+	/// - `0` - The span where the equals-sign is expected.
+	LayoutExpectedEqAfterIdent(Span),
+	/// ERROR - Did not find an expression after an equals-sign. E.g. `layout(location =)`.
+	///
+	/// - `0` - The span where the expression is expected.
+	LayoutExpectedExprAfterEq(Span),
+	/// ERROR - Did not find a closing parenthesis when parsing a layout qualifier.
+	///
+	/// - `0` - The span where the closing parenthesis is expected.
+	LayoutMissingRParen(Span),
+	/// ERROR - Did not find a comma after a layout in a layout list. E.g. `layout(std140 std430)`.
+	///
+	/// - `0` - The span where the comma is expected.
+	LayoutExpectedCommaAfterLayout(Span),
+	/// ERROR - Did not find a layout after a comma in a layout list. E.g. `layout(std140, )`.
+	///
+	/// - `0` - The span where the layout is expected.
+	LayoutExpectedLayoutAfterComma(Span),
+	/// ERROR - Did not find a layout between the opening parenthesis and the comma. E.g. `layout( , std430)`.
+	///
+	/// - `0` - The span where the layout is expected.
+	LayoutExpectedLayoutBetweenParenComma(Span),
 
 	/* VARIABLES */
 	/// ERROR - Did not find a semi-colon or an equals-sign after the identifiers in a variable definition.
@@ -351,11 +390,11 @@ pub enum StmtDiag {
 	///
 	/// - `0` - The span where the parameter is expected.
 	ParamsExpectedParamBetweenParenComma(Span),
-	/// ERROR - Found an expression which could not be parsed as a type. E.g. `void fn(500)`.
+	/// ERROR - Found a token which could not be parsed as a type. E.g. `void fn(500)`.
 	///
 	/// - `0` - The span of the expression.
 	ParamsInvalidTypeExpr(Span),
-	/// ERROR - Found an expression which could not be parsed as an identifier. E.g. `void fn(int 55)`.
+	/// ERROR - Found a token which could not be parsed as an identifier. E.g. `void fn(int 55)`.
 	///
 	/// - `0` - The span of the expression.
 	ParamsInvalidIdentExpr(Span),
@@ -396,6 +435,18 @@ impl StmtDiag {
 		match self {
 			StmtDiag::ExprStmtExpectedSemiAfterExpr(_) => Severity::Error,
 			StmtDiag::ScopeMissingRBrace(_, _) => Severity::Error,
+			StmtDiag::FoundQualifiersBeforeStmt(_) => Severity::Error,
+			/* QUALIFIERS */
+			StmtDiag::LayoutExpectedLParenAfterKw(_) => Severity::Error,
+			StmtDiag::LayoutInvalidIdent(_) => Severity::Error,
+			StmtDiag::LayoutExpectedEqAfterIdent(_) => Severity::Error,
+			StmtDiag::LayoutExpectedExprAfterEq(_) => Severity::Error,
+			StmtDiag::LayoutMissingRParen(_) => Severity::Error,
+			StmtDiag::LayoutExpectedCommaAfterLayout(_) => Severity::Error,
+			StmtDiag::LayoutExpectedLayoutAfterComma(_) => Severity::Error,
+			StmtDiag::LayoutExpectedLayoutBetweenParenComma(_) => {
+				Severity::Error
+			}
 			/* VARIABLES */
 			StmtDiag::VarDefExpectedSemiOrEqAfterIdents(_) => Severity::Error,
 			StmtDiag::VarDeclExpectedSemiAfterValue(_) => Severity::Error,

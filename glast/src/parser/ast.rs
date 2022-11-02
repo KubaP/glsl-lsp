@@ -3,8 +3,23 @@
 use crate::{
 	diag::Syntax,
 	lexer::{NumType, Token},
-	Span, Spanned,
+	Span,
 };
+
+/// This type represents a value which can be omitted in accordance to the GLSL specification.
+///
+/// This type is equivalent to [`Option`]. The reason for the two types is to differentiate when a node's field is
+/// empty because it can legally be omitted, and when a node's field is empty because the parser used an error
+/// recovery strategy due to a syntax error.
+///
+/// This type implements the [`From`] trait for conversions between [`Option`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub enum Omittable<T> {
+	/// Some value of type `T`.
+	Some(T),
+	/// No value.
+	None,
+}
 
 /// An identifier.
 #[derive(Debug, Clone, PartialEq)]
@@ -60,7 +75,7 @@ pub enum NodeTy {
 	/// A discard control-flow statement, i.e. `discard;`.
 	Discard,
 	/// A return control-flow statement, i.e. `return 5;`.
-	Return { value: Option<Expr> },
+	Return { value: Omittable<Expr> },
 }
 
 /// A scope of nodes.
@@ -74,7 +89,7 @@ pub struct Scope {
 #[derive(Debug, Clone, PartialEq)]
 pub struct Param {
 	pub type_: Type,
-	pub ident: Option<Ident>,
+	pub ident: Omittable<Ident>,
 	pub span: Span,
 }
 
@@ -82,6 +97,7 @@ pub struct Param {
 #[derive(Debug, Clone, PartialEq)]
 pub struct Type {
 	pub ty: TypeTy,
+	pub qualifiers: Vec<Qualifier>,
 	pub span: Span,
 }
 
@@ -102,7 +118,8 @@ pub enum TypeTy {
 	ArrayND(Primitive, Vec<ArrSize>),
 }
 
-pub type ArrSize = Option<Expr>;
+/// An array size.
+pub type ArrSize = Omittable<Expr>;
 
 /// A primitive language type.
 ///
@@ -207,6 +224,105 @@ pub enum TexType {
 	CubeArrayShadow,
 }
 
+/// A type qualifier.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Qualifier {
+	pub ty: QualifierTy,
+	pub span: Span,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub enum QualifierTy {
+	Const,
+	In,
+	Out,
+	InOut,
+	Attribute,
+	Uniform,
+	Varying,
+	Buffer,
+	Shared,
+	Centroid,
+	Sample,
+	Patch,
+	Layout(Vec<Layout>),
+	Flat,
+	Smooth,
+	NoPerspective,
+	HighP,
+	MediumP,
+	LowP,
+	Invariant,
+	Precise,
+	Coherent,
+	Volatile,
+	Restrict,
+	Readonly,
+	Writeonly,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct Layout {
+	pub ty: LayoutTy,
+	pub span: Span,
+}
+#[derive(Debug, Clone, PartialEq)]
+pub enum LayoutTy {
+	Shared,
+	Packed,
+	Std140,
+	Std430,
+	RowMajor,
+	ColumnMajor,
+	Binding(Option<Expr>),
+	Offset(Option<Expr>),
+	Align(Option<Expr>),
+	Location(Option<Expr>),
+	Component(Option<Expr>),
+	Index(Option<Expr>),
+	Points,
+	Lines,
+	Isolines,
+	Triangles,
+	Quads,
+	EqualSpacing,
+	FractionalEvenSpacing,
+	FractionalOddSpacing,
+	Clockwise,
+	CounterClockwise,
+	PointMode,
+	LineAdjacency,
+	TriangleAdjacency,
+	Invocations(Option<Expr>),
+	OriginUpperLeft,
+	PixelCenterInteger,
+	EarlyFragmentTests,
+	LocalSizeX(Option<Expr>),
+	LocalSizeY(Option<Expr>),
+	LocalSizeZ(Option<Expr>),
+	XfbBuffer(Option<Expr>),
+	XfbStride(Option<Expr>),
+	XfbOffset(Option<Expr>),
+	Vertices(Option<Expr>),
+	LineStrip,
+	TriangleStrip,
+	MaxVertices(Option<Expr>),
+	Stream(Option<Expr>),
+	DepthAny,
+	DepthGreater,
+	DepthLess,
+	DepthUnchanged,
+}
+
+impl<T> From<Option<T>> for Omittable<T> {
+	fn from(opt: Option<T>) -> Self {
+		match opt {
+			Some(val) => Omittable::Some(val),
+			None => Omittable::None,
+		}
+	}
+}
+
 impl Type {
 	/// Tries to parse an expression into a type.
 	pub fn parse(expr: &Expr) -> Option<Self> {
@@ -214,18 +330,19 @@ impl Type {
 			ExprTy::Ident(i) => Some(Self {
 				span: expr.span,
 				ty: TypeTy::Single(Primitive::parse(i)),
+				qualifiers: vec![],
 			}),
 			ExprTy::Index { item, i } => {
 				let mut current_item = item;
 				let mut stack = Vec::new();
-				stack.push(i.as_deref().cloned());
+				stack.push(i.as_deref().cloned().into());
 
 				// Recursively look into any nested index operators until we hit an identifier.
 				let primitive = loop {
 					match &current_item.ty {
 						ExprTy::Ident(i) => break Primitive::parse(i),
 						ExprTy::Index { item, i } => {
-							stack.push(i.as_deref().cloned());
+							stack.push(i.as_deref().cloned().into());
 							current_item = item;
 						}
 						_ => {
@@ -251,6 +368,7 @@ impl Type {
 					} else {
 						TypeTy::ArrayND(primitive, stack)
 					},
+					qualifiers: vec![],
 				})
 			}
 			_ => None,
@@ -271,14 +389,14 @@ impl Type {
 				ExprTy::Index { item, i } => {
 					let mut current_item = item;
 					let mut stack = Vec::new();
-					stack.push(i.as_deref().cloned());
+					stack.push(i.as_deref().cloned().into());
 
 					// Recursively look into any nested index operators until we hit an identifier.
 					let ident = loop {
 						match &current_item.ty {
 							ExprTy::Ident(i) => break i.clone(),
 							ExprTy::Index { item, i } => {
-								stack.push(i.as_deref().cloned());
+								stack.push(i.as_deref().cloned().into());
 								current_item = item;
 							}
 							_ => {

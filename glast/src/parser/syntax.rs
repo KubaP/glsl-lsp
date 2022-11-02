@@ -10,8 +10,11 @@ pub enum SyntaxToken {
 	Boolean,
 	/// An identifier which has not gone through name resolution.
 	UncheckedIdent,
-	/// An unresolved identifier.
-	Unresolved,
+	/// A valid layout identifier.
+	LayoutIdent,
+	/// An unresolved identifier. This could be an unresolved variable ident, an unresolved type name, or an
+	/// illegal layout ident.
+	UnresolvedIdent,
 	/// A keyword.
 	Keyword,
 	/// A punctuation symbol.

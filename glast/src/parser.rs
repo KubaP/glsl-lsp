@@ -9,8 +9,10 @@ use crate::{
 		ExprDiag, PreprocConditionalDiag, PreprocDefineDiag, Semantic,
 		StmtDiag, Syntax,
 	},
-	lexer::{preprocessor::TokenStream as PreprocStream, Token, TokenStream},
-	Span, Spanned,
+	lexer::{
+		preprocessor::TokenStream as PreprocStream, OpTy, Token, TokenStream,
+	},
+	Either, Span, Spanned,
 };
 use ast::*;
 use expression::{expr_parser, Mode};
@@ -981,7 +983,7 @@ impl Walker {
 				self.push_semantic_diag(Semantic::UndefMacroNameUnresolved(
 					span,
 				));
-				self.push_colour(span, SyntaxToken::Unresolved);
+				self.push_colour(span, SyntaxToken::UnresolvedIdent);
 			}
 		}
 	}
@@ -1044,14 +1046,30 @@ fn seek_next_stmt(walker: &mut Walker) {
 	}
 }
 
+/// Invalidates a set of qualifiers.
+///
+/// This function is used to emit a diagnostic about the use of qualifiers before a statement which doesn't support
+/// qualifiers.
+fn invalidate_qualifiers(walker: &mut Walker, qualifiers: Vec<Qualifier>) {
+	if let Some(q) = qualifiers.last() {
+		walker.push_syntax_diag(Syntax::Stmt(
+			StmtDiag::FoundQualifiersBeforeStmt(Span::new(
+				qualifiers.first().unwrap().span.start,
+				q.span.end,
+			)),
+		));
+	}
+}
+
 /// Parses an individual statement at the current position.
 fn parse_stmt(walker: &mut Walker, nodes: &mut Vec<ast::Node>) {
 	let (token, token_span) = walker.get().expect("This function should be called from a loop that checks this invariant!");
 
-	// TODO: Look for qualifiers.
+	let qualifiers = try_parse_qualifiers(walker);
 
 	match token {
 		Token::LBrace => {
+			invalidate_qualifiers(walker, qualifiers);
 			walker.push_colour(token_span, SyntaxToken::Punctuation);
 			walker.advance();
 			let block = parse_scope(walker, BRACE_SCOPE, token_span);
@@ -1061,6 +1079,7 @@ fn parse_stmt(walker: &mut Walker, nodes: &mut Vec<ast::Node>) {
 			});
 		}
 		Token::Semi => {
+			invalidate_qualifiers(walker, qualifiers);
 			walker.push_colour(token_span, SyntaxToken::Punctuation);
 			walker.advance();
 			nodes.push(Node {
@@ -1069,32 +1088,47 @@ fn parse_stmt(walker: &mut Walker, nodes: &mut Vec<ast::Node>) {
 			});
 		}
 		Token::Directive(stream) => {
+			invalidate_qualifiers(walker, qualifiers);
 			parse_directive(walker, stream, token_span);
 			walker.advance();
 		}
-		Token::Break => parse_break_continue_discard(
-			walker,
-			nodes,
-			token_span,
-			|| NodeTy::Break,
-			|span| Syntax::Stmt(StmtDiag::BreakExpectedSemiAfterKw(span)),
-		),
-		Token::Continue => parse_break_continue_discard(
-			walker,
-			nodes,
-			token_span,
-			|| NodeTy::Continue,
-			|span| Syntax::Stmt(StmtDiag::ContinueExpectedSemiAfterKw(span)),
-		),
-		Token::Discard => parse_break_continue_discard(
-			walker,
-			nodes,
-			token_span,
-			|| NodeTy::Discard,
-			|span| Syntax::Stmt(StmtDiag::DiscardExpectedSemiAfterKw(span)),
-		),
-		Token::Return => parse_return(walker, nodes, token_span),
-		_ => try_parse_definition_declaration_expr(walker, nodes),
+		Token::Break => {
+			invalidate_qualifiers(walker, qualifiers);
+			parse_break_continue_discard(
+				walker,
+				nodes,
+				token_span,
+				|| NodeTy::Break,
+				|span| Syntax::Stmt(StmtDiag::BreakExpectedSemiAfterKw(span)),
+			)
+		}
+		Token::Continue => {
+			invalidate_qualifiers(walker, qualifiers);
+			parse_break_continue_discard(
+				walker,
+				nodes,
+				token_span,
+				|| NodeTy::Continue,
+				|span| {
+					Syntax::Stmt(StmtDiag::ContinueExpectedSemiAfterKw(span))
+				},
+			);
+		}
+		Token::Discard => {
+			invalidate_qualifiers(walker, qualifiers);
+			parse_break_continue_discard(
+				walker,
+				nodes,
+				token_span,
+				|| NodeTy::Discard,
+				|span| Syntax::Stmt(StmtDiag::DiscardExpectedSemiAfterKw(span)),
+			);
+		}
+		Token::Return => {
+			invalidate_qualifiers(walker, qualifiers);
+			parse_return(walker, nodes, token_span);
+		}
+		_ => try_parse_definition_declaration_expr(walker, nodes, qualifiers),
 	}
 }
 
@@ -1148,6 +1182,536 @@ const BRACE_SCOPE: ScopeEnd = |walker, l_brace_span| match walker.peek() {
 	}
 };
 
+/// Tries to parse one or more qualifiers.
+///
+/// This function makes no assumptions as to what the current token is.
+fn try_parse_qualifiers(walker: &mut Walker) -> Vec<Qualifier> {
+	let mut qualifiers = Vec::new();
+	'outer: loop {
+		let (token, token_span) = match walker.peek() {
+			Some(t) => t,
+			None => break,
+		};
+
+		match token {
+			Token::Const => {
+				walker.push_colour(token_span, SyntaxToken::Keyword);
+				qualifiers.push(Qualifier {
+					span: token_span,
+					ty: QualifierTy::Const,
+				});
+			}
+			Token::In => {
+				walker.push_colour(token_span, SyntaxToken::Keyword);
+				qualifiers.push(Qualifier {
+					span: token_span,
+					ty: QualifierTy::In,
+				});
+			}
+			Token::Out => {
+				walker.push_colour(token_span, SyntaxToken::Keyword);
+				qualifiers.push(Qualifier {
+					span: token_span,
+					ty: QualifierTy::Out,
+				});
+			}
+			Token::InOut => {
+				walker.push_colour(token_span, SyntaxToken::Keyword);
+				qualifiers.push(Qualifier {
+					span: token_span,
+					ty: QualifierTy::InOut,
+				});
+			}
+			Token::Attribute => {
+				walker.push_colour(token_span, SyntaxToken::Keyword);
+				qualifiers.push(Qualifier {
+					span: token_span,
+					ty: QualifierTy::Attribute,
+				});
+			}
+			Token::Uniform => {
+				walker.push_colour(token_span, SyntaxToken::Keyword);
+				qualifiers.push(Qualifier {
+					span: token_span,
+					ty: QualifierTy::Uniform,
+				});
+			}
+			Token::Varying => {
+				walker.push_colour(token_span, SyntaxToken::Keyword);
+				qualifiers.push(Qualifier {
+					span: token_span,
+					ty: QualifierTy::Varying,
+				});
+			}
+			Token::Buffer => {
+				walker.push_colour(token_span, SyntaxToken::Keyword);
+				qualifiers.push(Qualifier {
+					span: token_span,
+					ty: QualifierTy::Buffer,
+				});
+			}
+			Token::Shared => {
+				walker.push_colour(token_span, SyntaxToken::Keyword);
+				qualifiers.push(Qualifier {
+					span: token_span,
+					ty: QualifierTy::Shared,
+				});
+			}
+			Token::Centroid => {
+				walker.push_colour(token_span, SyntaxToken::Keyword);
+				qualifiers.push(Qualifier {
+					span: token_span,
+					ty: QualifierTy::Centroid,
+				});
+			}
+			Token::Sample => {
+				walker.push_colour(token_span, SyntaxToken::Keyword);
+				qualifiers.push(Qualifier {
+					span: token_span,
+					ty: QualifierTy::Sample,
+				});
+			}
+			Token::Patch => {
+				walker.push_colour(token_span, SyntaxToken::Keyword);
+				qualifiers.push(Qualifier {
+					span: token_span,
+					ty: QualifierTy::Patch,
+				});
+			}
+			Token::Flat => {
+				walker.push_colour(token_span, SyntaxToken::Keyword);
+				qualifiers.push(Qualifier {
+					span: token_span,
+					ty: QualifierTy::Flat,
+				});
+			}
+			Token::Smooth => {
+				walker.push_colour(token_span, SyntaxToken::Keyword);
+				qualifiers.push(Qualifier {
+					span: token_span,
+					ty: QualifierTy::Smooth,
+				});
+			}
+			Token::NoPerspective => {
+				qualifiers.push(Qualifier {
+					span: token_span,
+					ty: QualifierTy::NoPerspective,
+				});
+			}
+			Token::HighP => {
+				walker.push_colour(token_span, SyntaxToken::Keyword);
+				qualifiers.push(Qualifier {
+					span: token_span,
+					ty: QualifierTy::HighP,
+				});
+			}
+			Token::MediumP => {
+				walker.push_colour(token_span, SyntaxToken::Keyword);
+				qualifiers.push(Qualifier {
+					span: token_span,
+					ty: QualifierTy::MediumP,
+				});
+			}
+			Token::LowP => {
+				walker.push_colour(token_span, SyntaxToken::Keyword);
+				qualifiers.push(Qualifier {
+					span: token_span,
+					ty: QualifierTy::LowP,
+				});
+			}
+			Token::Invariant => {
+				walker.push_colour(token_span, SyntaxToken::Keyword);
+				qualifiers.push(Qualifier {
+					span: token_span,
+					ty: QualifierTy::Invariant,
+				});
+			}
+			Token::Precise => {
+				walker.push_colour(token_span, SyntaxToken::Keyword);
+				qualifiers.push(Qualifier {
+					span: token_span,
+					ty: QualifierTy::Precise,
+				});
+			}
+			Token::Coherent => {
+				walker.push_colour(token_span, SyntaxToken::Keyword);
+				qualifiers.push(Qualifier {
+					span: token_span,
+					ty: QualifierTy::Coherent,
+				});
+			}
+			Token::Volatile => {
+				walker.push_colour(token_span, SyntaxToken::Keyword);
+				qualifiers.push(Qualifier {
+					span: token_span,
+					ty: QualifierTy::Volatile,
+				});
+			}
+			Token::Restrict => {
+				walker.push_colour(token_span, SyntaxToken::Keyword);
+				qualifiers.push(Qualifier {
+					span: token_span,
+					ty: QualifierTy::Restrict,
+				});
+			}
+			Token::Readonly => {
+				walker.push_colour(token_span, SyntaxToken::Keyword);
+				qualifiers.push(Qualifier {
+					span: token_span,
+					ty: QualifierTy::Readonly,
+				});
+			}
+			Token::Writeonly => {
+				walker.push_colour(token_span, SyntaxToken::Keyword);
+				qualifiers.push(Qualifier {
+					span: token_span,
+					ty: QualifierTy::Writeonly,
+				});
+			}
+			Token::Layout => {
+				let kw_span = token_span;
+				walker.push_colour(kw_span, SyntaxToken::Keyword);
+				walker.advance();
+
+				// Consume the `(`.
+				let (token, token_span) = match walker.peek() {
+					Some(t) => t,
+					None => {
+						// We don't have any layout contents yet.
+						walker.push_syntax_diag(Syntax::Stmt(
+							StmtDiag::LayoutExpectedLParenAfterKw(
+								kw_span.next_single_width(),
+							),
+						));
+						qualifiers.push(Qualifier {
+							span: kw_span,
+							ty: QualifierTy::Layout(vec![]),
+						});
+						break;
+					}
+				};
+				let l_paren_span = if *token == Token::LParen {
+					walker.push_colour(token_span, SyntaxToken::Punctuation);
+					walker.advance();
+					token_span
+				} else {
+					// We don't have any layout contents yet.
+					walker.push_syntax_diag(Syntax::Stmt(
+						StmtDiag::LayoutExpectedLParenAfterKw(
+							kw_span.next_single_width(),
+						),
+					));
+					qualifiers.push(Qualifier {
+						span: kw_span,
+						ty: QualifierTy::Layout(vec![]),
+					});
+					break;
+				};
+
+				// Look for any layouts until we hit a closing `)` parenthesis.
+				#[derive(PartialEq)]
+				enum Prev {
+					None,
+					Layout,
+					Comma,
+					Invalid,
+				}
+				let mut prev = Prev::None;
+				let mut prev_span = l_paren_span;
+				let mut layouts = Vec::new();
+				loop {
+					let (token, token_span) = match walker.get() {
+						Some(t) => t,
+						None => {
+							// We have not yet finished parsing the layout list, but we treat this as a valid
+							// layout qualifier.
+							let span = Span::new(
+								kw_span.start,
+								walker.get_last_span().end,
+							);
+							walker.push_syntax_diag(Syntax::Stmt(
+								StmtDiag::LayoutMissingRParen(
+									span.next_single_width(),
+								),
+							));
+							qualifiers.push(Qualifier {
+								span,
+								ty: QualifierTy::Layout(layouts),
+							});
+							break 'outer;
+						}
+					};
+
+					match token {
+						Token::Comma => {
+							walker.push_colour(
+								token_span,
+								SyntaxToken::Punctuation,
+							);
+							walker.advance();
+							if prev == Prev::Comma {
+								walker.push_syntax_diag(Syntax::Stmt(
+									StmtDiag::LayoutExpectedLayoutAfterComma(
+										Span::new(
+											prev_span.start,
+											token_span.end,
+										),
+									),
+								));
+							} else if prev == Prev::None {
+								walker.push_syntax_diag(Syntax::Stmt(StmtDiag::LayoutExpectedLayoutBetweenParenComma(
+									Span::new(prev_span.start, token_span.end)
+								)));
+							}
+							prev = Prev::Comma;
+							prev_span = token_span;
+							continue;
+						}
+						Token::RParen => {
+							walker.push_colour(
+								token_span,
+								SyntaxToken::Punctuation,
+							);
+							walker.advance();
+							break;
+						}
+						_ => {}
+					}
+
+					if prev == Prev::Layout {
+						walker.push_syntax_diag(Syntax::Stmt(
+							StmtDiag::LayoutExpectedCommaAfterLayout(
+								prev_span.next_single_width(),
+							),
+						));
+					}
+					let layout_span_start = token_span.start;
+
+					// Consume the layout identifier. This creates a constructor either for a layout which only
+					// consists of an identifier, or for a layout which expects an expression.
+					let constructor: Either<
+						LayoutTy,
+						fn(Option<Expr>) -> LayoutTy,
+					> = if let Token::Ident(str) = token {
+						match str.as_ref() {
+							"packed" => Either::Left(LayoutTy::Packed),
+							"std140" => Either::Left(LayoutTy::Std140),
+							"std430" => Either::Left(LayoutTy::Std430),
+							"row_major" => Either::Left(LayoutTy::RowMajor),
+							"column_major" => {
+								Either::Left(LayoutTy::ColumnMajor)
+							}
+							"binding" => Either::Right(LayoutTy::Binding),
+							"offset" => Either::Right(LayoutTy::Offset),
+							"align" => Either::Right(LayoutTy::Align),
+							"location" => Either::Right(LayoutTy::Location),
+							"component" => Either::Right(LayoutTy::Component),
+							"index" => Either::Right(LayoutTy::Index),
+							"points" => Either::Left(LayoutTy::Points),
+							"lines" => Either::Left(LayoutTy::Lines),
+							"isolines" => Either::Left(LayoutTy::Isolines),
+							"triangles" => Either::Left(LayoutTy::Triangles),
+							"quads" => Either::Left(LayoutTy::Quads),
+							"equal_spacing" => {
+								Either::Left(LayoutTy::EqualSpacing)
+							}
+							"fractional_even_spacing" => {
+								Either::Left(LayoutTy::FractionalEvenSpacing)
+							}
+							"fractional_odd_spacing" => {
+								Either::Left(LayoutTy::FractionalOddSpacing)
+							}
+							"cw" => Either::Left(LayoutTy::Clockwise),
+							"ccw" => Either::Left(LayoutTy::CounterClockwise),
+							"point_mode" => Either::Left(LayoutTy::PointMode),
+							"line_adjacency" => {
+								Either::Left(LayoutTy::LineAdjacency)
+							}
+							"triangle_adjacency" => {
+								Either::Left(LayoutTy::TriangleAdjacency)
+							}
+							"invocations" => {
+								Either::Right(LayoutTy::Invocations)
+							}
+							"origin_upper_left" => {
+								Either::Left(LayoutTy::OriginUpperLeft)
+							}
+							"pixel_center_integer" => {
+								Either::Left(LayoutTy::PixelCenterInteger)
+							}
+							"early_fragment_tests" => {
+								Either::Left(LayoutTy::EarlyFragmentTests)
+							}
+							"local_size_x" => {
+								Either::Right(LayoutTy::LocalSizeX)
+							}
+							"local_size_y" => {
+								Either::Right(LayoutTy::LocalSizeY)
+							}
+							"local_size_z" => {
+								Either::Right(LayoutTy::LocalSizeZ)
+							}
+							"xfb_buffer" => Either::Right(LayoutTy::XfbBuffer),
+							"xfb_stride" => Either::Right(LayoutTy::XfbStride),
+							"xfb_offset" => Either::Right(LayoutTy::XfbOffset),
+							"vertices" => Either::Right(LayoutTy::Vertices),
+							"line_strip" => Either::Left(LayoutTy::LineStrip),
+							"triangle_strip" => {
+								Either::Left(LayoutTy::TriangleStrip)
+							}
+							"max_vertices" => {
+								Either::Right(LayoutTy::MaxVertices)
+							}
+							"stream" => Either::Right(LayoutTy::Stream),
+							"depth_any" => Either::Left(LayoutTy::DepthAny),
+							"depth_greater" => {
+								Either::Left(LayoutTy::DepthGreater)
+							}
+							"depth_less" => Either::Left(LayoutTy::DepthLess),
+							"depth_unchanged" => {
+								Either::Left(LayoutTy::DepthUnchanged)
+							}
+							_ => {
+								// We have an identifier that is not a valid layout. We ignore it and continue
+								// for the next layout.
+								walker.push_colour(
+									token_span,
+									SyntaxToken::UnresolvedIdent,
+								);
+								walker.push_syntax_diag(Syntax::Stmt(
+									StmtDiag::LayoutInvalidIdent(token_span),
+								));
+								walker.advance();
+								prev = Prev::Invalid;
+								prev_span = token_span;
+								continue;
+							}
+						}
+					} else if let Token::Shared = token {
+						Either::Left(LayoutTy::Shared)
+					} else {
+						// We have a token that is not a valid layout. We ignore it and continue for the next
+						// layout.
+						walker.push_colour(token_span, SyntaxToken::Invalid);
+						walker.push_syntax_diag(Syntax::Stmt(
+							StmtDiag::LayoutInvalidIdent(token_span),
+						));
+						walker.advance();
+						prev = Prev::Invalid;
+						prev_span = token_span;
+						continue;
+					};
+
+					let (constructor, ident_span) = match constructor {
+						Either::Left(ty) => {
+							walker.push_colour(
+								token_span,
+								SyntaxToken::LayoutIdent,
+							);
+							walker.advance();
+							layouts.push(Layout {
+								span: token_span,
+								ty,
+							});
+							prev = Prev::Layout;
+							prev_span = token_span;
+							continue;
+						}
+						Either::Right(constructor) => {
+							walker.push_colour(
+								token_span,
+								SyntaxToken::LayoutIdent,
+							);
+							walker.advance();
+							(constructor, token_span)
+						}
+					};
+
+					// We have a layout identifier which expects an expression.
+
+					// Consume the `=`.
+					let (token, token_span) = match walker.peek() {
+						Some(t) => t,
+						None => {
+							// We are missing the equals sign and we don't know what comes after. We ignore this
+							// layout.
+							let span = Span::new(
+								kw_span.start,
+								walker.get_last_span().end,
+							);
+							walker.push_syntax_diag(Syntax::Stmt(
+								StmtDiag::LayoutExpectedEqAfterIdent(
+									span.next_single_width(),
+								),
+							));
+							qualifiers.push(Qualifier {
+								span,
+								ty: QualifierTy::Layout(layouts),
+							});
+							break 'outer;
+						}
+					};
+					let eq_span = if let Token::Op(OpTy::Eq) = token {
+						walker.push_colour(token_span, SyntaxToken::Operator);
+						walker.advance();
+						token_span
+					} else {
+						// We are missing the equals sign and we don't know what comes after. We ignore this
+						// layout.
+						walker.push_syntax_diag(Syntax::Stmt(
+							StmtDiag::LayoutExpectedEqAfterIdent(
+								ident_span.next_single_width(),
+							),
+						));
+						prev = Prev::Layout;
+						prev_span = ident_span;
+						continue;
+					};
+
+					// Consume the expression.
+					let value_expr = match expr_parser(
+						walker,
+						Mode::Default,
+						[Token::RParen],
+					) {
+						(Some(e), mut diags, mut colours) => {
+							walker.append_colours(&mut colours);
+							walker.append_syntax_diags(&mut diags);
+							e
+						}
+						(None, _, _) => {
+							// We are missing the expression.
+							walker.push_syntax_diag(Syntax::Stmt(
+								StmtDiag::LayoutExpectedExprAfterEq(
+									eq_span.next_single_width(),
+								),
+							));
+							layouts.push(Layout {
+								span: Span::new(layout_span_start, eq_span.end),
+								ty: constructor(None),
+							});
+							prev = Prev::Layout;
+							prev_span = eq_span;
+							continue;
+						}
+					};
+
+					layouts.push(Layout {
+						span: Span::new(layout_span_start, value_expr.span.end),
+						ty: constructor(Some(value_expr)),
+					});
+				}
+
+				continue;
+			}
+			_ => break,
+		}
+		walker.advance();
+	}
+
+	qualifiers
+}
+
 /// Tries to parse a variable/function definition/declaration or an expression statement.
 ///
 /// This function attempts to look for a statement at the current position. If this fails, error recovery till the
@@ -1155,6 +1719,7 @@ const BRACE_SCOPE: ScopeEnd = |walker, l_brace_span| match walker.peek() {
 fn try_parse_definition_declaration_expr(
 	walker: &mut Walker,
 	nodes: &mut Vec<Node>,
+	qualifiers: Vec<Qualifier>,
 ) {
 	// We attempt to parse an expression at the current position.
 	let (start, mut start_diags, mut start_colours) =
@@ -1164,13 +1729,14 @@ fn try_parse_definition_declaration_expr(
 				// The current token cannot begin any sort of expression. Since this function gets called if all
 				// other statement branches have failed to match, it means that whatever we have cannot be a valid
 				// statement at all.
+				invalidate_qualifiers(walker, qualifiers);
 				seek_next_stmt(walker);
 				return;
 			}
 		};
 
 	// We test if the expression can be converted into a type.
-	if let Some(type_) = Type::parse(&start) {
+	if let Some(mut type_) = Type::parse(&start) {
 		// Since we ran the expression parser in the Default mode, what we have so far must be something like
 		// `foobar`, `int`, `vec2[3]`, `MyStruct` etc. This can be the type part of a definition/declaration, but
 		// it could be just an expression statement depending on what comes next.
@@ -1180,6 +1746,7 @@ fn try_parse_definition_declaration_expr(
 			None => {
 				// We lack any identifiers necessary for a definition/declaration, so this must be an expression
 				// statement.
+				invalidate_qualifiers(walker, qualifiers);
 				walker.append_colours(&mut start_colours);
 				walker.append_syntax_diags(&mut start_diags);
 				walker.push_syntax_diag(Syntax::Stmt(
@@ -1202,6 +1769,7 @@ fn try_parse_definition_declaration_expr(
 				Some(next) => match next.0 {
 					Token::LParen => {
 						// We have a function definition/declaration.
+						type_.qualifiers = qualifiers;
 						let l_paren_span = next.1;
 						let ident = Ident {
 							name: i.clone(),
@@ -1229,6 +1797,7 @@ fn try_parse_definition_declaration_expr(
 			},
 			Token::Semi => {
 				// We have an expression statement.
+				invalidate_qualifiers(walker, qualifiers);
 				let semi_span = token_span;
 				walker.append_colours(&mut start_colours);
 				walker.append_syntax_diags(&mut start_diags);
@@ -1253,6 +1822,7 @@ fn try_parse_definition_declaration_expr(
 				(None, _, _) => {
 					// We have an expression followed by neither another expression nor a semi-colon. We treat this
 					// as an expression statement since that's the closest possible match.
+					invalidate_qualifiers(walker, qualifiers);
 					walker.append_colours(&mut start_colours);
 					walker.append_syntax_diags(&mut start_diags);
 					walker.push_syntax_diag(Syntax::Stmt(
@@ -1276,6 +1846,7 @@ fn try_parse_definition_declaration_expr(
 			// We have a second expression after the first expression, but the second expression can't be converted
 			// to one or more identifiers for a variable definition/declaration. We treat the first expression as
 			// an expression statement, and the second expression as invalid.
+			invalidate_qualifiers(walker, qualifiers);
 			walker.append_colours(&mut start_colours);
 			walker.append_syntax_diags(&mut start_diags);
 			walker.push_syntax_diag(Syntax::Stmt(
@@ -1304,6 +1875,7 @@ fn try_parse_definition_declaration_expr(
 				true
 			}
 		});
+		type_.qualifiers = qualifiers;
 		walker.append_colours(&mut start_colours);
 		walker.append_syntax_diags(&mut start_diags);
 		walker.append_colours(&mut ident_colours);
@@ -1311,7 +1883,7 @@ fn try_parse_definition_declaration_expr(
 
 		fn var_def(
 			type_: Type,
-			idents: Vec<(Ident, Vec<Option<Expr>>)>,
+			idents: Vec<(Ident, Vec<ArrSize>)>,
 			end_pos: usize,
 		) -> Node {
 			let span = Span::new(type_.span.start, end_pos);
@@ -1333,7 +1905,7 @@ fn try_parse_definition_declaration_expr(
 
 		fn var_decl(
 			type_: Type,
-			idents: Vec<(Ident, Vec<Option<Expr>>)>,
+			idents: Vec<(Ident, Vec<ArrSize>)>,
 			value: Option<Expr>,
 			end_pos: usize,
 		) -> Node {
@@ -1695,7 +2267,7 @@ fn parse_function(
 				params.push(Param {
 					span: param_span,
 					type_,
-					ident: None,
+					ident: Omittable::None,
 				});
 				prev = Prev::Param;
 				prev_span = param_span;
@@ -1716,7 +2288,7 @@ fn parse_function(
 			params.push(Param {
 				span: Span::new(param_span_start, type_.span.end),
 				type_,
-				ident: None,
+				ident: Omittable::None,
 			});
 			walker.push_syntax_diag(Syntax::Stmt(
 				StmtDiag::ParamsInvalidIdentExpr(ident_expr.span),
@@ -1735,7 +2307,7 @@ fn parse_function(
 		params.push(Param {
 			span: param_span,
 			type_,
-			ident: Some(ident),
+			ident: Omittable::Some(ident),
 		});
 		prev = Prev::Param;
 		prev_span = param_span;
@@ -1866,9 +2438,9 @@ fn parse_return(walker: &mut Walker, nodes: &mut Vec<Node>, kw_span: Span) {
 		(Some(expr), mut diags, mut colours) => {
 			walker.append_syntax_diags(&mut diags);
 			walker.append_colours(&mut colours);
-			Some(expr)
+			Omittable::Some(expr)
 		}
-		(None, _, _) => None,
+		(None, _, _) => Omittable::None,
 	};
 
 	// Consume the `;` to end the statement.
@@ -1885,7 +2457,7 @@ fn parse_return(walker: &mut Walker, nodes: &mut Vec<Node>, kw_span: Span) {
 		None => None,
 	};
 	if semi_span.is_none() {
-		if let Some(ref return_expr) = return_expr {
+		if let Omittable::Some(ref return_expr) = return_expr {
 			walker.push_syntax_diag(Syntax::Stmt(
 				StmtDiag::ReturnExpectedSemiAfterExpr(
 					return_expr.span.next_single_width(),
@@ -2013,7 +2585,7 @@ fn parse_directive(walker: &mut Walker, stream: PreprocStream, dir_span: Span) {
 /// because the idents themselves can contain type information, e.g. `int[3] i[9]`.
 fn combine_type_with_idents(
 	type_: Type,
-	ident_info: Vec<(Ident, Vec<Option<Expr>>)>,
+	ident_info: Vec<(Ident, Vec<ArrSize>)>,
 ) -> Vec<(Type, Ident)> {
 	let mut vars = Vec::new();
 	for (ident, sizes) in ident_info {
@@ -2021,7 +2593,11 @@ fn combine_type_with_idents(
 			vars.push((type_.clone(), ident));
 		} else {
 			let mut sizes = sizes.clone();
-			let Type { ty, span } = type_.clone();
+			let Type {
+				ty,
+				qualifiers,
+				span,
+			} = type_.clone();
 			let primitive = match ty {
 				TypeTy::Single(p) => p,
 				TypeTy::Array(p, i) => {
@@ -2043,11 +2619,13 @@ fn combine_type_with_idents(
 				Type {
 					span,
 					ty: TypeTy::Single(primitive),
+					qualifiers,
 				}
 			} else if sizes.len() == 1 {
 				Type {
 					span,
 					ty: TypeTy::Array(primitive, sizes.remove(0)),
+					qualifiers,
 				}
 			} else if sizes.len() == 2 {
 				Type {
@@ -2057,11 +2635,13 @@ fn combine_type_with_idents(
 						sizes.remove(0),
 						sizes.remove(0),
 					),
+					qualifiers,
 				}
 			} else {
 				Type {
 					span,
 					ty: TypeTy::ArrayND(primitive, sizes),
+					qualifiers,
 				}
 			};
 

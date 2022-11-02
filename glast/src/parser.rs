@@ -1093,6 +1093,8 @@ fn parse_stmt(walker: &mut Walker, nodes: &mut Vec<ast::Node>) {
 			parse_directive(walker, stream, token_span);
 			walker.advance();
 		}
+		Token::While => parse_while_loop(walker, nodes, token_span),
+		Token::Do => parse_do_while_loop(walker, nodes, token_span),
 		Token::Break => {
 			invalidate_qualifiers(walker, qualifiers);
 			parse_break_continue_discard(
@@ -2556,6 +2558,362 @@ fn parse_struct(
 			ident,
 			body,
 			instance,
+		},
+	});
+}
+
+/// Parses a while loop statement.
+///
+/// This function assumes that the keyword is not yet consumed.
+fn parse_while_loop(walker: &mut Walker, nodes: &mut Vec<Node>, kw_span: Span) {
+	walker.push_colour(kw_span, SyntaxToken::Keyword);
+	walker.advance();
+
+	// Consume the `(`.
+	let l_paren_span = match walker.peek() {
+		Some((token, span)) => {
+			if *token == Token::LParen {
+				walker.push_colour(span, SyntaxToken::Punctuation);
+				walker.advance();
+				Some(span)
+			} else {
+				walker.push_syntax_diag(Syntax::Stmt(
+					StmtDiag::WhileExpectedLParenAfterKw(
+						kw_span.next_single_width(),
+					),
+				));
+				None
+			}
+		}
+		None => {
+			walker.push_syntax_diag(Syntax::Stmt(
+				StmtDiag::WhileExpectedLParenAfterKw(
+					kw_span.next_single_width(),
+				),
+			));
+			return;
+		}
+	};
+
+	// Consume the condition expression.
+	let cond_expr = match expr_parser(
+		walker,
+		Mode::Default,
+		[Token::RParen, Token::Semi],
+	) {
+		(Some(e), mut diags, mut colours) => {
+			walker.append_colours(&mut colours);
+			walker.append_syntax_diags(&mut diags);
+			Some(e)
+		}
+		(None, _, _) => {
+			if let Some(l_paren_span) = l_paren_span {
+				walker.push_syntax_diag(Syntax::Stmt(
+					StmtDiag::WhileExpectedExprAfterLParen(
+						l_paren_span.next_single_width(),
+					),
+				));
+			}
+			None
+		}
+	};
+
+	// Consume the `)`.
+	let r_paren_span = match walker.peek() {
+		Some((token, span)) => {
+			if *token == Token::RParen {
+				walker.push_colour(span, SyntaxToken::Punctuation);
+				walker.advance();
+				Some(span)
+			} else {
+				if let Some(ref cond_expr) = cond_expr {
+					walker.push_syntax_diag(Syntax::Stmt(
+						StmtDiag::WhileExpectedRParenAfterExpr(
+							cond_expr.span.next_single_width(),
+						),
+					));
+				}
+				None
+			}
+		}
+		None => {
+			if let Some(ref cond_expr) = cond_expr {
+				walker.push_syntax_diag(Syntax::Stmt(
+					StmtDiag::WhileExpectedRParenAfterExpr(
+						cond_expr.span.next_single_width(),
+					),
+				));
+			}
+			return;
+		}
+	};
+
+	// Consume the `{`.
+	let l_brace_span = match walker.peek() {
+		Some((token, span)) => {
+			if *token == Token::LBrace {
+				walker.push_colour(span, SyntaxToken::Punctuation);
+				walker.advance();
+				span
+			} else {
+				if let Some(r_paren_span) = r_paren_span {
+					walker.push_syntax_diag(Syntax::Stmt(
+						StmtDiag::WhileExpectedLBraceAfterCond(
+							r_paren_span.next_single_width(),
+						),
+					));
+				}
+				return;
+			}
+		}
+		None => {
+			if let Some(r_paren_span) = r_paren_span {
+				walker.push_syntax_diag(Syntax::Stmt(
+					StmtDiag::WhileExpectedLBraceAfterCond(
+						r_paren_span.next_single_width(),
+					),
+				));
+			}
+			return;
+		}
+	};
+
+	// Parse the body.
+	let body = parse_scope(walker, BRACE_SCOPE, l_brace_span);
+	nodes.push(Node {
+		span: Span::new(kw_span.start, body.span.end),
+		ty: NodeTy::While {
+			cond: cond_expr,
+			body,
+		},
+	});
+}
+
+/// Parses a do-while loop statement.
+///
+/// This function assumes that the keyword is not yet consumed.
+fn parse_do_while_loop(
+	walker: &mut Walker,
+	nodes: &mut Vec<Node>,
+	kw_span: Span,
+) {
+	walker.push_colour(kw_span, SyntaxToken::Keyword);
+	walker.advance();
+
+	// Consume the `{`.
+	let l_brace_span = match walker.peek() {
+		Some((token, span)) => {
+			if *token == Token::LBrace {
+				walker.push_colour(span, SyntaxToken::Punctuation);
+				walker.advance();
+				span
+			} else {
+				walker.push_syntax_diag(Syntax::Stmt(
+					StmtDiag::DoWhileExpectedLBraceAfterKw(
+						kw_span.next_single_width(),
+					),
+				));
+				return;
+			}
+		}
+		None => {
+			walker.push_syntax_diag(Syntax::Stmt(
+				StmtDiag::DoWhileExpectedLBraceAfterKw(
+					kw_span.next_single_width(),
+				),
+			));
+			return;
+		}
+	};
+
+	// Parse the body.
+	let body = parse_scope(walker, BRACE_SCOPE, l_brace_span);
+
+	// Consume the `while` keyword.
+	let while_kw_span = match walker.peek() {
+		Some((token, span)) => {
+			if *token == Token::While {
+				walker.push_colour(span, SyntaxToken::Keyword);
+				walker.advance();
+				span
+			} else {
+				walker.push_syntax_diag(Syntax::Stmt(
+					StmtDiag::DoWhileExpectedWhileAfterBody(
+						body.span.next_single_width(),
+					),
+				));
+				nodes.push(Node {
+					span: Span::new(kw_span.start, body.span.end),
+					ty: NodeTy::DoWhile { body, cond: None },
+				});
+				return;
+			}
+		}
+		None => {
+			walker.push_syntax_diag(Syntax::Stmt(
+				StmtDiag::DoWhileExpectedWhileAfterBody(
+					body.span.next_single_width(),
+				),
+			));
+			nodes.push(Node {
+				span: Span::new(kw_span.start, body.span.end),
+				ty: NodeTy::DoWhile { body, cond: None },
+			});
+			return;
+		}
+	};
+
+	// Consume the `(`.
+	let l_paren_span = match walker.peek() {
+		Some((token, span)) => {
+			if *token == Token::LParen {
+				walker.push_colour(span, SyntaxToken::Punctuation);
+				walker.advance();
+				Some(span)
+			} else {
+				walker.push_syntax_diag(Syntax::Stmt(
+					StmtDiag::WhileExpectedLParenAfterKw(
+						while_kw_span.next_single_width(),
+					),
+				));
+				None
+			}
+		}
+		None => {
+			walker.push_syntax_diag(Syntax::Stmt(
+				StmtDiag::WhileExpectedLParenAfterKw(
+					while_kw_span.next_single_width(),
+				),
+			));
+			nodes.push(Node {
+				span: Span::new(kw_span.start, while_kw_span.end),
+				ty: NodeTy::DoWhile { body, cond: None },
+			});
+			return;
+		}
+	};
+
+	// Consume the condition expression.
+	let cond_expr = match expr_parser(
+		walker,
+		Mode::Default,
+		[Token::RParen, Token::Semi],
+	) {
+		(Some(e), mut diags, mut colours) => {
+			walker.append_colours(&mut colours);
+			walker.append_syntax_diags(&mut diags);
+			Some(e)
+		}
+		(None, _, _) => {
+			if let Some(l_paren_span) = l_paren_span {
+				walker.push_syntax_diag(Syntax::Stmt(
+					StmtDiag::WhileExpectedExprAfterLParen(
+						l_paren_span.next_single_width(),
+					),
+				));
+			}
+			None
+		}
+	};
+
+	// Consume the `)`.
+	let r_paren_span = match walker.peek() {
+		Some((token, span)) => {
+			if *token == Token::RParen {
+				walker.push_colour(span, SyntaxToken::Punctuation);
+				walker.advance();
+				Some(span)
+			} else {
+				if let Some(ref cond_expr) = cond_expr {
+					walker.push_syntax_diag(Syntax::Stmt(
+						StmtDiag::WhileExpectedRParenAfterExpr(
+							cond_expr.span.next_single_width(),
+						),
+					));
+				}
+				None
+			}
+		}
+		None => {
+			if let Some(ref cond_expr) = cond_expr {
+				walker.push_syntax_diag(Syntax::Stmt(
+					StmtDiag::WhileExpectedRParenAfterExpr(
+						cond_expr.span.next_single_width(),
+					),
+				));
+			}
+			nodes.push(Node {
+				span: Span::new(kw_span.start, while_kw_span.end),
+				ty: NodeTy::DoWhile {
+					body,
+					cond: cond_expr,
+				},
+			});
+			return;
+		}
+	};
+
+	// Consume the `;` to end the statement.
+	let semi_span = match walker.peek() {
+		Some((token, span)) => {
+			if *token == Token::Semi {
+				walker.push_colour(span, SyntaxToken::Punctuation);
+				walker.advance();
+				span
+			} else {
+				let span = if let Some(r_paren_span) = r_paren_span {
+					r_paren_span
+				} else if let Some(ref expr) = cond_expr {
+					expr.span
+				} else if let Some(l_paren_span) = l_paren_span {
+					l_paren_span
+				} else {
+					while_kw_span
+				};
+				walker.push_syntax_diag(Syntax::Stmt(
+					StmtDiag::DoWhileExpectedSemiAfterRParen(
+						span.next_single_width(),
+					),
+				));
+				nodes.push(Node {
+					span,
+					ty: NodeTy::DoWhile {
+						body,
+						cond: cond_expr,
+					},
+				});
+				return;
+			}
+		}
+		None => {
+			let span = if let Some(r_paren_span) = r_paren_span {
+				r_paren_span
+			} else if let Some(ref expr) = cond_expr {
+				expr.span
+			} else if let Some(l_paren_span) = l_paren_span {
+				l_paren_span
+			} else {
+				while_kw_span
+			};
+			walker.push_syntax_diag(Syntax::Stmt(
+				StmtDiag::WhileExpectedLParenAfterKw(span.next_single_width()),
+			));
+			nodes.push(Node {
+				span,
+				ty: NodeTy::DoWhile {
+					body,
+					cond: cond_expr,
+				},
+			});
+			return;
+		}
+	};
+
+	nodes.push(Node {
+		span: Span::new(kw_span.start, semi_span.end),
+		ty: NodeTy::DoWhile {
+			cond: cond_expr,
+			body,
 		},
 	});
 }

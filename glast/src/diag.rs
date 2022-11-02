@@ -392,6 +392,36 @@ pub enum StmtDiag {
 	/// - `0` - The span of the definition.
 	StructDefIsInvalid(Span),
 
+	/* DO/WHILE LOOPS */
+	/// ERROR - Did not find an opening parenthesis after the `while` keyword.
+	///
+	/// - `0` - The span where the opening parenthesis is expected.
+	WhileExpectedLParenAfterKw(Span),
+	/// ERROR - Did not find an expression after the opening parenthesis.
+	///
+	/// - `0` - The span where the expression is expected.
+	WhileExpectedExprAfterLParen(Span),
+	/// ERROR - Did not find a closing parenthesis after the expression.
+	///
+	/// - `0` - The span where the closing parenthesis is expected.
+	WhileExpectedRParenAfterExpr(Span),
+	/// ERROR - Did not find an opening brace after the while-loop condition.
+	///
+	/// - `0` - The span where the opening brace is expected.
+	WhileExpectedLBraceAfterCond(Span),
+	/// ERROR - Did not find an opening brace after the `do` keyword.
+	///
+	/// - `0` - The span where the opening brace is expected.
+	DoWhileExpectedLBraceAfterKw(Span),
+	/// ERROR - Did not find the `while` keyword after the body of a do-while loop.
+	///
+	/// - `0` - The span where the keyword is expected.
+	DoWhileExpectedWhileAfterBody(Span),
+	/// ERROR - Did not find a semi-colon after the do-while-loop condition.
+	///
+	/// - `0` - The span where the semi-colon is expected.
+	DoWhileExpectedSemiAfterRParen(Span),
+
 	/* SINGLE-KEYWORD CONTROL FLOW */
 	/// ERROR - Did not find a semi-colon after the `break` keyword.
 	///

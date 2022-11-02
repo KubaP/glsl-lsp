@@ -80,13 +80,17 @@ pub enum NodeTy {
 		body: Scope,
 		instance: Omittable<Ident>,
 	},
+	/// A while loop, e.g `while (true) {/*...*/}`.
+	While { cond: Option<Expr>, body: Scope },
+	/// A do-while loop, e.g. `do {/*...*/} while (true);`.
+	DoWhile { body: Scope, cond: Option<Expr> },
 	/// A break control-flow statement, i.e. `break;`.
 	Break,
 	/// A continue control-flow statement, i.e. `continue;`.
 	Continue,
 	/// A discard control-flow statement, i.e. `discard;`.
 	Discard,
-	/// A return control-flow statement, i.e. `return 5;`.
+	/// A return control-flow statement, e.g. `return 5;`.
 	Return { value: Omittable<Expr> },
 }
 

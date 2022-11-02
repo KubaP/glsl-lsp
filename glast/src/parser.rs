@@ -5,7 +5,10 @@ mod syntax;
 pub use syntax::*;
 
 use crate::{
-	diag::{ExprDiag, PreprocDefineDiag, Semantic, StmtDiag, Syntax},
+	diag::{
+		ExprDiag, PreprocConditionalDiag, PreprocDefineDiag, Semantic,
+		StmtDiag, Syntax,
+	},
 	lexer::{preprocessor::TokenStream as PreprocStream, Token, TokenStream},
 	Span, Spanned,
 };
@@ -126,6 +129,7 @@ pub fn parse_from_str(source: &str) -> TokenTree {
 				contents: vec![Content::Tokens(token_stream)],
 			}],
 			order_by_appearance: vec![],
+			syntax_diags: vec![],
 			contains_conditional_compilation: false,
 		};
 	}
@@ -217,6 +221,7 @@ pub fn parse_from_str(source: &str) -> TokenTree {
 	// ID is tracked so that in the `parse_by_order_of_appearance()` method we can validate whether the order is
 	// valid.
 	let mut order_by_appearance = vec![(0, 0)];
+	let mut syntax_diags = Vec::new();
 
 	// We consume all of the tokens from the beginning.
 	loop {
@@ -259,10 +264,16 @@ pub fn parse_from_str(source: &str) -> TokenTree {
 								.push((new_id, *stack.last().unwrap()));
 							stack.push(new_id);
 						} else {
-							// TODO: Emit error.
+							syntax_diags.push(Syntax::PreprocConditional(
+								PreprocConditionalDiag::UnmatchedElseIf(
+									token_span,
+								),
+							));
 						}
 					} else {
-						// TODO: Emit error.
+						syntax_diags.push(Syntax::PreprocConditional(
+							PreprocConditionalDiag::UnmatchedElseIf(token_span),
+						));
 					}
 				}
 				PreprocStream::Else { .. } => {
@@ -288,17 +299,25 @@ pub fn parse_from_str(source: &str) -> TokenTree {
 								.push((new_id, *stack.last().unwrap()));
 							stack.push(new_id);
 						} else {
-							// TODO: Emit error.
+							syntax_diags.push(Syntax::PreprocConditional(
+								PreprocConditionalDiag::UnmatchedElse(
+									token_span,
+								),
+							));
 						}
 					} else {
-						// TODO: Emit error.
+						syntax_diags.push(Syntax::PreprocConditional(
+							PreprocConditionalDiag::UnmatchedElse(token_span),
+						));
 					}
 				}
 				PreprocStream::EndIf { .. } => {
 					if stack.len() > 1 {
 						stack.pop();
 					} else {
-						// TODO: Emit error.
+						syntax_diags.push(Syntax::PreprocConditional(
+							PreprocConditionalDiag::UnmatchedEndIf(token_span),
+						));
 					}
 				}
 				_ => push_token(
@@ -318,6 +337,7 @@ pub fn parse_from_str(source: &str) -> TokenTree {
 	TokenTree {
 		arena,
 		order_by_appearance,
+		syntax_diags,
 		contains_conditional_compilation: true,
 	}
 }
@@ -437,6 +457,13 @@ pub struct TokenTree {
 	/// # Invariants
 	/// If `contains_conditional_compilation` is `false`, this is empty.
 	order_by_appearance: Vec<(NodeId, NodeId)>,
+
+	/// Syntax diagnostics related to conditional compilation directives.
+	///
+	/// # Invariants
+	/// If `contains_conditional_compilation` is `false`, this is empty.
+	#[allow(unused)]
+	syntax_diags: Vec<Syntax>,
 
 	/// Whether there are any conditional compilation brances.
 	contains_conditional_compilation: bool,
@@ -752,6 +779,7 @@ impl Walker {
 		let mut macros = self.macros.clone();
 		let mut active_macros = self.active_macros.clone();
 		let mut macro_call_site = self.macro_call_site.clone();
+		let mut syntax_diags = Vec::new();
 		let mut semantic_diags = Vec::new();
 		let mut syntax_tokens = Vec::new();
 		Self::move_cursor(
@@ -760,6 +788,7 @@ impl Walker {
 			&mut macros,
 			&mut active_macros,
 			&mut macro_call_site,
+			&mut syntax_diags,
 			&mut semantic_diags,
 			&mut syntax_tokens,
 		);
@@ -794,6 +823,7 @@ impl Walker {
 			&mut self.macros,
 			&mut self.active_macros,
 			&mut self.macro_call_site,
+			&mut self.syntax_diags,
 			&mut self.semantic_diags,
 			&mut self.syntax_tokens,
 		);
@@ -819,6 +849,7 @@ impl Walker {
 		macros: &mut HashMap<String, (Span, TokenStream)>,
 		active_macros: &mut HashSet<String>,
 		macro_call_site: &mut Option<Span>,
+		syntax_diags: &mut Vec<Syntax>,
 		semantic_diags: &mut Vec<Semantic>,
 		syntax_tokens: &mut Vec<Spanned<SyntaxToken>>,
 	) {
@@ -914,8 +945,12 @@ impl Walker {
 						syntax_tokens.push((SyntaxToken::Comment, token_span));
 					}
 				}
-				Token::BlockComment { .. } => {
-					// TODO: Emit error if missing end.
+				Token::BlockComment { contains_eof, .. } => {
+					if *contains_eof {
+						syntax_diags.push(Syntax::BlockCommentMissingEnd(
+							token_span.end_zero_width(),
+						));
+					}
 					let token_span = *token_span;
 					if streams.len() == 1 {
 						// We only syntax highlight when we are not in a macro call.
@@ -941,12 +976,12 @@ impl Walker {
 	/// Un-registers a defined macro. Note: currently only supports object-like macros.
 	fn unregister_macro(&mut self, ident: String, span: Span) {
 		match self.macros.remove(&ident) {
-			Some(_) => self.colour(span, SyntaxToken::ObjectMacro),
+			Some(_) => self.push_colour(span, SyntaxToken::ObjectMacro),
 			None => {
 				self.push_semantic_diag(Semantic::UndefMacroNameUnresolved(
 					span,
 				));
-				self.colour(span, SyntaxToken::Unresolved);
+				self.push_colour(span, SyntaxToken::Unresolved);
 			}
 		}
 	}
@@ -966,8 +1001,8 @@ impl Walker {
 		self.semantic_diags.push(diag);
 	}
 
-	/// Creates a syntax highlighting token over the given span.
-	fn colour(&mut self, span: Span, token: SyntaxToken) {
+	/// Pushes a syntax highlighting token over the given span.
+	fn push_colour(&mut self, span: Span, token: SyntaxToken) {
 		// When we are within a macro, we don't want to produce syntax tokens.
 		// Note: This functionality is duplicated in the `ShuntingYard::colour()` method.
 		if self.streams.len() == 1 {
@@ -995,11 +1030,11 @@ fn seek_next_stmt(walker: &mut Walker) {
 				if token.starts_statement() {
 					return;
 				} else if *token == Token::Semi {
-					walker.colour(span, SyntaxToken::Punctuation);
+					walker.push_colour(span, SyntaxToken::Punctuation);
 					walker.advance();
 					return;
 				} else {
-					walker.colour(span, SyntaxToken::Invalid);
+					walker.push_colour(span, SyntaxToken::Invalid);
 					walker.advance();
 					continue;
 				}
@@ -1011,129 +1046,52 @@ fn seek_next_stmt(walker: &mut Walker) {
 
 /// Parses an individual statement at the current position.
 fn parse_stmt(walker: &mut Walker, nodes: &mut Vec<ast::Node>) {
-	use crate::lexer::preprocessor::{self, DefineToken, UndefToken};
-
 	let (token, token_span) = walker.get().expect("This function should be called from a loop that checks this invariant!");
 
+	// TODO: Look for qualifiers.
+
 	match token {
+		Token::LBrace => {
+			walker.push_colour(token_span, SyntaxToken::Punctuation);
+			walker.advance();
+			let block = parse_scope(walker, BRACE_SCOPE, token_span);
+			nodes.push(Node {
+				span: block.span,
+				ty: NodeTy::Block(block),
+			});
+		}
 		Token::Semi => {
-			walker.colour(token_span, SyntaxToken::Punctuation);
+			walker.push_colour(token_span, SyntaxToken::Punctuation);
 			walker.advance();
 			nodes.push(Node {
 				span: token_span,
 				ty: NodeTy::Empty,
 			});
 		}
-		Token::Directive(dir) => match dir {
-			PreprocStream::Define {
-				kw: kw_span,
-				mut ident_tokens,
-				body_tokens,
-			} => {
-				walker.colour(token_span.first_char(), SyntaxToken::Directive);
-				walker.colour(kw_span, SyntaxToken::Directive);
-
-				if ident_tokens.is_empty() {
-					// We have a macro that's missing a name.
-
-					walker.push_syntax_diag(Syntax::PreprocDefine(
-						PreprocDefineDiag::DefineExpectedMacroName(
-							kw_span.next_single_width(),
-						),
-					));
-					body_tokens.iter().for_each(|(_, s)| {
-						walker.colour(*s, SyntaxToken::Invalid)
-					});
-				} else if ident_tokens.len() == 1 {
-					// We have an object-like macro.
-
-					let ident = match ident_tokens.remove(0) {
-						(DefineToken::Ident(s), span) => (s, span),
-						_ => unreachable!(),
-					};
-					walker.colour(ident.1, SyntaxToken::ObjectMacro);
-
-					// Since object-like macros don't have parameters, we can perform the concatenation right here
-					// since we know the contents of the macro body will never change.
-					let body_tokens = preprocessor::concat_object_macro_body(
-						walker,
-						body_tokens,
-					);
-					body_tokens.iter().for_each(|(t, s)| {
-						walker.colour(*s, t.non_semantic_colour())
-					});
-					walker.register_macro(ident, body_tokens);
-				} else {
-					// We have a function-like macro.
-					// TODO: Implement
-				}
-
-				walker.advance();
-			}
-			PreprocStream::Undef {
-				kw: kw_span,
-				mut tokens,
-			} => {
-				walker.colour(token_span.first_char(), SyntaxToken::Directive);
-				walker.colour(kw_span, SyntaxToken::Directive);
-
-				if tokens.is_empty() {
-					walker.push_syntax_diag(Syntax::PreprocDefine(
-						PreprocDefineDiag::UndefExpectedMacroName(
-							kw_span.next_single_width(),
-						),
-					));
-				} else {
-					let (token, token_span) = tokens.remove(0);
-
-					match token {
-						UndefToken::Ident(s) => {
-							walker.unregister_macro(s, token_span)
-						}
-						_ => {
-							walker.push_syntax_diag(Syntax::PreprocDefine(
-								PreprocDefineDiag::UndefExpectedMacroName(
-									token_span,
-								),
-							));
-						}
-					}
-
-					if !tokens.is_empty() {
-						let (_, first) = tokens.first().unwrap();
-						let (_, last) = tokens.last().unwrap();
-						walker.push_syntax_diag(Syntax::PreprocTrailingTokens(
-							Span::new(first.start, last.end),
-						));
-					}
-				}
-
-				walker.advance();
-			}
-			_ => {
-				walker.advance();
-			}
-		},
+		Token::Directive(stream) => {
+			parse_directive(walker, stream, token_span);
+			walker.advance();
+		}
 		Token::Break => parse_break_continue_discard(
 			walker,
 			nodes,
 			token_span,
 			|| NodeTy::Break,
-			|span| Syntax::Stmt(StmtDiag::ExpectedSemiAfterBreakKw(span)),
+			|span| Syntax::Stmt(StmtDiag::BreakExpectedSemiAfterKw(span)),
 		),
 		Token::Continue => parse_break_continue_discard(
 			walker,
 			nodes,
 			token_span,
 			|| NodeTy::Continue,
-			|span| Syntax::Stmt(StmtDiag::ExpectedSemiAfterContinueKw(span)),
+			|span| Syntax::Stmt(StmtDiag::ContinueExpectedSemiAfterKw(span)),
 		),
 		Token::Discard => parse_break_continue_discard(
 			walker,
 			nodes,
 			token_span,
 			|| NodeTy::Discard,
-			|span| Syntax::Stmt(StmtDiag::ExpectedSemiAfterDiscardKw(span)),
+			|span| Syntax::Stmt(StmtDiag::DiscardExpectedSemiAfterKw(span)),
 		),
 		Token::Return => parse_return(walker, nodes, token_span),
 		_ => try_parse_definition_declaration_expr(walker, nodes),
@@ -1149,16 +1107,13 @@ fn parse_scope(
 	opening_span: Span,
 ) -> Scope {
 	let mut nodes = Vec::new();
-	// If this scope never finished and we run out of tokens, the scope will reach the EOF.
-	let mut ending_span = walker.get_last_span().end_zero_width();
-	while let Some(_) = walker.peek() {
+	let ending_span = loop {
 		// Check if we have reached the closing delimiter.
 		if let Some(span) = exit_condition(walker, opening_span) {
-			ending_span = span;
-			break;
+			break span;
 		}
 		parse_stmt(walker, &mut nodes);
-	}
+	};
 
 	Scope {
 		contents: nodes,
@@ -1166,25 +1121,31 @@ fn parse_scope(
 	}
 }
 
-/// A function, which given the `walker`, determines whether to end parsing the current scope of
-/// statements and return back to the caller. If this returns `Some`, we have reached the end of the scope. If the
-/// span returned is zero-width, that means we have no closing delimiter.
+/// A function, which given the `walker`, determines whether to end parsing the current scope of statements and
+/// return back to the caller. If this returns `Some`, we have reached the end of the scope. If the span returned
+/// is zero-width, that means we have no closing delimiter.
 ///
-/// This also takes a mutable reference to a vector of syntax errors, and a span of the opening delimiter, which
-/// allows for the creation of a syntax error if the function never encounters the desired ending delimiter.
+/// This also takes a span of the opening delimiter which allows for the creation of a syntax error if the function
+/// never encounters the desired ending delimiter.
 type ScopeEnd = fn(&mut Walker, Span) -> Option<Span>;
 
-const BRACE_SCOPE: ScopeEnd = |walker, _| match walker.peek() {
+const BRACE_SCOPE: ScopeEnd = |walker, l_brace_span| match walker.peek() {
 	Some((token, span)) => {
 		if *token == Token::RBrace {
-			walker.colour(span, SyntaxToken::Punctuation);
+			walker.push_colour(span, SyntaxToken::Punctuation);
 			walker.advance();
-			return Some(span);
+			Some(span)
 		} else {
-			return None;
+			None
 		}
 	}
-	None => unreachable!(),
+	None => {
+		walker.push_syntax_diag(Syntax::Stmt(StmtDiag::ScopeMissingRBrace(
+			l_brace_span,
+			walker.get_last_span().next_single_width(),
+		)));
+		Some(walker.get_last_span().end_zero_width())
+	}
 };
 
 /// Tries to parse a variable/function definition/declaration or an expression statement.
@@ -1246,9 +1207,12 @@ fn try_parse_definition_declaration_expr(
 							name: i.clone(),
 							span: token_span,
 						};
-						walker.colour(token_span, SyntaxToken::UncheckedIdent);
+						walker.push_colour(
+							token_span,
+							SyntaxToken::UncheckedIdent,
+						);
 						walker.advance();
-						walker.colour(next.1, SyntaxToken::Punctuation);
+						walker.push_colour(next.1, SyntaxToken::Punctuation);
 						walker.advance();
 						parse_function(
 							walker,
@@ -1268,7 +1232,7 @@ fn try_parse_definition_declaration_expr(
 				let semi_span = token_span;
 				walker.append_colours(&mut start_colours);
 				walker.append_syntax_diags(&mut start_diags);
-				walker.colour(semi_span, SyntaxToken::Punctuation);
+				walker.push_colour(semi_span, SyntaxToken::Punctuation);
 				walker.advance();
 				nodes.push(Node {
 					span: Span::new(start.span.start, semi_span.end),
@@ -1324,7 +1288,7 @@ fn try_parse_definition_declaration_expr(
 				ty: NodeTy::Expr(start),
 			});
 			for (_, span) in ident_colours {
-				walker.colour(span, SyntaxToken::Invalid);
+				walker.push_colour(span, SyntaxToken::Invalid);
 			}
 			seek_next_stmt(walker);
 			return;
@@ -1412,14 +1376,14 @@ fn try_parse_definition_declaration_expr(
 		if *token == Token::Semi {
 			// We have a variable definition.
 			let semi_span = token_span;
-			walker.colour(semi_span, SyntaxToken::Punctuation);
+			walker.push_colour(semi_span, SyntaxToken::Punctuation);
 			walker.advance();
 			nodes.push(var_def(type_, ident_info, semi_span.end));
 			return;
 		} else if *token == Token::Op(crate::lexer::OpTy::Eq) {
 			// We have a variable declaration.
 			let eq_span = token_span;
-			walker.colour(eq_span, SyntaxToken::Operator);
+			walker.push_colour(eq_span, SyntaxToken::Operator);
 			walker.advance();
 
 			// Consume the value expression.
@@ -1468,7 +1432,7 @@ fn try_parse_definition_declaration_expr(
 			};
 			if *token == Token::Semi {
 				let semi_span = token_span;
-				walker.colour(semi_span, SyntaxToken::Punctuation);
+				walker.push_colour(semi_span, SyntaxToken::Punctuation);
 				walker.advance();
 				nodes.push(var_decl(
 					type_,
@@ -1494,8 +1458,8 @@ fn try_parse_definition_declaration_expr(
 				return;
 			}
 		} else {
-			// We have something that matches the start of a variable definition/declaration. Since we have
-			// neither the `;` or `=`, we assume that this is a definition which is missing the semi-colon.
+			// We have something that matches the start of a variable definition/declaration. Since we have neither
+			// the `;` or `=`, we assume that this is a definition which is missing the semi-colon.
 			walker.push_syntax_diag(Syntax::Stmt(
 				StmtDiag::VarDefExpectedSemiOrEqAfterIdents(
 					ident_span.next_single_width(),
@@ -1517,7 +1481,7 @@ fn try_parse_definition_declaration_expr(
 	let semi_span = match walker.peek() {
 		Some((token, span)) => {
 			if *token == Token::Semi {
-				walker.colour(span, SyntaxToken::Punctuation);
+				walker.push_colour(span, SyntaxToken::Punctuation);
 				walker.advance();
 				Some(span)
 			} else {
@@ -1570,7 +1534,8 @@ fn parse_function(
 		let (token, token_span) = match walker.peek() {
 			Some(t) => t,
 			None => {
-				// We have not yet finished parsing the parameter list, but we treat this as a valid definition.
+				// We have not yet finished parsing the parameter list, but we treat this as a valid definition
+				// since that's the closest match.
 				let span = Span::new(return_type.span.start, prev_span.end);
 				walker.push_syntax_diag(Syntax::Stmt(
 					StmtDiag::ParamsExpectedRParen(
@@ -1591,7 +1556,7 @@ fn parse_function(
 
 		match token {
 			Token::Comma => {
-				walker.colour(token_span, SyntaxToken::Punctuation);
+				walker.push_colour(token_span, SyntaxToken::Punctuation);
 				walker.advance();
 				if prev == Prev::Comma {
 					walker.push_syntax_diag(Syntax::Stmt(
@@ -1611,15 +1576,15 @@ fn parse_function(
 				continue;
 			}
 			Token::RParen => {
-				walker.colour(token_span, SyntaxToken::Punctuation);
+				walker.push_colour(token_span, SyntaxToken::Punctuation);
 				walker.advance();
 				break token_span;
 			}
 			Token::Semi => {
-				walker.colour(token_span, SyntaxToken::Punctuation);
+				walker.push_colour(token_span, SyntaxToken::Punctuation);
 				walker.advance();
 				// We have not yet finished parsing the parameter list but we've encountered a semi-colon. We treat
-				// this as a valid definition.
+				// this as a valid definition since that's the closest match.
 				walker.push_syntax_diag(Syntax::Stmt(
 					StmtDiag::ParamsExpectedRParen(
 						prev_span.next_single_width(),
@@ -1636,11 +1601,11 @@ fn parse_function(
 				return;
 			}
 			Token::LBrace => {
-				walker.colour(token_span, SyntaxToken::Punctuation);
+				walker.push_colour(token_span, SyntaxToken::Punctuation);
 				// We don't advance because the next check after this loop checks for a l-brace.
 
 				// We have not yet finished parsing the parameter list but we've encountered a l-brace. We treat
-				// this as a valid declaration.
+				// this as a potentially valid declaration since that's the closest match.
 				walker.push_syntax_diag(Syntax::Stmt(
 					StmtDiag::ParamsExpectedRParen(
 						prev_span.next_single_width(),
@@ -1674,7 +1639,7 @@ fn parse_function(
 					// We have an expression which cannot be parsed into a type. We ignore this and continue
 					// searching for the next parameter.
 					for (_, span) in colours {
-						walker.colour(span, SyntaxToken::Invalid);
+						walker.push_colour(span, SyntaxToken::Invalid);
 					}
 					walker.push_syntax_diag(Syntax::Stmt(
 						StmtDiag::ParamsInvalidTypeExpr(e.span),
@@ -1685,8 +1650,31 @@ fn parse_function(
 				}
 			}
 			(None, _, _) => {
-				// We immediately have a token that is not an expression.
-				// TODO: Decide on error recovery strategy.
+				// We immediately have a token that is not an expression. We ignore this and loop until we hit
+				// something recognizable.
+				let end_span = loop {
+					match walker.peek() {
+						Some((token, span)) => {
+							if *token == Token::Comma
+								|| *token == Token::RParen || *token
+								== Token::Semi || *token == Token::LBrace
+							{
+								break span;
+							} else {
+								walker.push_colour(span, SyntaxToken::Invalid);
+								walker.advance();
+								continue;
+							}
+						}
+						None => break walker.get_last_span(),
+					}
+				};
+				walker.push_syntax_diag(Syntax::Stmt(
+					StmtDiag::ParamsInvalidTypeExpr(Span::new(
+						param_span_start,
+						end_span.end,
+					)),
+				));
 				prev = Prev::Invalid;
 				prev_span = token_span;
 				continue;
@@ -1734,7 +1722,7 @@ fn parse_function(
 				StmtDiag::ParamsInvalidIdentExpr(ident_expr.span),
 			));
 			for (_, span) in ident_colours {
-				walker.colour(span, SyntaxToken::Invalid);
+				walker.push_colour(span, SyntaxToken::Invalid);
 			}
 			prev = Prev::Param;
 			prev_span = param_span;
@@ -1760,7 +1748,7 @@ fn parse_function(
 			// This branch will only be triggered if we exited the param loop with a `)`, it will not trigger if we
 			// exit with a `{` because that token is not consumed.
 
-			// We are missing a `;` for a definition, but it's the closest match, so that's what we assume.
+			// We are missing a `;` for a definition. We treat this as a definition since that's the closest match.
 			walker.push_syntax_diag(Syntax::Stmt(
 				StmtDiag::FnExpectedSemiOrLBraceAfterParams(
 					param_end_span.next_single_width(),
@@ -1779,7 +1767,7 @@ fn parse_function(
 	};
 	if *token == Token::Semi {
 		// We have a definition.
-		walker.colour(token_span, SyntaxToken::Punctuation);
+		walker.push_colour(token_span, SyntaxToken::Punctuation);
 		walker.advance();
 		nodes.push(Node {
 			span: Span::new(return_type.span.start, param_end_span.end),
@@ -1792,14 +1780,11 @@ fn parse_function(
 	} else if *token == Token::LBrace {
 		// We have a declaration.
 		let l_brace_span = token_span;
-		walker.colour(l_brace_span, SyntaxToken::Punctuation);
+		walker.push_colour(l_brace_span, SyntaxToken::Punctuation);
 		walker.advance();
-		let body = parse_scope(walker, BRACE_SCOPE,l_brace_span);
+		let body = parse_scope(walker, BRACE_SCOPE, l_brace_span);
 		nodes.push(Node {
-			span: Span::new(
-				return_type.span.start,
-				body.span.end,
-			),
+			span: Span::new(return_type.span.start, body.span.end),
 			ty: NodeTy::FnDecl {
 				return_type,
 				ident,
@@ -1808,7 +1793,7 @@ fn parse_function(
 			},
 		});
 	} else {
-		// We are missing a `;` for a definition, but it's the closest match, so that's what we assume.
+		// We are missing a `;` for a definition. We treat this as a definition since that's the closest match.
 		walker.push_syntax_diag(Syntax::Stmt(
 			StmtDiag::FnExpectedSemiOrLBraceAfterParams(
 				param_end_span.next_single_width(),
@@ -1836,14 +1821,14 @@ fn parse_break_continue_discard(
 	ty: impl FnOnce() -> NodeTy,
 	error: impl FnOnce(Span) -> Syntax,
 ) {
-	walker.colour(kw_span, SyntaxToken::Keyword);
+	walker.push_colour(kw_span, SyntaxToken::Keyword);
 	walker.advance();
 
 	// Consume the `;` to end the statement.
 	let semi_span = match walker.peek() {
 		Some((token, span)) => {
 			if *token == Token::Semi {
-				walker.colour(span, SyntaxToken::Punctuation);
+				walker.push_colour(span, SyntaxToken::Punctuation);
 				walker.advance();
 				Some(span)
 			} else {
@@ -1873,7 +1858,7 @@ fn parse_break_continue_discard(
 ///
 /// This function assumes that the keyword is not yet consumed.
 fn parse_return(walker: &mut Walker, nodes: &mut Vec<Node>, kw_span: Span) {
-	walker.colour(kw_span, SyntaxToken::Keyword);
+	walker.push_colour(kw_span, SyntaxToken::Keyword);
 	walker.advance();
 
 	// Look for the optional return value expression.
@@ -1890,7 +1875,7 @@ fn parse_return(walker: &mut Walker, nodes: &mut Vec<Node>, kw_span: Span) {
 	let semi_span = match walker.peek() {
 		Some((token, span)) => {
 			if *token == Token::Semi {
-				walker.colour(span, SyntaxToken::Punctuation);
+				walker.push_colour(span, SyntaxToken::Punctuation);
 				walker.advance();
 				Some(span)
 			} else {
@@ -1902,13 +1887,13 @@ fn parse_return(walker: &mut Walker, nodes: &mut Vec<Node>, kw_span: Span) {
 	if semi_span.is_none() {
 		if let Some(ref return_expr) = return_expr {
 			walker.push_syntax_diag(Syntax::Stmt(
-				StmtDiag::ExpectedSemiAfterReturnExpr(
+				StmtDiag::ReturnExpectedSemiAfterExpr(
 					return_expr.span.next_single_width(),
 				),
 			));
 		} else {
 			walker.push_syntax_diag(Syntax::Stmt(
-				StmtDiag::ExpectedSemiOrExprAfterReturnKw(
+				StmtDiag::ReturnExpectedSemiOrExprAfterKw(
 					kw_span.next_single_width(),
 				),
 			));
@@ -1928,8 +1913,104 @@ fn parse_return(walker: &mut Walker, nodes: &mut Vec<Node>, kw_span: Span) {
 	});
 }
 
-/// Combines the ident information with the type to create one or more type-ident pairs. This step is
-/// necessary because the idents can contain type information, e.g. `int[3] i[9]`.
+/// Parses a preprocessor directive.
+///
+/// This function assumes that the directive has not yet been consumed.
+fn parse_directive(walker: &mut Walker, stream: PreprocStream, dir_span: Span) {
+	use crate::lexer::preprocessor::{self, DefineToken, UndefToken};
+
+	match stream {
+		PreprocStream::Define {
+			kw: kw_span,
+			mut ident_tokens,
+			body_tokens,
+		} => {
+			walker.push_colour(dir_span.first_char(), SyntaxToken::Directive);
+			walker.push_colour(kw_span, SyntaxToken::Directive);
+
+			if ident_tokens.is_empty() {
+				// We have a macro that's missing a name.
+
+				walker.push_syntax_diag(Syntax::PreprocDefine(
+					PreprocDefineDiag::DefineExpectedMacroName(
+						kw_span.next_single_width(),
+					),
+				));
+				body_tokens.iter().for_each(|(_, s)| {
+					walker.push_colour(*s, SyntaxToken::Invalid)
+				});
+			} else if ident_tokens.len() == 1 {
+				// We have an object-like macro.
+
+				let ident = match ident_tokens.remove(0) {
+					(DefineToken::Ident(s), span) => (s, span),
+					_ => unreachable!(),
+				};
+				walker.push_colour(ident.1, SyntaxToken::ObjectMacro);
+
+				// Since object-like macros don't have parameters, we can perform the concatenation right here
+				// since we know the contents of the macro body will never change.
+				let body_tokens =
+					preprocessor::concat_object_macro_body(walker, body_tokens);
+				body_tokens.iter().for_each(|(t, s)| {
+					walker.push_colour(*s, t.non_semantic_colour())
+				});
+				walker.register_macro(ident, body_tokens);
+			} else {
+				// We have a function-like macro.
+				// TODO: Implement
+			}
+
+			walker.advance();
+		}
+		PreprocStream::Undef {
+			kw: kw_span,
+			mut tokens,
+		} => {
+			walker.push_colour(dir_span.first_char(), SyntaxToken::Directive);
+			walker.push_colour(kw_span, SyntaxToken::Directive);
+
+			if tokens.is_empty() {
+				walker.push_syntax_diag(Syntax::PreprocDefine(
+					PreprocDefineDiag::UndefExpectedMacroName(
+						kw_span.next_single_width(),
+					),
+				));
+			} else {
+				let (token, token_span) = tokens.remove(0);
+
+				match token {
+					UndefToken::Ident(s) => {
+						walker.unregister_macro(s, token_span)
+					}
+					_ => {
+						walker.push_syntax_diag(Syntax::PreprocDefine(
+							PreprocDefineDiag::UndefExpectedMacroName(
+								token_span,
+							),
+						));
+					}
+				}
+
+				if !tokens.is_empty() {
+					let (_, first) = tokens.first().unwrap();
+					let (_, last) = tokens.last().unwrap();
+					walker.push_syntax_diag(Syntax::PreprocTrailingTokens(
+						Span::new(first.start, last.end),
+					));
+				}
+			}
+
+			walker.advance();
+		}
+		_ => {
+			walker.advance();
+		}
+	}
+}
+
+/// Combines the ident information with the type to create one or more type-ident pairs. This step is necessary
+/// because the idents themselves can contain type information, e.g. `int[3] i[9]`.
 fn combine_type_with_idents(
 	type_: Type,
 	ident_info: Vec<(Ident, Vec<Option<Expr>>)>,

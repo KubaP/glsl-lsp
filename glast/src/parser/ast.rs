@@ -26,6 +26,8 @@ pub enum NodeTy {
 	Empty,
 	/// An expression statement, e.g. `5 + 1;` or `i++;`.
 	Expr(Expr),
+	/// A block scope, e.g. `{ int i; }`.
+	Block(Scope),
 	/// A variable definition, e.g. `int i;`.
 	VarDef { type_: Type, ident: Ident },
 	/// A variable definition containing multiple variables, e.g. `int i, j, k;`.

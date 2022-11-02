@@ -48,12 +48,20 @@ pub enum Syntax {
 	Expr(ExprDiag),
 	/// Diagnostics for statement.
 	Stmt(StmtDiag),
+
 	/// Diagnostics for the `#define` and `#undef` directives.
 	PreprocDefine(PreprocDefineDiag),
+	/// Diagnostics for the conditional directives.
+	PreprocConditional(PreprocConditionalDiag),
 	/// ERROR - Found trailing tokens in a directive.
 	///
 	/// - `0` - The span of the tokens.
 	PreprocTrailingTokens(Span),
+
+	/// ERROR - Found a block comment that is missing the closing tag.
+	///
+	/// - `0` - The span where the closing tag is expected.
+	BlockCommentMissingEnd(Span),
 }
 
 impl Syntax {
@@ -62,7 +70,9 @@ impl Syntax {
 			Syntax::Expr(e) => e.get_severity(),
 			Syntax::Stmt(s) => s.get_severity(),
 			Syntax::PreprocDefine(d) => d.get_severity(),
+			Syntax::PreprocConditional(d) => d.get_severity(),
 			Syntax::PreprocTrailingTokens(_) => Severity::Error,
+			Syntax::BlockCommentMissingEnd(_) => Severity::Error,
 		}
 	}
 }
@@ -308,6 +318,11 @@ pub enum StmtDiag {
 	///
 	/// - `0` - The span where the semi-colon is expected.
 	ExprStmtExpectedSemiAfterExpr(Span),
+	/// ERROR - Did not find a closing brace to finish a scope.
+	///
+	/// - `0` - The span of the scope's opening brace.
+	/// - `1` - The span where the closing brace is expected.
+	ScopeMissingRBrace(Span, Span),
 
 	/* VARIABLES */
 	/// ERROR - Did not find a semi-colon or an equals-sign after the identifiers in a variable definition.
@@ -357,29 +372,30 @@ pub enum StmtDiag {
 	/// ERROR - Did not find a semi-colon after the `break` keyword.
 	///
 	/// - `0` - The span where the semi-colon is expected.
-	ExpectedSemiAfterBreakKw(Span),
+	BreakExpectedSemiAfterKw(Span),
 	/// ERROR - Did not find a semi-colon after the `continue` keyword.
 	///
 	/// - `0` - The span where the semi-colon is expected.
-	ExpectedSemiAfterContinueKw(Span),
+	ContinueExpectedSemiAfterKw(Span),
 	/// ERROR - Did not find a semi-colon after the `discar` keyword.
 	///
 	/// - `0` - The span where the semi-colon is expected.
-	ExpectedSemiAfterDiscardKw(Span),
+	DiscardExpectedSemiAfterKw(Span),
 	/// ERROR - Did not find a semi-colon or an expression after the `return` keyword.
 	///
 	/// - `0` - The span where the semi-colon or expression is expected.
-	ExpectedSemiOrExprAfterReturnKw(Span),
+	ReturnExpectedSemiOrExprAfterKw(Span),
 	/// ERROR - Did not find a semi-colon after the `return` expression.
 	///
 	/// - `0` - The span where the semi-colon is expected.
-	ExpectedSemiAfterReturnExpr(Span),
+	ReturnExpectedSemiAfterExpr(Span),
 }
 
 impl StmtDiag {
 	pub fn get_severity(&self) -> Severity {
 		match self {
 			StmtDiag::ExprStmtExpectedSemiAfterExpr(_) => Severity::Error,
+			StmtDiag::ScopeMissingRBrace(_, _) => Severity::Error,
 			/* VARIABLES */
 			StmtDiag::VarDefExpectedSemiOrEqAfterIdents(_) => Severity::Error,
 			StmtDiag::VarDeclExpectedSemiAfterValue(_) => Severity::Error,
@@ -395,11 +411,11 @@ impl StmtDiag {
 			StmtDiag::ParamsExpectedRParen(_) => Severity::Error,
 			StmtDiag::FnExpectedSemiOrLBraceAfterParams(_) => Severity::Error,
 			/* SINGLE-KEYWORD CONTROL FLOW */
-			StmtDiag::ExpectedSemiAfterBreakKw(_) => Severity::Error,
-			StmtDiag::ExpectedSemiAfterContinueKw(_) => Severity::Error,
-			StmtDiag::ExpectedSemiAfterDiscardKw(_) => Severity::Error,
-			StmtDiag::ExpectedSemiOrExprAfterReturnKw(_) => Severity::Error,
-			StmtDiag::ExpectedSemiAfterReturnExpr(_) => Severity::Error,
+			StmtDiag::BreakExpectedSemiAfterKw(_) => Severity::Error,
+			StmtDiag::ContinueExpectedSemiAfterKw(_) => Severity::Error,
+			StmtDiag::DiscardExpectedSemiAfterKw(_) => Severity::Error,
+			StmtDiag::ReturnExpectedSemiOrExprAfterKw(_) => Severity::Error,
+			StmtDiag::ReturnExpectedSemiAfterExpr(_) => Severity::Error,
 		}
 	}
 }
@@ -446,6 +462,28 @@ impl PreprocDefineDiag {
 			PreprocDefineDiag::TokenConcatMissingRHS(_) => Severity::Error,
 			/* UNDEF */
 			PreprocDefineDiag::UndefExpectedMacroName(_) => Severity::Error,
+		}
+	}
+}
+
+/// Syntax diagnostics for the conditional directives.
+#[derive(Debug)]
+#[non_exhaustive]
+pub enum PreprocConditionalDiag {
+	/// ERROR - Found an unmatched `#elif` directive.
+	UnmatchedElseIf(Span),
+	/// ERROR - Found an unmatched `#else` directive.
+	UnmatchedElse(Span),
+	/// ERROR - Found an unmatched `#endif` directive.
+	UnmatchedEndIf(Span),
+}
+
+impl PreprocConditionalDiag {
+	pub fn get_severity(&self) -> Severity {
+		match self {
+			PreprocConditionalDiag::UnmatchedElseIf(_) => Severity::Error,
+			PreprocConditionalDiag::UnmatchedElse(_) => Severity::Error,
+			PreprocConditionalDiag::UnmatchedEndIf(_) => Severity::Error,
 		}
 	}
 }

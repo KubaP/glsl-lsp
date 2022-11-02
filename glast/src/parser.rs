@@ -1063,9 +1063,9 @@ fn invalidate_qualifiers(walker: &mut Walker, qualifiers: Vec<Qualifier>) {
 
 /// Parses an individual statement at the current position.
 fn parse_stmt(walker: &mut Walker, nodes: &mut Vec<ast::Node>) {
-	let (token, token_span) = walker.get().expect("This function should be called from a loop that checks this invariant!");
-
 	let qualifiers = try_parse_qualifiers(walker);
+
+	let (token, token_span) = walker.get().expect("This function should be called from a loop that checks this invariant!");
 
 	match token {
 		Token::LBrace => {
@@ -1087,6 +1087,7 @@ fn parse_stmt(walker: &mut Walker, nodes: &mut Vec<ast::Node>) {
 				ty: NodeTy::Empty,
 			});
 		}
+		Token::Struct => parse_struct(walker, nodes, qualifiers, token_span),
 		Token::Directive(stream) => {
 			invalidate_qualifiers(walker, qualifiers);
 			parse_directive(walker, stream, token_span);
@@ -2381,6 +2382,182 @@ fn parse_function(
 		});
 		seek_next_stmt(walker);
 	}
+}
+
+/// Parses a struct definition/declaration.
+///
+/// This function assumes that the keyword is not yet consumed.
+fn parse_struct(
+	walker: &mut Walker,
+	nodes: &mut Vec<Node>,
+	qualifiers: Vec<Qualifier>,
+	kw_span: Span,
+) {
+	walker.push_colour(kw_span, SyntaxToken::Keyword);
+	walker.advance();
+
+	// Consume the identifier.
+	let ident = match expr_parser(
+		walker,
+		Mode::TakeOneUnit,
+		[Token::LBrace, Token::Semi],
+	) {
+		(Some(e), _, mut colours) => match e.ty {
+			ExprTy::Ident(i) => {
+				walker.append_colours(&mut colours);
+				i
+			}
+			_ => {
+				walker.append_colours(&mut colours);
+				walker.push_syntax_diag(Syntax::Stmt(
+					StmtDiag::StructExpectedIdentAfterKw(e.span),
+				));
+				return;
+			}
+		},
+		(None, _, _) => {
+			walker.push_syntax_diag(Syntax::Stmt(
+				StmtDiag::StructExpectedIdentAfterKw(
+					kw_span.next_single_width(),
+				),
+			));
+			return;
+		}
+	};
+
+	let struct_span_start = if let Some(q) = qualifiers.first() {
+		q.span.start
+	} else {
+		kw_span.start
+	};
+
+	// Consume the `{`.
+	let (token, token_span) = match walker.peek() {
+		Some(t) => t,
+		None => {
+			// We don't create a struct definition because it would result in two errors that would reduce clarity.
+			walker.push_syntax_diag(Syntax::Stmt(
+				StmtDiag::StructExpectedLBraceAfterIdent(
+					ident.span.next_single_width(),
+				),
+			));
+			return;
+		}
+	};
+	let l_brace_span = if *token == Token::LBrace {
+		walker.push_colour(token_span, SyntaxToken::Punctuation);
+		walker.advance();
+		token_span
+	} else if *token == Token::Semi {
+		// We have a definition (which is illegal).
+		let span = Span::new(struct_span_start, token_span.end);
+		walker.push_colour(token_span, SyntaxToken::Punctuation);
+		walker
+			.push_syntax_diag(Syntax::Stmt(StmtDiag::StructDefIsInvalid(span)));
+		walker.advance();
+		nodes.push(Node {
+			span,
+			ty: NodeTy::StructDef { qualifiers, ident },
+		});
+		return;
+	} else {
+		// We don't create a struct definition because it would result in two errors that would reduce clarity.
+		walker.push_syntax_diag(Syntax::Stmt(
+			StmtDiag::StructExpectedLBraceAfterIdent(
+				ident.span.next_single_width(),
+			),
+		));
+		return;
+	};
+
+	// Parse the contents of the body.
+	let body = parse_scope(walker, BRACE_SCOPE, l_brace_span);
+	for stmt in &body.contents {
+		match &stmt.ty {
+			NodeTy::VarDef { .. }
+			| NodeTy::VarDecl { .. }
+			| NodeTy::VarDefs(_)
+			| NodeTy::VarDecls(_, _) => {}
+			_ => {
+				walker.push_syntax_diag(Syntax::Stmt(
+					StmtDiag::StructInvalidStmtInBody(stmt.span),
+				));
+			}
+		}
+	}
+
+	// Look for an optional instance identifier.
+	let instance = match expr_parser(walker, Mode::TakeOneUnit, [Token::Semi]) {
+		(Some(e), _, mut colours) => match e.ty {
+			ExprTy::Ident(i) => {
+				walker.append_colours(&mut colours);
+				Omittable::Some(i)
+			}
+			_ => {
+				walker.append_colours(&mut colours);
+				walker.push_syntax_diag(Syntax::Stmt(
+					StmtDiag::StructExpectedInstanceOrSemiAfterBody(e.span),
+				));
+				nodes.push(Node {
+					span: Span::new(struct_span_start, body.span.end),
+					ty: NodeTy::StructDecl {
+						qualifiers,
+						ident,
+						body,
+						instance: Omittable::None,
+					},
+				});
+				return;
+			}
+		},
+		_ => Omittable::None,
+	};
+
+	// Consume the `;` to end the statement.
+	let semi_span = match walker.peek() {
+		Some((token, span)) => {
+			if *token == Token::Semi {
+				walker.push_colour(span, SyntaxToken::Punctuation);
+				walker.advance();
+				Some(span)
+			} else {
+				None
+			}
+		}
+		None => None,
+	};
+	if semi_span.is_none() {
+		walker.push_syntax_diag(Syntax::Stmt(
+			StmtDiag::StructExpectedSemiAfterBodyOrInstance(
+				if let Omittable::Some(ref i) = instance {
+					i.span.next_single_width()
+				} else {
+					body.span.next_single_width()
+				},
+			),
+		));
+	}
+
+	nodes.push(Node {
+		span: Span::new(
+			struct_span_start,
+			if let Some(semi_span) = semi_span {
+				semi_span.end
+			} else {
+				if let Omittable::Some(ref i) = instance {
+					i.span.end
+				} else {
+					body.span.end
+				}
+			},
+		),
+		ty: NodeTy::StructDecl {
+			qualifiers,
+			ident,
+			body,
+			instance,
+		},
+	});
 }
 
 /// Parses a break/continue/discard statement.

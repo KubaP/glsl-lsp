@@ -407,6 +407,32 @@ pub enum StmtDiag {
 	/// - `0` - The span where the semi-colon or opening brace is expected.
 	FnExpectedSemiOrLBraceAfterParams(Span),
 
+	/* STRUCTS */
+	/// ERROR - Did not find an identifier after the `struct` keyword. E.g. `struct;`.
+	///
+	/// - `0` - The span where the ident is expected.
+	StructExpectedIdentAfterKw(Span),
+	/// ERROR - Did not find an opening brace after the ident. E.g. `struct Foo`.
+	///
+	/// - `0` - The span where the opening brace is expected.
+	StructExpectedLBraceAfterIdent(Span),
+	/// ERROR - Found a statement within the struct body that is invalid. E.g. `struct Foo { return; };`.
+	///
+	/// - `0` - The span of the statement.
+	StructInvalidStmtInBody(Span),
+	/// ERROR - Did not find an instance ident or a semi-colon after the struct body. E.g. `struct Foo { int i; }`.
+	///
+	/// - `0` - The span where the instance ident or semi-colon is expected.
+	StructExpectedInstanceOrSemiAfterBody(Span),
+	/// ERROR - Did not find a semi-colon after the struct body or optional instance ident. E.g. `struct Foo {}`.
+	///
+	/// - `0` - The span where the semi-colon is expected.
+	StructExpectedSemiAfterBodyOrInstance(Span),
+	/// ERROR - Found a struct definition which is not a valid GLSL statement. E.g. `struct Foo;`.
+	///
+	/// - `0` - The span of the definition.
+	StructDefIsInvalid(Span),
+
 	/* SINGLE-KEYWORD CONTROL FLOW */
 	/// ERROR - Did not find a semi-colon after the `break` keyword.
 	///
@@ -461,6 +487,17 @@ impl StmtDiag {
 			StmtDiag::ParamsInvalidIdentExpr(_) => Severity::Error,
 			StmtDiag::ParamsExpectedRParen(_) => Severity::Error,
 			StmtDiag::FnExpectedSemiOrLBraceAfterParams(_) => Severity::Error,
+			/* STRUCTS */
+			StmtDiag::StructInvalidStmtInBody(_) => Severity::Error,
+			StmtDiag::StructExpectedIdentAfterKw(_) => Severity::Error,
+			StmtDiag::StructExpectedLBraceAfterIdent(_) => Severity::Error,
+			StmtDiag::StructExpectedInstanceOrSemiAfterBody(_) => {
+				Severity::Error
+			}
+			StmtDiag::StructExpectedSemiAfterBodyOrInstance(_) => {
+				Severity::Error
+			}
+			StmtDiag::StructDefIsInvalid(_) => Severity::Error,
 			/* SINGLE-KEYWORD CONTROL FLOW */
 			StmtDiag::BreakExpectedSemiAfterKw(_) => Severity::Error,
 			StmtDiag::ContinueExpectedSemiAfterKw(_) => Severity::Error,

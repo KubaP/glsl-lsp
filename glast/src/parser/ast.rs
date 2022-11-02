@@ -68,6 +68,18 @@ pub enum NodeTy {
 		params: Vec<Param>,
 		body: Scope,
 	},
+	/// A struct definition, e.g. `struct FooBar;`. This is an illegal GLSL statement.
+	StructDef {
+		qualifiers: Vec<Qualifier>,
+		ident: Ident,
+	},
+	/// A struct declaration, e.g. `struct FooBar { mat4 m; };`.
+	StructDecl {
+		qualifiers: Vec<Qualifier>,
+		ident: Ident,
+		body: Scope,
+		instance: Omittable<Ident>,
+	},
 	/// A break control-flow statement, i.e. `break;`.
 	Break,
 	/// A continue control-flow statement, i.e. `continue;`.

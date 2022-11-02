@@ -66,14 +66,7 @@ pub enum Syntax {
 
 impl Syntax {
 	pub fn get_severity(&self) -> Severity {
-		match self {
-			Syntax::Expr(e) => e.get_severity(),
-			Syntax::Stmt(s) => s.get_severity(),
-			Syntax::PreprocDefine(d) => d.get_severity(),
-			Syntax::PreprocConditional(d) => d.get_severity(),
-			Syntax::PreprocTrailingTokens(_) => Severity::Error,
-			Syntax::BlockCommentMissingEnd(_) => Severity::Error,
-		}
+		Severity::Error
 	}
 }
 
@@ -272,41 +265,7 @@ pub enum ExprDiag {
 
 impl ExprDiag {
 	pub fn get_severity(&self) -> Severity {
-		match self {
-			/* LITERALS */
-			ExprDiag::InvalidNumber(_) => Severity::Error,
-			ExprDiag::EmptyNumber(_) => Severity::Error,
-			ExprDiag::UnparsableNumber(_) => Severity::Error,
-			/* COMPOUND EXPRESSIONS */
-			ExprDiag::FoundOperandAfterOperand(_, _) => Severity::Error,
-			ExprDiag::InvalidPrefixOperator(_) => Severity::Error,
-			ExprDiag::InvalidBinOrPostOperator(_) => Severity::Error,
-			ExprDiag::FoundDotInsteadOfOperand(_, _) => Severity::Error,
-			ExprDiag::FoundCommaInsteadOfOperand(_, _) => Severity::Error,
-			ExprDiag::FoundQuestionInsteadOfOperand(_, _) => Severity::Error,
-			ExprDiag::FoundColonInsteadOfOperand(_, _) => Severity::Error,
-			ExprDiag::FoundInvalidToken(_) => Severity::Error,
-			/* GROUPS */
-			ExprDiag::FoundEmptyParens(_) => Severity::Error,
-			ExprDiag::FoundLBracketInsteadOfOperand(_, _) => Severity::Error,
-			ExprDiag::FoundRParenInsteadOfOperand(_, _) => Severity::Error,
-			ExprDiag::FoundRBracketInsteadOfOperand(_, _) => Severity::Error,
-			ExprDiag::FoundRBraceInsteadOfOperand(_, _) => Severity::Error,
-			/* ARITY */
-			ExprDiag::ExpectedCommaAfterArg(_) => Severity::Error,
-			ExprDiag::ExpectedArgAfterComma(_) => Severity::Error,
-			ExprDiag::ExpectedArgBetweenParenComma(_) => Severity::Error,
-			ExprDiag::ExpectedArgBetweenBraceComma(_) => Severity::Error,
-			ExprDiag::ExpectedCommaAfterExpr(_) => Severity::Error,
-			ExprDiag::ExpectedExprAfterComma(_) => Severity::Error,
-			ExprDiag::ExpectedExprBeforeComma(_) => Severity::Error,
-			/* UNCLOSED GROUPS */
-			ExprDiag::UnclosedParens(_, _) => Severity::Error,
-			ExprDiag::UnclosedIndexOperator(_, _) => Severity::Error,
-			ExprDiag::UnclosedFunctionCall(_, _) => Severity::Error,
-			ExprDiag::UnclosedInitializerList(_, _) => Severity::Error,
-			ExprDiag::UnclosedArrayConstructor(_, _) => Severity::Error,
-		}
+		Severity::Error
 	}
 }
 
@@ -458,53 +417,7 @@ pub enum StmtDiag {
 
 impl StmtDiag {
 	pub fn get_severity(&self) -> Severity {
-		match self {
-			StmtDiag::ExprStmtExpectedSemiAfterExpr(_) => Severity::Error,
-			StmtDiag::ScopeMissingRBrace(_, _) => Severity::Error,
-			StmtDiag::FoundQualifiersBeforeStmt(_) => Severity::Error,
-			/* QUALIFIERS */
-			StmtDiag::LayoutExpectedLParenAfterKw(_) => Severity::Error,
-			StmtDiag::LayoutInvalidIdent(_) => Severity::Error,
-			StmtDiag::LayoutExpectedEqAfterIdent(_) => Severity::Error,
-			StmtDiag::LayoutExpectedExprAfterEq(_) => Severity::Error,
-			StmtDiag::LayoutMissingRParen(_) => Severity::Error,
-			StmtDiag::LayoutExpectedCommaAfterLayout(_) => Severity::Error,
-			StmtDiag::LayoutExpectedLayoutAfterComma(_) => Severity::Error,
-			StmtDiag::LayoutExpectedLayoutBetweenParenComma(_) => {
-				Severity::Error
-			}
-			/* VARIABLES */
-			StmtDiag::VarDefExpectedSemiOrEqAfterIdents(_) => Severity::Error,
-			StmtDiag::VarDeclExpectedSemiAfterValue(_) => Severity::Error,
-			StmtDiag::VarDeclExpectedValueAfterEq(_) => Severity::Error,
-			/* FUNCTIONS */
-			StmtDiag::ParamsExpectedCommaAfterParam(_) => Severity::Error,
-			StmtDiag::ParamsExpectedParamAfterComma(_) => Severity::Error,
-			StmtDiag::ParamsExpectedParamBetweenParenComma(_) => {
-				Severity::Error
-			}
-			StmtDiag::ParamsInvalidTypeExpr(_) => Severity::Error,
-			StmtDiag::ParamsInvalidIdentExpr(_) => Severity::Error,
-			StmtDiag::ParamsExpectedRParen(_) => Severity::Error,
-			StmtDiag::FnExpectedSemiOrLBraceAfterParams(_) => Severity::Error,
-			/* STRUCTS */
-			StmtDiag::StructInvalidStmtInBody(_) => Severity::Error,
-			StmtDiag::StructExpectedIdentAfterKw(_) => Severity::Error,
-			StmtDiag::StructExpectedLBraceAfterIdent(_) => Severity::Error,
-			StmtDiag::StructExpectedInstanceOrSemiAfterBody(_) => {
-				Severity::Error
-			}
-			StmtDiag::StructExpectedSemiAfterBodyOrInstance(_) => {
-				Severity::Error
-			}
-			StmtDiag::StructDefIsInvalid(_) => Severity::Error,
-			/* SINGLE-KEYWORD CONTROL FLOW */
-			StmtDiag::BreakExpectedSemiAfterKw(_) => Severity::Error,
-			StmtDiag::ContinueExpectedSemiAfterKw(_) => Severity::Error,
-			StmtDiag::DiscardExpectedSemiAfterKw(_) => Severity::Error,
-			StmtDiag::ReturnExpectedSemiOrExprAfterKw(_) => Severity::Error,
-			StmtDiag::ReturnExpectedSemiAfterExpr(_) => Severity::Error,
-		}
+		Severity::Error
 	}
 }
 
@@ -542,15 +455,7 @@ pub enum PreprocDefineDiag {
 
 impl PreprocDefineDiag {
 	pub fn get_severity(&self) -> Severity {
-		match self {
-			/* DEFINE */
-			PreprocDefineDiag::DefineExpectedMacroName(_) => Severity::Error,
-			/* TOKEN CONCAT */
-			PreprocDefineDiag::TokenConcatMissingLHS(_) => Severity::Error,
-			PreprocDefineDiag::TokenConcatMissingRHS(_) => Severity::Error,
-			/* UNDEF */
-			PreprocDefineDiag::UndefExpectedMacroName(_) => Severity::Error,
-		}
+		Severity::Error
 	}
 }
 
@@ -568,10 +473,6 @@ pub enum PreprocConditionalDiag {
 
 impl PreprocConditionalDiag {
 	pub fn get_severity(&self) -> Severity {
-		match self {
-			PreprocConditionalDiag::UnmatchedElseIf(_) => Severity::Error,
-			PreprocConditionalDiag::UnmatchedElse(_) => Severity::Error,
-			PreprocConditionalDiag::UnmatchedEndIf(_) => Severity::Error,
-		}
+		Severity::Error
 	}
 }

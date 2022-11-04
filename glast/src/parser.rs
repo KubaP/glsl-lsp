@@ -1093,6 +1093,7 @@ fn parse_stmt(walker: &mut Walker, nodes: &mut Vec<ast::Node>) {
 			parse_directive(walker, stream, token_span);
 			walker.advance();
 		}
+		Token::Switch => parse_switch(walker, nodes, token_span),
 		Token::For => parse_for_loop(walker, nodes, token_span),
 		Token::While => parse_while_loop(walker, nodes, token_span),
 		Token::Do => parse_do_while_loop(walker, nodes, token_span),
@@ -1182,6 +1183,19 @@ const BRACE_SCOPE: ScopeEnd = |walker, l_brace_span| match walker.peek() {
 	None => {
 		walker.push_syntax_diag(Syntax::Stmt(StmtDiag::ScopeMissingRBrace(
 			l_brace_span,
+			walker.get_last_span().next_single_width(),
+		)));
+		Some(walker.get_last_span().end_zero_width())
+	}
+};
+
+const SWITCH_CASE_SCOPE: ScopeEnd = |walker, _start_span| match walker.peek() {
+	Some((token, span)) => match token {
+		Token::Case | Token::Default | Token::RBrace => Some(span),
+		_ => None,
+	},
+	None => {
+		walker.push_syntax_diag(Syntax::Stmt(StmtDiag::SwitchExpectedRBrace(
 			walker.get_last_span().next_single_width(),
 		)));
 		Some(walker.get_last_span().end_zero_width())
@@ -2609,6 +2623,449 @@ fn parse_struct(
 	});
 }
 
+/// Parses a switch statement.
+///
+/// This function assumes that the keyword is not yet consumed.
+fn parse_switch(walker: &mut Walker, nodes: &mut Vec<Node>, kw_span: Span) {
+	walker.push_colour(kw_span, SyntaxToken::Keyword);
+	walker.advance();
+
+	// Consume the `(`.
+	let l_paren_span = match walker.peek() {
+		Some((token, span)) => {
+			if *token == Token::LParen {
+				walker.push_colour(span, SyntaxToken::Punctuation);
+				walker.advance();
+				Some(span)
+			} else {
+				walker.push_syntax_diag(Syntax::Stmt(
+					StmtDiag::SwitchExpectedLParenAfterKw(
+						kw_span.next_single_width(),
+					),
+				));
+				None
+			}
+		}
+		None => {
+			walker.push_syntax_diag(Syntax::Stmt(
+				StmtDiag::SwitchExpectedLParenAfterKw(
+					kw_span.next_single_width(),
+				),
+			));
+			return;
+		}
+	};
+
+	// Consume the condition expression.
+	let cond_expr = match expr_parser(
+		walker,
+		Mode::Default,
+		[Token::RParen, Token::LBrace],
+	) {
+		(Some(e), mut diags, mut colours) => {
+			walker.append_colours(&mut colours);
+			walker.append_syntax_diags(&mut diags);
+			Some(e)
+		}
+		(None, _, _) => {
+			if let Some(l_paren_span) = l_paren_span {
+				walker.push_syntax_diag(Syntax::Stmt(
+					StmtDiag::SwitchExpectedExprAfterLParen(
+						l_paren_span.next_single_width(),
+					),
+				));
+			}
+			None
+		}
+	};
+
+	// Consume the `)`.
+	let r_paren_span = match walker.peek() {
+		Some((token, span)) => {
+			if *token == Token::RParen {
+				walker.push_colour(span, SyntaxToken::Punctuation);
+				walker.advance();
+				Some(span)
+			} else {
+				if let Some(ref cond_expr) = cond_expr {
+					walker.push_syntax_diag(Syntax::Stmt(
+						StmtDiag::SwitchExpectedRParenAfterExpr(
+							cond_expr.span.next_single_width(),
+						),
+					));
+				}
+				None
+			}
+		}
+		None => {
+			if let Some(ref cond_expr) = cond_expr {
+				walker.push_syntax_diag(Syntax::Stmt(
+					StmtDiag::SwitchExpectedRParenAfterExpr(
+						cond_expr.span.next_single_width(),
+					),
+				));
+			}
+			return;
+		}
+	};
+
+	// Consume the `{`.
+	let l_brace_span = match walker.peek() {
+		Some((token, span)) => {
+			if *token == Token::LBrace {
+				walker.push_colour(span, SyntaxToken::Punctuation);
+				walker.advance();
+				span
+			} else {
+				if let Some(r_paren_span) = r_paren_span {
+					walker.push_syntax_diag(Syntax::Stmt(
+						StmtDiag::SwitchExpectedLBraceAfterCond(
+							r_paren_span.next_single_width(),
+						),
+					));
+				}
+				nodes.push(Node {
+					span: Span::new(
+						kw_span.start,
+						if let Some(r_paren_span) = r_paren_span {
+							r_paren_span.end
+						} else if let Some(ref cond_expr) = cond_expr {
+							cond_expr.span.end
+						} else if let Some(l_paren_span) = l_paren_span {
+							l_paren_span.end
+						} else {
+							kw_span.end
+						},
+					),
+					ty: NodeTy::Switch {
+						cond: cond_expr,
+						cases: vec![],
+					},
+				});
+				return;
+			}
+		}
+		None => {
+			if let Some(r_paren_span) = r_paren_span {
+				walker.push_syntax_diag(Syntax::Stmt(
+					StmtDiag::SwitchExpectedLBraceAfterCond(
+						r_paren_span.next_single_width(),
+					),
+				));
+			}
+			nodes.push(Node {
+				span: Span::new(kw_span.start, walker.get_last_span().end),
+				ty: NodeTy::Switch {
+					cond: cond_expr,
+					cases: vec![],
+				},
+			});
+			return;
+		}
+	};
+
+	// Check if the body is empty.
+	match walker.peek() {
+		Some((token, token_span)) => {
+			if *token == Token::RBrace {
+				walker.push_syntax_diag(Syntax::Stmt(
+					StmtDiag::SwitchFoundEmptyBody(Span::new(
+						l_brace_span.start,
+						token_span.end,
+					)),
+				));
+				nodes.push(Node {
+					span: Span::new(kw_span.start, token_span.end),
+					ty: NodeTy::Switch {
+						cond: cond_expr,
+						cases: vec![],
+					},
+				});
+				return;
+			}
+		}
+		None => {
+			walker.push_syntax_diag(Syntax::Stmt(
+				StmtDiag::ScopeMissingRBrace(
+					l_brace_span,
+					walker.get_last_span().next_single_width(),
+				),
+			));
+			nodes.push(Node {
+				span: Span::new(kw_span.start, walker.get_last_span().end),
+				ty: NodeTy::Switch {
+					cond: cond_expr,
+					cases: vec![],
+				},
+			});
+			return;
+		}
+	}
+
+	// Consume cases until we reach the end of the body.
+	let mut cases = Vec::new();
+	loop {
+		let (token, token_span) = match walker.peek() {
+			Some(t) => t,
+			None => {
+				walker.push_syntax_diag(Syntax::Stmt(
+					StmtDiag::ScopeMissingRBrace(
+						l_brace_span,
+						walker.get_last_span().next_single_width(),
+					),
+				));
+				nodes.push(Node {
+					span: Span::new(kw_span.start, walker.get_last_span().end),
+					ty: NodeTy::Switch {
+						cond: cond_expr,
+						cases,
+					},
+				});
+				return;
+			}
+		};
+
+		match token {
+			Token::Case => {
+				let case_kw_span = token_span;
+				walker.push_colour(case_kw_span, SyntaxToken::Keyword);
+				walker.advance();
+
+				// Consume the expression.
+				let expr =
+					match expr_parser(walker, Mode::Default, [Token::Colon]) {
+						(Some(e), mut diags, mut colours) => {
+							walker.append_colours(&mut colours);
+							walker.append_syntax_diags(&mut diags);
+							Some(e)
+						}
+						(None, _, _) => {
+							walker.push_syntax_diag(Syntax::Stmt(
+								StmtDiag::SwitchExpectedExprAfterCaseKw(
+									case_kw_span.next_single_width(),
+								),
+							));
+							None
+						}
+					};
+
+				// Consume the `:`.
+				let colon_span = match walker.peek() {
+					Some((token, token_span)) => {
+						if *token == Token::Colon {
+							walker.push_colour(
+								token_span,
+								SyntaxToken::Punctuation,
+							);
+							walker.advance();
+							Some(token_span)
+						} else {
+							if let Some(ref expr) = expr {
+								walker.push_syntax_diag(Syntax::Stmt(
+									StmtDiag::SwitchExpectedColonAfterCaseExpr(
+										expr.span.next_single_width(),
+									),
+								));
+							}
+							None
+						}
+					}
+					None => {
+						// We don't have a complete case but we've reached the EOF.
+						if let Some(ref expr) = expr {
+							walker.push_syntax_diag(Syntax::Stmt(
+								StmtDiag::SwitchExpectedColonAfterCaseExpr(
+									expr.span.next_single_width(),
+								),
+							));
+						}
+						cases.push(SwitchCase {
+							span: Span::new(
+								case_kw_span.start,
+								walker.get_last_span().end,
+							),
+							expr: Either::Left(expr),
+							body: None,
+						});
+						nodes.push(Node {
+							span: Span::new(
+								kw_span.start,
+								walker.get_last_span().end,
+							),
+							ty: NodeTy::Switch {
+								cond: cond_expr,
+								cases,
+							},
+						});
+						return;
+					}
+				};
+
+				// Consume the body of the case.
+				let body = parse_scope(
+					walker,
+					SWITCH_CASE_SCOPE,
+					colon_span.unwrap_or(if let Some(ref expr) = expr {
+						expr.span
+					} else {
+						case_kw_span
+					}),
+				);
+				cases.push(SwitchCase {
+					span: Span::new(case_kw_span.start, body.span.end),
+					expr: Either::Left(expr),
+					body: Some(body),
+				});
+			}
+			Token::Default => {
+				let default_kw_span = token_span;
+				walker.push_colour(default_kw_span, SyntaxToken::Keyword);
+				walker.advance();
+
+				// Consume the `:`.
+				let colon_span = match walker.peek() {
+					Some((token, token_span)) => {
+						if *token == Token::Colon {
+							walker.push_colour(
+								token_span,
+								SyntaxToken::Punctuation,
+							);
+							walker.advance();
+							Some(token_span)
+						} else {
+							walker.push_syntax_diag(Syntax::Stmt(
+								StmtDiag::SwitchExpectedColonAfterDefaultKw(
+									default_kw_span.next_single_width(),
+								),
+							));
+							None
+						}
+					}
+					None => {
+						// We don't have a complete case but we've reached the EOF.
+						walker.push_syntax_diag(Syntax::Stmt(
+							StmtDiag::SwitchExpectedColonAfterDefaultKw(
+								default_kw_span.next_single_width(),
+							),
+						));
+						cases.push(SwitchCase {
+							span: default_kw_span,
+							expr: Either::Right(()),
+							body: None,
+						});
+						nodes.push(Node {
+							span: Span::new(
+								kw_span.start,
+								walker.get_last_span().end,
+							),
+							ty: NodeTy::Switch {
+								cond: cond_expr,
+								cases,
+							},
+						});
+						return;
+					}
+				};
+
+				// Consume the body of the case.
+				let body = parse_scope(
+					walker,
+					SWITCH_CASE_SCOPE,
+					colon_span.unwrap_or(default_kw_span.end_zero_width()),
+				);
+				cases.push(SwitchCase {
+					span: Span::new(default_kw_span.start, body.span.end),
+					expr: Either::Right(()),
+					body: Some(body),
+				});
+			}
+			Token::RBrace => {
+				// If this branch is triggered, this `}` is closing the entire body of the switch statement. In the
+				// following example:
+				//
+				// switch (true) {
+				//     default: {
+				//         /*...*/
+				//     }
+				// }
+				//
+				// the first `}` will be consumed by the `parse_scope()` function of the default case body, whilst
+				// the second will be consumed by this branch. In the following example:
+				//
+				// switch (true) {
+				//     default:
+				//         /*...*/
+				// }
+				//
+				// The `}` will close the body of the default case but it won't be consumed, and hence it will be
+				// consumed by this branch.
+				walker.push_colour(token_span, SyntaxToken::Punctuation);
+				walker.advance();
+				nodes.push(Node {
+					span: Span::new(kw_span.start, token_span.end),
+					ty: NodeTy::Switch {
+						cond: cond_expr,
+						cases,
+					},
+				});
+				return;
+			}
+			_ => {
+				// We have a token which cannot begin a case, nor can finish the switch body. We consume tokens
+				// until we hit something recognizable.
+				let invalid_span_start = token_span.start;
+				let mut invalid_span_end = token_span.end;
+				loop {
+					match walker.peek() {
+						Some((token, token_span)) => {
+							if *token == Token::Case
+								|| *token == Token::Default || *token
+								== Token::RBrace
+							{
+								// We don't consume the token because the next iteration of the main loop will deal
+								// with it appropriately.
+								walker.push_syntax_diag(Syntax::Stmt(StmtDiag::SwitchExpectedCaseOrDefaultKwOrEnd(
+									Span::new(invalid_span_start, invalid_span_end)
+								)));
+								break;
+							} else {
+								invalid_span_end = token_span.end;
+								walker.push_colour(
+									token_span,
+									token.non_semantic_colour(),
+								);
+								walker.advance();
+							}
+						}
+						None => {
+							// We haven't yet hit anything recognizable but we've reached the EOF.
+							walker.push_syntax_diag(Syntax::Stmt(
+								StmtDiag::SwitchExpectedCaseOrDefaultKwOrEnd(
+									Span::new(
+										invalid_span_start,
+										walker.get_last_span().end,
+									),
+								),
+							));
+							nodes.push(Node {
+								span: Span::new(
+									kw_span.start,
+									walker.get_last_span().end,
+								),
+								ty: NodeTy::Switch {
+									cond: cond_expr,
+									cases,
+								},
+							});
+							return;
+						}
+					}
+				}
+			}
+		}
+	}
+}
+
 /// Parses a for loop statement.
 ///
 /// This function assumes that the keyword is not yet consumed.
@@ -3337,8 +3794,6 @@ fn parse_directive(walker: &mut Walker, stream: PreprocStream, dir_span: Span) {
 				// We have a function-like macro.
 				// TODO: Implement
 			}
-
-			walker.advance();
 		}
 		PreprocStream::Undef {
 			kw: kw_span,
@@ -3377,12 +3832,8 @@ fn parse_directive(walker: &mut Walker, stream: PreprocStream, dir_span: Span) {
 					));
 				}
 			}
-
-			walker.advance();
 		}
-		_ => {
-			walker.advance();
-		}
+		_ => {}
 	}
 }
 

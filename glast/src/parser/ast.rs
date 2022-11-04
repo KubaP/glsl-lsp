@@ -3,7 +3,7 @@
 use crate::{
 	diag::Syntax,
 	lexer::{NumType, Token},
-	Span,
+	Either, Span,
 };
 
 /// This type represents a value which can be omitted in accordance to the GLSL specification.
@@ -80,6 +80,11 @@ pub enum NodeTy {
 		body: Scope,
 		instance: Omittable<Ident>,
 	},
+	/// A switch statement, e.g. `switch (true) { default: return; }`.
+	Switch {
+		cond: Option<Expr>,
+		cases: Vec<SwitchCase>,
+	},
 	/// A for loop, e.g. `for (int i = 0; i<5; i++) {/*...*/}`.
 	For {
 		init: Option<Box<Node>>,
@@ -113,6 +118,14 @@ pub struct Scope {
 pub struct Param {
 	pub type_: Type,
 	pub ident: Omittable<Ident>,
+	pub span: Span,
+}
+
+/// A switch case.
+#[derive(Debug, Clone, PartialEq)]
+pub struct SwitchCase {
+	pub expr: Either<Option<Expr>, ()>,
+	pub body: Option<Scope>,
 	pub span: Span,
 }
 

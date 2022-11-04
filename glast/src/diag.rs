@@ -392,6 +392,36 @@ pub enum StmtDiag {
 	/// - `0` - The span of the definition.
 	StructDefIsInvalid(Span),
 
+	/* FOR LOOPS */
+	/// ERROR - Did not find an opening parenthesis after the `for` keyword.
+	///
+	/// - `0` - The span where the opening parenthesis is expected.
+	ForExpectedLParenAfterKw(Span),
+	/// ERROR - Did not find an initialization statement after the opening parenthesis.
+	///
+	/// - `0` - The span where the statement is expected.
+	ForExpectedInitStmt(Span),
+	/// ERROR - Did not find a conditional statement after the opening parenthesis.
+	///
+	/// - `0` - The span where the statement is expected.
+	ForExpectedCondStmt(Span),
+	/// ERROR - Did not find an increment statement after the opening parenthesis.
+	///
+	/// - `0` - The span where the statement is expected.
+	ForExpectedIncStmt(Span),
+	/// ERROR - Did not find all 3 statements before reaching the closing parenthesis.
+	///
+	/// - `0` - The span where the statements were expected.
+	ForExpected3Stmts(Span),
+	/// ERROR - Did not find a closing parenthesis after the 3 statements.
+	///
+	/// - `0` - The span where the closing parenthesis is expected.
+	ForExpectedRParenAfterStmts(Span),
+	/// ERROR - Did not find an opening brace after the for header.
+	///
+	/// - `0` - The span where the opening brace is expected.
+	ForExpectedLBraceAfterHeader(Span),
+
 	/* DO/WHILE LOOPS */
 	/// ERROR - Did not find an opening parenthesis after the `while` keyword.
 	///

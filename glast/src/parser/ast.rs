@@ -80,6 +80,13 @@ pub enum NodeTy {
 		body: Scope,
 		instance: Omittable<Ident>,
 	},
+	/// A for loop, e.g. `for (int i = 0; i<5; i++) {/*...*/}`.
+	For {
+		init: Option<Box<Node>>,
+		cond: Option<Box<Node>>,
+		inc: Option<Box<Node>>,
+		body: Option<Scope>,
+	},
 	/// A while loop, e.g `while (true) {/*...*/}`.
 	While { cond: Option<Expr>, body: Scope },
 	/// A do-while loop, e.g. `do {/*...*/} while (true);`.

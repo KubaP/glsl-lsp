@@ -1093,6 +1093,7 @@ fn parse_stmt(walker: &mut Walker, nodes: &mut Vec<ast::Node>) {
 			parse_directive(walker, stream, token_span);
 			walker.advance();
 		}
+		Token::For => parse_for_loop(walker, nodes, token_span),
 		Token::While => parse_while_loop(walker, nodes, token_span),
 		Token::Do => parse_do_while_loop(walker, nodes, token_span),
 		Token::Break => {
@@ -1131,7 +1132,9 @@ fn parse_stmt(walker: &mut Walker, nodes: &mut Vec<ast::Node>) {
 			invalidate_qualifiers(walker, qualifiers);
 			parse_return(walker, nodes, token_span);
 		}
-		_ => try_parse_definition_declaration_expr(walker, nodes, qualifiers),
+		_ => try_parse_definition_declaration_expr(
+			walker, nodes, qualifiers, false,
+		),
 	}
 }
 
@@ -1719,10 +1722,14 @@ fn try_parse_qualifiers(walker: &mut Walker) -> Vec<Qualifier> {
 ///
 /// This function attempts to look for a statement at the current position. If this fails, error recovery till the
 /// next clear statement delineation occurs.
+///
+/// - `parsing_last_for_stmt` - Set to `true` if this function is attempting to parse the increment statement in a
+///   for loop header.
 fn try_parse_definition_declaration_expr(
 	walker: &mut Walker,
 	nodes: &mut Vec<Node>,
 	qualifiers: Vec<Qualifier>,
+	parsing_last_for_stmt: bool,
 ) {
 	// We attempt to parse an expression at the current position.
 	let (start, mut start_diags, mut start_colours) =
@@ -1752,11 +1759,19 @@ fn try_parse_definition_declaration_expr(
 				invalidate_qualifiers(walker, qualifiers);
 				walker.append_colours(&mut start_colours);
 				walker.append_syntax_diags(&mut start_diags);
-				walker.push_syntax_diag(Syntax::Stmt(
-					StmtDiag::ExprStmtExpectedSemiAfterExpr(
-						start.span.next_single_width(),
-					),
-				));
+				if parsing_last_for_stmt {
+					walker.push_syntax_diag(Syntax::Stmt(
+						StmtDiag::ForExpectedRParenAfterStmts(
+							start.span.next_single_width(),
+						),
+					))
+				} else {
+					walker.push_syntax_diag(Syntax::Stmt(
+						StmtDiag::ExprStmtExpectedSemiAfterExpr(
+							start.span.next_single_width(),
+						),
+					));
+				}
 				nodes.push(Node {
 					span: start.span,
 					ty: NodeTy::Expr(start),
@@ -1806,8 +1821,24 @@ fn try_parse_definition_declaration_expr(
 				walker.append_syntax_diags(&mut start_diags);
 				walker.push_colour(semi_span, SyntaxToken::Punctuation);
 				walker.advance();
+				if parsing_last_for_stmt {
+					walker.push_syntax_diag(Syntax::Stmt(
+						StmtDiag::ForExpectedRParenAfterStmts(semi_span),
+					));
+				}
 				nodes.push(Node {
 					span: Span::new(start.span.start, semi_span.end),
+					ty: NodeTy::Expr(start),
+				});
+				return;
+			}
+			Token::RParen if parsing_last_for_stmt => {
+				// We have an expression statement.
+				invalidate_qualifiers(walker, qualifiers);
+				walker.append_colours(&mut start_colours);
+				walker.append_syntax_diags(&mut start_diags);
+				nodes.push(Node {
+					span: start.span,
 					ty: NodeTy::Expr(start),
 				});
 				return;
@@ -1828,11 +1859,19 @@ fn try_parse_definition_declaration_expr(
 					invalidate_qualifiers(walker, qualifiers);
 					walker.append_colours(&mut start_colours);
 					walker.append_syntax_diags(&mut start_diags);
-					walker.push_syntax_diag(Syntax::Stmt(
-						StmtDiag::ExprStmtExpectedSemiAfterExpr(
-							start.span.next_single_width(),
-						),
-					));
+					if parsing_last_for_stmt {
+						walker.push_syntax_diag(Syntax::Stmt(
+							StmtDiag::ForExpectedRParenAfterStmts(
+								start.span.next_single_width(),
+							),
+						))
+					} else {
+						walker.push_syntax_diag(Syntax::Stmt(
+							StmtDiag::ExprStmtExpectedSemiAfterExpr(
+								start.span.next_single_width(),
+							),
+						));
+					}
 					nodes.push(Node {
 						span: start.span,
 						ty: NodeTy::Expr(start),
@@ -1852,11 +1891,19 @@ fn try_parse_definition_declaration_expr(
 			invalidate_qualifiers(walker, qualifiers);
 			walker.append_colours(&mut start_colours);
 			walker.append_syntax_diags(&mut start_diags);
-			walker.push_syntax_diag(Syntax::Stmt(
-				StmtDiag::ExprStmtExpectedSemiAfterExpr(
-					start.span.next_single_width(),
-				),
-			));
+			if parsing_last_for_stmt {
+				walker.push_syntax_diag(Syntax::Stmt(
+					StmtDiag::ForExpectedRParenAfterStmts(
+						start.span.next_single_width(),
+					),
+				))
+			} else {
+				walker.push_syntax_diag(Syntax::Stmt(
+					StmtDiag::ExprStmtExpectedSemiAfterExpr(
+						start.span.next_single_width(),
+					),
+				));
+			}
 			nodes.push(Node {
 				span: start.span,
 				ty: NodeTy::Expr(start),
@@ -2558,6 +2605,229 @@ fn parse_struct(
 			ident,
 			body,
 			instance,
+		},
+	});
+}
+
+/// Parses a for loop statement.
+///
+/// This function assumes that the keyword is not yet consumed.
+fn parse_for_loop(walker: &mut Walker, nodes: &mut Vec<Node>, kw_span: Span) {
+	walker.push_colour(kw_span, SyntaxToken::Keyword);
+	walker.advance();
+
+	// Consume the `(`.
+	let l_paren_span = match walker.peek() {
+		Some((token, span)) => {
+			if *token == Token::LParen {
+				walker.push_colour(span, SyntaxToken::Punctuation);
+				walker.advance();
+				Some(span)
+			} else {
+				walker.push_syntax_diag(Syntax::Stmt(
+					StmtDiag::ForExpectedLParenAfterKw(
+						kw_span.next_single_width(),
+					),
+				));
+				None
+			}
+		}
+		None => {
+			walker.push_syntax_diag(Syntax::Stmt(
+				StmtDiag::ForExpectedLParenAfterKw(kw_span.next_single_width()),
+			));
+			return;
+		}
+	};
+
+	// Consume the "expressions" (actually expression/declaration statements).
+	let mut init: Option<Node> = None;
+	let mut cond: Option<Node> = None;
+	let mut inc: Option<Node> = None;
+	let mut counter = 0;
+	let r_paren_span = 'outer: loop {
+		let (token, token_span) = match walker.peek() {
+			Some(t) => t,
+			None => {
+				// We have not encountered a `)` yet.
+				let span = Span::new(
+					kw_span.start,
+					if let Some(ref inc) = inc {
+						inc.span.end
+					} else if let Some(ref cond) = cond {
+						walker.push_syntax_diag(Syntax::Stmt(
+							StmtDiag::ForExpectedIncStmt(
+								cond.span.next_single_width(),
+							),
+						));
+						cond.span.end
+					} else if let Some(ref init) = init {
+						walker.push_syntax_diag(Syntax::Stmt(
+							StmtDiag::ForExpectedCondStmt(
+								init.span.next_single_width(),
+							),
+						));
+						init.span.end
+					} else if let Some(l_paren_span) = l_paren_span {
+						walker.push_syntax_diag(Syntax::Stmt(
+							StmtDiag::ForExpectedInitStmt(
+								l_paren_span.next_single_width(),
+							),
+						));
+						l_paren_span.end
+					} else {
+						kw_span.end
+					},
+				);
+				nodes.push(Node {
+					span,
+					ty: NodeTy::For {
+						init: init.map(|n| Box::from(n)),
+						cond: cond.map(|n| Box::from(n)),
+						inc: inc.map(|n| Box::from(n)),
+						body: None,
+					},
+				});
+				return;
+			}
+		};
+
+		match token {
+			Token::RParen => {
+				if counter < 3 {
+					walker.push_syntax_diag(Syntax::Stmt(
+						StmtDiag::ForExpected3Stmts(
+							token_span.previous_single_width(),
+						),
+					));
+				}
+				walker.push_colour(token_span, SyntaxToken::Punctuation);
+				walker.advance();
+				break token_span;
+			}
+			_ => {
+				if counter == 3 {
+					walker.push_syntax_diag(Syntax::Stmt(
+						StmtDiag::ForExpectedRParenAfterStmts(
+							inc.as_ref().unwrap().span.next_single_width(),
+						),
+					));
+
+					walker.push_colour(token_span, SyntaxToken::Invalid);
+					walker.advance();
+
+					loop {
+						match walker.peek() {
+							Some((token, span)) => {
+								if *token == Token::RParen {
+									walker.push_colour(
+										span,
+										SyntaxToken::Punctuation,
+									);
+									walker.advance();
+									break 'outer span;
+								} else {
+									walker.push_colour(
+										span,
+										SyntaxToken::Invalid,
+									);
+									walker.advance();
+								}
+							}
+							None => break,
+						}
+					}
+
+					nodes.push(Node {
+						span: Span::new(
+							kw_span.start,
+							inc.as_ref().unwrap().span.end,
+						),
+						ty: NodeTy::For {
+							init: init.map(|n| Box::from(n)),
+							cond: cond.map(|n| Box::from(n)),
+							inc: inc.map(|n| Box::from(n)),
+							body: None,
+						},
+					});
+					return;
+				}
+			}
+		}
+
+		let mut stmt = Vec::new();
+		try_parse_definition_declaration_expr(
+			walker,
+			&mut stmt,
+			vec![],
+			counter == 2,
+		);
+
+		if !stmt.is_empty() {
+			if counter == 0 {
+				init = Some(stmt.remove(0));
+			} else if counter == 1 {
+				cond = Some(stmt.remove(0));
+			} else if counter == 2 {
+				inc = Some(stmt.remove(0));
+			}
+		}
+		counter += 1;
+	};
+
+	// Consume the `{`.
+	let l_brace_span = match walker.peek() {
+		Some((token, span)) => {
+			if *token == Token::LBrace {
+				walker.push_colour(span, SyntaxToken::Punctuation);
+				walker.advance();
+				span
+			} else {
+				walker.push_syntax_diag(Syntax::Stmt(
+					StmtDiag::ForExpectedLBraceAfterHeader(
+						r_paren_span.next_single_width(),
+					),
+				));
+				nodes.push(Node {
+					span: Span::new(kw_span.start, r_paren_span.end),
+					ty: NodeTy::For {
+						init: init.map(|n| Box::from(n)),
+						cond: cond.map(|n| Box::from(n)),
+						inc: inc.map(|n| Box::from(n)),
+						body: None,
+					},
+				});
+				return;
+			}
+		}
+		None => {
+			walker.push_syntax_diag(Syntax::Stmt(
+				StmtDiag::ForExpectedLBraceAfterHeader(
+					r_paren_span.next_single_width(),
+				),
+			));
+			nodes.push(Node {
+				span: Span::new(kw_span.start, r_paren_span.end),
+				ty: NodeTy::For {
+					init: init.map(|n| Box::from(n)),
+					cond: cond.map(|n| Box::from(n)),
+					inc: inc.map(|n| Box::from(n)),
+					body: None,
+				},
+			});
+			return;
+		}
+	};
+
+	// Consume the body.
+	let body = parse_scope(walker, BRACE_SCOPE, l_brace_span);
+	nodes.push(Node {
+		span: Span::new(kw_span.start, body.span.end),
+		ty: NodeTy::For {
+			init: init.map(|n| Box::from(n)),
+			cond: cond.map(|n| Box::from(n)),
+			inc: inc.map(|n| Box::from(n)),
+			body: Some(body),
 		},
 	});
 }

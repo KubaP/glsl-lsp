@@ -1093,6 +1093,7 @@ fn parse_stmt(walker: &mut Walker, nodes: &mut Vec<ast::Node>) {
 			parse_directive(walker, stream, token_span);
 			walker.advance();
 		}
+		Token::If => parse_if(walker, nodes, token_span),
 		Token::Switch => parse_switch(walker, nodes, token_span),
 		Token::For => parse_for_loop(walker, nodes, token_span),
 		Token::While => parse_while_loop(walker, nodes, token_span),
@@ -2621,6 +2622,389 @@ fn parse_struct(
 			instance,
 		},
 	});
+}
+
+/// Parses an if statement.
+///
+/// This function assumes that the keyword is not yet consumed.
+fn parse_if(walker: &mut Walker, nodes: &mut Vec<Node>, kw_span: Span) {
+	let mut branches = Vec::new();
+	let mut first_iter = true;
+	// On the first iteration of this loop, the current token is guaranteed to be `Token::If`.
+	loop {
+		let (token, token_span) = match walker.peek() {
+			Some(t) => t,
+			None => {
+				nodes.push(Node {
+					span: Span::new(kw_span.start, walker.get_last_span().end),
+					ty: NodeTy::If(branches),
+				});
+				return;
+			}
+		};
+
+		let else_kw_span = if *token != Token::Else && !first_iter {
+			// We've found a token that is not `else`, which means we've finished the current if statement.
+			nodes.push(Node {
+				span: Span::new(
+					kw_span.start,
+					if let Some(branch) = branches.last() {
+						branch.span.end
+					} else {
+						kw_span.end
+					},
+				),
+				ty: NodeTy::If(branches),
+			});
+			return;
+		} else if *token == Token::If && first_iter {
+			// In the first iteration this variable is ignored. This is just to prevent divergence of branches
+			// which would require a different overall parsing algorithm.
+			token_span
+		} else {
+			// Consume the `else` keyword.
+			walker.push_colour(token_span, SyntaxToken::Keyword);
+			walker.advance();
+			token_span
+		};
+
+		let (token, token_span) = match walker.peek() {
+			Some(t) => t,
+			None => {
+				nodes.push(Node {
+					span: Span::new(kw_span.start, walker.get_last_span().end),
+					ty: NodeTy::If(branches),
+				});
+				return;
+			}
+		};
+
+		if *token == Token::If {
+			let if_kw_span = token_span;
+			walker.push_colour(if_kw_span, SyntaxToken::Keyword);
+			walker.advance();
+
+			// Consume the `(`.
+			let l_paren_span = match walker.peek() {
+				Some((token, span)) => {
+					if *token == Token::LParen {
+						walker.push_colour(span, SyntaxToken::Punctuation);
+						walker.advance();
+						Some(span)
+					} else {
+						walker.push_syntax_diag(Syntax::Stmt(
+							StmtDiag::IfExpectedLParenAfterKw(
+								if_kw_span.next_single_width(),
+							),
+						));
+						None
+					}
+				}
+				None => {
+					walker.push_syntax_diag(Syntax::Stmt(
+						StmtDiag::IfExpectedLParenAfterKw(
+							if_kw_span.next_single_width(),
+						),
+					));
+					branches.push(IfBranch {
+						span: if first_iter {
+							if_kw_span
+						} else {
+							Span::new(else_kw_span.start, if_kw_span.end)
+						},
+						condition: if first_iter {
+							(IfCondition::If(None), if_kw_span)
+						} else {
+							(
+								IfCondition::ElseIf(None),
+								Span::new(else_kw_span.start, if_kw_span.end),
+							)
+						},
+						body: None,
+					});
+					nodes.push(Node {
+						span: Span::new(
+							kw_span.start,
+							walker.get_last_span().end,
+						),
+						ty: NodeTy::If(branches),
+					});
+					return;
+				}
+			};
+
+			// Consume the condition expression.
+			let cond_expr = match expr_parser(
+				walker,
+				Mode::Default,
+				[Token::RParen, Token::LBrace],
+			) {
+				(Some(e), mut diags, mut colours) => {
+					walker.append_colours(&mut colours);
+					walker.append_syntax_diags(&mut diags);
+					Some(e)
+				}
+				(None, _, _) => {
+					if let Some(l_paren_span) = l_paren_span {
+						walker.push_syntax_diag(Syntax::Stmt(
+							StmtDiag::IfExpectedExprAfterLParen(
+								l_paren_span.next_single_width(),
+							),
+						));
+					}
+					None
+				}
+			};
+
+			// Consume the `)`.
+			let r_paren_span = match walker.peek() {
+				Some((token, span)) => {
+					if *token == Token::RParen {
+						walker.push_colour(span, SyntaxToken::Punctuation);
+						walker.advance();
+						Some(span)
+					} else {
+						if let Some(ref cond_expr) = cond_expr {
+							walker.push_syntax_diag(Syntax::Stmt(
+								StmtDiag::IfExpectedRParenAfterExpr(
+									cond_expr.span.next_single_width(),
+								),
+							));
+						}
+						None
+					}
+				}
+				None => {
+					if let Some(ref cond_expr) = cond_expr {
+						walker.push_syntax_diag(Syntax::Stmt(
+							StmtDiag::IfExpectedRParenAfterExpr(
+								cond_expr.span.next_single_width(),
+							),
+						));
+					}
+					let span = Span::new(
+						if first_iter {
+							if_kw_span.start
+						} else {
+							else_kw_span.start
+						},
+						if let Some(ref cond_expr) = cond_expr {
+							cond_expr.span.end
+						} else if let Some(l_paren_span) = l_paren_span {
+							l_paren_span.end
+						} else {
+							if_kw_span.end
+						},
+					);
+					branches.push(IfBranch {
+						span,
+						condition: (
+							if first_iter {
+								IfCondition::If(cond_expr)
+							} else {
+								IfCondition::ElseIf(None)
+							},
+							span,
+						),
+						body: None,
+					});
+					nodes.push(Node {
+						span: Span::new(
+							kw_span.start,
+							walker.get_last_span().end,
+						),
+						ty: NodeTy::If(branches),
+					});
+					return;
+				}
+			};
+
+			// Consume either the `{` for a multi-line if body or a statement for a single-statement if body.
+			match walker.peek() {
+				Some((token, token_span)) => {
+					if *token == Token::LBrace {
+						// We have a multi-line body.
+						walker
+							.push_colour(token_span, SyntaxToken::Punctuation);
+						walker.advance();
+						let body = parse_scope(walker, BRACE_SCOPE, token_span);
+						let span = Span::new(
+							if first_iter {
+								if_kw_span.start
+							} else {
+								else_kw_span.start
+							},
+							if let Some(r_paren_span) = r_paren_span {
+								r_paren_span.end
+							} else if let Some(ref cond_expr) = cond_expr {
+								cond_expr.span.end
+							} else if let Some(l_paren_span) = l_paren_span {
+								l_paren_span.end
+							} else {
+								if_kw_span.end
+							},
+						);
+						branches.push(IfBranch {
+							span: Span::new(if_kw_span.start, body.span.end),
+							condition: (
+								if first_iter {
+									IfCondition::If(cond_expr)
+								} else {
+									IfCondition::ElseIf(cond_expr)
+								},
+								span,
+							),
+							body: Some(body),
+						});
+					} else {
+						// We don't have a multi-line body, so we attempt to parse a single statement.
+						let mut stmts = Vec::new();
+						parse_stmt(walker, &mut stmts);
+
+						let body =
+							if stmts.is_empty() {
+								if let Some(r_paren_span) = r_paren_span {
+									walker.push_syntax_diag(Syntax::Stmt(StmtDiag::IfExpectedLBraceOrExprAfterCond(
+									r_paren_span
+								)));
+								}
+								None
+							} else {
+								let stmt = stmts.remove(0);
+								let body = Scope {
+									span: stmt.span,
+									contents: vec![stmt],
+								};
+								Some(body)
+							};
+
+						let span = Span::new(
+							if first_iter {
+								if_kw_span.start
+							} else {
+								else_kw_span.start
+							},
+							if let Some(r_paren_span) = r_paren_span {
+								r_paren_span.end
+							} else if let Some(ref cond_expr) = cond_expr {
+								cond_expr.span.end
+							} else if let Some(l_paren_span) = l_paren_span {
+								l_paren_span.end
+							} else {
+								if_kw_span.end
+							},
+						);
+						branches.push(IfBranch {
+							span: Span::new(
+								if_kw_span.start,
+								if let Some(ref body) = body {
+									body.span.end
+								} else {
+									span.end
+								},
+							),
+							condition: (
+								if first_iter {
+									IfCondition::If(cond_expr)
+								} else {
+									IfCondition::ElseIf(cond_expr)
+								},
+								span,
+							),
+							body,
+						});
+					}
+				}
+				None => {
+					// We have a if-header but no associated body but we've reached the EOF.
+					walker.push_syntax_diag(Syntax::Stmt(
+						StmtDiag::IfExpectedLBraceOrExprAfterCond(
+							walker.get_last_span().next_single_width(),
+						),
+					));
+					let span = Span::new(
+						if first_iter {
+							if_kw_span.start
+						} else {
+							else_kw_span.start
+						},
+						if let Some(r_paren_span) = r_paren_span {
+							r_paren_span.end
+						} else if let Some(ref cond_expr) = cond_expr {
+							cond_expr.span.end
+						} else if let Some(l_paren_span) = l_paren_span {
+							l_paren_span.end
+						} else {
+							if_kw_span.end
+						},
+					);
+					branches.push(IfBranch {
+						span,
+						condition: (
+							if first_iter {
+								IfCondition::If(cond_expr)
+							} else {
+								IfCondition::ElseIf(cond_expr)
+							},
+							span,
+						),
+						body: None,
+					});
+					nodes.push(Node {
+						span: Span::new(
+							kw_span.start,
+							walker.get_last_span().end,
+						),
+						ty: NodeTy::If(branches),
+					});
+					return;
+				}
+			}
+		} else {
+			// Consume either the `{` for a multi-line if body or a statement for a single-statement if body.
+			match walker.peek() {
+				Some((token, token_span)) => {
+					if *token == Token::LBrace {
+						// We have a multi-line body.
+						walker
+							.push_colour(token_span, SyntaxToken::Punctuation);
+						walker.advance();
+						let body = parse_scope(walker, BRACE_SCOPE, token_span);
+						branches.push(IfBranch {
+							span: Span::new(else_kw_span.start, body.span.end),
+							condition: (IfCondition::Else, else_kw_span),
+							body: Some(body),
+						});
+					} else {
+						// We don't have a multi-line body, so we attempt to parse a single statement.
+					}
+				}
+				None => {
+					// We have one else-header but no associated body.
+					walker.push_syntax_diag(Syntax::Stmt(
+						StmtDiag::IfExpectedLBraceOrExprAfterCond(
+							walker.get_last_span().next_single_width(),
+						),
+					));
+					branches.push(IfBranch {
+						span: else_kw_span,
+						condition: (IfCondition::Else, else_kw_span),
+						body: None,
+					});
+					nodes.push(Node {
+						span: Span::new(
+							kw_span.start,
+							walker.get_last_span().end,
+						),
+						ty: NodeTy::If(branches),
+					});
+					return;
+				}
+			}
+		}
+
+		first_iter = false;
+	}
 }
 
 /// Parses a switch statement.

@@ -3,7 +3,7 @@
 use crate::{
 	diag::Syntax,
 	lexer::{NumType, Token},
-	Either, Span,
+	Either, Span, Spanned,
 };
 
 /// This type represents a value which can be omitted in accordance to the GLSL specification.
@@ -44,7 +44,10 @@ pub enum NodeTy {
 	/// A block scope, e.g. `{ int i; }`.
 	Block(Scope),
 	/// A variable definition, e.g. `int i;`.
-	VarDef { type_: Type, ident: Ident },
+	VarDef {
+		type_: Type,
+		ident: Ident,
+	},
 	/// A variable definition containing multiple variables, e.g. `int i, j, k;`.
 	VarDefs(Vec<(Type, Ident)>),
 	/// A variable declaration, e.g. `int i = 0;`.
@@ -80,6 +83,11 @@ pub enum NodeTy {
 		body: Scope,
 		instance: Omittable<Ident>,
 	},
+	/// An if statement, e.g. `if (true) {/*...*/} else {/*...*/}`.
+	/// 
+	/// # Invariants
+	/// 
+	If(Vec<IfBranch>),
 	/// A switch statement, e.g. `switch (true) { default: return; }`.
 	Switch {
 		cond: Option<Expr>,
@@ -93,9 +101,15 @@ pub enum NodeTy {
 		body: Option<Scope>,
 	},
 	/// A while loop, e.g `while (true) {/*...*/}`.
-	While { cond: Option<Expr>, body: Scope },
+	While {
+		cond: Option<Expr>,
+		body: Scope,
+	},
 	/// A do-while loop, e.g. `do {/*...*/} while (true);`.
-	DoWhile { body: Scope, cond: Option<Expr> },
+	DoWhile {
+		body: Scope,
+		cond: Option<Expr>,
+	},
 	/// A break control-flow statement, i.e. `break;`.
 	Break,
 	/// A continue control-flow statement, i.e. `continue;`.
@@ -103,7 +117,9 @@ pub enum NodeTy {
 	/// A discard control-flow statement, i.e. `discard;`.
 	Discard,
 	/// A return control-flow statement, e.g. `return 5;`.
-	Return { value: Omittable<Expr> },
+	Return {
+		value: Omittable<Expr>,
+	},
 }
 
 /// A scope of nodes.
@@ -119,6 +135,22 @@ pub struct Param {
 	pub type_: Type,
 	pub ident: Omittable<Ident>,
 	pub span: Span,
+}
+
+/// An if-statement branch.
+#[derive(Debug, Clone, PartialEq)]
+pub struct IfBranch {
+	pub condition: Spanned<IfCondition>,
+	pub body: Option<Scope>,
+	pub span: Span,
+}
+
+/// The condition of an if-statement branch.
+#[derive(Debug, Clone, PartialEq)]
+pub enum IfCondition {
+	If(Option<Expr>),
+	ElseIf(Option<Expr>),
+	Else,
 }
 
 /// A switch case.

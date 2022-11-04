@@ -392,6 +392,24 @@ pub enum StmtDiag {
 	/// - `0` - The span of the definition.
 	StructDefIsInvalid(Span),
 
+	/* IF */
+	/// ERROR - Did not find an opening parenthesis after the `if` keyword.
+	///
+	/// - `0` - The span where the opening parenthesis is expected.
+	IfExpectedLParenAfterKw(Span),
+	/// ERROR - Did not find an expression after the opening parenthesis.
+	///
+	/// - `0` - The span where the expression is expected.
+	IfExpectedExprAfterLParen(Span),
+	/// ERROR - Did not find a closing parenthesis after the expression.
+	///
+	/// - `0` - The span where the closing parenthesis is expected.
+	IfExpectedRParenAfterExpr(Span),
+	// ERROR - Did not find an opening brace after the if condition.
+	///
+	/// - `0` - The span where the opening brace is expected.
+	IfExpectedLBraceOrExprAfterCond(Span),
+
 	/* SWITCH */
 	/// ERROR - Did not find an opening parenthesis after the `switch` keyword.
 	///
@@ -410,27 +428,27 @@ pub enum StmtDiag {
 	/// - `0` - The span where the opening brace is expected.
 	SwitchExpectedLBraceAfterCond(Span),
 	/// ERROR - Found a switch body which is empty.
-	/// 
+	///
 	/// - `0` - The span of the body.
 	SwitchFoundEmptyBody(Span),
 	/// ERROR - Found a token that is not the `case`/`default` keyword nor a closing brace.
-	/// 
+	///
 	/// - `0` - The span of tokens until a `case`/`default` keyword or closing brace.
 	SwitchExpectedCaseOrDefaultKwOrEnd(Span),
 	/// ERROR - Did not find an expression after the `case` keyword.
-	/// 
+	///
 	/// - `0` - The span where the expression is expected.
 	SwitchExpectedExprAfterCaseKw(Span),
 	/// ERROR - Did not find a colon after the case expression.
-	/// 
+	///
 	/// - `0` - The span where the colon is expected.
 	SwitchExpectedColonAfterCaseExpr(Span),
 	/// ERROR - Did not find a colon after the `default` keyword.
-	/// 
+	///
 	/// - `0` - The span where the colon is expected.
 	SwitchExpectedColonAfterDefaultKw(Span),
 	/// ERROR - Did not find a closing brace at the end of the body.
-	/// 
+	///
 	/// - `0` - The span where the brace is expected.
 	SwitchExpectedRBrace(Span),
 

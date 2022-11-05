@@ -44,10 +44,7 @@ pub enum NodeTy {
 	/// A block scope, e.g. `{ int i; }`.
 	Block(Scope),
 	/// A variable definition, e.g. `int i;`.
-	VarDef {
-		type_: Type,
-		ident: Ident,
-	},
+	VarDef { type_: Type, ident: Ident },
 	/// A variable definition containing multiple variables, e.g. `int i, j, k;`.
 	VarDefs(Vec<(Type, Ident)>),
 	/// A variable declaration, e.g. `int i = 0;`.
@@ -84,9 +81,9 @@ pub enum NodeTy {
 		instance: Omittable<Ident>,
 	},
 	/// An if statement, e.g. `if (true) {/*...*/} else {/*...*/}`.
-	/// 
+	///
 	/// # Invariants
-	/// 
+	///
 	If(Vec<IfBranch>),
 	/// A switch statement, e.g. `switch (true) { default: return; }`.
 	Switch {
@@ -101,15 +98,9 @@ pub enum NodeTy {
 		body: Option<Scope>,
 	},
 	/// A while loop, e.g `while (true) {/*...*/}`.
-	While {
-		cond: Option<Expr>,
-		body: Scope,
-	},
+	While { cond: Option<Expr>, body: Scope },
 	/// A do-while loop, e.g. `do {/*...*/} while (true);`.
-	DoWhile {
-		body: Scope,
-		cond: Option<Expr>,
-	},
+	DoWhile { body: Scope, cond: Option<Expr> },
 	/// A break control-flow statement, i.e. `break;`.
 	Break,
 	/// A continue control-flow statement, i.e. `continue;`.
@@ -117,8 +108,11 @@ pub enum NodeTy {
 	/// A discard control-flow statement, i.e. `discard;`.
 	Discard,
 	/// A return control-flow statement, e.g. `return 5;`.
-	Return {
-		value: Omittable<Expr>,
+	Return { value: Omittable<Expr> },
+	/// A version directive, e.g. `#version 450 core`.
+	VersionDirective {
+		version: Option<Spanned<usize>>,
+		profile: Omittable<Spanned<ProfileTy>>,
 	},
 }
 
@@ -380,6 +374,14 @@ pub enum LayoutTy {
 	DepthGreater,
 	DepthLess,
 	DepthUnchanged,
+}
+
+/// A GLSL profile.
+#[derive(Debug, Clone, PartialEq)]
+pub enum ProfileTy {
+	Core,
+	Compatability,
+	Es,
 }
 
 impl<T> From<Option<T>> for Omittable<T> {

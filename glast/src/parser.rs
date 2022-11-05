@@ -6,8 +6,8 @@ pub use syntax::*;
 
 use crate::{
 	diag::{
-		ExprDiag, PreprocConditionalDiag, PreprocDefineDiag, Semantic,
-		StmtDiag, Syntax,
+		ExprDiag, PreprocConditionalDiag, PreprocDefineDiag,
+		PreprocVersionDiag, Semantic, StmtDiag, Syntax,
 	},
 	lexer::{
 		preprocessor::TokenStream as PreprocStream, OpTy, Token, TokenStream,
@@ -1090,7 +1090,7 @@ fn parse_stmt(walker: &mut Walker, nodes: &mut Vec<ast::Node>) {
 		Token::Struct => parse_struct(walker, nodes, qualifiers, token_span),
 		Token::Directive(stream) => {
 			invalidate_qualifiers(walker, qualifiers);
-			parse_directive(walker, stream, token_span);
+			parse_directive(walker, nodes, stream, token_span);
 			walker.advance();
 		}
 		Token::If => parse_if(walker, nodes, token_span),
@@ -1133,6 +1133,36 @@ fn parse_stmt(walker: &mut Walker, nodes: &mut Vec<ast::Node>) {
 		Token::Return => {
 			invalidate_qualifiers(walker, qualifiers);
 			parse_return(walker, nodes, token_span);
+		}
+		Token::RBrace => {
+			invalidate_qualifiers(walker, qualifiers);
+			walker.push_colour(token_span, SyntaxToken::Punctuation);
+			walker.push_syntax_diag(Syntax::FoundUnmatchedRBrace(token_span));
+		}
+		Token::Else => {
+			invalidate_qualifiers(walker, qualifiers);
+			walker.push_colour(token_span, SyntaxToken::Keyword);
+			walker.push_syntax_diag(Syntax::FoundLonelyElseKw(token_span));
+		}
+		Token::Case => {
+			invalidate_qualifiers(walker, qualifiers);
+			walker.push_colour(token_span, SyntaxToken::Keyword);
+			walker.push_syntax_diag(Syntax::FoundLonelyCaseKw(token_span));
+		}
+		Token::Default => {
+			invalidate_qualifiers(walker, qualifiers);
+			walker.push_colour(token_span, SyntaxToken::Keyword);
+			walker.push_syntax_diag(Syntax::FoundLonelyDefaultKw(token_span));
+		}
+		Token::Reserved(str) => {
+			invalidate_qualifiers(walker, qualifiers);
+			walker.push_colour(token_span, SyntaxToken::Invalid);
+			walker.push_syntax_diag(Syntax::FoundReservedKw(token_span, str));
+		}
+		Token::Invalid(c) => {
+			invalidate_qualifiers(walker, qualifiers);
+			walker.push_colour(token_span, SyntaxToken::Invalid);
+			walker.push_syntax_diag(Syntax::FoundIllegalChar(token_span, c));
 		}
 		_ => try_parse_definition_declaration_expr(
 			walker, nodes, qualifiers, false,
@@ -4134,10 +4164,294 @@ fn parse_return(walker: &mut Walker, nodes: &mut Vec<Node>, kw_span: Span) {
 /// Parses a preprocessor directive.
 ///
 /// This function assumes that the directive has not yet been consumed.
-fn parse_directive(walker: &mut Walker, stream: PreprocStream, dir_span: Span) {
-	use crate::lexer::preprocessor::{self, DefineToken, UndefToken};
+fn parse_directive(
+	walker: &mut Walker,
+	nodes: &mut Vec<Node>,
+	stream: PreprocStream,
+	dir_span: Span,
+) {
+	use crate::lexer::preprocessor::{
+		self, DefineToken, UndefToken, VersionToken,
+	};
 
 	match stream {
+		PreprocStream::Version {
+			kw: kw_span,
+			tokens,
+		} => {
+			walker.push_colour(dir_span.first_char(), SyntaxToken::Directive);
+			walker.push_colour(kw_span, SyntaxToken::Directive);
+
+			if tokens.is_empty() {
+				walker.push_syntax_diag(Syntax::PreprocVersion(
+					PreprocVersionDiag::ExpectedNumber(
+						dir_span.next_single_width(),
+					),
+				));
+				return;
+			}
+			let mut tokens = tokens.into_iter();
+
+			/// Consumes the rest of the tokens.
+			fn seek_end(
+				walker: &mut Walker,
+				mut tokens: impl Iterator<Item = (VersionToken, Span)>,
+				emit_diagnostic: bool,
+			) {
+				let span_start = match tokens.next() {
+					Some((_, span)) => span.start,
+					None => return,
+				};
+				let mut span_end = span_start;
+				for (token, token_span) in tokens {
+					walker.push_colour(
+						token_span,
+						match token {
+							VersionToken::Invalid(_) => SyntaxToken::Invalid,
+							_ => SyntaxToken::Directive,
+						},
+					);
+					span_end = token_span.end;
+				}
+				if emit_diagnostic {
+					walker.push_syntax_diag(Syntax::PreprocTrailingTokens(
+						Span::new(span_start, span_end),
+					));
+				}
+			}
+
+			/// Parses the version number.
+			fn parse_version(
+				walker: &mut Walker,
+				number: usize,
+				span: Span,
+			) -> Option<usize> {
+				match number {
+					450 => Some(number),
+					100 | 110 | 120 | 130 | 140 | 150 | 300 | 310 | 320
+					| 330 | 400 | 410 | 420 | 430 | 460 => {
+						walker.push_syntax_diag(Syntax::PreprocVersion(
+							PreprocVersionDiag::UnsupportedVersion(
+								span, number,
+							),
+						));
+						Some(number)
+					}
+					_ => {
+						walker.push_syntax_diag(Syntax::PreprocVersion(
+							PreprocVersionDiag::InvalidVersion(span, number),
+						));
+						None
+					}
+				}
+			}
+
+			/// Parses the profile.
+			fn parse_profile(
+				walker: &mut Walker,
+				str: &str,
+				span: Span,
+			) -> Option<ProfileTy> {
+				match str {
+					"core" => {
+						walker.push_colour(span, SyntaxToken::Directive);
+						Some(ProfileTy::Core)
+					}
+					"compatability" => {
+						walker.push_colour(span, SyntaxToken::Directive);
+						Some(ProfileTy::Compatability)
+					}
+					"es" => {
+						walker.push_colour(span, SyntaxToken::Directive);
+						Some(ProfileTy::Es)
+					}
+					_ => {
+						let str = str.to_lowercase();
+						match str.as_ref() {
+							"core" => {
+								walker
+									.push_colour(span, SyntaxToken::Directive);
+								walker
+									.push_syntax_diag(Syntax::PreprocVersion(
+									PreprocVersionDiag::InvalidProfileCasing(
+										span, "core",
+									),
+								));
+								Some(ProfileTy::Core)
+							}
+							"compatability" => {
+								walker
+									.push_colour(span, SyntaxToken::Directive);
+								walker
+									.push_syntax_diag(Syntax::PreprocVersion(
+									PreprocVersionDiag::InvalidProfileCasing(
+										span,
+										"compatability",
+									),
+								));
+								Some(ProfileTy::Compatability)
+							}
+							"es" => {
+								walker
+									.push_colour(span, SyntaxToken::Directive);
+								walker
+									.push_syntax_diag(Syntax::PreprocVersion(
+									PreprocVersionDiag::InvalidProfileCasing(
+										span, "es",
+									),
+								));
+								Some(ProfileTy::Es)
+							}
+							_ => None,
+						}
+					}
+				}
+			}
+
+			// Consume the version number.
+			let version = {
+				let (token, token_span) = tokens.next().unwrap();
+				match token {
+					VersionToken::Num(n) => {
+						match parse_version(walker, n, token_span) {
+							Some(n) => {
+								walker.push_colour(
+									token_span,
+									SyntaxToken::Directive,
+								);
+								(n, token_span)
+							}
+							None => {
+								walker.push_colour(
+									token_span,
+									SyntaxToken::Directive,
+								);
+								seek_end(walker, tokens, false);
+								return;
+							}
+						}
+					}
+					VersionToken::InvalidNum(_) => {
+						walker.push_colour(token_span, SyntaxToken::Directive);
+						walker.push_syntax_diag(Syntax::PreprocVersion(
+							PreprocVersionDiag::InvalidNumber(token_span),
+						));
+						seek_end(walker, tokens, false);
+						return;
+					}
+					VersionToken::Invalid(_) => {
+						walker.push_colour(token_span, SyntaxToken::Invalid);
+						walker.push_syntax_diag(Syntax::PreprocVersion(
+							PreprocVersionDiag::ExpectedNumber(token_span),
+						));
+						seek_end(walker, tokens, false);
+						return;
+					}
+					VersionToken::Word(str) => {
+						match parse_profile(walker, &str, token_span) {
+							Some(profile) => {
+								// We have a profile immediately after the `version` keyword.
+								walker.push_syntax_diag(Syntax::PreprocVersion(PreprocVersionDiag::MissingNumberBetweenKwAndProfile(
+									Span::new_between(kw_span, token_span)
+								)));
+								seek_end(walker, tokens, true);
+								nodes.push(Node {
+									span: Span::new(
+										dir_span.start,
+										token_span.end,
+									),
+									ty: NodeTy::VersionDirective {
+										version: None,
+										profile: Omittable::Some((
+											profile, token_span,
+										)),
+									},
+								});
+								return;
+							}
+							None => {
+								walker.push_colour(
+									token_span,
+									SyntaxToken::Directive,
+								);
+								walker.push_syntax_diag(
+									Syntax::PreprocVersion(
+										PreprocVersionDiag::ExpectedNumber(
+											token_span,
+										),
+									),
+								);
+								seek_end(walker, tokens, false);
+								return;
+							}
+						}
+					}
+				}
+			};
+
+			// Look for an optional profile.
+			let profile = match tokens.next() {
+				Some((token, token_span)) => match token {
+					VersionToken::Word(str) => {
+						match parse_profile(walker, &str, token_span) {
+							Some(p) => Omittable::Some((p, token_span)),
+							None => {
+								walker.push_syntax_diag(
+									Syntax::PreprocVersion(
+										PreprocVersionDiag::InvalidProfile(
+											token_span,
+										),
+									),
+								);
+								seek_end(walker, tokens, false);
+								nodes.push(Node {
+									span: Span::new(
+										dir_span.start,
+										version.1.end,
+									),
+									ty: NodeTy::VersionDirective {
+										version: Some(version),
+										profile: Omittable::None,
+									},
+								});
+								return;
+							}
+						}
+					}
+					_ => {
+						walker.push_syntax_diag(Syntax::PreprocVersion(
+							PreprocVersionDiag::ExpectedProfile(token_span),
+						));
+						seek_end(walker, tokens, false);
+						nodes.push(Node {
+							span: Span::new(dir_span.start, version.1.end),
+							ty: NodeTy::VersionDirective {
+								version: Some(version),
+								profile: Omittable::None,
+							},
+						});
+						return;
+					}
+				},
+				None => Omittable::None,
+			};
+
+			seek_end(walker, tokens, true);
+			nodes.push(Node {
+				span: Span::new(
+					dir_span.start,
+					if let Omittable::Some(ref profile) = profile {
+						profile.1.end
+					} else {
+						version.1.end
+					},
+				),
+				ty: NodeTy::VersionDirective {
+					version: Some(version),
+					profile,
+				},
+			});
+		}
 		PreprocStream::Define {
 			kw: kw_span,
 			mut ident_tokens,

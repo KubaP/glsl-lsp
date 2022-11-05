@@ -48,7 +48,35 @@ pub enum Syntax {
 	Expr(ExprDiag),
 	/// Diagnostics for statement.
 	Stmt(StmtDiag),
+	/// ERROR - Found an illegal character.
+	///
+	/// - `0` - The span of the character,
+	/// - `1` - The character.
+	FoundIllegalChar(Span, char),
+	/// ERROR - Found a reserved keyword.
+	///
+	/// - `0` - The span of the keyword,
+	/// - `1` - The keyword as a string.
+	FoundReservedKw(Span, String),
+	/// ERROR - Found a trailing closing brace that doesn't match-up with an opening brace.
+	///
+	/// - `0` - The span of the closing brace.
+	FoundUnmatchedRBrace(Span),
+	/// ERROR - Found an `else` keyword outside of an if statement.
+	///
+	/// - `0` - The span of the keyword.
+	FoundLonelyElseKw(Span),
+	/// ERROR - Found a `case` keyword outside of a switch statement.
+	///
+	/// - `0` - The span of the keyword.
+	FoundLonelyCaseKw(Span),
+	/// ERROR - Found a `default` keyword outside of a switch statement.
+	///
+	/// - `0` - The span of the keyword.
+	FoundLonelyDefaultKw(Span),
 
+	/// Diagnostics for the `#version` directive.
+	PreprocVersion(PreprocVersionDiag),
 	/// Diagnostics for the `#define` and `#undef` directives.
 	PreprocDefine(PreprocDefineDiag),
 	/// Diagnostics for the conditional directives.
@@ -536,6 +564,55 @@ pub enum StmtDiag {
 }
 
 impl StmtDiag {
+	pub fn get_severity(&self) -> Severity {
+		Severity::Error
+	}
+}
+
+/// Syntax diagnostics for the `#version` directive.
+#[derive(Debug)]
+#[non_exhaustive]
+pub enum PreprocVersionDiag {
+	/// ERROR - Did not find a number after the `version` keyword.
+	///
+	/// - `0` - The span of the incorrect token or the position where the number should be inserted.
+	ExpectedNumber(Span),
+	/// ERROR - Did not find a number after the `version` keyword, but did find a profile. E.g. `#version core`.
+	///
+	/// - `0` - The span between the keyword and profile.
+	MissingNumberBetweenKwAndProfile(Span),
+	/// ERROR - Found a number-like token which can't be successfully parsed as a number for the version. E.g.
+	/// `#version 19617527`.
+	///
+	/// - `0` - The span of the number-like token.
+	InvalidNumber(Span),
+	/// ERROR - Found a version number that is not a valid GLSL version. E.g. `#version 480`.
+	///
+	/// - `0` - The span of the nubmer,
+	/// - `1` - The number.
+	InvalidVersion(Span, usize),
+	/// ERROR - Found a version number that is not currently supported by this crate. E.g. `#version 300`.
+	///
+	/// - `0` - The span of the number,
+	/// - `1` - The number.
+	UnsupportedVersion(Span, usize),
+	/// ERROR - Did not find a profile after the version number.
+	///
+	/// - `0` - The span of the incorrect token or the position where the profile should be inserted.
+	ExpectedProfile(Span),
+	/// ERROR - Found a word token that isn't a valid profile. E.g. `#version 450 foobar`.
+	///
+	/// - `0` - The span of the word.
+	InvalidProfile(Span),
+	/// ERROR - Found a word token that would be a valid profile with the correct capitalization. E.g. `#version
+	/// 450 CoRe`.
+	///
+	/// - `0` - The span of the word,
+	/// - `1` - The corrected spelling.
+	InvalidProfileCasing(Span, &'static str),
+}
+
+impl PreprocVersionDiag {
 	pub fn get_severity(&self) -> Severity {
 		Severity::Error
 	}

@@ -1,10 +1,16 @@
 //! All diagnostic types.
 //!
 //! Diagnostics are split across two main types:
-//! - [`Syntax`] for all syntax/grammar related diagnostics,
-//! - [`Semantic`] for all semantic related diagnostics.
+//! - [`Syntax`] for all syntax/grammar-related diagnostics,
+//! - [`Semantic`] for all semantics-related diagnostics.
 //!
-//! All diagnostic types have a `get_severity()` method which returns the [`Severity`] of that given diagnostic.
+//! All diagnostic types are marked `#[non_exhaustive]` to allow for new diagnostics to be introduced without a
+//! breaking change. All diagnostic types have a `get_severity()` method which returns the [`Severity`] of that
+//! given diagnostic. Syntax diagnostics only return `Severity::Error`.
+//! 
+//! There are a *lot* of individual syntax diagnostics for all sorts of edge cases. This approach was chosen in
+//! order to provide very specific diagnostics without having to hardcode `&'static` strings everywhere. In order
+//! to make the amount more managable, most diagnostics are split into nested enums.
 
 use crate::Span;
 

@@ -1,24 +1,24 @@
 //! *glast* is a crate for parsing and manipulating **gl**sl **a**bstract **s**yntax **t**rees, and a lot more.
 //!
-//! ⚠ This crate is still heavily **work-in-progress**. It can't correctly deal with all glsl 4.50/4.60 language
-//! constructs yet, and the `ast` module is mostly empty. ⚠
+//! ⚠ This crate is still heavily **work-in-progress**. It can't correctly deal with all GLSL 4.50/4.60 language
+//! constructs yet. ⚠
 //!
-//! This crate is split into modules representing the different stages of parsing:
-//! - `token` - token stream produced by the lexer,
-//! - `cst` - concrete syntax tree produced as an intermediate step of the parser,
-//! - `ast` - abstract syntax tree produced as the final output of the parser.
+//! This crate is split into modules representing the different stages of parsing/manipulation:
+//! - [`lexer`] - All things related to the lexer.
+//! - [`parser`] - All things related to the parser.
+//! - `analyzer` - AST analysis, such as name resolution (⚠ Currently unimplemented).
 //!
 //! You can invoke a specific parsing stage individually, such as calling
-//! [`glast::token::parse_from_str()`](self::token::parse_from_str()) or
-//! [`glast::cst::parse_from_token_stream()`](self::cst::parse_from_token_stream()) and chaining them however you
-//! need, or you can invoke all of the stages automatically by calling a function such as
-//! [`glast::cst::parse_from_str()`](self::cst::parse_from_str()).
+//! [`glast::lexer::parse_from_str()`](crate::lexer::parse_from_str()) or
+//! [`glast::parser::parse_from_token_stream()`](crate::parser::parse_from_token_stream()) and chaining them
+//! however you need, or you can invoke all of the necessary stages automatically by calling a function such as
+//! [`glast::parser::parse_from_str()`](crate::parser::parse_from_str()).
 //!
 //! ## The parsing pipeline
 //! This crate breaks up the individual parsing steps into separate modules which can be invoked individually. The
-//! modules are self-contained so if you're for example working with the abstract syntax tree, you only need to
-//! concern yourself with the `glast::ast` module.
-//! 
+//! modules are self-contained so if you're for example working with the parser, you only need to concern yourself
+//! with the `glast::parser` module.
+//!
 //! This crate operates only on [`str`] inputs because the GLSL specification states that GLSL source strings must
 //! use the UTF-8 encoding (so if the source can be parsed into a valid Rust [`str`] then it must be valid), hence
 //! no support for `[u8]` inputs is provided.
@@ -31,39 +31,21 @@
 //! int i = 5.0+1;
 //! ```
 //!
-//! ### Token Stream
-//! This is the first transformation in the parsing pipeline, and it converts a string of characters into a list of
-//! tokens. The source string would become (in pseudocode):
+//! ### Lexer
+//! This is the first transformation in the parsing pipeline, and it converts a string of characters into a stream
+//! of tokens. The source string would become (in pseudocode):
 //! ```text
 //! (comment " Comment") (ident "int") (ident "i") (op "=") (float "5.0") (op "+") (int "1") (punct ";")
 //! ```
 //!
-//! ### Concrete Syntax Tree
-//! This is the second transformation in the parsing pipeline, and it converts a list of tokens into a structured
-//! tree that still preserves all of the syntactical information. The token stream would become (in pseudocode):
-//! ```text
-//! VariableDeclaration {
-//!     comment_before: " Comment",
-//!     type: "int",
-//!     ident: "i",
-//!     eq: "=",
-//!     value: BinaryExpression {
-//!         left: "5.0",
-//!         op: "+",
-//!         right: "1"
-//!     },
-//!     semi: ";"
-//! }
-//! ```
-//!
-//! ### Abstract Syntax Tree
-//! This is the final transformation in the parsing pipeline, and it converts a concrete syntax tree into a tree
-//! that only contains semantic information, loosing things like irrelevant punctuation symbols or comments. The
-//! concrete syntax tree would become (in pseudocode):
+//! ### Parser
+//! This is the next transformation in the parsing pipeline, and it converts the tokenstream into a tree that only
+//! contains semantic information, loosing things like irrelevant punctuation symbols or comments. The tokenstream
+//! would become (in pseudocode):
 //! ```text
 //! VariableDeclaration {
 //!     type: Primitive.Int,
-//!     ident: IdentifierHandle, // points to some lookup hashmap of symbol names
+//!     ident: Identifier("i"),
 //!     value: BinaryExpression {
 //!         left: Float(5.0),
 //!         op: Addition,
@@ -73,7 +55,6 @@
 //! ```
 
 pub mod diag;
-pub mod error;
 pub mod lexer;
 pub mod parser;
 mod span;
@@ -81,7 +62,7 @@ mod span;
 pub use span::*;
 
 /// Holds either one or the other value.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, Copy, PartialEq)]
 pub enum Either<L, R> {
 	Left(L),
 	Right(R),

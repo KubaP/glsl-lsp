@@ -19,7 +19,7 @@
 //! #version FOO compatability
 //! ```
 //!
-//! The `#define` macro follows through existing macros, but it does not expand them at the definition site:
+//! The `#define` macro can nest already-defined macros, but it does not expand them at the definition site:
 //! ```c
 //! #define FOO 5
 //! #define BAR FOO
@@ -28,7 +28,7 @@
 //!
 //! int i = BAR; // Expands to: int i = 10;
 //! ```
-//! As you can see, within the `BAR` macro the `FOO` macro is evaluated, but this takes the latest value of `FOO`
+//! As you can see, within the `BAR` macro, the `FOO` macro is evaluated but this takes the latest value of `FOO`
 //! whenever `BAR` is called. It does not, strictly speaking, expand the `FOO` macro when `BAR` is defined.
 //!
 //! The `#undef` and all of the conditional directives accept macro names, but they also do not expand them:
@@ -51,6 +51,7 @@
 //! - has no support for universal character names (`\uXXXX` notation),
 //! - has no support for any number literals other than integers (with no prefixes/suffixes),
 //! - has the extra `version` and `extension` directives, and lacks the `include` directive,
+//! - has a different `line` directive, since GLSL has no concept of filenames,
 //! - has different pre-defined macros, (which depend on the exact GLSL version).
 
 use super::{is_word, is_word_start, match_op, Lexer};
@@ -179,8 +180,8 @@ pub enum TokenStream {
 /// - When the lexer comes across anything which matches the `[0-9]+` pattern it produces a
 ///   [`Num`](VersionToken::Num) token, even if the token doesn't match a valid GLSL version number. If the number
 ///   cannot be parsed into a [`usize`] it produces an [`InvalidNum`](VersionToken::InvalidNum) token. If it
-///   matches the `[0-9]+([a-z]|[A-Z])+([a-z]|[A-Z]|[0-9])*` pattern it produces an
-///   [`InvalidNum`](VersionToken::InvalidNum) token.
+///   matches the `[0-9]+([a-z]|[A-Z])+([a-z]|[A-Z]|[0-9])*` pattern (i.e. a number immediately followed by a word)
+///   it produces an [`InvalidNum`](VersionToken::InvalidNum) token.
 /// - When the lexer comes across anything which matches the `([a-z]|[A-Z]|_)([a-z]|[A-Z]|[0-9]|_)*` pattern it
 ///   produces a [`Word`](VersionToken::Word) token.
 /// - Anything else produces the [`Invalid`](VersionToken::Invalid) token.
@@ -249,8 +250,8 @@ pub enum ExtensionToken {
 /// This lexer behaves as following:
 /// - When the lexer comes across anything which matches the `[0-9]+` pattern it produces a [`Num`](LineToken::Num)
 ///   token. If the number cannot be parsed into a [`usize`] it produces an [`InvalidNum`](LineToken::InvalidNum)
-///   token. If it matches the `[0-9]+([a-z]|[A-Z])+([a-z]|[A-Z]|[0-9])*` pattern it produces an
-///   [`InvalidNum`](LineToken::InvalidNum) token.
+///   token. If it matches the `[0-9]+([a-z]|[A-Z])+([a-z]|[A-Z]|[0-9])*` pattern (i.e. a number immediately
+///   followed by a word) it produces an [`InvalidNum`](LineToken::InvalidNum) token.
 /// - When the lexer comes across anything which matches the `([a-z]|[A-Z]|_)([a-z]|[A-Z]|[0-9]|_)*` pattern it
 ///   produces an [`Ident`](LineToken::Ident) token. This is to support macro expansion within the directive, but
 ///   this **does not** check if a macro with the given name actually exists.
@@ -332,6 +333,7 @@ pub enum UndefToken {
 /// - identifiers,
 /// - `defined` keyword,
 /// - specified punctuation symbols.
+// TODO: Improve the documentation for this.
 #[derive(Debug, Clone, PartialEq)]
 pub enum ConditionToken {
 	/// An integer number.
@@ -394,7 +396,7 @@ pub enum ConditionToken {
 	RParen,
 }
 
-/// Construct a directive with no tokens, just the keyword.
+/// Constructs a directive with no tokens, just the keyword.
 pub(super) fn construct_empty(
 	lexer: &mut Lexer,
 	directive_kw: String,
@@ -479,7 +481,7 @@ pub(super) fn construct_empty(
 	}
 }
 
-/// Parse a `#version` directive.
+/// Parses a `#version` directive.
 pub(super) fn parse_version(
 	lexer: &mut Lexer,
 	directive_kw_span: Span,
@@ -656,7 +658,7 @@ pub(super) fn parse_version(
 	}
 }
 
-/// Parse an `#extension` directive.
+/// Parses an `#extension` directive.
 pub(super) fn parse_extension(
 	lexer: &mut Lexer,
 	directive_kw_span: Span,
@@ -747,7 +749,7 @@ pub(super) fn parse_extension(
 	}
 }
 
-/// Parse a `#line` directive.
+/// Parses a `#line` directive.
 pub(super) fn parse_line(
 	lexer: &mut Lexer,
 	directive_kw_span: Span,
@@ -922,7 +924,7 @@ pub(super) fn parse_line(
 	}
 }
 
-/// Parse the identifier part of a `#define` directive.
+/// Parses the identifier part of a `#define` directive.
 pub(super) fn parse_define(lexer: &mut Lexer) -> Vec<Spanned<DefineToken>> {
 	let mut tokens = Vec::new();
 	// We continue off from where the lexer previously stopped.
@@ -1098,7 +1100,7 @@ pub(super) fn parse_define(lexer: &mut Lexer) -> Vec<Spanned<DefineToken>> {
 	tokens
 }
 
-/// Parse an `#undef` directive.
+/// Parses an `#undef` directive.
 pub(super) fn parse_undef(
 	lexer: &mut Lexer,
 	directive_kw_span: Span,
@@ -1180,7 +1182,7 @@ pub(super) fn parse_undef(
 	}
 }
 
-/// Parse a `#ifdef`/`#ifndef`/`#if`/`#elif`/`#else`/`#endif` directive.
+/// Parses a `#ifdef`/`#ifndef`/`#if`/`#elif`/`#else`/`#endif` directive.
 pub(super) fn parse_condition(
 	lexer: &mut Lexer,
 	directive_kw: &str,
@@ -1360,9 +1362,9 @@ pub(super) fn parse_condition(
 					break 'number;
 				}
 			}
-		} else if is_condition_punctuation_start(&current) {
+		} else if is_conditional_punctuation_start(&current) {
 			tokens.push((
-				match_condition_punctuation(lexer),
+				match_conditional_punctuation(lexer),
 				Span {
 					start: buffer_start,
 					end: lexer.position(),
@@ -1413,8 +1415,8 @@ pub(super) fn parse_condition(
 	}
 }
 
-/// Returns whether the character is allowed to start a punctuation token.
-fn is_condition_punctuation_start(c: &char) -> bool {
+/// Returns whether the character is allowed to start a punctuation token within a conditional directive.
+fn is_conditional_punctuation_start(c: &char) -> bool {
 	match c {
 		'=' | '+' | '-' | '*' | '/' | '%' | '>' | '<' | '!' | '~' | '&'
 		| '|' | '^' | '(' | ')' => true,
@@ -1423,7 +1425,7 @@ fn is_condition_punctuation_start(c: &char) -> bool {
 }
 
 /// Matches a punctuation symbol.
-fn match_condition_punctuation(lexer: &mut Lexer) -> ConditionToken {
+fn match_conditional_punctuation(lexer: &mut Lexer) -> ConditionToken {
 	match_op!(lexer, "==", ConditionToken::EqEq);
 	match_op!(lexer, "!=", ConditionToken::NotEq);
 	match_op!(lexer, ">=", ConditionToken::Ge);
@@ -1447,10 +1449,10 @@ fn match_condition_punctuation(lexer: &mut Lexer) -> ConditionToken {
 	match_op!(lexer, "&", ConditionToken::And);
 	match_op!(lexer, "|", ConditionToken::Or);
 	match_op!(lexer, "^", ConditionToken::Xor);
-	unreachable!("[preprocessor::match_condition_punctuation] Exhausted all of the patterns without matching anything!");
+	unreachable!("[preprocessor::match_conditional_punctuation] Exhausted all of the patterns without matching anything");
 }
 
-/// Perform token concatenation on the given token stream.
+/// Performs token concatenation on the given token stream.
 pub(crate) fn concat_object_macro_body(
 	walker: &mut crate::parser::Walker,
 	tokens: super::TokenStream,
@@ -1491,9 +1493,6 @@ pub(crate) fn concat_object_macro_body(
 							next.1.last_char(),
 						));
 					} else {
-						// Panic: The `Token::to_string()` method panics with a directive, however `tokens` is a
-						// replacement-list of tokens in a macro and it will never contain any directive tokens
-						// within.
 						let mut new_string = prev.0.to_string();
 						new_string.push_str(&next.0.to_string());
 						let mut lexer = Lexer::new(&new_string);

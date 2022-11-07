@@ -1,3 +1,5 @@
+//! Types and functionality related to the parser.
+
 pub mod ast;
 mod expression;
 mod syntax;
@@ -43,11 +45,12 @@ pub enum ParseErr {
 /// compilation. Because conditional compilation is enabled through the preprocessor, there are no rules as to
 /// where the parser can branch - a conditional branch could be introduced in the middle of a variable declaration
 /// for instance. This makes it effectively impossible to represent all branches of a source string within a single
-/// AST, multiple ASTs are needed to represent all the conditional permutations.
+/// AST without greatly overcomplicating the entire parser, multiple ASTs are needed to represent all the
+/// conditional permutations.
 ///
 /// The [`TokenTree`] struct allows you to pick which conditional compilation permutations to enable, and then
-/// parse the source string with those conditions to produce a [`Shader`]. Each permutation of all possible ASTs
-/// can be accessed with a key that describes which of the conditional options is selected. The example below
+/// parse the source string with those conditions to produce a [`ParseResult`]. Each permutation of all possible
+/// ASTs can be accessed with a key that describes which of the conditional options is selected. The example below
 /// illustrates this:
 /// ```c
 ///                         // Ordered by appearance    Ordered by nesting
@@ -82,8 +85,8 @@ pub enum ParseErr {
 ///                         //  ┴                        
 /// ```
 /// There is always a root token stream which has no conditional branches enabled. This can be accessed through the
-/// [`root()`](TokenTree::root) method. There are two ways of controlling which conditions are enabled, by order
-/// of appearance or by order of nesting.
+/// [`root()`](TokenTree::root) method. There are two ways of controlling which conditions are enabled, by order of
+/// appearance or by order of nesting.
 ///
 /// ## Order by appearance
 /// Each encountered condition (an `ifdef`/`ifndef`/`if`/`elif`/`else` directive) is given an incrementing number.
@@ -122,8 +125,17 @@ pub enum ParseErr {
 /// let (ast, _, _) = trees.root();
 /// ```
 pub fn parse_from_str(source: &str) -> TokenTree {
-	let (mut token_stream, metadata) = crate::lexer::parse_from_str(source);
+	let (token_stream, metadata) = crate::lexer::parse_from_str(source);
+	parse_from_token_stream(token_stream, metadata)
+}
 
+/// Parses a GLSL source string into a tree of tokens that can be then parsed into an abstract syntax tree.
+///
+/// For an explanation of how this function works, see the documentation for the [`parse_from_str()`] function.
+pub fn parse_from_token_stream(
+	mut token_stream: TokenStream,
+	metadata: crate::lexer::Metadata,
+) -> TokenTree {
 	// Skip tree generation if there are no conditional compilation blocks.
 	if !metadata.contains_conditional_compilation {
 		return TokenTree {
@@ -361,17 +373,17 @@ pub fn parse_from_str(source: &str) -> TokenTree {
 /// branching can take place, (apart from the fact that a preprocessor directive must exist on its own line). This
 /// means that a conditional branch could, for example, completely change the entire signature of a program:
 /// ```c
-///  1| void foo() {
-///  2|
-///  3|     int i = 5;
-///  4|
-///  5|     #ifdef TOGGLE
-///  6|     }
-///  7|     void bar() {
-///  8|     #endif
-///  9|
-/// 10|     int p = 0;
-/// 11| }
+///  1│ void foo() {
+///  2│
+///  3│     int i = 5;
+///  4│
+///  5│     #ifdef TOGGLE
+///  6│     }
+///  7│     void bar() {
+///  8│     #endif
+///  9│
+/// 10│     int p = 0;
+/// 11│ }
 /// ```
 /// In the example above, if `TOGGLE` is not defined, we have a function `foo` who's scope ends on line `11` and
 /// includes two variable declarations `i` and `p`. However, if `TOGGLE` is defined, the function `foo` ends on
@@ -427,10 +439,11 @@ pub fn parse_from_str(source: &str) -> TokenTree {
 /// The main reason this option wasn't chosen is because it would immensely complicate the parsing logic, and in
 /// turn the maintainability of this project. As with all recursive-descent parsers, the individual parsing
 /// functions hold onto any temporary state. In this example, the function for parsing functions holds information
-/// such as the name, the starting position, etc. If we would encounter the conditional branching within this
-/// parsing function, we would somehow need to be able to return up the call stack to split the parser, whilst also
-/// somehow not loosing the temporary state. This should be technically possible, but it would make writing the
-/// parsing code absolutely awful in many ways and that is not a trade-off I'm willing to take.
+/// such as the name, the starting position, the parameters, etc. If we would encounter the conditional branching
+/// within this parsing function, we would somehow need to be able to return up the call stack to split the parser,
+/// whilst also somehow not loosing the temporary state. This should be technically possible, but it would greatly
+/// complicate the parser and make writing the parsing logic itself absolutely awful, and that is not a trade-off
+/// I'm willing to take.
 ///
 /// This complication occurs because the preprocessor is a separate pass ran before the main compiler and does not
 /// follow the GLSL grammar rules, which means that preprocessor directives and macros can be included literally
@@ -1030,7 +1043,7 @@ fn seek_next_stmt(walker: &mut Walker) {
 	loop {
 		match walker.peek() {
 			Some((token, span)) => {
-				if token.starts_statement() {
+				if token.can_start_statement() {
 					return;
 				} else if *token == Token::Semi {
 					walker.push_colour(span, SyntaxToken::Punctuation);

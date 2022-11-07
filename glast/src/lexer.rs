@@ -10,19 +10,21 @@
 //! lexer as specified by the official GLSL specification. The differences are listed below:
 //!
 //! - When the lexer comes across a character which is not part of the allowed character set it emits the
-//!   [`Invalid`](Token::Invalid) token. The specification says that upon such a case a compile-time error must be
-//!   produced.
+//!   [`Invalid`](Token::Invalid) token. The specification has no such token; it just mentions that a character
+//!   outside of the allowed character set must produce a compile-time error.
 //! - When the lexer comes across a block comment which does not have a delimiter (and therefore goes to the
 //!   end-of-file) it still produces a [`BlockComment`](Token::BlockComment) token with the `contains_eof` field
 //!   set to `true`. The specification does not mention what should technically happen in such a case, but
 //!   compilers seem to produce a compile-time error.
 //! - The lexer treats any number that matches the following pattern `0[0-9]+` as an octal number. The
-//!   specification says that an octal number can only contain digits `0-7`.
-//! - The lexer treats any identifier immediately after a number (without separating whitespace) as a valid suffix.
-//!   The specification only defines the `u|U` suffix as valid for integers, and the `f|F` & `lf|LF` suffix as
-//!   valid for floating point numbers. Anything afterwards should be treated as a new token, so this would be
-//!   valid: `#define TEST +5 \n uint i = 5uTEST`. Currently, this crate doesn't work according to this behaviour,
-//!   hence for now the lexer will treat the suffix as `uTEST` instead.
+//!   specification says that an octal number can only contain digits `0-7`. This change was done to produce better
+//!   errors; the entire span `009` would be highlighting as an invalid octal number token, rather than an error
+//!   about two consecutive number tokens (`00` and `9`) which would be more confusing.
+//! - The lexer treats any identifier immediately after a number (without separating whitespace) as a suffix. The
+//!   specification only defines the `u|U` suffix as valid for integers, and the `f|F` & `lf|LF` suffix as valid
+//!   for floating point numbers. Anything afterwards should be treated as a new token, so this would be valid:
+//!   `#define TEST +5 \n uint i = 5uTEST`. Currently, this crate doesn't work according to this behaviour, hence
+//!   for now the lexer will treat the suffix as `uTEST` instead.
 //!
 //! See the [`preprocessor`] module for behavioural differences for each individual directive.
 //!
@@ -40,7 +42,7 @@
 
 pub mod preprocessor;
 
-use crate::{Either, Span, Spanned};
+use crate::{Span, Spanned};
 
 /// A vector of tokens representing a GLSL source string.
 pub type TokenStream = Vec<Spanned<Token>>;
@@ -83,7 +85,7 @@ pub fn parse_from_str(source: &str) -> (TokenStream, Metadata) {
 /// met.
 ///
 /// The purpose of this struct is to hold structured data that gets extracted out and checked-against if needed.
-/// Hence, this struct is marked as `non_exhaustive` and new fields may be added at any time without causing a
+/// Hence, this struct is marked as `#[non_exhaustive]` and new fields may be added at any time without causing a
 /// breaking change.
 #[derive(Debug, Clone, PartialEq)]
 #[non_exhaustive]
@@ -237,7 +239,8 @@ pub enum Token {
 /// The type/notation of a number token.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum NumType {
-	/// A decimal is any number beginning with `1-9` without a decimal point or an exponent, or just the digit `0` on it's own.
+	/// A decimal is any number beginning with `1-9` without a decimal point or an exponent, or just the digit `0`
+	/// on it's own.
 	Dec,
 	/// An octal is any number beginning with `0` without a decimal point or an exponent.
 	Oct,
@@ -323,8 +326,8 @@ pub enum OpTy {
 }
 
 impl Token {
-	/// Produces a syntax token corresponding to the type of this token. This performs simple, non-semantically
-	/// aware colouring.
+	/// Produces a syntax token corresponding to the type of this lexer token. This performs simple,
+	/// non-semantically-aware colouring.
 	pub fn non_semantic_colour(&self) -> crate::parser::SyntaxToken {
 		use crate::parser::SyntaxToken;
 		match self {
@@ -394,7 +397,7 @@ impl Token {
 	}
 
 	/// Returns whether the current token is a keyword which can start a statement.
-	pub fn starts_statement(&self) -> bool {
+	pub fn can_start_statement(&self) -> bool {
 		match self {
 			Self::If
 			| Self::For
@@ -436,22 +439,6 @@ impl Token {
 			_ => false,
 		}
 	}
-
-	/// Returns whether the current token is a punctuation assuming we are at the beginning of parsing a statement.
-	pub fn is_punctuation_for_stmt(&self) -> bool {
-		match self {
-			Self::Op(_)
-			| Self::Comma
-			| Self::Dot
-			| Self::Colon
-			| Self::Question
-			| Self::LParen
-			| Self::RParen
-			| Self::LBracket
-			| Self::RBracket => true,
-			_ => false,
-		}
-	}
 }
 
 impl std::fmt::Display for Token {
@@ -473,7 +460,7 @@ impl std::fmt::Display for Token {
 			}
 			Token::Bool(b) => write!(f, "{b}"),
 			Token::Ident(s) => write!(f, "{s}"),
-			Token::Directive(_) => todo!(),
+			Token::Directive(_) => write!(f, "DIRECTIVE"),
 			Token::MacroConcat => write!(f, "##"),
 			Token::LineComment(s) => write!(f, "//{s}"),
 			Token::BlockComment { str, contains_eof } => {

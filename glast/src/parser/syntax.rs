@@ -1,7 +1,7 @@
 /// A syntax highlighting token.
 ///
 /// For semantic highlighting, any [`UncheckedIdent`](SyntaxToken::UncheckedIdent) tokens must be name-resolved
-/// into a more concrete identifier token type.
+/// into a more concrete token type.
 #[derive(Debug, Clone, PartialEq)]
 pub enum SyntaxToken {
 	/// A number.

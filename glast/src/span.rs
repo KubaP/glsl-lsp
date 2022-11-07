@@ -6,7 +6,7 @@
 /// Illustrated example:
 /// ```text
 ///   i   f   =   a   b   c
-///  |-----| |-| |---------|
+///  ├─────┤ ├─┤ ├─────────┤
 /// ^   ^   ^   ^   ^   ^   ^
 /// 0   1   2   3   4   5   6
 /// ```
@@ -22,10 +22,12 @@ pub struct Span {
 	pub end: usize,
 }
 
+pub type Spanned<T> = (T, Span);
+
 impl Span {
 	/// Constructs a new span between the two positions.
 	pub fn new(start: usize, end: usize) -> Self {
-		// Panics: If this assertion is not met, the semantic meaning of this type will be incorrect, but it will
+		// Invariant: If this assertion is not met, the semantic meaning of this type will be incorrect, but it will
 		// never cause any further panics or memory unsafety. Hence, I've made a decision to only perform this
 		// check in debug builds; the tests should catch any potential misuses.
 		debug_assert!(
@@ -38,7 +40,7 @@ impl Span {
 
 	/// Constructs a new span between the end of the first span and the beginning of the second span.
 	pub fn new_between(a: Span, b: Span) -> Self {
-		// Panics: If this assertion is not met, the semantic meaning of this type will be incorrect, but it will
+		// Invariant: If this assertion is not met, the semantic meaning of this type will be incorrect, but it will
 		// never cause any further panics or memory unsafety. Hence, I've made a decision to only perform this
 		// check in debug builds; the tests should catch any potential misuses.
 		debug_assert!(
@@ -182,10 +184,8 @@ impl std::fmt::Display for Span {
 
 /// Constructs a new [`Span`] from a start and end position.
 ///
-/// *Note:* This is just a shorthand for [`Span::new()`], since that becomes a bit verbose to type out again and
-/// again especially in the unit test assertions. This is not publically accessible outside of the crate.
+/// This is just a shorthand for [`Span::new()`], since that becomes a bit verbose to type out again and again
+/// especially in the unit test assertions.
 pub(crate) fn span(start: usize, end: usize) -> Span {
 	Span { start, end }
 }
-
-pub type Spanned<T> = (T, Span);

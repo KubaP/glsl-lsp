@@ -1,21 +1,21 @@
 # glast
 *glast* is a crate for parsing and manipulating **gl**sl **a**bstract **s**yntax **t**rees, and a lot more.
 
-The current aims of this project are to allow for parsing and analysis of the OpenGL Shading Language version 4.50 and 4.60. This includes parsing source strings into abstract or concrete syntax trees, as well as performing analysis such as type-checking.
+The current aims of this crate are to allow for parsing and analysis of the OpenGL Shading Language version 4.50 and 4.60. This includes parsing source strings into ASTs, generating syntax highlighting information, as well as performing analysis such as type-checking.
 
-⚠ This crate is still heavily **work-in-progress**. ⚠
+Unlike other similar crates, *glast* is designed also for IDEs in mind, so it handles syntactical errors gracefully and has excellent recovery strategies.
+
+⚠ This crate is still heavily **work-in-progress**.
 
 ## Status
-- `token` - All functionality is pretty much finished, though a slight re-work of directive parsing is due.
-- `cst` - Support for dealing correctly with comments is work-in-progress. Support for preprocessor directives hasn't started yet. Aside from these two things the rest of the functionality is finished.
-- `ast` - No real work started yet.
-
-## Plan of Work
-- Fully implement support for comments in the parser.
-- Implement support for preprocessor directives.
-- Start working on the AST functionality, such as name resolution.
+All GLSL 4.50/4.60 features are implemented, apart from:
+- Subroutines - Not started yet.
+- Function-like macros - Framework implemented but currently only supports object-like macros.
+- Some preprocessor directives are unsupported.
 
 ## Future Goals
+- Add a visitor api for easy traversal of the AST.
+- Start working on the analysis-part of the crate, e.g. name resolution.
 - Support older versions of GLSL, such as 1.10, 3.00 and 3.30 amongst others.
 
 ## License

@@ -118,6 +118,11 @@ pub enum NodeTy {
 	ExtensionDirective {
 		name: Option<Spanned<String>>,
 		behaviour: Option<Spanned<BehaviourTy>>
+	},
+	/// A line directive, e.g. `#line 1`.
+	LineDirective {
+		line: Option<Spanned<usize>>,
+		src_str_num: Omittable<Spanned<usize>>,
 	}
 }
 

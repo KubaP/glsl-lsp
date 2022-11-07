@@ -7,10 +7,11 @@ pub use syntax::*;
 use crate::{
 	diag::{
 		ExprDiag, PreprocConditionalDiag, PreprocDefineDiag, PreprocExtDiag,
-		PreprocVersionDiag, Semantic, StmtDiag, Syntax,
+		PreprocLineDiag, PreprocVersionDiag, Semantic, StmtDiag, Syntax,
 	},
 	lexer::{
-		preprocessor::TokenStream as PreprocStream, OpTy, Token, TokenStream,
+		preprocessor::TokenStream as PreprocStream, NumType, OpTy, Token,
+		TokenStream,
 	},
 	Either, Span, Spanned,
 };
@@ -4171,7 +4172,7 @@ fn parse_directive(
 	dir_span: Span,
 ) {
 	use crate::lexer::preprocessor::{
-		self, DefineToken, ExtensionToken, UndefToken, VersionToken,
+		self, DefineToken, ExtensionToken, LineToken, UndefToken, VersionToken,
 	};
 
 	match stream {
@@ -4771,12 +4772,357 @@ fn parse_directive(
 				}
 			};
 
+			seek_end(walker, tokens, true);
 			nodes.push(Node {
 				span: Span::new(dir_span.start, behaviour.1.end),
 				ty: NodeTy::ExtensionDirective {
 					name: Some(name),
 					behaviour: Some(behaviour),
 				},
+			});
+		}
+		PreprocStream::Line {
+			kw: kw_span,
+			tokens,
+		} => {
+			walker.push_colour(dir_span.first_char(), SyntaxToken::Directive);
+			walker.push_colour(kw_span, SyntaxToken::Directive);
+
+			if tokens.is_empty() {
+				walker.push_syntax_diag(Syntax::PreprocLine(
+					PreprocLineDiag::ExpectedNumber(
+						dir_span.next_single_width(),
+					),
+				));
+				return;
+			}
+			let mut tokens = tokens.into_iter();
+
+			/// Consumes the rest of the tokens.
+			fn seek_end(
+				walker: &mut Walker,
+				mut tokens: impl Iterator<Item = (LineToken, Span)>,
+				emit_diagnostic: bool,
+			) {
+				let span_start = match tokens.next() {
+					Some((_, span)) => span.start,
+					None => return,
+				};
+				let mut span_end = span_start;
+				for (token, token_span) in tokens {
+					walker.push_colour(
+						token_span,
+						match token {
+							LineToken::Invalid(_) => SyntaxToken::Invalid,
+							_ => SyntaxToken::Directive,
+						},
+					);
+					span_end = token_span.end;
+				}
+				if emit_diagnostic {
+					walker.push_syntax_diag(Syntax::PreprocTrailingTokens(
+						Span::new(span_start, span_end),
+					));
+				}
+			}
+
+			let line = {
+				let (token, token_span) = tokens.next().unwrap();
+				match token {
+					LineToken::Num(n) => {
+						walker.push_colour(token_span, SyntaxToken::Directive);
+						Some((n, token_span))
+					}
+					LineToken::InvalidNum(_) => {
+						walker.push_colour(token_span, SyntaxToken::Invalid);
+						walker.push_syntax_diag(Syntax::PreprocLine(
+							PreprocLineDiag::InvalidNumber(token_span),
+						));
+						None
+					}
+					LineToken::Ident(str) => {
+						let ident_span = token_span;
+
+						let mut line = None;
+						let mut src_str_num = Omittable::None;
+						if let Some((_, replacement_list)) =
+							walker.macros.get(&str)
+						{
+							'replacement: for (token, _) in replacement_list {
+								match token {
+									Token::Num { type_, num, suffix } => {
+										if *type_ != NumType::Dec
+											|| suffix.is_some()
+										{
+											walker.push_syntax_diag(
+												Syntax::PreprocLine(
+													PreprocLineDiag::InvalidNumber(
+														ident_span,
+													),
+												),
+											);
+											seek_end(walker, tokens, false);
+											nodes.push(Node {
+												span: Span::new(
+													dir_span.start,
+													kw_span.end,
+												),
+												ty: NodeTy::LineDirective {
+													line,
+													src_str_num,
+												},
+											});
+											return;
+										}
+
+										let num: usize = match num.parse() {
+											Ok(n) => n,
+											Err(_) => {
+												walker.push_syntax_diag(
+												Syntax::PreprocLine(
+													PreprocLineDiag::InvalidNumber(
+														ident_span,
+													),
+												),
+											);
+												seek_end(walker, tokens, false);
+												nodes.push(Node {
+													span: Span::new(
+														dir_span.start,
+														kw_span.end,
+													),
+													ty: NodeTy::LineDirective {
+														line,
+														src_str_num,
+													},
+												});
+												return;
+											}
+										};
+
+										if let Omittable::Some(_) = src_str_num
+										{
+											walker.push_syntax_diag(
+												Syntax::PreprocTrailingTokens(
+													ident_span,
+												),
+											);
+											break 'replacement;
+										}
+
+										if line.is_none() {
+											line = Some((num, ident_span))
+										} else {
+											src_str_num = Omittable::Some((
+												num, ident_span,
+											));
+										}
+									}
+									_ => {
+										walker.push_syntax_diag(
+											Syntax::PreprocLine(
+												PreprocLineDiag::ExpectedNumber(
+													ident_span,
+												),
+											),
+										);
+										seek_end(walker, tokens, false);
+										nodes.push(Node {
+											span: Span::new(
+												dir_span.start,
+												kw_span.end,
+											),
+											ty: NodeTy::LineDirective {
+												line,
+												src_str_num,
+											},
+										});
+										return;
+									}
+								}
+							}
+						}
+
+						if let Omittable::Some(_) = src_str_num {
+							seek_end(walker, tokens, true);
+							nodes.push(Node {
+								span: Span::new(dir_span.start, kw_span.end),
+								ty: NodeTy::LineDirective { line, src_str_num },
+							});
+							return;
+						} else {
+							line
+						}
+					}
+					LineToken::Invalid(_) => {
+						walker.push_colour(token_span, SyntaxToken::Invalid);
+						walker.push_syntax_diag(Syntax::PreprocLine(
+							PreprocLineDiag::ExpectedNumber(token_span),
+						));
+						seek_end(walker, tokens, false);
+						nodes.push(Node {
+							span: Span::new(dir_span.start, kw_span.end),
+							ty: NodeTy::LineDirective {
+								line: None,
+								src_str_num: Omittable::None,
+							},
+						});
+						return;
+					}
+				}
+			};
+
+			let src_str_num = match tokens.next() {
+				Some((token, token_span)) => match token {
+					LineToken::Num(n) => {
+						walker.push_colour(token_span, SyntaxToken::Directive);
+						Omittable::Some((n, token_span))
+					}
+					LineToken::InvalidNum(_) => {
+						walker.push_colour(token_span, SyntaxToken::Invalid);
+						walker.push_syntax_diag(Syntax::PreprocLine(
+							PreprocLineDiag::InvalidNumber(token_span),
+						));
+						Omittable::None
+					}
+					LineToken::Ident(str) => {
+						let ident_span = token_span;
+
+						let mut src_str_num = Omittable::None;
+						if let Some((_, replacement_list)) =
+							walker.macros.get(&str)
+						{
+							'replacement: for (token, _) in replacement_list {
+								match token {
+									Token::Num { type_, num, suffix } => {
+										if *type_ != NumType::Dec
+											|| suffix.is_some()
+										{
+											walker.push_syntax_diag(
+												Syntax::PreprocLine(
+													PreprocLineDiag::InvalidNumber(
+														ident_span,
+													),
+												),
+											);
+											seek_end(walker, tokens, false);
+											nodes.push(Node {
+												span: Span::new(
+													dir_span.start,
+													kw_span.end,
+												),
+												ty: NodeTy::LineDirective {
+													line,
+													src_str_num,
+												},
+											});
+											return;
+										}
+
+										let num: usize = match num.parse() {
+											Ok(n) => n,
+											Err(_) => {
+												walker.push_syntax_diag(
+												Syntax::PreprocLine(
+													PreprocLineDiag::InvalidNumber(
+														ident_span,
+													),
+												),
+											);
+												seek_end(walker, tokens, false);
+												nodes.push(Node {
+													span: Span::new(
+														dir_span.start,
+														kw_span.end,
+													),
+													ty: NodeTy::LineDirective {
+														line,
+														src_str_num,
+													},
+												});
+												return;
+											}
+										};
+
+										if let Omittable::Some(_) = src_str_num
+										{
+											walker.push_syntax_diag(
+												Syntax::PreprocTrailingTokens(
+													ident_span,
+												),
+											);
+											break 'replacement;
+										}
+
+										src_str_num =
+											Omittable::Some((num, ident_span));
+									}
+									_ => {
+										walker.push_syntax_diag(
+											Syntax::PreprocLine(
+												PreprocLineDiag::ExpectedNumber(
+													ident_span,
+												),
+											),
+										);
+										seek_end(walker, tokens, false);
+										nodes.push(Node {
+											span: Span::new(
+												dir_span.start,
+												kw_span.end,
+											),
+											ty: NodeTy::LineDirective {
+												line,
+												src_str_num,
+											},
+										});
+										return;
+									}
+								}
+							}
+						}
+
+						src_str_num
+					}
+					LineToken::Invalid(_) => {
+						walker.push_colour(token_span, SyntaxToken::Invalid);
+						walker.push_syntax_diag(Syntax::PreprocLine(
+							PreprocLineDiag::ExpectedNumber(token_span),
+						));
+						seek_end(walker, tokens, false);
+						nodes.push(Node {
+							span: Span::new(
+								dir_span.start,
+								if let Some(line) = line {
+									line.1.end
+								} else {
+									kw_span.end
+								},
+							),
+							ty: NodeTy::LineDirective {
+								line,
+								src_str_num: Omittable::None,
+							},
+						});
+						return;
+					}
+				},
+				None => Omittable::None,
+			};
+
+			seek_end(walker, tokens, true);
+			nodes.push(Node {
+				span: Span::new(
+					dir_span.start,
+					if let Omittable::Some(src_str_num) = src_str_num {
+						src_str_num.1.end
+					} else if let Some(line) = line {
+						line.1.end
+					} else {
+						kw_span.end
+					},
+				),
+				ty: NodeTy::LineDirective { line, src_str_num },
 			});
 		}
 		PreprocStream::Define {

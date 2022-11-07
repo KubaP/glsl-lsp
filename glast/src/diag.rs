@@ -79,6 +79,8 @@ pub enum Syntax {
 	PreprocVersion(PreprocVersionDiag),
 	/// Diagnostics for the `#extension` directive.
 	PreprocExt(PreprocExtDiag),
+	/// Diagnostics for the `#line` directive.
+	PreprocLine(PreprocLineDiag),
 	/// Diagnostics for the `#define` and `#undef` directives.
 	PreprocDefine(PreprocDefineDiag),
 	/// Diagnostics for the conditional directives.
@@ -663,6 +665,27 @@ pub enum PreprocExtDiag {
 }
 
 impl PreprocExtDiag {
+	pub fn get_severity(&self) -> Severity {
+		Severity::Error
+	}
+}
+
+/// Syntax diagnostics for the `#line` directive.
+#[derive(Debug)]
+#[non_exhaustive]
+pub enum PreprocLineDiag {
+	/// ERROR - Did not find a number after the `line` keyword.
+	///
+	/// - `0` - The span of the incorrect token or the position where the number should be inserted.
+	ExpectedNumber(Span),
+	/// ERROR - Found a number-like token which can't be successfully parsed as a line number. E.g.
+	/// `#line 100000000000000000000`.
+	///
+	/// - `0` - The span of the number-like token.
+	InvalidNumber(Span),
+}
+
+impl PreprocLineDiag {
 	pub fn get_severity(&self) -> Severity {
 		Severity::Error
 	}

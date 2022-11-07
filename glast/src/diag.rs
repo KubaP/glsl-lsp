@@ -77,6 +77,8 @@ pub enum Syntax {
 
 	/// Diagnostics for the `#version` directive.
 	PreprocVersion(PreprocVersionDiag),
+	/// Diagnostics for the `#extension` directive.
+	PreprocExt(PreprocExtDiag),
 	/// Diagnostics for the `#define` and `#undef` directives.
 	PreprocDefine(PreprocDefineDiag),
 	/// Diagnostics for the conditional directives.
@@ -613,6 +615,54 @@ pub enum PreprocVersionDiag {
 }
 
 impl PreprocVersionDiag {
+	pub fn get_severity(&self) -> Severity {
+		Severity::Error
+	}
+}
+
+/// Syntax diagnostics for the `#extension` directive.
+#[derive(Debug)]
+#[non_exhaustive]
+pub enum PreprocExtDiag {
+	/// ERROR - Did not find an extension name after the `extension` keyword.
+	///
+	/// - `0` - The span of the incorrect token or the position where the name should be inserted.
+	ExpectedName(Span),
+	/// ERROR - Did not find a name after the `extension` keyword, but did find a colon. E.g. `#extension :
+	/// enable`.
+	///
+	/// - `0` - The span between the keyword and colon.
+	MissingNameBetweenKwAndColon(Span),
+	/// ERROR - Did not find a number after the `extension` keyword, but did find a behaviour. E.g. `#extension
+	/// enable`.
+	///
+	/// - `0` - The span between the keyword and behaviour.
+	MissingNameBetweenKwAndBehaviour(Span),
+	/// ERROR - Did not find a colon after the name, but did find a behaviour. E.g. `#extension foobar enable`.
+	///
+	/// - `0` - The span between the name and behaviour.
+	MissingColonBetweenNameAndBehaviour(Span),
+	/// ERROR - Did not find a colon after the extension name.
+	///
+	/// - `0` - The span of the incorrect token or the position where the colon should be inserted.
+	ExpectedColon(Span),
+	/// ERROR - Did not find a behaviour after the colon.
+	///
+	/// - `0` - The span of the incorrect token or the position where the behaviour should be inserted.
+	ExpectedBehaviour(Span),
+	/// ERROR - Found a word token that isn't a valid behaviour. E.g. `#extension all : foobar`.
+	///
+	/// - `0` - The span of the word.
+	InvalidBehaviour(Span),
+	/// ERROR - Found a word token that would be a valid behaviour with the correct capitalization. E.g. `#extension
+	/// all : EnAbLe`.
+	///
+	/// - `0` - The span of the word,
+	/// - `1` - The corrected spelling.
+	InvalidBehaviourCasing(Span, &'static str),
+}
+
+impl PreprocExtDiag {
 	pub fn get_severity(&self) -> Severity {
 		Severity::Error
 	}

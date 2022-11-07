@@ -114,6 +114,11 @@ pub enum NodeTy {
 		version: Option<Spanned<usize>>,
 		profile: Omittable<Spanned<ProfileTy>>,
 	},
+	/// An extension directive, e.g. `#extension all : enable`.
+	ExtensionDirective {
+		name: Option<Spanned<String>>,
+		behaviour: Option<Spanned<BehaviourTy>>
+	}
 }
 
 /// A scope of nodes.
@@ -382,6 +387,15 @@ pub enum ProfileTy {
 	Core,
 	Compatability,
 	Es,
+}
+
+/// The behaviour for a GLSL extension.
+#[derive(Debug, Clone, PartialEq)]
+pub enum BehaviourTy{
+	Require,
+	Enable,
+	Warn,
+	Disable,
 }
 
 impl<T> From<Option<T>> for Omittable<T> {

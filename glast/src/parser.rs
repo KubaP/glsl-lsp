@@ -6,7 +6,7 @@ pub use syntax::*;
 
 use crate::{
 	diag::{
-		ExprDiag, PreprocConditionalDiag, PreprocDefineDiag,
+		ExprDiag, PreprocConditionalDiag, PreprocDefineDiag, PreprocExtDiag,
 		PreprocVersionDiag, Semantic, StmtDiag, Syntax,
 	},
 	lexer::{
@@ -4171,7 +4171,7 @@ fn parse_directive(
 	dir_span: Span,
 ) {
 	use crate::lexer::preprocessor::{
-		self, DefineToken, UndefToken, VersionToken,
+		self, DefineToken, ExtensionToken, UndefToken, VersionToken,
 	};
 
 	match stream {
@@ -4449,6 +4449,333 @@ fn parse_directive(
 				ty: NodeTy::VersionDirective {
 					version: Some(version),
 					profile,
+				},
+			});
+		}
+		PreprocStream::Extension {
+			kw: kw_span,
+			tokens,
+		} => {
+			walker.push_colour(dir_span.first_char(), SyntaxToken::Directive);
+			walker.push_colour(kw_span, SyntaxToken::Directive);
+
+			if tokens.is_empty() {
+				walker.push_syntax_diag(Syntax::PreprocExt(
+					PreprocExtDiag::ExpectedName(dir_span.next_single_width()),
+				));
+				return;
+			}
+			let mut tokens = tokens.into_iter();
+
+			/// Consumes the rest of the tokens.
+			fn seek_end(
+				walker: &mut Walker,
+				mut tokens: impl Iterator<Item = (ExtensionToken, Span)>,
+				emit_diagnostic: bool,
+			) {
+				let span_start = match tokens.next() {
+					Some((_, span)) => span.start,
+					None => return,
+				};
+				let mut span_end = span_start;
+				for (token, token_span) in tokens {
+					walker.push_colour(
+						token_span,
+						match token {
+							ExtensionToken::Invalid(_) => SyntaxToken::Invalid,
+							_ => SyntaxToken::Directive,
+						},
+					);
+					span_end = token_span.end;
+				}
+				if emit_diagnostic {
+					walker.push_syntax_diag(Syntax::PreprocTrailingTokens(
+						Span::new(span_start, span_end),
+					));
+				}
+			}
+
+			/// Parses the behaviour.
+			fn parse_behaviour(
+				walker: &mut Walker,
+				str: &str,
+				span: Span,
+			) -> Option<(BehaviourTy, Option<Syntax>)> {
+				match str {
+					"require" => Some((BehaviourTy::Require, None)),
+
+					"enable" => Some((BehaviourTy::Enable, None)),
+
+					"warn" => Some((BehaviourTy::Warn, None)),
+
+					"disable" => Some((BehaviourTy::Disable, None)),
+					_ => {
+						let str = str.to_lowercase();
+						match str.as_ref() {
+							"require" => Some((
+								BehaviourTy::Require,
+								Some(Syntax::PreprocExt(
+									PreprocExtDiag::InvalidBehaviourCasing(
+										span, "require",
+									),
+								)),
+							)),
+
+							"enable" => Some((
+								BehaviourTy::Enable,
+								Some(Syntax::PreprocExt(
+									PreprocExtDiag::InvalidBehaviourCasing(
+										span, "enable",
+									),
+								)),
+							)),
+
+							"warn" => Some((
+								BehaviourTy::Warn,
+								Some(Syntax::PreprocExt(
+									PreprocExtDiag::InvalidBehaviourCasing(
+										span, "warn",
+									),
+								)),
+							)),
+
+							"disable" => Some((
+								BehaviourTy::Disable,
+								Some(Syntax::PreprocExt(
+									PreprocExtDiag::InvalidBehaviourCasing(
+										span, "disable",
+									),
+								)),
+							)),
+							_ => None,
+						}
+					}
+				}
+			}
+
+			// Consume the extension name.
+			let name = {
+				let (token, token_span) = tokens.next().unwrap();
+				match token {
+					ExtensionToken::Word(str) => {
+						match parse_behaviour(walker, &str, token_span) {
+							Some((behaviour, _)) => {
+								walker.push_colour(
+									token_span,
+									SyntaxToken::Directive,
+								);
+								walker.push_syntax_diag(Syntax::PreprocExt(PreprocExtDiag::MissingNameBetweenKwAndBehaviour(
+									Span::new_between(kw_span, token_span)
+								)));
+								seek_end(walker, tokens, false);
+								nodes.push(Node {
+									span: Span::new(
+										dir_span.start,
+										token_span.end,
+									),
+									ty: NodeTy::ExtensionDirective {
+										name: None,
+										behaviour: Some((
+											behaviour, token_span,
+										)),
+									},
+								});
+								return;
+							}
+							None => (str, token_span),
+						}
+					}
+					ExtensionToken::Colon => {
+						walker.push_colour(token_span, SyntaxToken::Directive);
+						walker.push_syntax_diag(Syntax::PreprocExt(
+							PreprocExtDiag::MissingNameBetweenKwAndColon(
+								Span::new_between(kw_span, token_span),
+							),
+						));
+						seek_end(walker, tokens, false);
+						nodes.push(Node {
+							span: Span::new(dir_span.start, kw_span.end),
+							ty: NodeTy::ExtensionDirective {
+								name: None,
+								behaviour: None,
+							},
+						});
+						return;
+					}
+					ExtensionToken::Invalid(_) => {
+						walker.push_colour(token_span, SyntaxToken::Invalid);
+						walker.push_syntax_diag(Syntax::PreprocExt(
+							PreprocExtDiag::ExpectedName(token_span),
+						));
+						seek_end(walker, tokens, false);
+						return;
+					}
+				}
+			};
+
+			// Consume the colon.
+			let colon_span = match tokens.next() {
+				Some((token, token_span)) => match token {
+					ExtensionToken::Colon => {
+						walker.push_colour(token_span, SyntaxToken::Directive);
+						token_span
+					}
+					ExtensionToken::Word(str) => {
+						match parse_behaviour(walker, &str, token_span) {
+							Some((behaviour, _)) => {
+								walker.push_colour(
+									token_span,
+									SyntaxToken::Directive,
+								);
+								walker.push_syntax_diag(Syntax::PreprocExt(PreprocExtDiag::MissingColonBetweenNameAndBehaviour(
+									Span::new_between(name.1, token_span)
+								)));
+								seek_end(walker, tokens, false);
+								nodes.push(Node {
+									span: Span::new(
+										dir_span.start,
+										token_span.end,
+									),
+									ty: NodeTy::ExtensionDirective {
+										name: Some(name),
+										behaviour: Some((
+											behaviour, token_span,
+										)),
+									},
+								});
+								return;
+							}
+							None => {
+								walker.push_colour(
+									token_span,
+									SyntaxToken::Invalid,
+								);
+								walker.push_syntax_diag(Syntax::PreprocExt(
+									PreprocExtDiag::ExpectedColon(token_span),
+								));
+								seek_end(walker, tokens, false);
+								nodes.push(Node {
+									span: Span::new(dir_span.start, name.1.end),
+									ty: NodeTy::ExtensionDirective {
+										name: Some(name),
+										behaviour: None,
+									},
+								});
+								return;
+							}
+						}
+					}
+					ExtensionToken::Invalid(_) => {
+						walker.push_colour(token_span, SyntaxToken::Invalid);
+						walker.push_syntax_diag(Syntax::PreprocExt(
+							PreprocExtDiag::ExpectedColon(token_span),
+						));
+						seek_end(walker, tokens, false);
+						nodes.push(Node {
+							span: Span::new(dir_span.start, name.1.end),
+							ty: NodeTy::ExtensionDirective {
+								name: Some(name),
+								behaviour: None,
+							},
+						});
+						return;
+					}
+				},
+				None => {
+					walker.push_syntax_diag(Syntax::PreprocExt(
+						PreprocExtDiag::ExpectedColon(
+							name.1.next_single_width(),
+						),
+					));
+					nodes.push(Node {
+						span: Span::new(dir_span.start, name.1.end),
+						ty: NodeTy::ExtensionDirective {
+							name: Some(name),
+							behaviour: None,
+						},
+					});
+					return;
+				}
+			};
+
+			// Consume the behaviour.
+			let behaviour = match tokens.next() {
+				Some((token, token_span)) => match token {
+					ExtensionToken::Word(str) => {
+						match parse_behaviour(walker, &str, token_span) {
+							Some((behaviour, diag)) => {
+								walker.push_colour(
+									token_span,
+									SyntaxToken::Directive,
+								);
+								if let Some(diag) = diag {
+									walker.push_syntax_diag(diag);
+								}
+								(behaviour, token_span)
+							}
+							None => {
+								walker.push_colour(
+									token_span,
+									SyntaxToken::Invalid,
+								);
+								walker.push_syntax_diag(Syntax::PreprocExt(
+									PreprocExtDiag::InvalidBehaviour(
+										token_span,
+									),
+								));
+								seek_end(walker, tokens, false);
+								nodes.push(Node {
+									span: Span::new(
+										dir_span.start,
+										colon_span.end,
+									),
+									ty: NodeTy::ExtensionDirective {
+										name: Some(name),
+										behaviour: None,
+									},
+								});
+								return;
+							}
+						}
+					}
+					ExtensionToken::Colon | ExtensionToken::Invalid(_) => {
+						walker.push_colour(token_span, SyntaxToken::Invalid);
+						walker.push_syntax_diag(Syntax::PreprocExt(
+							PreprocExtDiag::ExpectedBehaviour(token_span),
+						));
+						seek_end(walker, tokens, false);
+						nodes.push(Node {
+							span: Span::new(dir_span.start, colon_span.end),
+							ty: NodeTy::ExtensionDirective {
+								name: Some(name),
+								behaviour: None,
+							},
+						});
+						return;
+					}
+				},
+				None => {
+					walker.push_syntax_diag(Syntax::PreprocExt(
+						PreprocExtDiag::ExpectedBehaviour(
+							name.1.next_single_width(),
+						),
+					));
+					nodes.push(Node {
+						span: Span::new(dir_span.start, colon_span.end),
+						ty: NodeTy::ExtensionDirective {
+							name: Some(name),
+							behaviour: None,
+						},
+					});
+					return;
+				}
+			};
+
+			nodes.push(Node {
+				span: Span::new(dir_span.start, behaviour.1.end),
+				ty: NodeTy::ExtensionDirective {
+					name: Some(name),
+					behaviour: Some(behaviour),
 				},
 			});
 		}

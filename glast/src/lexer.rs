@@ -1,4 +1,4 @@
-//! Types and functionality related to the token stream.
+//! Types and functionality related to the lexer.
 //!
 //! This module contains the structs and enums used to represent tokens, and the [`parse_from_str()`] function
 //! which returns a [`TokenStream`] and accompanied [`Metadata`]. The [`preprocessor`] submodule contains types
@@ -40,10 +40,7 @@
 
 pub mod preprocessor;
 
-use crate::{
-	cst::{Expr, Layout, LayoutTy},
-	Either, Span, Spanned,
-};
+use crate::{Either, Span, Spanned};
 
 /// A vector of tokens representing a GLSL source string.
 pub type TokenStream = Vec<Spanned<Token>>;
@@ -395,7 +392,7 @@ impl Token {
 			| Token::RBrace => SyntaxToken::Punctuation,
 		}
 	}
-	
+
 	/// Returns whether the current token is a keyword which can start a statement.
 	pub fn starts_statement(&self) -> bool {
 		match self {
@@ -453,242 +450,6 @@ impl Token {
 			| Self::LBracket
 			| Self::RBracket => true,
 			_ => false,
-		}
-	}
-
-	/// Tries to convert the current token into a [`LayoutTy`] identifier.
-	///
-	/// If the token matches a layout identifier that doesn't take an expression, e.g. `early_fragment_tests`, then
-	/// `Left` is returned with the converted `LayoutTy`. If the token matches a layout identifier that takes an
-	/// expression, e.g. `location = n`, then `Right` is returned; after the expression has been parsed, call
-	/// [`to_layout_expr()`](Self::to_layout_expr).
-	///
-	/// If `None` is returned, the current token is not a valid layout identifier.
-	pub fn to_layout(&self) -> Option<Either<LayoutTy, ()>> {
-		match self {
-			// `shared` is a keyword in all circumstances, apart from when it is used as a qualifier, hence it's a
-			// distinct variant rather than a string.
-			Self::Shared => Some(Either::Left(LayoutTy::Shared)),
-			Self::Ident(s) => match s.as_ref() {
-				"packed" => Some(Either::Left(LayoutTy::Packed)),
-				"std140" => Some(Either::Left(LayoutTy::Std140)),
-				"std430" => Some(Either::Left(LayoutTy::Std430)),
-				"row_major" => Some(Either::Left(LayoutTy::RowMajor)),
-				"column_major" => Some(Either::Left(LayoutTy::ColumnMajor)),
-				"binding" => Some(Either::Right(())),
-				"offset" => Some(Either::Right(())),
-				"align" => Some(Either::Right(())),
-				"location" => Some(Either::Right(())),
-				"component" => Some(Either::Right(())),
-				"index" => Some(Either::Right(())),
-				"points" => Some(Either::Left(LayoutTy::Points)),
-				"lines" => Some(Either::Left(LayoutTy::Lines)),
-				"isolines" => Some(Either::Left(LayoutTy::Isolines)),
-				"triangles" => Some(Either::Left(LayoutTy::Triangles)),
-				"quads" => Some(Either::Left(LayoutTy::Quads)),
-				"equal_spacing" => Some(Either::Left(LayoutTy::EqualSpacing)),
-				"fractional_even_spacing" => {
-					Some(Either::Left(LayoutTy::FractionalEvenSpacing))
-				}
-				"fractional_odd_spacing" => {
-					Some(Either::Left(LayoutTy::FractionalOddSpacing))
-				}
-				"cw" => Some(Either::Left(LayoutTy::Clockwise)),
-				"ccw" => Some(Either::Left(LayoutTy::CounterClockwise)),
-				"point_mode" => Some(Either::Left(LayoutTy::PointMode)),
-				"line_adjacency" => {
-					Some(Either::Left(LayoutTy::LinesAdjacency))
-				}
-				"triangle_adjacency" => {
-					Some(Either::Left(LayoutTy::TrianglesAdjacency))
-				}
-				"invocations" => Some(Either::Right(())),
-				"origin_upper_left" => {
-					Some(Either::Left(LayoutTy::OriginUpperLeft))
-				}
-				"pixel_center_integer" => {
-					Some(Either::Left(LayoutTy::PixelCenterInteger))
-				}
-				"early_fragment_tests" => {
-					Some(Either::Left(LayoutTy::EarlyFragmentTests))
-				}
-				"local_size_x" => Some(Either::Right(())),
-				"local_size_y" => Some(Either::Right(())),
-				"local_size_z" => Some(Either::Right(())),
-				"xfb_buffer" => Some(Either::Right(())),
-				"xfb_stride" => Some(Either::Right(())),
-				"xfb_offset" => Some(Either::Right(())),
-				"vertices" => Some(Either::Right(())),
-				"line_strip" => Some(Either::Left(LayoutTy::LineStrip)),
-				"triangle_strip" => Some(Either::Left(LayoutTy::TriangleStrip)),
-				"max_vertices" => Some(Either::Right(())),
-				"stream" => Some(Either::Right(())),
-				"depth_any" => Some(Either::Left(LayoutTy::DepthAny)),
-				"depth_greater" => Some(Either::Left(LayoutTy::DepthGreater)),
-				"depth_less" => Some(Either::Left(LayoutTy::DepthLess)),
-				"depth_unchanged" => {
-					Some(Either::Left(LayoutTy::DepthUnchanged))
-				}
-				_ => None,
-			},
-			_ => None,
-		}
-	}
-
-	/// Constructs a [`Layout`] given the identifier, expression and spans.
-	///
-	/// # Panics
-	/// This is only for layout identifiers which take a value expression. See the documentation for
-	/// [`to_layout()`](Self::to_layout) for more information.
-	#[rustfmt::skip]
-	pub fn to_layout_expr(
-		&self,
-		kw_span: Span,
-		eq_span: Option<Span>,
-		expr: Option<Expr>,
-	) -> Layout {
-		// Calculate the span.
-		let span = if let Some(expr) = &expr {
-			Span::new(kw_span.start, expr.span.end)
-		} else if let Some(eq_span) = eq_span {
-			Span::new(kw_span.start, eq_span.end)
-		} else {
-			kw_span
-		};
-
-		match self {
-			Self::Ident(s) => match s.as_ref() {
-				"binding" => Layout {
-					span,
-					ty: LayoutTy::Binding {
-						kw: kw_span,
-						eq: eq_span,
-						value: expr,
-					}
-				},
-				"offset" => Layout {
-					span,
-					ty: LayoutTy::Offset {
-						kw: kw_span,
-						eq: eq_span,
-						value: expr,
-					}
-				},
-				"align" => Layout {
-					span,
-					ty: LayoutTy::Align {
-						kw: kw_span,
-						eq: eq_span,
-						value: expr,
-					}
-				},
-				"location" => Layout {
-					span,
-					ty: LayoutTy::Location {
-						kw: kw_span,
-						eq: eq_span,
-						value: expr,
-					}
-				},
-				"component" => Layout {
-					span,
-					ty: LayoutTy::Component {
-						kw: kw_span,
-						eq: eq_span,
-						value: expr,
-					}
-				},
-				"index" => Layout {
-					span,
-					ty: LayoutTy::Index {
-						kw: kw_span,
-						eq: eq_span,
-						value: expr,
-					}
-				},
-				"invocations" => Layout {
-					span,
-					ty: LayoutTy::Invocations {
-						kw: kw_span,
-						eq: eq_span,
-						value: expr,
-					}
-				},
-				"local_size_x" => Layout{
-					span,
-					ty: LayoutTy::LocalSizeX {
-						kw: kw_span,
-						eq: eq_span,
-						value: expr,
-					}
-				},
-				"local_size_y" => Layout {
-					span,
-					ty: LayoutTy::LocalSizeY {
-						kw: kw_span,
-						eq: eq_span,
-						value: expr,
-					}
-				},
-				"local_size_z" => Layout {
-					span,
-					ty: LayoutTy::LocalSizeZ {
-						kw: kw_span,
-						eq: eq_span,
-						value: expr,
-					}
-				},
-				"xfb_buffer" => Layout {
-					span,
-					ty: LayoutTy::XfbBuffer {
-						kw: kw_span,
-						eq: eq_span,
-						value: expr,
-					}
-				},
-				"xfb_stride" => Layout {
-					span,
-					ty: LayoutTy::XfbStride {
-						kw: kw_span,
-						eq: eq_span,
-						value: expr,
-					}
-				},
-				"xfb_offset" => Layout {
-					span,
-					ty: LayoutTy::XfbOffset {
-						kw: kw_span,
-						eq: eq_span,
-						value: expr,
-					}
-				},
-				"vertices" => Layout {
-					span,
-					ty: LayoutTy::Vertices {
-						kw: kw_span,
-						eq: eq_span,
-						value: expr,
-					}
-				},
-				"max_vertices" => Layout {
-					span,
-					ty: LayoutTy::MaxVertices {
-						kw: kw_span,
-						eq: eq_span,
-						value: expr,
-					}
-				},
-				"stream" => Layout {
-					span,
-					ty: LayoutTy::Stream {
-						kw: kw_span,
-						eq: eq_span,
-						value: expr,
-					}
-				},
-				_ => unreachable!("[Token::to_layout_expr] Given a layout `identifier: {s}` that doesn't take an expression value."),
-			},
-			_ => unreachable!("[Token::to_layout_expr] Given a token which is cannot be a valid layout identifier."),
 		}
 	}
 }

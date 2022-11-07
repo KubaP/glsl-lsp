@@ -12,11 +12,15 @@ use std::{
 };
 
 pub fn parse_file(source: &str) {
-	let (cst, errs) = glast::cst::parse_from_str(source);
-	println!("\r\n{}\r\n", glast::cst::print_tree(&cst));
-	for err in errs {
-		println!("{err:?}");
+	let token_stream = glast::lexer::parse_from_str(source);
+	println!("\r\n{:?}\r\n", token_stream);
+	let tree = glast::parser::parse_from_str(source);
+	let result = tree.root();
+	//let result = tree.parse_by_order_of_appearance([1]).unwrap();
+	for node in result.0 {
+		println!("{node:?}");
 	}
+	println!("\r\n{:?}\r\n\r\n{:?}\r\n\r\n", result.1, result.2);
 }
 
 #[allow(unused_assignments)]

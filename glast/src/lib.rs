@@ -72,8 +72,6 @@
 //! }
 //! ```
 
-pub mod ast;
-pub mod cst;
 pub mod diag;
 pub mod error;
 pub mod lexer;

@@ -437,6 +437,40 @@ pub enum BehaviourTy {
 	Disable,
 }
 
+impl<T> Omittable<T> {
+	/// Returns `true` if the omittable is a [`Some`](Omittable::Some) value.
+	///
+	/// # Examples
+	/// ```
+	/// # use glast::parser::ast::Omittable::{self, Some, None};
+	/// let x: Omittable<u32> = Some(2);
+	/// assert_eq!(x.is_some(), true);
+	///
+	/// let x: Omittable<u32> = None;
+	/// assert_eq!(x.is_some(), false);
+	/// ```
+	#[inline]
+	pub const fn is_some(&self) -> bool {
+		matches!(*self, Self::Some(_))
+	}
+
+	/// Returns `true` if the omittable is a [`None`](Omittable::None) value.
+	///
+	/// # Examples
+	/// ```
+	/// # use glast::parser::ast::Omittable::{self, Some, None};
+	/// let x: Omittable<u32> = Some(2);
+	/// assert_eq!(x.is_none(), false);
+	///
+	/// let x: Omittable<u32> = None;
+	/// assert_eq!(x.is_none(), true);
+	/// ```
+	#[inline]
+	pub const fn is_none(&self) -> bool {
+		!self.is_some()
+	}
+}
+
 impl<T> From<Option<T>> for Omittable<T> {
 	fn from(opt: Option<T>) -> Self {
 		match opt {

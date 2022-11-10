@@ -1454,12 +1454,12 @@ fn match_conditional_punctuation(lexer: &mut Lexer) -> ConditionToken {
 
 /// Performs token concatenation on the given token stream.
 pub(crate) fn concat_object_macro_body(
-	walker: &mut crate::parser::Walker,
 	tokens: super::TokenStream,
-) -> super::TokenStream {
+) -> (super::TokenStream, Vec<crate::diag::Syntax>) {
 	use crate::diag::{PreprocDefineDiag, Syntax};
 
 	let mut stack = Vec::new();
+	let mut diags = Vec::new();
 
 	let mut tokens = tokens.into_iter();
 	while let Some(token) = tokens.next() {
@@ -1472,7 +1472,7 @@ pub(crate) fn concat_object_macro_body(
 					if next.0 == super::Token::MacroConcat {
 						// We have something like `foobar ## ##`. We cannot concatenate two concat operators, so we
 						// just emit the tokens as-is.
-						walker.push_syntax_diag(Syntax::PreprocDefine(
+						diags.push(Syntax::PreprocDefine(
 							PreprocDefineDiag::TokenConcatMissingRHS(token.1),
 						));
 						stack.push(prev);
@@ -1501,19 +1501,19 @@ pub(crate) fn concat_object_macro_body(
 					}
 				}
 				(Some(prev), None) => {
-					walker.push_syntax_diag(Syntax::PreprocDefine(
+					diags.push(Syntax::PreprocDefine(
 						PreprocDefineDiag::TokenConcatMissingRHS(token.1),
 					));
 					stack.push(prev);
 				}
 				(None, Some(next)) => {
-					walker.push_syntax_diag(Syntax::PreprocDefine(
+					diags.push(Syntax::PreprocDefine(
 						PreprocDefineDiag::TokenConcatMissingLHS(token.1),
 					));
 					if next.0 == super::Token::MacroConcat {
 						// We begin the replacement-list with `## ##`. We cannot concatenate two concat operators,
 						// so we just emit the tokens as-is.
-						walker.push_syntax_diag(Syntax::PreprocDefine(
+						diags.push(Syntax::PreprocDefine(
 							PreprocDefineDiag::TokenConcatMissingRHS(token.1),
 						));
 						stack.push((
@@ -1537,10 +1537,10 @@ pub(crate) fn concat_object_macro_body(
 				}
 				(None, None) => {
 					// The entire replacement-list is just `##`.
-					walker.push_syntax_diag(Syntax::PreprocDefine(
+					diags.push(Syntax::PreprocDefine(
 						PreprocDefineDiag::TokenConcatMissingLHS(token.1),
 					));
-					walker.push_syntax_diag(Syntax::PreprocDefine(
+					diags.push(Syntax::PreprocDefine(
 						PreprocDefineDiag::TokenConcatMissingRHS(token.1),
 					));
 					stack.push((
@@ -1558,5 +1558,5 @@ pub(crate) fn concat_object_macro_body(
 		}
 	}
 
-	stack
+	(stack, diags)
 }

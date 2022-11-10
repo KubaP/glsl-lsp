@@ -34,6 +34,11 @@ pub enum Semantic {
 	///
 	/// - `0` - The span of the call site.
 	EmptyMacroCallSite(Span),
+	/// ERROR - Found a function-like macro call site where the number of arguments doesn't match the number of
+	/// parameters as in the definition.
+	///
+	/// - `0` - The span of the call site.
+	FunctionMacroMismatchedArgCount(Span),
 	/// WARNING - The macro name in an undef directive could not be resolved.
 	///
 	/// - `0` - The span of the name.
@@ -46,6 +51,7 @@ impl Semantic {
 			Self::EmptyDirective(_) => Severity::Warning,
 			/* MACROS */
 			Self::EmptyMacroCallSite(_) => Severity::Warning,
+			Self::FunctionMacroMismatchedArgCount(_) => Severity::Error,
 			Self::UndefMacroNameUnresolved(_) => Severity::Warning,
 		}
 	}
@@ -101,7 +107,7 @@ pub enum Syntax {
 	/// - `0` - The span of the tokens.
 	PreprocTrailingTokens(Span),
 	/// ERROR - Found an illegal preprocessor directive.
-	/// 
+	///
 	/// - `0` - The span of the directive,
 	/// - `1` - The initial keyword and it's span, if there is one.
 	FoundIllegalPreproc(Span, Option<Spanned<String>>),
@@ -716,6 +722,22 @@ pub enum PreprocDefineDiag {
 	///
 	/// - `0` - The span where the macro name is expected.
 	DefineExpectedMacroName(Span),
+	/// ERROR - Did not find a comma after a parameter in a macro's parameter list. E.g. `#define fn(foo bar)`.
+	///
+	/// - `0` - The span where the comma is expected.
+	FunctionExpectedCommaAfterParam(Span),
+	/// ERROR - Did not find a paramater after a comma in a macro's parameter list. E.g. `#define fn(foo, )`.
+	///
+	/// - `0` - The span where the parameter is expected.
+	FunctionExpectedParamAfterComma(Span),
+	/// ERROR - Did not find a parameter between the opening parenthesis and the comma. E.g. `#define fn( , bar)`.
+	///
+	/// - `0` - The span where the parameter is expected.
+	FunctionExpectedParamBetweenParenComma(Span),
+	/// ERROR - Did not find a closing parenthesis. E.g. `#define fn(bar, baz `.
+	///
+	/// `0` - The span where the closing parenthesis is expected.
+	FunctionExpectedRParen(Span),
 
 	/* TOKEN CONCAT */
 	/// ERROR - Found a token concatenator (`##`) with no valid token on the left-hand side. E.g.

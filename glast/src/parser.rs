@@ -16,7 +16,7 @@ use crate::{
 			ExtensionToken, LineToken, TokenStream as PreprocStream,
 			VersionToken,
 		},
-		NumType, OpTy, Token, TokenStream,
+		OpTy, Token, TokenStream,
 	},
 	Either, Span, Spanned,
 };
@@ -675,6 +675,26 @@ enum Condition {
 	Else,
 }
 
+/// Information necessary to expand a macro.
+#[derive(Debug, Clone)]
+enum Macro {
+	Object(TokenStream),
+	Function {
+		params: Vec<Ident>,
+		body: TokenStream,
+	},
+}
+
+impl Macro {
+	/// Returns the replacement-list token stream.
+	fn stream(&self) -> &TokenStream {
+		match self {
+			Self::Object(stream) => stream,
+			Self::Function { body, .. } => body,
+		}
+	}
+}
+
 pub(crate) struct Walker {
 	/// The token streams of the source string with the preselected conditional branches.
 	source_streams: Vec<TokenStream>,
@@ -691,8 +711,8 @@ pub(crate) struct Walker {
 	///
 	/// Value:
 	/// - `0` - The span of the identifier,
-	/// - `1` - The body/replacement-list of tokens.
-	macros: HashMap<String, (Span, TokenStream)>,
+	/// - `1` - Macro information.
+	macros: HashMap<String, (Span, Macro)>,
 	/// The span of an initial macro call site. Only the first macro call site is registered here.
 	macro_call_site: Option<Span>,
 	/// The actively-called macro identifiers.
@@ -860,12 +880,10 @@ impl Walker {
 
 	/// Moves the cursor to the next token. This function takes all the necessary data by parameter so that the
 	/// functionality can be re-used between the `Self::advance()` and `Self::lookahead_1()` methods.
-	///
-	/// FIXME: Implement function macro support here!!! Doesn't abide by expression parser's rules
 	fn move_cursor(
 		source_streams: &mut Vec<TokenStream>,
 		streams: &mut Vec<(String, TokenStream, usize)>,
-		macros: &mut HashMap<String, (Span, TokenStream)>,
+		macros: &mut HashMap<String, (Span, Macro)>,
 		active_macros: &mut HashSet<String>,
 		macro_call_site: &mut Option<Span>,
 		syntax_diags: &mut Vec<Syntax>,
@@ -914,24 +932,233 @@ impl Walker {
 			match token {
 				// We check if the new token is a macro call site.
 				Token::Ident(s) => {
-					if let Some((_, new_stream)) = macros.get(s) {
+					if let Some((_, macro_)) = macros.get(s) {
 						if active_macros.contains(s) {
 							// We have already visited a macro with this identifier. Recursion is not supported so
 							// we don't continue.
 							break;
 						}
 
-						let token_span = *token_span;
+						let ident_span = *token_span;
 
-						if new_stream.is_empty() {
+						if let Macro::Function { params, body } = macro_ {
+							// We have an identifier which matches a function-like macro, so we are expecting a
+							// parameter list in the current token stream before we do any switching.
+
+							// We don't need to worry about having to switch source streams because that would
+							// imply that a conditional compilation directive is in the middle of a function-like
+							// macro call site, which isn't valid. A function-like macro call cannot have
+							// preprocessor directives within, which means that the source stream won't be split up
+							// by a conditional, which means the entire invocation of the macro will be within this
+							// stream.
+
+							let mut tmp_cursor = *cursor + 1;
+							let mut comment_spans = Vec::new();
+							loop {
+								match stream.get(tmp_cursor) {
+									Some((token, token_span)) => match token {
+										Token::LineComment(_)
+										| Token::BlockComment { .. } => {
+											comment_spans.push(token_span);
+											tmp_cursor += 1;
+										}
+										_ => break,
+									},
+									None => break 'outer,
+								}
+							}
+
+							// Consume the opening `(` parenthesis.
+							let l_paren_span = match stream.get(tmp_cursor) {
+								Some((token, token_span)) => match token {
+									Token::LParen => {
+										for span in comment_spans {
+											syntax_tokens.push((
+												SyntaxToken::Comment,
+												*token_span,
+											));
+										}
+										syntax_tokens.push((
+											SyntaxToken::Punctuation,
+											*token_span,
+										));
+										*cursor = tmp_cursor + 1;
+										*token_span
+									}
+									_ => {
+										// We did not immediately encounter a parenthesis, which means that this is
+										// not a call to a function-like macro even if the names match.
+										break;
+									}
+								},
+								None => break,
+							};
+
+							// Look for any arguments until we hit a closing `)` parenthesis. The preprocessor
+							// immediately switches to the next argument when a `,` is encountered, unless we are
+							// within a parenthesis group.
+							#[derive(PartialEq)]
+							enum Prev {
+								None,
+								Param,
+								Comma,
+								Invalid,
+							}
+							let mut prev = Prev::None;
+							let mut prev_span = l_paren_span;
+							let mut paren_groups = 0;
+							let mut args = Vec::new();
+							let mut arg = Vec::new();
+							let r_paren_span = loop {
+								let (token, token_span) = match stream
+									.get(*cursor)
+								{
+									Some(t) => t,
+									None => {
+										syntax_diags.push(Syntax::PreprocDefine(PreprocDefineDiag::FunctionExpectedRParen(
+												prev_span.next_single_width()
+											)));
+										break 'outer;
+									}
+								};
+
+								match token {
+									Token::Comma => {
+										syntax_tokens.push((
+											SyntaxToken::Punctuation,
+											*token_span,
+										));
+										if paren_groups == 0 {
+											let arg = std::mem::take(&mut arg);
+											args.push(arg);
+											prev = Prev::Comma;
+										}
+										prev_span = *token_span;
+										*cursor += 1;
+										continue;
+									}
+									Token::LParen => {
+										paren_groups += 1;
+									}
+									Token::RParen => {
+										if paren_groups == 0 {
+											// We have reached the end of this function-like macro call site.
+											syntax_tokens.push((
+												SyntaxToken::Punctuation,
+												*token_span,
+											));
+											let arg = std::mem::take(&mut arg);
+											args.push(arg);
+											// It is important that we don't increment the cursor to the next token
+											// after the macro call site. This is because once this macro is
+											// finished, and we return to the previous stream, we will
+											// automatically increment the cursor onto the next token which will be
+											// the first token after the macro call site. The object-like macro
+											// branch also doesn't perform this increment.
+											// *cursor += 1;
+											break *token_span;
+										}
+										paren_groups -= 1;
+									}
+									_ => {}
+								}
+								syntax_tokens.push((
+									token.non_semantic_colour(),
+									*token_span,
+								));
+								arg.push((token.clone(), *token_span));
+								*cursor += 1;
+							};
+							let call_site_span =
+								Span::new(ident_span.start, r_paren_span.end);
+
+							// We have a set of arguments now.
+							if params.len() != args.len() {
+								// If there is a mismatch in the argument/parameter count, we ignore this macro
+								// call and move onto the next token after the call site.
+								semantic_diags.push(
+									Semantic::FunctionMacroMismatchedArgCount(
+										call_site_span,
+									),
+								);
+								continue;
+							}
+							let mut param_map = HashMap::new();
+							params.iter().zip(args.into_iter()).for_each(
+								|(ident, tokens)| {
+									param_map.insert(&ident.name, tokens);
+								},
+							);
+
+							// We now go through the replacement token list and replace any identifiers which match
+							// a parameter name with the relevant argument's tokens.
+							let mut new_body = Vec::with_capacity(body.len());
+							for (token, token_span) in body {
+								match token {
+									Token::Ident(str) => {
+										if let Some(arg) = param_map.get(&str) {
+											for token in arg {
+												new_body.push(token.clone());
+											}
+											continue;
+										}
+									}
+									_ => {}
+								}
+								new_body.push((token.clone(), *token_span));
+							}
+							// Then, we perform token concatenation.
+							let (new_body, mut diags) = crate::lexer::preprocessor::
+							concat_object_macro_body(new_body);
+							syntax_diags.append(&mut diags);
+
+							if body.is_empty() {
+								// The macro is empty, so we want to move to the next token of the existing stream.
+								semantic_diags.push(
+									Semantic::EmptyMacroCallSite(
+										call_site_span,
+									),
+								);
+								if streams.len() == 1 {
+									// We only syntax highlight when it is the first macro call.
+									syntax_tokens.push((
+										SyntaxToken::FunctionMacro,
+										ident_span,
+									));
+								}
+								continue;
+							}
+
+							let ident = s.to_owned();
+
+							// We only syntax highlight and note the macro call site when it is the first macro
+							// call.
+							if streams.len() == 1 {
+								*macro_call_site = Some(call_site_span);
+								syntax_tokens.push((
+									SyntaxToken::FunctionMacro,
+									ident_span,
+								));
+							}
+
+							active_macros.insert(ident.clone());
+							streams.push((ident, new_body, 0));
+
+							// The first token in the new stream could be another macro call, so we re-run the loop on
+							// this new stream in case.
+							dont_increment = true;
+							continue;
+						}
+
+						if macro_.stream().is_empty() {
 							// The macro is empty, so we want to move to the next token of the existing stream.
 							semantic_diags
-								.push(Semantic::EmptyMacroCallSite(token_span));
+								.push(Semantic::EmptyMacroCallSite(ident_span));
 							if streams.len() == 1 {
 								// We only syntax highlight when it is the first macro call.
 								syntax_tokens.push((
 									SyntaxToken::ObjectMacro,
-									token_span,
+									ident_span,
 								));
 							}
 							continue;
@@ -941,13 +1168,13 @@ impl Walker {
 
 						// We only syntax highlight and note the macro call site when it is the first macro call.
 						if streams.len() == 1 {
-							*macro_call_site = Some(token_span);
+							*macro_call_site = Some(ident_span);
 							syntax_tokens
-								.push((SyntaxToken::ObjectMacro, token_span));
+								.push((SyntaxToken::ObjectMacro, ident_span));
 						}
 
 						active_macros.insert(ident.clone());
-						streams.push((ident, new_stream.clone(), 0));
+						streams.push((ident, macro_.stream().clone(), 0));
 
 						// The first token in the new stream could be another macro call, so we re-run the loop on
 						// this new stream in case.
@@ -986,8 +1213,8 @@ impl Walker {
 	}
 
 	/// Registers a define macro. Note: currently only supports object-like macros.
-	fn register_macro(&mut self, ident: Spanned<String>, tokens: TokenStream) {
-		if let Some(_prev) = self.macros.insert(ident.0, (ident.1, tokens)) {
+	fn register_macro(&mut self, ident: Spanned<String>, macro_: Macro) {
+		if let Some(_prev) = self.macros.insert(ident.0, (ident.1, macro_)) {
 			// TODO: Emit error if the macros aren't identical (will require scanning the tokenstream to compare).
 		}
 	}
@@ -4249,15 +4476,115 @@ fn parse_directive(
 
 				// Since object-like macros don't have parameters, we can perform the concatenation right here
 				// since we know the contents of the macro body will never change.
-				let body_tokens =
-					preprocessor::concat_object_macro_body(walker, body_tokens);
+				let (body_tokens, mut diags) =
+					preprocessor::concat_object_macro_body(body_tokens);
+				walker.append_syntax_diags(&mut diags);
 				body_tokens.iter().for_each(|(t, s)| {
 					walker.push_colour(*s, t.non_semantic_colour())
 				});
-				walker.register_macro(ident, body_tokens);
+				walker.register_macro(ident, Macro::Object(body_tokens));
 			} else {
 				// We have a function-like macro.
-				// TODO: Implement
+
+				let ident = match ident_tokens.remove(0) {
+					(DefineToken::Ident(s), span) => (s, span),
+					_ => unreachable!(),
+				};
+				walker.push_colour(ident.1, SyntaxToken::FunctionMacro);
+
+				// Consume the `(`.
+				let l_paren_span = match ident_tokens.remove(0) {
+					(DefineToken::LParen, span) => {
+						walker.push_colour(span, SyntaxToken::Punctuation);
+						span
+					}
+					_ => unreachable!(),
+				};
+
+				// Look for any parameters until we hit a closing `)` parenthesis.
+				#[derive(PartialEq)]
+				enum Prev {
+					None,
+					Param,
+					Comma,
+					Invalid,
+				}
+				let mut prev = Prev::None;
+				let mut prev_span = l_paren_span;
+				let mut params = Vec::new();
+				let _r_paren_span = loop {
+					let (token, token_span) = if !ident_tokens.is_empty() {
+						ident_tokens.remove(0)
+					} else {
+						walker.push_syntax_diag(Syntax::PreprocDefine(
+							PreprocDefineDiag::FunctionExpectedRParen(
+								prev_span.next_single_width(),
+							),
+						));
+						nodes.push(Node {
+							span: dir_span,
+							ty: NodeTy::DefineDirective {},
+						});
+						return;
+					};
+
+					match token {
+						DefineToken::Comma => {
+							walker.push_colour(
+								token_span,
+								SyntaxToken::Punctuation,
+							);
+							if prev == Prev::Comma {
+								walker.push_syntax_diag(Syntax::PreprocDefine(
+									PreprocDefineDiag::FunctionExpectedParamAfterComma(Span::new_between(
+										prev_span, token_span
+									))
+								));
+							} else if prev == Prev::None {
+								walker.push_syntax_diag(Syntax::PreprocDefine(
+									PreprocDefineDiag::FunctionExpectedParamBetweenParenComma(Span::new_between(
+										l_paren_span, token_span
+									))
+								));
+							}
+							prev = Prev::Comma;
+							prev_span = token_span;
+						}
+						DefineToken::Ident(str) => {
+							walker.push_colour(token_span, SyntaxToken::Ident);
+							params.push(Ident {
+								name: str,
+								span: token_span,
+							});
+							prev = Prev::Param;
+							prev_span = token_span;
+						}
+						DefineToken::RParen => {
+							walker.push_colour(
+								token_span,
+								SyntaxToken::Punctuation,
+							);
+							break token_span;
+						}
+						DefineToken::Invalid(_) | DefineToken::LParen => {
+							walker
+								.push_colour(token_span, SyntaxToken::Invalid);
+							prev = Prev::Invalid;
+							prev_span = token_span;
+						}
+					}
+				};
+
+				body_tokens.iter().for_each(|(t, s)| {
+					walker.push_colour(*s, t.non_semantic_colour())
+				});
+				walker.register_macro(
+					ident,
+					Macro::Function {
+						params,
+						body: body_tokens,
+					},
+				);
 			}
 
 			nodes.push(Node {
@@ -4948,95 +5275,95 @@ fn parse_line_directive(
 
 				let mut line = None;
 				let mut src_str_num = Omittable::None;
-				if let Some((_, replacement_list)) = walker.macros.get(&str) {
-					'replacement: for (token, _) in replacement_list {
-						match token {
-							Token::Num { type_, num, suffix } => {
-								if *type_ != NumType::Dec || suffix.is_some() {
-									walker.push_syntax_diag(
-										Syntax::PreprocLine(
-											PreprocLineDiag::InvalidNumber(
-												ident_span,
-											),
-										),
-									);
-									seek_end(walker, tokens, false);
-									nodes.push(Node {
-										span: Span::new(
-											dir_span.start,
-											kw_span.end,
-										),
-										ty: NodeTy::LineDirective {
-											line,
-											src_str_num,
-										},
-									});
-									return;
-								}
+				/* if let Some((_, replacement_list)) = walker.macros.get(&str) {
+								   'replacement: for (token, _) in replacement_list {
+									   match token {
+										   Token::Num { type_, num, suffix } => {
+											   if *type_ != NumType::Dec || suffix.is_some() {
+												   walker.push_syntax_diag(
+													   Syntax::PreprocLine(
+														   PreprocLineDiag::InvalidNumber(
+															   ident_span,
+														   ),
+													   ),
+												   );
+												   seek_end(walker, tokens, false);
+												   nodes.push(Node {
+													   span: Span::new(
+														   dir_span.start,
+														   kw_span.end,
+													   ),
+													   ty: NodeTy::LineDirective {
+														   line,
+														   src_str_num,
+													   },
+												   });
+												   return;
+											   }
 
-								let num: usize = match num.parse() {
-									Ok(n) => n,
-									Err(_) => {
-										walker.push_syntax_diag(
-											Syntax::PreprocLine(
-												PreprocLineDiag::InvalidNumber(
-													ident_span,
-												),
-											),
-										);
-										seek_end(walker, tokens, false);
-										nodes.push(Node {
-											span: Span::new(
-												dir_span.start,
-												kw_span.end,
-											),
-											ty: NodeTy::LineDirective {
-												line,
-												src_str_num,
-											},
-										});
-										return;
-									}
-								};
+											   let num: usize = match num.parse() {
+												   Ok(n) => n,
+												   Err(_) => {
+													   walker.push_syntax_diag(
+														   Syntax::PreprocLine(
+															   PreprocLineDiag::InvalidNumber(
+																   ident_span,
+															   ),
+														   ),
+													   );
+													   seek_end(walker, tokens, false);
+													   nodes.push(Node {
+														   span: Span::new(
+															   dir_span.start,
+															   kw_span.end,
+														   ),
+														   ty: NodeTy::LineDirective {
+															   line,
+															   src_str_num,
+														   },
+													   });
+													   return;
+												   }
+											   };
 
-								if let Omittable::Some(_) = src_str_num {
-									walker.push_syntax_diag(
-										Syntax::PreprocTrailingTokens(
-											ident_span,
-										),
-									);
-									break 'replacement;
-								}
+											   if src_str_num.is_some() {
+												   walker.push_syntax_diag(
+													   Syntax::PreprocTrailingTokens(
+														   ident_span,
+													   ),
+												   );
+												   break 'replacement;
+											   }
 
-								if line.is_none() {
-									line = Some((num, ident_span))
-								} else {
-									src_str_num =
-										Omittable::Some((num, ident_span));
-								}
-							}
-							_ => {
-								walker.push_syntax_diag(Syntax::PreprocLine(
-									PreprocLineDiag::ExpectedNumber(ident_span),
-								));
-								seek_end(walker, tokens, false);
-								nodes.push(Node {
-									span: Span::new(
-										dir_span.start,
-										kw_span.end,
-									),
-									ty: NodeTy::LineDirective {
-										line,
-										src_str_num,
-									},
-								});
-								return;
-							}
-						}
-					}
-				}
-
-				if let Omittable::Some(_) = src_str_num {
+											   if line.is_none() {
+												   line = Some((num, ident_span))
+											   } else {
+												   src_str_num =
+													   Omittable::Some((num, ident_span));
+											   }
+										   }
+										   _ => {
+											   walker.push_syntax_diag(Syntax::PreprocLine(
+												   PreprocLineDiag::ExpectedNumber(ident_span),
+											   ));
+											   seek_end(walker, tokens, false);
+											   nodes.push(Node {
+												   span: Span::new(
+													   dir_span.start,
+													   kw_span.end,
+												   ),
+												   ty: NodeTy::LineDirective {
+													   line,
+													   src_str_num,
+												   },
+											   });
+											   return;
+										   }
+									   }
+								   }
+							   }
+				*/
+				if src_str_num.is_some() {
 					seek_end(walker, tokens, true);
 					nodes.push(Node {
 						span: Span::new(dir_span.start, kw_span.end),
@@ -5083,87 +5410,88 @@ fn parse_line_directive(
 
 				let mut src_str_num = Omittable::None;
 				if let Some((_, replacement_list)) = walker.macros.get(&str) {
-					'replacement: for (token, _) in replacement_list {
-						match token {
-							Token::Num { type_, num, suffix } => {
-								if *type_ != NumType::Dec || suffix.is_some() {
-									walker.push_syntax_diag(
-										Syntax::PreprocLine(
-											PreprocLineDiag::InvalidNumber(
-												ident_span,
-											),
-										),
-									);
-									seek_end(walker, tokens, false);
-									nodes.push(Node {
-										span: Span::new(
-											dir_span.start,
-											kw_span.end,
-										),
-										ty: NodeTy::LineDirective {
-											line,
-											src_str_num,
-										},
-									});
-									return;
-								}
+					/* 'replacement: for (token, _) in replacement_list {
+						   match token {
+							   Token::Num { type_, num, suffix } => {
+								   if *type_ != NumType::Dec || suffix.is_some() {
+									   walker.push_syntax_diag(
+										   Syntax::PreprocLine(
+											   PreprocLineDiag::InvalidNumber(
+												   ident_span,
+											   ),
+										   ),
+									   );
+									   seek_end(walker, tokens, false);
+									   nodes.push(Node {
+										   span: Span::new(
+											   dir_span.start,
+											   kw_span.end,
+										   ),
+										   ty: NodeTy::LineDirective {
+											   line,
+											   src_str_num,
+										   },
+									   });
+									   return;
+								   }
 
-								let num: usize = match num.parse() {
-									Ok(n) => n,
-									Err(_) => {
-										walker.push_syntax_diag(
-											Syntax::PreprocLine(
-												PreprocLineDiag::InvalidNumber(
-													ident_span,
-												),
-											),
-										);
-										seek_end(walker, tokens, false);
-										nodes.push(Node {
-											span: Span::new(
-												dir_span.start,
-												kw_span.end,
-											),
-											ty: NodeTy::LineDirective {
-												line,
-												src_str_num,
-											},
-										});
-										return;
-									}
-								};
+								   let num: usize = match num.parse() {
+									   Ok(n) => n,
+									   Err(_) => {
+										   walker.push_syntax_diag(
+											   Syntax::PreprocLine(
+												   PreprocLineDiag::InvalidNumber(
+													   ident_span,
+												   ),
+											   ),
+										   );
+										   seek_end(walker, tokens, false);
+										   nodes.push(Node {
+											   span: Span::new(
+												   dir_span.start,
+												   kw_span.end,
+											   ),
+											   ty: NodeTy::LineDirective {
+												   line,
+												   src_str_num,
+											   },
+										   });
+										   return;
+									   }
+								   };
 
-								if let Omittable::Some(_) = src_str_num {
-									walker.push_syntax_diag(
-										Syntax::PreprocTrailingTokens(
-											ident_span,
-										),
-									);
-									break 'replacement;
-								}
+								   if src_str_num.is_some() {
+									   walker.push_syntax_diag(
+										   Syntax::PreprocTrailingTokens(
+											   ident_span,
+										   ),
+									   );
+									   break 'replacement;
+								   }
 
-								src_str_num =
-									Omittable::Some((num, ident_span));
-							}
-							_ => {
-								walker.push_syntax_diag(Syntax::PreprocLine(
-									PreprocLineDiag::ExpectedNumber(ident_span),
-								));
-								seek_end(walker, tokens, false);
-								nodes.push(Node {
-									span: Span::new(
-										dir_span.start,
-										kw_span.end,
-									),
-									ty: NodeTy::LineDirective {
-										line,
-										src_str_num,
-									},
-								});
-								return;
-							}
-						}
-					}
+								   src_str_num =
+									   Omittable::Some((num, ident_span));
+							   }
+							   _ => {
+								   walker.push_syntax_diag(Syntax::PreprocLine(
+									   PreprocLineDiag::ExpectedNumber(ident_span),
+								   ));
+								   seek_end(walker, tokens, false);
+								   nodes.push(Node {
+									   span: Span::new(
+										   dir_span.start,
+										   kw_span.end,
+									   ),
+									   ty: NodeTy::LineDirective {
+										   line,
+										   src_str_num,
+									   },
+								   });
+								   return;
+							   }
+						   }
+					   }
+					*/
 				}
 
 				src_str_num

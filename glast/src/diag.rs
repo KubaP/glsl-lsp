@@ -7,12 +7,12 @@
 //! All diagnostic types are marked `#[non_exhaustive]` to allow for new diagnostics to be introduced without a
 //! breaking change. All diagnostic types have a `get_severity()` method which returns the [`Severity`] of that
 //! given diagnostic. Syntax diagnostics only return `Severity::Error`.
-//! 
+//!
 //! There are a *lot* of individual syntax diagnostics for all sorts of edge cases. This approach was chosen in
 //! order to provide very specific diagnostics without having to hardcode `&'static` strings everywhere. In order
 //! to make the amount more managable, most diagnostics are split into nested enums.
 
-use crate::Span;
+use crate::{Span, Spanned};
 
 /// The severity of a diagnostic.
 #[derive(Debug)]
@@ -25,6 +25,10 @@ pub enum Severity {
 #[derive(Debug)]
 #[non_exhaustive]
 pub enum Semantic {
+	/// WARNING - Found an empty preprocessor directive.
+	///
+	/// - `0` - The span of the line containing the directive.
+	EmptyDirective(Span),
 	/* MACROS */
 	/// WARNING - Found a macro call site, but the macro contains no replacement tokens.
 	///
@@ -39,9 +43,10 @@ pub enum Semantic {
 impl Semantic {
 	pub fn get_severity(&self) -> Severity {
 		match self {
+			Self::EmptyDirective(_) => Severity::Warning,
 			/* MACROS */
-			Semantic::EmptyMacroCallSite(_) => Severity::Warning,
-			Semantic::UndefMacroNameUnresolved(_) => Severity::Warning,
+			Self::EmptyMacroCallSite(_) => Severity::Warning,
+			Self::UndefMacroNameUnresolved(_) => Severity::Warning,
 		}
 	}
 }
@@ -95,6 +100,11 @@ pub enum Syntax {
 	///
 	/// - `0` - The span of the tokens.
 	PreprocTrailingTokens(Span),
+	/// ERROR - Found an illegal preprocessor directive.
+	/// 
+	/// - `0` - The span of the directive,
+	/// - `1` - The initial keyword and it's span, if there is one.
+	FoundIllegalPreproc(Span, Option<Spanned<String>>),
 
 	/// ERROR - Found a block comment that is missing the closing tag.
 	///

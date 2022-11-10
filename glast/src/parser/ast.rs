@@ -1,12 +1,12 @@
 //! Abstract syntax tree types and functionality.
-//! 
+//!
 //! There are a lot of types used to represent specific things. Some common ones worth mentioning:
 //! - [`Node`] and [`NodeTy`] - A node representing a statement.
 //! - [`Expr`] and [`ExprTy`] - A node representing an expression; this will never be found standalone but part of
 //!   a `Node` of some kind.
 //! - [`Ident`] - A general identifier of some kind.
 //! - [`Omittable`] - A type representing optional grammar elements.
-//! 
+//!
 //! In general, types are laid out as follows:
 //! ```
 //! pub struct _LangFeature_ {
@@ -15,7 +15,7 @@
 //!     /// A span of the entire node.
 //!     pub span: Span
 //! }
-//! 
+//!
 //! pub enum _LangFeature_Ty {
 //!     /* Actual variants are here */
 //!     /* Each variant contains any necessary fields that are relevant to it */
@@ -128,6 +128,8 @@ pub enum NodeTy {
 	Discard,
 	/// A return statement, e.g. `return 5;`.
 	Return { value: Omittable<Expr> },
+	/// An empty directive, i.e. just a `#` on it's own line.
+	EmptyDirective,
 	/// A version directive, e.g. `#version 450 core`.
 	VersionDirective {
 		version: Option<Spanned<usize>>,
@@ -136,13 +138,25 @@ pub enum NodeTy {
 	/// An extension directive, e.g. `#extension all : enable`.
 	ExtensionDirective {
 		name: Option<Spanned<String>>,
-		behaviour: Option<Spanned<BehaviourTy>>
+		behaviour: Option<Spanned<BehaviourTy>>,
 	},
 	/// A line directive, e.g. `#line 1`.
 	LineDirective {
 		line: Option<Spanned<usize>>,
 		src_str_num: Omittable<Spanned<usize>>,
-	}
+	},
+	/// A define directive, e.g. `#define TOGGLE 1`.
+	// TODO: Decide what to store here.
+	DefineDirective {},
+	/// An undef directive, e.g. `#undef TOGGLE`.
+	UndefDirective {
+		/// The name of the macro to un-define.
+		name: Omittable<Ident>,
+	},
+	/// An error directive, e.g. `#error foo bar`.
+	ErrorDirective { message: Omittable<Spanned<String>> },
+	/// A pragma directive, e.g. `#pragma strict`.
+	PragmaDirective { options: Omittable<Spanned<String>> },
 }
 
 /// A scope of nodes.
@@ -416,7 +430,7 @@ pub enum ProfileTy {
 
 /// The behaviour for a GLSL extension.
 #[derive(Debug, Clone, PartialEq)]
-pub enum BehaviourTy{
+pub enum BehaviourTy {
 	Require,
 	Enable,
 	Warn,
@@ -491,7 +505,9 @@ impl Type {
 	/// - `1` - Any array size specifiers for that variable.
 	///
 	/// If the expression cannot be parsed, this function returns `None`.
-	pub(crate) fn parse_var_idents(expr: &Expr) -> Option<Vec<(Ident, Vec<ArrSize>)>> {
+	pub(crate) fn parse_var_idents(
+		expr: &Expr,
+	) -> Option<Vec<(Ident, Vec<ArrSize>)>> {
 		fn convert(expr: &Expr) -> Option<(Ident, Vec<ArrSize>)> {
 			match &expr.ty {
 				ExprTy::Ident(i) => Some((i.clone(), vec![])),

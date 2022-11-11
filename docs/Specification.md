@@ -7,9 +7,33 @@ Missing/incomplete:
 - Images
 - Atomic counters
 - Arrays/opaque arrays limitations
-- Subroutines
 
-GLSL source strings **must** use the UTF-8 encoding. Any characters which are not explicitly allowed are treated as invalid.
+# Character Set
+GLSL source strings **must** use the UTF-8 encoding. Only the following characters are allowed in GLSL tokens (preprocessor tokens can accept any character):
+- `[a-z]`, `[A-Z]`, `_`,
+- `[0-9]`,
+- `+`, `-`, `*`, `/`, `%`, `<`, `>`, `&`, `|`, `^`, `~`, `=`, `!`, `?`, `:`, `(`, `)`, `[`, `]`, `{`, `}`, `;`, `,`, `.`
+
+Any other characters produce a compile-time error.
+
+There are no digraphs or trigraphs, and no escape sequences other than the [line-continuation character](#line-continuation-character).
+
+The following are reserved keywords, using any of these results in a compile-time error:
+```glsl
+common partition active
+asm
+class union enum typedef template this
+resource
+goto
+inline noinline public static extern external interface
+long short half fixed unsigned superp
+input output
+hvec2 hvec3 hvec4 fvec2 fvec3 fvec4
+sampler3DRect
+filter
+sizeof cast
+namespace using
+```
 
 # Types
 Note that the term *composites* refers to any of the vector, matrix, array or struct types.
@@ -18,36 +42,36 @@ Unlike in C, there are no pointer types.
 
 ### Standard Types
 Scalars:
-- `bool` - genuine boolean which can hold one of two values, not an integer like in C,
-- `int` - signed 32-bit integer,
-- `uint` - unsigned 32-bit integer,
-- `float` - single precision floating point number,
-- `double` - double precision floating point number,
-- `void` - nothing.
+- `bool` - Genuine boolean which can hold one of two values; not an integer like in C.
+- `int` - Signed 32-bit integer.
+- `uint` - Unsigned 32-bit integer.
+- `float` - Single precision floating point number.
+- `double` - Double precision floating point number.
+- `void` - Nothing.
 
 `void` is a special type which can only be used in function signatures to denote a function not returning anything. It cannot be used to declare a variable which stores some data.
 
 Vectors (where `2 <= n <= 4`):
-- `bvecn` - vector of booleans,
-- `ivecn` - vector of integers,
-- `uvecn` - vector of unsigned integers,
-- `vecn` - vector of floats,
-- `dvec` - vector of double precision floats.
+- `bvecn` - Booleans.
+- `ivecn` - Integers.
+- `uvecn` - Unsigned integers.
+- `vecn` - Single precision floats.
+- `dvec` - Double precision floats.
 
 Matrices (where `n` is the number of columns and `m` is the number of rows, and they satisfy `2 <= n/m <= 4`):
-- `matnxm` - matrix of floats,
-- `dmatnxm` - matrix of double precision floats.
+- `matnxm` - Single precision floats.
+- `dmatnxm` - Double precision floats.
 
-An alternative `mati` and `dmati` notation, (where `i` is a number that satisfies `2 <= i <= 4`), defines a square matrix, i.e. it is equivalent to `(d)matixi`.
+An alternative `mati` and `dmati` notation, (where `i` is a number that satisfies `2 <= i <= 4`), defines a square matrix. It is equivalent to `(d)matixi`.
 
 ### Opaque Types
 These are types which act as a reference to some external object. A clear analogy would be, like pointers are fundamentally integers but they have special meaning, opaque types are also integer primitives but they point to somewhere else in gpu memory. Opaque types can only be declared as `uniform`-qualified variables, or as function parameters.
 
 Opaque types are a form of constant variables; they cannot be assigned to, and hence cannot be qualified with the `out` or `inout` parameter qualifiers.
 
-- Samplers - TODO
-- Images - TODO,
-- Atomic counters - TODO.
+- TODO: Samplers
+- TODO: Images
+- TODO: Atomic counters
 
 ### Structs
 User-defined structs can be created like so:
@@ -61,7 +85,7 @@ Structs must have at least one member defined. Members cannot be initialized. No
 
 If a struct contains an [Opaque Type](#opaque-types), then it can only be used in places that accept such types (mainly `uniform` globals).
 
-Struct members are defined using standard [Variable Definition](#variable-definitions--declarations) statements, i.e. all of the following are valid:
+Struct members are defined using standard [Variable Definition](#variable-definitions--initializations) statements, i.e. all of the following are valid:
 ```glsl
 struct NAME {
     int[3] a;
@@ -76,13 +100,13 @@ Unlike with variable definitions, array members **must** be sized. Anonymous mem
 ## Arrays
 Any type (other than `void`) can be aggregated into an array of homogenous values:
 ```glsl
-// Sized
+// Sized:
 float f[3]
 
-// Unsized
+// Unsized:
 mat4 m[]
 
-// Size specified by a more complex constant expression
+// Size specified by a more complex constant expression:
 const int size = 2;
 vec3 v[size + 5]
 ```
@@ -90,16 +114,16 @@ If an array size is specified, it must be a *Constant Expression* which evaluate
 
 Multi-dimensional arrays can also be typed:
 ```glsl
-// 3 sets of arrays, each 5 in length
+// 3 sets of arrays, each 5 in length:
 float f[3][5]
 
-// Equivalent to above
+// Equivalent to above:
 float[5] f[3]
 
-// A 3d array
+// A 3d array:
 mat4 m[2][3][9]
 
-// Equivalent to above
+// Equivalent to above:
 mat4[3][9] m[2]
 
 mat4[9] m[2][3]
@@ -111,16 +135,16 @@ All types can be initialized with an initialization expression. This expression 
 ### Scalar
 Scalars can be initialized through the following:
 ```glsl
-// An expression consiting of a literal
+// An expression consiting of a literal:
 int i = 5;
 
-// A simple binary expression
+// A simple binary expression:
 int i = 5 + 10;
 
-// A more complex nested binary expresion
+// A more complex nested binary expresion:
 int i = (5 + 7) << 9;
 
-// An expression consiting of a function call which returns a value
+// An expression consiting of a function call which returns a value:
 int i = func();
 ```
 You can combine the different expression types above in any arbitrary way.
@@ -133,13 +157,13 @@ TODO:
 ### Vectors and Matrices
 Vectors and matrices can be initialized through constructors:
 ```glsl
-// Initialises a vec3 with the given values
+// Initialises a vec3 with the given values:
 vec3 v = vec3(1.0, 2.0, 3.0);
 
-// Initialises a vec3 with all zeroes
+// Initialises a vec3 with all zeroes:
 vec3 v = vec3(0.0);
 
-// Initialises a mat2x2 with the given values
+// Initialises a mat2x2 with the given values:
 mat2 m = mat2(1.0, 2.0, 10.0, 20.0);
 mat2 m = mat2(vec2(1.0, 2.0), vec2(10.0, 20.0));
 ```
@@ -155,24 +179,24 @@ Each expression in an initializer list must either evaluate to the constituent t
 
 Initializer lists must contain the same amount of expressions as the number of components in the vector. The following is not allowed:
 ```glsl
-// Allowed
+// Valid:
 vec3 v = vec3(0.0);
 
-// Not allowed
+// Invalid:
 vec3 v = {0.0};
 
-// Allowed
+// Valid:
 vec3 v = {0.0, 0.0, 0.0}; // x, y, z
 ```
 Initializer lists must contain the same amount of expressions as the number of columns in the matrix. Matrices are "under the hood" treated as a bunch of vectors, one vector per column, hence the following happens:
 ```glsl
-// Allowed
+// Valid:
 mat2 m = mat2(1.0, 2.0, 3.0, 4.0);
 
-// Not allowed
+// Invalid:
 mat2 m = {1.0, 2.0, 3.0, 4.0};
 
-// This _is_ allowed however
+// This _is_ allowed however:
 // See how you're effectively first initializing two `vec2`s, and then using those to initialize the `mat2`
 mat2 m = {{1.0, 2.0}, {3.0, 4.0}};
 // It is the equivalent of:
@@ -182,33 +206,33 @@ mat2 m = mat2(vec2(1.0, 2.0), vec2(3.0, 4.0));
 ### Arrays
 Arrays can be initialized through constructors:
 ```glsl
-// Initialize 3 elements
+// Initialize 3 elements:
 int i[3] = int[3](1, 2, 3);
 
-// You don't have to repeat the size
+// You don't have to repeat the size:
 int i[3] = int[](1, 2, 3);
 
-// You can skip out the size entirely if you are initializing in one go
+// You can skip out the size entirely if you are initializing in one go:
 int i[] = int[](1, 2, 3);
 
-// Alternatively, the size can go on the type
+// Alternatively, the size can go on the type:
 int[3] i = int[](1, 2, 3);
 int[] i = int[](1, 2, 3);
 
-// Invalid, incorrect number of arguments
+// Invalid, incorrect number of arguments:
 int i[3] = int[](1, 2);
 ```
 The number of arguments in a constructor must match the size of the array (if explicitly specified). Each expression must evaluate to the element type, or a type which can be implicitly converted to the element type. If no explicit size is specified, the number of arguments can be arbitrary.
 
 Multi-dimensional arrays cannot be initialized with nested array constructors:
 ```glsl
-// Invalid
+// Invalid:
 int i[2][3] = int[2](
     int[3](1, 2, 3),
     int[3](4, 5, 6)
 );
 
-// Use initializer lists instead,
+// Use initializer lists instead:
 int i[2][3] = {{1, 2, 3}, {4, 5, 6}};
 int i[2][3][1] = {{{1}, {2}, {3}}, {{4}, {5}, {6}}};
 
@@ -220,33 +244,33 @@ int i[2][3] = int[](a, b);
 // Or alternatively use only inner constructors:
 int i[2][3] = {int[](1, 2, 3), int[](4, 5, 6)};
 
-// Alternatively, put the inner dimension size first
+// Alternatively, put the inner dimension size first:
 int[3] i[2] = {int[](1, 2, 3), int[](4, 5, 6)};
 int[1] i[2][3] = {{{1}, {2}, {3}}, {{4}, {5}, {6}}};
 
-// Invalid, only the inner-most size can be moved forward
+// Invalid, only the inner-most size can be moved forward:
 int[1][3] i[2] = {{{1}, {2}, {3}}, {{4}, {5}, {6}}};
 ```
 With multi-dimensional arrays, only the outer-most size can be implicit:
 ```glsl
-// Valid, automatically infers: int[2][3]
+// Valid, automatically infers: int[2][3]:
 int i[][3] = {{1, 2, 3}, {4, 5, 6}};
 int[3] i[] = {{1, 2, 3}, {4, 5, 6}};
 
-// Invalid
+// Invalid:
 int i[][] = {int[3](1, 2, 3), int[3](4, 5, 6)};
 
-// Also invalid, inner size not specified
+// Also invalid, inner size not specified:
 int[] i[2] = {{1, 2, 3}, {4, 5, 6}};
 int[] i[2][3] = {{{1}, {2}, {3}}, {{4}, {5}, {6}}};
 ```
 
 Alternatively, initializer lists can be used:
 ```glsl
-// Explicit size
+// Explicit size:
 int i[3] = {1, 2, 3};
 
-// Implicit size
+// Implicit size:
 int i[] = {1, 2, 3};
 
 int i[3][2] = {{1, 2}, {3, 4}, {5, 6}};
@@ -257,7 +281,7 @@ Each expression in an initializer list must be either evaluate to the element ty
 
 Initializer lists must contain the same amount of expressions as the number of elements in the array. The following is not allowed:
 ```glsl
-// Not allowed
+// Invalid:
 // Provided only 2 expressions, but there are 3 elements in the array
 int i[3] = {0, 1};
 
@@ -274,10 +298,10 @@ struct Data {
     mat2 m;
 };
 
-// Initializes the struct
+// Initializes the struct:
 Data d = Data(5, 1.0, mat2(0.0));
 
-// Invalid
+// Invalid:
 Data d = Data(5, 1.0);
 ```
 The order of the arguments corresponds to the order the struct members are declared in. The number of arguments must match the number of members of the struct.
@@ -297,6 +321,7 @@ Initializer lists must contain the same amount of expressions as the number of m
 ```glsl
 // Provided only 2 expressions, but there are 3 members in the struct
 Data d = {5, 1.0};
+
 // Provided 4 expressions, but there are only 3 members
 Data d = {5, 1.0, mat2(0.0), 7};
 ```
@@ -312,14 +337,14 @@ struct Data {
     mat2 m;
 };
 
-// Valid
+// Valid:
 // Only uses initializer lists
 Data d = {
     1,
     {{1.0, 2.0}, {3.0, 4.0}}
 };
 
-// Valid
+// Valid:
 // Uses the initializer list for the top-most composite,
 // but constructors for the nested `mat2` and `vec2` composites.
 Data d = {
@@ -327,7 +352,7 @@ Data d = {
     mat2(vec2(1.0, 2.0), vec2(3.0, 4.0))
 };
 
-// Invalid
+// Invalid:
 // Uses an initializer lists for the top-most composite,
 // a constructor for the nested `mat2` composite,
 // and then an initializer list for the nested `vec2` composites.
@@ -353,13 +378,13 @@ int i[2][3] = int[2]({1, 2, 3}, {4, 5, 6});
 ```
 Initializer Lists can have a trailing comma after the arguments, i.e. this is valid:
 ```glsl
-// Valid
+// Valid:
 vec2 v = {1, 2,};
 
-// Also valid
+// Also valid:
 vec2 v = {1, 2};
 
-// This however is invalid
+// This however is invalid:
 vec3 v = {1, 2, ,};
 //             ^ expected argument between the two commas
 ```
@@ -391,15 +416,15 @@ A-Z // uppercase latin
 0-9 // digits
 _   // underscore
 ```
-An identifier cannot start with a digit. Identifiers starting with the `gl_` prefix are reserved for OpenGL. Identifiers also cannot be any of the keywords, reserved keywords.
+An identifier cannot start with a digit. Identifiers starting with the `gl_` prefix are reserved for OpenGL. Identifiers starting with a `__` prefix are by convention reserved; they can be (un)defined but it may cause unintended behaviour if a previous implementation definition exists. Identifiers also cannot be any of the keywords or reserved keywords.
 
 # Literals
 These are the allowed literals:
-- `bool` - `true` and `false`,
-- `int` - `1` (prefix `0` for base-8 or prefix `0x` for base-16),
-- `uint` - `1u` or `1U` (prefix `0` for base-8 or prefix `0x` for base-16),
-- `float` - `1.0` (`1e10` or `1.2e10` for exponential notation, which is always base-10),
-- `double` - `1.0lf` or `1.0LF` (mixing case such as `lF` is not allowed).
+- `bool` - `true` and `false`.
+- `int` - `1`, (prefix `0` for base-8 or prefix `0x` for base-16).
+- `uint` - `1u` or `1U`, (prefix `0` for base-8 or prefix `0x` for base-16).
+- `float` - `1.0`, (`1e10` or `1.2e10` for exponential notation, which is always base-10).
+- `double` - `1.0lf` or `1.0LF`, (mixing case such as `lF` is not allowed).
 
 ### Numbers
 For a specification of valid number notations, see the [lexer_grammar.bnf](./lexer_grammar.bnf) file.
@@ -484,52 +509,52 @@ Only the `==`, `!=`, `=` and `[]` index operators are allowed to operate on [Arr
 
 # Statements & Expressions
 
-## Variable Definitions & Declarations
-Variable declaration & definition statements are valid at the top-level of a shader file, and within functions or any other control flow statements or scopes. Variables can be of any type (other than `void`).
+## Variable Definitions & Initializations
+Variable definition (& initialization) statements are valid at the top-level of a shader file, and within functions or any other control flow statements or blocks. Variables can be defined of any type (other than `void`):
 ```glsl
-// A definition
+// A definition:
 int i;
 
-// A declaration
+// A definition with initialization:
 int i = 5;
 ```
 
 ### Initialization
-See [Initialization](#initialization) for an overview of how different types can be initialized.
+See the [Initialization](#initialization) section for an overview of how different types can be initialized.
 
-If a variable is not initialized at the site of definition, it must be later initialized (through assignment, or through declaration) before it can be used:
+If a variable is not initialized at the site of definition, it must be later initialized before it can be used:
 ```glsl
-// Defined but not initialized
+// Defined but not initialized:
 float b[3];
 
-// Initialized
+// Initialized:
 b = float[](1, 2, 3);
-
-// Alternatively, it can be declared;
-float b[3] = {1, 2, 3};
-
-// Can be used...
 ```
 For `const` qualified variables (or other constant variables such as `uniform` globals), any assignment expression must also be a *Constant Expression*.
 
-### Multiple
-In a variable declaration or definition, multiple variables can be created in one statement.
+### Multiple At Once
+In a variable definition (& initialization), multiple variables can be created in one statement:
 ```glsl
 int a, b;
 
 int a, b = 5;
 
-// Defines `a` of `int[3][1]` and `b` of `int[5][1]`
+// Defines `a` of `int[3][1]` and `b` of `int[5][1]`:
 int[1] a[3], b[5];
+```
+If more than one variable is defined of a different array size, the statement cannot initializer the variables (because there would be a type mismatch):
+```glsl
+// One array has an outer size of 3 but the other of 5:
+int[1] a[3], b[5] = int[](/*???*/);
 ```
 
 ## Variable Assignment
-Variable assignment statements are valid at the top-level of a shader file, and within functions or any other control flow statements or scopes:
+Variable assignment statements are valid at the top-level of a shader file, and within functions or any other control flow statements or blocks:
 ```glsl
-// Assuming int p;
+// Assuming int p; :
 p = 5;
 
-// Assuming float b[2][4];
+// Assuming float b[2][4]; :
 b = {
     {1, 2, 3, 4},
     {5, 6, 7, 8}
@@ -542,10 +567,11 @@ p += 1;
 // The same as:
 p = p + 1;
 ```
-Note: These operators can also be used within expressions like so:
+
+Variables can be assigned to within an expression like so:
 ```glsl
-// This will increment `p` by 4, and assign a copy of this new value to `i`.
-int i = p+= 4;
+// This will increment `p` by 4, and assign a copy of this new value to `i`:
+int i = p += 4;
 ```
 
 ## Function Definitions & Declarations
@@ -563,27 +589,27 @@ int func(int i) {
     return 5;
 }
 ```
-In a function definition, the return type must match, or be able to be implicitly converted to, the return type specified in the function signature. If the return type is of `void`, the `return;` control flow statement must be used without any returning expression.
+Within a function definition, the return type must match, or be able to be implicitly converted to, the return type specified in the function definition. If the return type is of `void`, the `return;` control flow statement must be used without any returning expression.
 
-Functions are allowed to return any type, and take in any type other than `void` for the parameter types. Arrays are allowed, but they must be explicitly sized.
+Functions are allowed to return any type, and take in any type other than `void` for the parameter types. Arrays are allowed, but they must be explicitly sized:
 ```glsl
-// A function with no parameters
+// A function with no parameters:
 void func();
 
-// A function with multiple parameters
+// A function with multiple parameters:
 mat4 func(int i, float f, mat4 m);
 
-// Invalid, `void` cannot be a parameter
+// Invalid, `void` cannot be a parameter:
 void func(void v);
 
-// A function with arrays
+// A function with arrays:
 vec3[3] func(int[2] i);
 
-// Just like with variable definitions/declarations, array sizes can be disjointed
+// Just like with variable definitions, array sizes can be disjointed:
 vec3[3] func(int[2] i);
 vec3[3] func(int[2] i[1]);
 
-// Invalid, arrays must be sized
+// Invalid, arrays must be sized:
 vec3[] func(int[2] i);
 ```
 
@@ -592,9 +618,10 @@ The parameter names are optional in both the declaration and definition, so the 
 void func(int i, float, mat4 m);
 ```
 
-A function that takes no parameters can have an optional `void` parameter specified. If this is the case, it must be the only parameter, and it must be anonymous
+A function that takes no parameters can have an optional `void` parameter specified. If this is the case, it must be the only parameter, and it must be anonymous:
 ```glsl
 int func(void);
+
 // Equivalent to:
 int func();
 
@@ -641,31 +668,32 @@ PRECISION float func();
 ```
 
 ## Function Calls
-Function call statements are only valid within function bodies. Function call expressions are valid in any expression, but **only** if they return a value.
+Function call statements/expressions are only valid within function bodies:
 ```glsl
-// A statement
+// A statement:
 func();
 
-// Part of an expression
+// Part of an expression:
 ... = vec3(0.0); // <- Returns a value
 
-// Functions can have an arbitrary number of arguments
+// Functions can have an arbitrary number of arguments:
 func(1, 5.0, Data(1));
 ```
+
 There are multiple ways that arguments are passed into a function call:
-- `in` - The argument value is copied into the function,
-- `out` - The parameter value within the function is copied out into this argument,
+- `in` - The argument value is copied into the function.
+- `out` - The parameter value within the function is copied out into this argument.
 - `inout` - The argument value is copied into the function, and then the parameter value within the function is copied back out into the same argument.
 
 ```glsl
-// Standard passing of arguments in
+// Standard passing of arguments in:
 fn(in int p) {
     // Reads from `p` and does something...
 }
 int i = 5;
 fn(i);
 
-// Passing parameters out
+// Passing parameters out:
 fn2(out int p) {
     p = 5;
 }
@@ -673,7 +701,7 @@ int i;
 fn2(i);
 // `i` is now 5
 
-// Both
+// Both:
 fn3(inout int p) {
     p += p;
 }
@@ -681,14 +709,78 @@ int i = 5;
 fn3(i);
 // `i` is now 10
 ```
+
 Note that an argument is expected after a comma, i.e. this is invalid:
 ```glsl
-// Invalid
+// Invalid:
 vec2(1, 2, )
 //        ^ expected argument here
 
-// Valid
+// Valid:
 vec2(1, 2)
+```
+
+## Subroutines
+Subroutines are special functions which can have one or more variants, one of which is selected at runtime through a uniform. You first declare a subroutine type which provides a function declaration only. Then you define one or more functions which are associated with that subroutine and match the signature. Finally you define a special uniform which acts as a function that you can call in normal code.
+
+### Subroutine Type
+A subroutine type is declared in the same manner as a function:
+```glsl
+subroutine int func(int i);
+```
+In this example `func` is the typename of the subroutine.
+
+### Function Association
+Function definitions are associated with a certain subroutine type through the extra syntax:
+```glsl
+// Associated with the subroutine `func`:
+subroutine(func) int func_1(int i) {
+    // Do something
+    return 5;
+}
+
+// Associated with multiple subroutines:
+subroutine(func, foobar) int baz(int i) {
+    // Do something
+    return 5;
+}
+```
+The arguments and return type must match the subroutine type, (if multiple subroutines are associated they all must have the same arguments and return type). The name of a function doesn't have to match, but it must be unique if it is associated with a subroutine. The following would be invalid:`
+```glsl
+subroutine(func) int func_1(int i) {
+    return 5;
+}
+
+// This isn't a subroutine function, but the names clash nontheless:
+int func_1(int i, int p);
+```
+Function declarations cannot be associated; a body is necessary. Associated functions can also be called directly through their function name.
+
+### Subroutine Uniform
+A subroutine uniform is defined:
+```glsl
+subroutine uniform func my_func;
+
+// Can also be defined as an array:
+subroutine uniform func my_func[2];
+```
+
+### Calling
+A subroutine is called within normal code by calling the name of the subroutine uniform like so:
+```glsl
+int i = my_func(0);
+
+// Also works with arrays:
+int i = my_func[1](0);
+```
+This will call the currently chosen subroutine function, whatever it may be. Control over which subroutine function is chosen is done through the OpenGL API which is irrelevant to this specification.
+
+### Layout specification
+Individual subroutine function definitions as well as the subroutine uniform can have their in-shader layout specified:
+```glsl
+layout(index = 2) subroutine(func) int func_1(int i) { return 5; }
+
+layout(index = 5) subroutine uniform func my_func;
 ```
 
 ## Control Flow
@@ -696,31 +788,31 @@ Control flow statements are only valid within function bodies.
 
 ### Jumps
 ```glsl
-// Only valid inside for, while and do-while loops.
+// Only valid inside for, while and do-while loops:
 continue;
 
-// Only valid inside for, while and do-while loops, as well as switch statements.
+// Only valid inside for, while and do-while loops, as well as switch statements:
 break;
 
-// Valid inside any function.
+// Valid inside any function:
 return;
-return EXPR;
+return _EXPR_;
 
-// Only valid in fragment shaders, inside any function.
+// Only valid in fragment shaders, inside any function:
 discard;
 ```
-`EXPR` is an expression.
+`_EXPR_` is an expression.
 
 Unlike in C, there is no `goto` statement.
 
 ### If Statement
 ```glsl
-if (EXPR) {
+if (_EXPR_) {
     /*...*/
 }
 
 // Optionally followed by (n number of times):
-else if (EXPR) {
+else if (_EXPR_) {
     /*...*/
 }
 
@@ -730,21 +822,20 @@ else {
 }
 
 ```
-`EXPR` is an expression which evaluates to a `bool`.
+`_EXPR_` is an expression which evaluates to a `bool`.
 
-If the body only contains one statement, the braces can be omitted. Note that if the braces are omitted, there **must** be one statement after, zero statements is not allowed.
+If the body only contains one statement, the braces can be omitted. If the braces are omitted, there **must** be one statement after; a lack of statement produces a compile-time error:
 ```glsl
-if (EXPR)
+if (_EXPR_)
     /*...*/
-else if (EXPR)
-    /*...*/
+else if (_EXPR_) // <- error
 else
     /*...*/
 
 // We can mix and match:
-if (EXPR) {
+if (_EXPR_) {
     /*...*/
-} else if (EXPR)
+} else if (_EXPR_)
     /*...*/
 else {
     /*...*/
@@ -753,9 +844,9 @@ else {
 
 ### Switch
 ```glsl
-switch (EXPR) {
+switch (_EXPR_) {
     // Optionally repeated (n number of times):
-    case CONST_EXPR : 
+    case _CONST-EXPR_ : 
         /*...*/
 
     // Optionally followed by:
@@ -763,41 +854,41 @@ switch (EXPR) {
         /*...*/
 }
 ```
-`EXPR` is an expression which evaluates to either `int` or `uint`.
+`_EXPR_` is an expression which evaluates to either `int` or `uint`.
 
-`CONST_EXPR` is a constant expression which evaluates to either `int` or `uint`.
+`_CONST-EXPR_` is a constant expression which evaluates to either `int` or `uint`.
 
-If there is a difference in type between `EXPR` and `CONST_EXPR`, then an implicit conversion will take place from `int` to `uint`.
+If there is a difference in type between `_EXPR_` and `_CONST-EXPR_`, then an implicit conversion will take place from `int` to `uint`.
 
 ### For Loop
 ```glsl
-for (INIT_STMT; COND_EXPR; LOOP_EXPR) {
+for (_INIT-STMT_; _COND-EXPR_; _LOOP-EXPR_) {
     /*...*/
 }
 ```
-`INIT_STMT` is a either a statement or an expression. It is evaluated once at the start of the loop. It can be a variable declaration (with an assignment value).
+`_INIT-STMT_` is a either a statement or an expression. It is evaluated once at the start of the loop. It can be a variable definition.
 
-`COND_EXPR` is an expression which evaluated to a `bool`.
+`_COND-EXPR_` is an expression which evaluated to a `bool`.
 
-`LOOP_EXPR` is an expression.
+`_LOOP-EXPR_` is an expression.
 
 All 3 parts are optional, i.e. `for (;;)` is a valid (infinite) loop.
 
 ### While Loop
 ```glsl
-while (COND_EXPR) {
+while (_COND-EXPR_) {
     /*...*/
 }
 ```
-`COND_EXPR` is an expression which evaluates to `bool`.
+`_COND-EXPR_` is an expression which evaluates to `bool`.
 
 ### Do-While Loop
 ```glsl
 do {
     /*...*/
-} while (COND_EXPR);
+} while (_COND-EXPR_);
 ```
-`COND_EXPR` is an expression which evaluates to `bool`.
+`_COND-EXPR_` is an expression which evaluates to `bool`.
 
 
 # Variables
@@ -1099,11 +1190,11 @@ layout(early_fragment_tests) in;
 ```
 
 # Line-Continuation Character
-The line-continuation character makes the lexer ignore itself and the end-of-line characters that follow, and continue lexing from the first character of the next line as if there was no break.
+The line-continuation character makes the lexer ignore itself and the end-of-line characters that follow, and continue lexing from the first character of the next line **as if there was no break**:
 ```glsl
 <ANYTHING>\<EOL>
 ```
-`<ANYTHING>` is anything other than `\`. `<EOL>` is either `\n` or `\r\n`. Two slashes (`\\`) are illegal.
+`<ANYTHING>` is anything other than `\`. `<EOL>` is either `\n` or `\r\n`. Two slashes (`\\`) produce a compile-time error:
 ```glsl
 i +\
 = 5;
@@ -1115,7 +1206,7 @@ i +\\
 // Would be lexed as:
 i +<ERROR>=5;
 ```
-Note that this allows keywords to be split up.
+Note that this allows keywords and identifiers to be split in half:
 ```glsl
 str\
 uct I;
@@ -1139,38 +1230,39 @@ Comment syntax:
 /* Comment between these delimiters */
 ```
 
-Delimited comments cannot be nested, i.e. the following produces an error:
+Delimited comments cannot be nested, i.e. the following produces a compile-time error about an unexpected punctuation symbol:
 ```glsl
 /* First comment
     /* inner comment */ (<- First comment ends here)
 */ (<- Unmatched delimiter/punctuation)
 ```
 
-Single line comments can continue with the [Line-Continuation Character](#line-continuation-character) `\`, in which case the comment extends to the EOL of the next line. So the following is one single comment:
+Single line comments can continue with the [Line-Continuation Character](#line-continuation-character) `\`, in which case the comment extends to the end-of-line of the next line. So the following is one single comment:
 ```glsl
 // First comment... \
-int i = 5; * This is still part of the first comment *
+* int i = 5; This is still part of the first comment *
 ```
 
-Open-ended multi-line comments containing the EOF produce an error:
+Open-ended block comments containing the end-of-file produce a compile-time error:
 ```glsl
 // Something else
 
 /*
 <EOF>
 ```
-Note that single-line comments, even with the `\` continuation character, can never produce this error even if they also are at the end of the file.
+Note that single-line comments, even with the `\` line-continuation character, can never produce this error even if they also are at the end of the file.
 
 # Preprocessor
 The preprocessor is a single-pass scan. This means that, for example, a macro cannot create a new directive.
 
 The GLSL preprocessor is based off the C++98 standard: [ISO/IEC 14882:1998](https://www.lirmm.fr/~ducour/Doc-objets/ISO+IEC+14882-1998.pdf), but it:
-- has no support for digraphs or trigraphs,
-- has no support for string or character literals, and hence no support for the stringizing operator,
-- has no support for universal character names (`\uXXXX` notation),
-- has no support for any number literals other than integers (with no prefixes/suffixes),
-- has the extra [version](#version) and [extension](#extension) directives, and lacks the [include](#include) directive,
-- has different pre-defined macros, (which depend on the exact GLSL version).
+- Has no support for digraphs or trigraphs.
+- Has no support for string or character literals, and hence no support for the stringizing operator.
+- Has no support for universal character names (`\uXXXX` notation).
+- Has no support for any number literals other than integers (with no prefixes/suffixes).
+- Has the extra [version](#version) and [extension](#extension) directives, and lacks the [include](#include) directive.
+- Has a different [line](#line) directive, since GLSL has no concept of filenames.
+- Has different pre-defined macros, (which depend on the exact GLSL version).
 
 ## Token Concatenation Operator (##)
 The token concatenation operator (sometimes referred to as the pasting operator) joins two tokens, removing any whitespace in the process:
@@ -1182,7 +1274,7 @@ The token concatenation operator (sometimes referred to as the pasting operator)
 ```
 Any use of `TEST` would expand to the number token `49`.
 
-This operator can only be used within the body of a [define](#define) directive; everywhere else it is treated as two individual `#` characters, (which may or may not be legal depending on the specific directive). An error is produced if there is no token before/after the operator. An error is produced if a `##` is located immediately after the operator, i.e. `####`. A warning may be produced if the two tokens can't be concatenated together, such as `500##+`.
+This operator can only be used within the replacement-list of a [define](#define) directive; everywhere else it is treated as two individual `#` characters, (which may or may not be legal depending on the specific directive). A compile-time error is produced if there is no token before/after the operator. A compile-time error is produced if a `##` is located immediately after the operator, i.e. `####`. An attempt to combine two tokens which cannot be compined (e.g. `500##+`) results in no combination; the two tokens remain as separate. A warning may be produced in such a case.
 
 The main use of this operator is to concatenate an argument in a function-like macro with hardcoded tokens:
 ```glsl
@@ -1200,6 +1292,9 @@ int i = DOT(5, 0); // Expands to: int i = 5.0;
 ## Directives
 All preprocessor directives follow the syntax:
 ```glsl
+#_DIRECTIVE_ _CONTENTS_
+
+// All valid:
 #Directive ...
 
    #Directive ...
@@ -1211,14 +1306,17 @@ All preprocessor directives follow the syntax:
 
 /* foo */ # Directive ...
 
-// This is ignored:
 #
 ```
-The `#` symbol must be the first (aside from whitespace or comments) and the statement ends at the EOL (taking into account any [Line-Continuation Characters](#line-continuation-character)). The `#` can be followed by whitespace before any other character.
+`_DIRECTIVE_` is a name of an accepted directive. A name that is not accepted produces a compile-time error.
 
-A `#` on its own without anything after until the EOL is ignored.
+`_CONTENTS_` is a list of tokens for the directive; which preprocessing tokens are and aren't allowed depends on the directive.
 
-### Version
+The `#` symbol must be the first (aside from whitespace or comments) token on the new line and the statement ends at the end-of-line (taking into account any [Line-Continuation Characters](#line-continuation-character)). The `#` can be followed by whitespace before the directive name.
+
+A `#` on its own without anything afterwards until the end-of-line is completely ignored.
+
+## Version
 The version directive is specified like so:
 ```glsl
 #version _NUM_
@@ -1229,13 +1327,13 @@ The version directive is specified like so:
 #version 450 core
 #version 310 es
 ```
-`_NUM_` is the GLSL version number as an integer without the dot (`.`), so version 4.50 is `450`; only valid GLSL version numbers are accepted, any other value produces an error. It is mandatory. The default behaviour assumes `110`.
+`_NUM_` is the GLSL version number as an integer without the dot (`.`), so version 4.50 is `450`; only valid GLSL version numbers are accepted, any other value produces a compile-time error. It is mandatory. The default behaviour assumes `110`.
 
-`_PROFILE_` is either `core`, `compatibility` or `es`; any other value produces an error. It is optional, unless version is `300` or `310` in which case the profile must be `es`. It can only be used if the version number is `150` or greater. The default behaviour assumes `core`. 
+`_PROFILE_` is either `core`, `compatibility` or `es`; any other value produces a compile-time error. It is optional, unless version is `300` or `310` in which case the profile must be `es`. It can only be used if the version number is `150` or greater. The default behaviour assumes `core`. 
 
 This directive, if present at all, must be the first statement in the file (aside from whitespace or comments), and it cannot be repeated.
 
-### Extension
+## Extension
 The extension directive is specified like so:
 ```glsl
 #extension _NAME_ : _BEHAVIOUR_
@@ -1248,28 +1346,28 @@ The extension directive is specified like so:
 `_NAME_` specifies the name of the extension. It is mandatory. It can be substituted with the string `all`.
 
 `_BEHAVIOUR_` is mandatory, and one of the following:
-- `require` - Enables the extension. If not supported, it produces an error.
+- `require` - Enables the extension. If not supported, it produces a compile-time error.
 - `enable` - Enables the extension. If not supported, a warning is generated.
 - `warn` - Enables the extension. If used, it will produce warnings. If not supported, a warning is generated.
-- `disable` - Disabled the extension. If used, it produces an error.
+- `disable` - Disabled the extension. If used, it produces a compile-time error.
 - 
 
 If `all` is used for `_NAME_`, the following behaviour is exhibited:
 ```glsl
-// Produce warnings any time any extension is used.
+// Produce warnings any time any extension is used:
 #extension all : warn
 
-// Produce errors any time any extension is used.
-// (This is the default state of the compiler).
+// Produce errors any time any extension is used:
+// (This is the default state of the compiler)
 #extension all : disable
 
-// The following are invalid and result in an error.
+// The following are invalid and result in an error:
 #extension all : require
 #extension all : enable
 ```
 The order of extension directives matters; configuring an extension overwrites any previous configurations of that extension.
 
-### Line
+## Line
 The line directive is specified like so:
 ```glsl
 #line _LINE_ _SRC-STR-NUM_
@@ -1281,29 +1379,33 @@ The line directive is specified like so:
 
 `_SRC-STR-NUM_` is a number greater than `0`. It is optional.
 
-⚠ This is the only directive within which macros are expanded. The following is valid:
+⚠ This is the only directive within which macros are expanded, though nested expansions are not supported. The following is valid:
 ```glsl
 #define FOO 5
 
 // Expands to: #line 5
 #line FOO
 ```
+But this wouldn't be:
+```glsl
+#define FOO 5
+#define BAR FOO
+
+#line BAR
+```
 
 After processing this directive, the compiler will behave as if it compiling at line number `LINE` and source string number `SRC-STR-NUM`. Subsequent lines will be numbered sequentially, until another `#line` directive overrides this.
 
-### C Directives
-These directives come from the C language.
-
-#### ~~include~~
+## ~~include~~
 ⚠ Not supported natively by GLSL.
 ```glsl
 #include _FILE_
 ```
 
-#### define
+## define
 Defines a macro, which is textually substituted at any call site.
 
-##### Object-like
+### Object-like
 An object-like macro is one which is simply substituted by replacement tokens:
 ```glsl
 #define _NAME_ _REPLACEMENT-LIST_
@@ -1319,7 +1421,19 @@ An object-like macro is one which is simply substituted by replacement tokens:
 
 Token concatenation happens first, then any nested macros are expanded. Token concatenation operators are effectively unnecessary within an object-like macro since there's no possible way it will ever expand differently.
 
-##### Function-like
+```glsl
+#define AZ 7
+#define FOO A##Z - 5
+
+FOO // Expands to: 7 - 5
+
+// FOO → A##Z - 5    The FOO macro is first expanded
+//           ↓
+//        AZ - 5     The token concatenation operator is applied
+//           ↓
+//         7 - 5     The AZ macro is expanded
+```
+### Function-like
 A function-like macro is one which accepts arguments and is subsituted by replacement tokens:
 ```glsl
 #define _NAME( ) _REPLACEMENT-LIST_
@@ -1353,29 +1467,67 @@ When a function-like macro is called, the arguments passed in the brackets are m
 ```glsl
 #define ADD_10(A) (A) + 10
 
-ADD(5) // Expands to: 5 + 10
+ADD(5) // Expands to: (5) + 10
 ADD(5 * 8) // Expands to: (5 * 8) + 10
 ```
 
 Arguments within a function-like macro are expanded before being passed into the macro:
 ```glsl
-#define FOO 8
-#define BAR FOO
-#define ADD_10(A) A + 10
+#define AZ 5;
+#define BZ 0;
 
-ADD_10(BAR)
-// Equivalent to:
-ADD_10(8)
+#define ADD_INT(_1) _1##Z + 10
+
+ADD_INT(A)
+
+ADD_INT(_1) is populated such that:
+_1 = A
+
+_1##Z + 10 -> A##Z + 10 -> AZ + 10 -> 5 + 10
 
 // BAR -> FOO -> 8    The BAR macro is first expanded.
 //               |
 //              \/
 //      ADD_10( 8 )   Then the result is actually passed to the macro call.
 ```
+```glsl
+#define NAME my_name
+#define BAR NAME
+#define DECLARE(a, b) a = b
+#define INIT(a, b, c) DECLARE(a b, c)
+
+INIT(int, BAR, 0)
+↓                
+Identify arguments:
+a = int
+b = BAR
+c = 0
+↓
+Arguments are expanded since they're not concatenated:
+a = int
+b = my_name
+c = 0
+↓
+Parameters in the body are replaced:
+DECLARE(int my_name, 0)
+↓
+
+loop until no further expansions left:
+DECLARE(int my_name, 0)
+↓
+a = int my_name
+b = 0
+↓
+No expansion necessary
+↓
+int my_name = 0
+
+FINISHED
+```
 
 If a function-like macro, the parameters are first replaced with the argument tokens, then any token concatenation occurs, then any further macro expansions occur. Note that an argument of `##` is not taken into account in regards to token concatenation.
 
-##### Nesting
+### Nesting
 Macros can be nested within other macros, and they will be expanded fully:
 ```glsl
 #define FOO 5
@@ -1395,12 +1547,12 @@ BAZ // Expands to: BAR
 //                          it is not expanded, but inserted verbatim
 ```
 
-##### Re-defining
+### Re-defining
 Macros can be re-defined only if:
-- both are the same type of macro,
-- the tokens in the `_REPLACEMENT-LIST_` are identical,
-- if a function-like macro, the parameters are identical,
-- whitespace appears in the same places,
+- Both are the same type of macro.
+- The tokens in the `_REPLACEMENT-LIST_` are identical.
+- If a function-like macro, the parameters are identical.
+- Whitespace appears in the same places.
 
 For whitespace to appear in the same places, consult the examples below. The gist is that if there already is a whitespace, comments can be added since they are treated as whitespace. But if there is no whitespace, neither whitespace nor comments can be introduced in the re-definition. The whitespace rule only applies to the `_REPLACEMENT-LIST_`; whitespace can be introduced within the parameter list.
 ```glsl
@@ -1439,7 +1591,7 @@ For whitespace to appear in the same places, consult the examples below. The gis
 ```
 A macro can always be un-defined and then defined as a new macro.
 
-##### Built-in
+### Built-in
 ```glsl
 // Always defined
 #define GL_core_profile 1
@@ -1450,60 +1602,62 @@ A macro can always be un-defined and then defined as a new macro.
 // Defined if the profile is set to `es`
 #define GL_es_profile 1
 ```
-#### undef
+## undef
 Un-defines a macro:
 ```glsl
 #undef _IDENTIFIER_
 ```
 `_IDENTIFIER_` specifies the name of the macro. If there is no macro with such a name, this directive is ignored. Even if the macro is a function-like macro, only the name is specified; the parenthesis are omitted.
 
-#### ifdef
+## ifdef
 ⚠ `defined` can also be a valid macro name
 ```glsl
 #ifdef SYMBOL
 ```
 `SYMBOL` is any identifier string.
 
-#### ifndef
+## ifndef
 ```glsl
 #ifndef SYMBOL
 ```
 `SYMBOL` is any identifier string.
 
-#### if
-#### elif
-#### else
+## if
+## elif
+## else
 ```glsl
 #else
 ```
 
-#### endif
+## endif
 ```glsl
 #endif
 ```
 
-#### error
+## error
 Causes the compiler to produce a compile-time error and print the text in the debug log output:
 ```glsl
-#error TEXT
+#error _TEXT_
 ```
-`TEXT` is any stream of tokens until a EOL.
+`_TEXT_` is any number of any characters.
 
-#### pragma
+## pragma
 Controls compiler options:
 ```glsl
-#pragma OPTIONS
+#pragma _OPTIONS_
 ```
-`OPTIONS` is any stream of tokens until a EOL.
+`_OPTIONS_` is any number of any characters.
+
+TODO: Supported pragmas as part of the language.
 
 ## Macros
 Macro names starting with the `GL_` prefix are reserved for OpenGL; they cannot de (un)defined. Macro names starting with a `__` prefix are by convention reserved; they can be (un)defined but it may cause unintended behaviour if a previous implementation definition exists.
 
 ### \_\_FILE\_\_
-It is **not** a file name. It is a decimal integer representing which string in the list of strings the shader came from.
+It is **not** a file name, since GLSL has no concept of files. It is a decimal integer representing which string in the list of strings the shader came from.
 
 ### \_\_LINE\_\_
 The line number.
 
 ### \_\_VERSION\_\_
-The version number as an integer, i.e. version 4.50 is `450`.
+The version number as an integer, e.g. version 4.50 is `450`.

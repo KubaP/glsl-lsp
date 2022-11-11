@@ -1,4 +1,9 @@
 //! Types and functionality related to the parser.
+//!
+//! This module contains the structs and enums used to represent the AST, and the
+//! [`parse_from_str()`]/[`parse_from_token_stream()`] functions which return a [`TokenTree`], which can be used to
+//! parse the tokens into an abstract syntax tree ([`ParseResult`]). The [`ast`] submodule contains the AST types
+//! themselves. There is also the [`SyntaxToken`] type used to represent syntax highlighting spans.
 
 pub mod ast;
 mod expression;
@@ -26,10 +31,18 @@ use std::collections::{HashMap, HashSet};
 
 /// The result of a parsed GLSL source string.
 ///
-/// - `0` - The abstract syntax tree,
-/// - `1` - Any diagnostics created during parsing,
-/// - `2` - Syntax highlighting tokens.
-pub type ParseResult = (Vec<Node>, Vec<Syntax>, Vec<Spanned<SyntaxToken>>);
+/// - `0` - The abstract syntax tree. By nature of this tree being parsed after conditional compilation has been
+///   applied, it will not contain any conditional compilation preprocessor directives.
+/// - `1` - Any syntax diagnostics created during parsing.
+/// - `2` - Any semantic diagnostics created during parsing, (this will only contain semantic diagnostics related
+///   to macros and macro expansion).
+/// - `3` - Syntax highlighting tokens.
+pub type ParseResult = (
+	Vec<Node>,
+	Vec<Syntax>,
+	Vec<Semantic>,
+	Vec<Spanned<SyntaxToken>>,
+);
 
 /// An error type for parsing operations.
 #[derive(Debug)]
@@ -97,9 +110,9 @@ pub enum ParseErr {
 /// [`parse_by_order_of_appearance()`](TokenTree::parse_by_order_of_appearance) method.
 ///
 /// Some examples to visualise:
-/// - `[1, 3]` will produce: `foo AAA 60 BBB bar`,
-/// - `[4]` will produce: `foo CCC bar`,
-/// - `[6, 7]` will produce: `foo EEE 100 bar`,
+/// - `[1, 3]` will produce: `foo AAA 60 BBB bar`.
+/// - `[4]` will produce: `foo CCC bar`.
+/// - `[6, 7]` will produce: `foo EEE 100 bar`.
 /// - `[1, 2, 6, 7]` will produce: `foo AAA 50 BBB EEE 100 bar`.
 ///
 /// ## Order by nesting
@@ -109,9 +122,9 @@ pub enum ParseErr {
 /// [`parse_by_order_of_nesting()`](TokenTree::parse_by_order_of_nesting) method.
 ///
 /// Some examples to visualise:
-/// - `[[0-0, 0-1]]` will produce: `foo AAA 60 BBB bar`,
-/// - `[[0-1]]` will produce: `foo CCC bar`,
-/// - `[[1-0, 0-0]]` will produce: `foo EEE 100 bar`,
+/// - `[[0-0, 0-1]]` will produce: `foo AAA 60 BBB bar`.
+/// - `[[0-1]]` will produce: `foo CCC bar`.
+/// - `[[1-0, 0-0]]` will produce: `foo EEE 100 bar`.
 /// - `[[0-0, 0-0], [1-0, 0-0]]` will produce: `foo AAA 50 BBB EEE 100 bar`.
 ///
 /// ## Invalid permutations
@@ -127,12 +140,16 @@ pub enum ParseErr {
 /// let trees = parse_from_str(&src);
 /// let (ast, _, _) = trees.root();
 /// ```
+///
+/// # Further reading
+/// See the documentation of the [`TokenTree`] struct for a more in-depth explanation about why this seemingly
+/// roundabout method is necessary.
 pub fn parse_from_str(source: &str) -> TokenTree {
 	let (token_stream, metadata) = crate::lexer::parse_from_str(source);
 	parse_from_token_stream(token_stream, metadata)
 }
 
-/// Parses a GLSL source string into a tree of tokens that can be then parsed into an abstract syntax tree.
+/// Parses a token stream into a tree of tokens that can be then parsed into an abstract syntax tree.
 ///
 /// For an explanation of how this function works, see the documentation for the [`parse_from_str()`] function.
 pub fn parse_from_token_stream(
@@ -389,7 +406,7 @@ pub fn parse_from_token_stream(
 /// 11│ }
 /// ```
 /// In the example above, if `TOGGLE` is not defined, we have a function `foo` who's scope ends on line `11` and
-/// includes two variable declarations `i` and `p`. However, if `TOGGLE` is defined, the function `foo` ends on
+/// includes two variable definitions `i` and `p`. However, if `TOGGLE` is defined, the function `foo` ends on
 /// line `6` instead and only contains the variable `i`, and we have a completely new function `bar` which has the
 /// variable `p`.
 ///
@@ -445,8 +462,8 @@ pub fn parse_from_token_stream(
 /// such as the name, the starting position, the parameters, etc. If we would encounter the conditional branching
 /// within this parsing function, we would somehow need to be able to return up the call stack to split the parser,
 /// whilst also somehow not loosing the temporary state. This should be technically possible, but it would greatly
-/// complicate the parser and make writing the parsing logic itself absolutely awful, and that is not a trade-off
-/// I'm willing to take.
+/// complicate the parser and make writing the parsing logic itself an absolutely awful experience, and that is not
+/// a trade-off I'm willing to take.
 ///
 /// This complication occurs because the preprocessor is a separate pass ran before the main compiler and does not
 /// follow the GLSL grammar rules, which means that preprocessor directives and macros can be included literally
@@ -470,7 +487,7 @@ pub struct TokenTree {
 	arena: Vec<TreeNode>,
 	/// IDs of the relevant nodes ordered by appearance.
 	///
-	/// - `0` - The ID of the `[n]`th conditional node,
+	/// - `0` - The ID of the `[n]`th conditional node.
 	/// - `1` - The ID of the node which this conditional node depends on.
 	///
 	/// # Invariants
@@ -524,13 +541,18 @@ impl TokenTree {
 			parse_stmt(&mut walker, &mut nodes);
 		}
 
-		(nodes, walker.syntax_diags, walker.syntax_tokens)
+		(
+			nodes,
+			walker.syntax_diags,
+			walker.semantic_diags,
+			walker.syntax_tokens,
+		)
 	}
 
 	/// Parses a token tree by enabling conditional branches in the order of their appearance.
 	///
 	/// This method can return an `Err` in the following cases:
-	/// - The `key` has a number which doesn't map to a conditional compilation branch,
+	/// - The `key` has a number which doesn't map to a conditional compilation branch.
 	/// - The `key` has a number which depends on another number that is missing.
 	///
 	/// # Examples
@@ -623,7 +645,12 @@ impl TokenTree {
 			parse_stmt(&mut walker, &mut nodes);
 		}
 
-		Ok((nodes, walker.syntax_diags, walker.syntax_tokens))
+		Ok((
+			nodes,
+			walker.syntax_diags,
+			walker.semantic_diags,
+			walker.syntax_tokens,
+		))
 	}
 
 	/// TODO: Implement.
@@ -685,23 +712,15 @@ enum Macro {
 	},
 }
 
-impl Macro {
-	/// Returns the replacement-list token stream.
-	fn stream(&self) -> &TokenStream {
-		match self {
-			Self::Object(stream) => stream,
-			Self::Function { body, .. } => body,
-		}
-	}
-}
-
+/// Allows for stepping through a token stream. Takes care of dealing with irrelevant details from the perspective
+/// of the parser, such as comments and macro expansion.
 pub(crate) struct Walker {
 	/// The token streams of the source string with the preselected conditional branches.
 	source_streams: Vec<TokenStream>,
 	/// The active token streams.
 	///
-	/// - `0` - The macro identifier, (for the root source stream this is just `""`),
-	/// - `1` - The token stream,
+	/// - `0` - The macro identifier, (for the root source stream this is just `""`).
+	/// - `1` - The token stream.
 	/// - `2` - The cursor.
 	streams: Vec<(String, TokenStream, usize)>,
 
@@ -710,7 +729,7 @@ pub(crate) struct Walker {
 	/// Key: The macro identifier.
 	///
 	/// Value:
-	/// - `0` - The span of the identifier,
+	/// - `0` - The span of the identifier.
 	/// - `1` - Macro information.
 	macros: HashMap<String, (Span, Macro)>,
 	/// The span of an initial macro call site. Only the first macro call site is registered here.
@@ -821,6 +840,7 @@ impl Walker {
 		let mut syntax_diags = Vec::new();
 		let mut semantic_diags = Vec::new();
 		let mut syntax_tokens = Vec::new();
+		// PERF: Optimize for certain cases to prevent having to clone everything everytime.
 		Self::move_cursor(
 			&mut source_streams,
 			&mut streams,
@@ -1144,42 +1164,46 @@ impl Walker {
 							active_macros.insert(ident.clone());
 							streams.push((ident, new_body, 0));
 
-							// The first token in the new stream could be another macro call, so we re-run the loop on
-							// this new stream in case.
+							// The first token in the new stream could be another macro call, so we re-run the loop
+							// on this new stream in case.
 							dont_increment = true;
 							continue;
-						}
+						} else if let Macro::Object(stream) = macro_ {
+							if stream.is_empty() {
+								// The macro is empty, so we want to move to the next token of the existing stream.
+								semantic_diags.push(
+									Semantic::EmptyMacroCallSite(ident_span),
+								);
+								if streams.len() == 1 {
+									// We only syntax highlight when it is the first macro call.
+									syntax_tokens.push((
+										SyntaxToken::ObjectMacro,
+										ident_span,
+									));
+								}
+								continue;
+							}
 
-						if macro_.stream().is_empty() {
-							// The macro is empty, so we want to move to the next token of the existing stream.
-							semantic_diags
-								.push(Semantic::EmptyMacroCallSite(ident_span));
+							let ident = s.to_owned();
+
+							// We only syntax highlight and note the macro call site when it is the first macro
+							// call.
 							if streams.len() == 1 {
-								// We only syntax highlight when it is the first macro call.
+								*macro_call_site = Some(ident_span);
 								syntax_tokens.push((
 									SyntaxToken::ObjectMacro,
 									ident_span,
 								));
 							}
+
+							active_macros.insert(ident.clone());
+							streams.push((ident, stream.clone(), 0));
+
+							// The first token in the new stream could be another macro call, so we re-run the loop
+							// on this new stream in case.
+							dont_increment = true;
 							continue;
 						}
-
-						let ident = s.to_owned();
-
-						// We only syntax highlight and note the macro call site when it is the first macro call.
-						if streams.len() == 1 {
-							*macro_call_site = Some(ident_span);
-							syntax_tokens
-								.push((SyntaxToken::ObjectMacro, ident_span));
-						}
-
-						active_macros.insert(ident.clone());
-						streams.push((ident, macro_.stream().clone(), 0));
-
-						// The first token in the new stream could be another macro call, so we re-run the loop on
-						// this new stream in case.
-						dont_increment = true;
-						continue;
 					}
 					break;
 				}
@@ -2007,7 +2031,7 @@ fn try_parse_qualifiers(walker: &mut Walker) -> Vec<Qualifier> {
 	qualifiers
 }
 
-/// Tries to parse a variable/function definition/declaration or an expression statement.
+/// Tries to parse a variable definition or a function declaration/definition or an expression statement.
 ///
 /// This function attempts to look for a statement at the current position. If this fails, error recovery till the
 /// next clear statement delineation occurs.
@@ -2037,13 +2061,13 @@ fn try_parse_definition_declaration_expr(
 	// We test if the expression can be converted into a type.
 	if let Some(mut type_) = Type::parse(&start) {
 		// Since we ran the expression parser in the Default mode, what we have so far must be something like
-		// `foobar`, `int`, `vec2[3]`, `MyStruct` etc. This can be the type part of a definition/declaration, but
+		// `foobar`, `int`, `vec2[3]`, `MyStruct` etc. This can be the type part of a declaration/definition, but
 		// it could be just an expression statement depending on what comes next.
 
 		let (token, token_span) = match walker.peek() {
 			Some(t) => t,
 			None => {
-				// We lack any identifiers necessary for a definition/declaration, so this must be an expression
+				// We lack any identifiers necessary for a declaration/definition, so this must be an expression
 				// statement.
 				invalidate_qualifiers(walker, qualifiers);
 				walker.append_colours(&mut start_colours);
@@ -2069,13 +2093,13 @@ fn try_parse_definition_declaration_expr(
 			}
 		};
 
-		// Check whether we have a function definition/declaration, or whether this is an expression immediately
+		// Check whether we have a function declaration/definition, or whether this is an expression immediately
 		// followed by a semi-colon.
 		match token {
 			Token::Ident(i) => match walker.lookahead_1() {
 				Some(next) => match next.0 {
 					Token::LParen => {
-						// We have a function definition/declaration.
+						// We have a function declaration/definition.
 						type_.qualifiers = qualifiers;
 						let l_paren_span = next.1;
 						let ident = Ident {
@@ -2135,8 +2159,8 @@ fn try_parse_definition_declaration_expr(
 			_ => {}
 		}
 
-		// We don't have a function definition/declaration, so this must be a variable definition/declaration or an
-		// expression statement.
+		// We don't have a function declaration/definition, so this must be a variable definition (with possibly an
+		// initialization) or an expression statement.
 
 		// We attempt to parse an expression for the identifier(s).
 		let (ident_expr, mut ident_diags, mut ident_colours) =
@@ -2175,8 +2199,8 @@ fn try_parse_definition_declaration_expr(
 			i
 		} else {
 			// We have a second expression after the first expression, but the second expression can't be converted
-			// to one or more identifiers for a variable definition/declaration. We treat the first expression as
-			// an expression statement, and the second expression as invalid.
+			// to one or more identifiers for a variable definition. We treat the first expression as an expression
+			// statement, and the second expression as invalid.
 			invalidate_qualifiers(walker, qualifiers);
 			walker.append_colours(&mut start_colours);
 			walker.append_syntax_diags(&mut start_diags);
@@ -2242,7 +2266,7 @@ fn try_parse_definition_declaration_expr(
 			}
 		}
 
-		fn var_decl(
+		fn var_def_init(
 			type_: Type,
 			idents: Vec<(Ident, Vec<ArrSize>)>,
 			value: Option<Expr>,
@@ -2255,7 +2279,7 @@ fn try_parse_definition_declaration_expr(
 					let (type_, ident) = vars.remove(0);
 					Node {
 						span,
-						ty: NodeTy::VarDecl {
+						ty: NodeTy::VarDefInit {
 							type_,
 							ident,
 							value,
@@ -2264,17 +2288,18 @@ fn try_parse_definition_declaration_expr(
 				}
 				_ => Node {
 					span,
-					ty: NodeTy::VarDecls(vars, value),
+					ty: NodeTy::VarDefInits(vars, value),
 				},
 			}
 		}
 
-		// Consume the `;` for a definition, or a `=` for a declaration.
+		// Consume the `;` for a definition, or a `=` for a definition with initialization.
 		let (token, token_span) = match walker.peek() {
 			Some(t) => t,
 			None => {
-				// We have something that matches the start of a variable definition/declaration. Since we have
-				// neither the `;` or `=`, we assume that this is a definition which is missing the semi-colon.
+				// We have something that matches the start of a variable definition. Since we have neither the `;`
+				// or `=`, we assume that this is a definition without initialization that is missing the
+				// semi-colon.
 				walker.push_syntax_diag(Syntax::Stmt(
 					StmtDiag::VarDefExpectedSemiOrEqAfterIdents(
 						ident_span.next_single_width(),
@@ -2285,14 +2310,14 @@ fn try_parse_definition_declaration_expr(
 			}
 		};
 		if *token == Token::Semi {
-			// We have a variable definition.
+			// We have a variable definition without initialization.
 			let semi_span = token_span;
 			walker.push_colour(semi_span, SyntaxToken::Punctuation);
 			walker.advance();
 			nodes.push(var_def(type_, ident_info, semi_span.end));
 			return;
 		} else if *token == Token::Op(crate::lexer::OpTy::Eq) {
-			// We have a variable declaration.
+			// We have a variable definition with initialization.
 			let eq_span = token_span;
 			walker.push_colour(eq_span, SyntaxToken::Operator);
 			walker.advance();
@@ -2307,11 +2332,11 @@ fn try_parse_definition_declaration_expr(
 					}
 					(None, _, _) => {
 						walker.push_syntax_diag(Syntax::Stmt(
-							StmtDiag::VarDeclExpectedValueAfterEq(
+							StmtDiag::VarDefInitExpectedValueAfterEq(
 								eq_span.next_single_width(),
 							),
 						));
-						nodes.push(var_decl(
+						nodes.push(var_def_init(
 							type_,
 							ident_info,
 							None,
@@ -2328,11 +2353,11 @@ fn try_parse_definition_declaration_expr(
 				None => {
 					let value_span = value_expr.span;
 					walker.push_syntax_diag(Syntax::Stmt(
-						StmtDiag::VarDeclExpectedSemiAfterValue(
+						StmtDiag::VarDefInitExpectedSemiAfterValue(
 							value_span.next_single_width(),
 						),
 					));
-					nodes.push(var_decl(
+					nodes.push(var_def_init(
 						type_,
 						ident_info,
 						Some(value_expr),
@@ -2345,7 +2370,7 @@ fn try_parse_definition_declaration_expr(
 				let semi_span = token_span;
 				walker.push_colour(semi_span, SyntaxToken::Punctuation);
 				walker.advance();
-				nodes.push(var_decl(
+				nodes.push(var_def_init(
 					type_,
 					ident_info,
 					Some(value_expr),
@@ -2355,11 +2380,11 @@ fn try_parse_definition_declaration_expr(
 			} else {
 				let end_span = token_span;
 				walker.push_syntax_diag(Syntax::Stmt(
-					StmtDiag::VarDeclExpectedSemiAfterValue(
+					StmtDiag::VarDefInitExpectedSemiAfterValue(
 						end_span.next_single_width(),
 					),
 				));
-				nodes.push(var_decl(
+				nodes.push(var_def_init(
 					type_,
 					ident_info,
 					Some(value_expr),
@@ -2369,8 +2394,8 @@ fn try_parse_definition_declaration_expr(
 				return;
 			}
 		} else {
-			// We have something that matches the start of a variable definition/declaration. Since we have neither
-			// the `;` or `=`, we assume that this is a definition which is missing the semi-colon.
+			// We have something that matches the start of a variable definition. Since we have neither the `;` or
+			// `=`, we assume that this is a definition without initialization which is missing the semi-colon.
 			walker.push_syntax_diag(Syntax::Stmt(
 				StmtDiag::VarDefExpectedSemiOrEqAfterIdents(
 					ident_span.next_single_width(),
@@ -2382,7 +2407,7 @@ fn try_parse_definition_declaration_expr(
 		}
 	}
 
-	// We have an expression which cannot be parsed as a type, so this cannot start a definition/declaration; it
+	// We have an expression which cannot be parsed as a type, so this cannot start a declaration/definition; it
 	// must therefore be a standalone expression statement.
 	let expr = start;
 	walker.append_colours(&mut start_colours);
@@ -2420,7 +2445,7 @@ fn try_parse_definition_declaration_expr(
 	});
 }
 
-/// Parses a function definition/declaration.
+/// Parses a function declaration/definition.
 ///
 /// This function assumes that the return type, ident, and opening parenthesis have been consumed.
 fn parse_function(
@@ -2445,7 +2470,7 @@ fn parse_function(
 		let (token, token_span) = match walker.peek() {
 			Some(t) => t,
 			None => {
-				// We have not yet finished parsing the parameter list, but we treat this as a valid definition
+				// We have not yet finished parsing the parameter list, but we treat this as a valid declaration
 				// since that's the closest match.
 				let span = Span::new(return_type.span.start, prev_span.end);
 				walker.push_syntax_diag(Syntax::Stmt(
@@ -2455,7 +2480,7 @@ fn parse_function(
 				));
 				nodes.push(Node {
 					span,
-					ty: NodeTy::FnDef {
+					ty: NodeTy::FnDecl {
 						return_type,
 						ident,
 						params,
@@ -2495,7 +2520,7 @@ fn parse_function(
 				walker.push_colour(token_span, SyntaxToken::Punctuation);
 				walker.advance();
 				// We have not yet finished parsing the parameter list but we've encountered a semi-colon. We treat
-				// this as a valid definition since that's the closest match.
+				// this as a valid declaration since that's the closest match.
 				walker.push_syntax_diag(Syntax::Stmt(
 					StmtDiag::ParamsExpectedRParen(
 						prev_span.next_single_width(),
@@ -2503,7 +2528,7 @@ fn parse_function(
 				));
 				nodes.push(Node {
 					span: Span::new(return_type.span.start, token_span.end),
-					ty: NodeTy::FnDef {
+					ty: NodeTy::FnDecl {
 						return_type,
 						ident,
 						params,
@@ -2516,7 +2541,7 @@ fn parse_function(
 				// We don't advance because the next check after this loop checks for a l-brace.
 
 				// We have not yet finished parsing the parameter list but we've encountered a l-brace. We treat
-				// this as a potentially valid declaration since that's the closest match.
+				// this as a potentially valid definition since that's the closest match.
 				walker.push_syntax_diag(Syntax::Stmt(
 					StmtDiag::ParamsExpectedRParen(
 						prev_span.next_single_width(),
@@ -2601,7 +2626,7 @@ fn parse_function(
 			(Some(e), _, colours) => (e, colours),
 			(None, _, _) => {
 				// We have a first expression and then something that is not an expression. We treat this as an
-				// ident-less parameter, whatever the current token is will be dealt with in the next iteration.
+				// anonymous parameter, whatever the current token is will be dealt with in the next iteration.
 				let param_span = Span::new(param_span_start, type_.span.end);
 				params.push(Param {
 					span: param_span,
@@ -2621,7 +2646,7 @@ fn parse_function(
 			i
 		} else {
 			// We have a second expression after the first expression, but the second expression can't be converted
-			// to an identifier for the parameter. We treat the first type expression as an ident-less parameter,
+			// to an identifier for the parameter. We treat the first type expression as an anonymous parameter,
 			// and the second expression as invalid.
 			let param_span = Span::new(param_span_start, type_.span.end);
 			params.push(Param {
@@ -2652,14 +2677,15 @@ fn parse_function(
 		prev_span = param_span;
 	};
 
-	// Consume the `;` for a definition or a `{` for a declaration.
+	// Consume the `;` for a declaration or a `{` for a definition.
 	let (token, token_span) = match walker.peek() {
 		Some(t) => t,
 		None => {
 			// This branch will only be triggered if we exited the param loop with a `)`, it will not trigger if we
 			// exit with a `{` because that token is not consumed.
 
-			// We are missing a `;` for a definition. We treat this as a definition since that's the closest match.
+			// We are missing a `;` for a declaration. We treat this as a declaration since that's the closest
+			// match.
 			walker.push_syntax_diag(Syntax::Stmt(
 				StmtDiag::FnExpectedSemiOrLBraceAfterParams(
 					param_end_span.next_single_width(),
@@ -2667,7 +2693,7 @@ fn parse_function(
 			));
 			nodes.push(Node {
 				span: Span::new(return_type.span.start, param_end_span.end),
-				ty: NodeTy::FnDef {
+				ty: NodeTy::FnDecl {
 					return_type,
 					ident,
 					params,
@@ -2677,26 +2703,26 @@ fn parse_function(
 		}
 	};
 	if *token == Token::Semi {
-		// We have a definition.
+		// We have a declaration.
 		walker.push_colour(token_span, SyntaxToken::Punctuation);
 		walker.advance();
 		nodes.push(Node {
 			span: Span::new(return_type.span.start, param_end_span.end),
-			ty: NodeTy::FnDef {
+			ty: NodeTy::FnDecl {
 				return_type,
 				ident,
 				params,
 			},
 		});
 	} else if *token == Token::LBrace {
-		// We have a declaration.
+		// We have a definition.
 		let l_brace_span = token_span;
 		walker.push_colour(l_brace_span, SyntaxToken::Punctuation);
 		walker.advance();
 		let body = parse_scope(walker, BRACE_SCOPE, l_brace_span);
 		nodes.push(Node {
 			span: Span::new(return_type.span.start, body.span.end),
-			ty: NodeTy::FnDecl {
+			ty: NodeTy::FnDef {
 				return_type,
 				ident,
 				params,
@@ -2704,7 +2730,7 @@ fn parse_function(
 			},
 		});
 	} else {
-		// We are missing a `;` for a definition. We treat this as a definition since that's the closest match.
+		// We are missing a `;` for a declaration. We treat this as a declaration since that's the closest match.
 		walker.push_syntax_diag(Syntax::Stmt(
 			StmtDiag::FnExpectedSemiOrLBraceAfterParams(
 				param_end_span.next_single_width(),
@@ -2712,7 +2738,7 @@ fn parse_function(
 		));
 		nodes.push(Node {
 			span: Span::new(return_type.span.start, param_end_span.end),
-			ty: NodeTy::FnDef {
+			ty: NodeTy::FnDecl {
 				return_type,
 				ident,
 				params,
@@ -2722,7 +2748,7 @@ fn parse_function(
 	}
 }
 
-/// Parses a struct definition/declaration.
+/// Parses a struct declaration/definition.
 ///
 /// This function assumes that the keyword is not yet consumed.
 fn parse_struct(
@@ -2773,7 +2799,8 @@ fn parse_struct(
 	let (token, token_span) = match walker.peek() {
 		Some(t) => t,
 		None => {
-			// We don't create a struct definition because it would result in two errors that would reduce clarity.
+			// We don't create a struct declaration because it would result in two errors that would reduce
+			// clarity.
 			walker.push_syntax_diag(Syntax::Stmt(
 				StmtDiag::StructExpectedLBraceAfterIdent(
 					ident.span.next_single_width(),
@@ -2787,19 +2814,20 @@ fn parse_struct(
 		walker.advance();
 		token_span
 	} else if *token == Token::Semi {
-		// We have a definition (which is illegal).
+		// We have a declaration, (which is illegal).
 		let span = Span::new(struct_span_start, token_span.end);
 		walker.push_colour(token_span, SyntaxToken::Punctuation);
-		walker
-			.push_syntax_diag(Syntax::Stmt(StmtDiag::StructDefIsInvalid(span)));
+		walker.push_syntax_diag(Syntax::Stmt(StmtDiag::StructDeclIsInvalid(
+			span,
+		)));
 		walker.advance();
 		nodes.push(Node {
 			span,
-			ty: NodeTy::StructDef { qualifiers, ident },
+			ty: NodeTy::StructDecl { qualifiers, ident },
 		});
 		return;
 	} else {
-		// We don't create a struct definition because it would result in two errors that would reduce clarity.
+		// We don't create a struct declaration because it would result in two errors that would reduce clarity.
 		walker.push_syntax_diag(Syntax::Stmt(
 			StmtDiag::StructExpectedLBraceAfterIdent(
 				ident.span.next_single_width(),
@@ -2813,9 +2841,9 @@ fn parse_struct(
 	for stmt in &body.contents {
 		match &stmt.ty {
 			NodeTy::VarDef { .. }
-			| NodeTy::VarDecl { .. }
+			| NodeTy::VarDefInit { .. }
 			| NodeTy::VarDefs(_)
-			| NodeTy::VarDecls(_, _) => {}
+			| NodeTy::VarDefInits(_, _) => {}
 			_ => {
 				walker.push_syntax_diag(Syntax::Stmt(
 					StmtDiag::StructInvalidStmtInBody(stmt.span),
@@ -2838,7 +2866,7 @@ fn parse_struct(
 				));
 				nodes.push(Node {
 					span: Span::new(struct_span_start, body.span.end),
-					ty: NodeTy::StructDecl {
+					ty: NodeTy::StructDef {
 						qualifiers,
 						ident,
 						body,
@@ -2889,7 +2917,7 @@ fn parse_struct(
 				}
 			},
 		),
-		ty: NodeTy::StructDecl {
+		ty: NodeTy::StructDef {
 			qualifiers,
 			ident,
 			body,
@@ -4482,7 +4510,23 @@ fn parse_directive(
 				body_tokens.iter().for_each(|(t, s)| {
 					walker.push_colour(*s, t.non_semantic_colour())
 				});
-				walker.register_macro(ident, Macro::Object(body_tokens));
+				walker.register_macro(
+					ident.clone(),
+					Macro::Object(body_tokens.clone()),
+				);
+
+				nodes.push(Node {
+					span: dir_span,
+					ty: NodeTy::DefineDirective {
+						macro_: ast::Macro::Object {
+							ident: Ident {
+								span: ident.1,
+								name: ident.0,
+							},
+						},
+						replacement_tokens: body_tokens,
+					},
+				});
 			} else {
 				// We have a function-like macro.
 
@@ -4523,7 +4567,16 @@ fn parse_directive(
 						));
 						nodes.push(Node {
 							span: dir_span,
-							ty: NodeTy::DefineDirective {},
+							ty: NodeTy::DefineDirective {
+								macro_: ast::Macro::Function {
+									ident: Ident {
+										span: ident.1,
+										name: ident.0,
+									},
+									params,
+								},
+								replacement_tokens: body_tokens,
+							},
 						});
 						return;
 					};
@@ -4579,18 +4632,26 @@ fn parse_directive(
 					walker.push_colour(*s, t.non_semantic_colour())
 				});
 				walker.register_macro(
-					ident,
+					ident.clone(),
 					Macro::Function {
-						params,
-						body: body_tokens,
+						params: params.clone(),
+						body: body_tokens.clone(),
 					},
 				);
+				nodes.push(Node {
+					span: dir_span,
+					ty: NodeTy::DefineDirective {
+						macro_: ast::Macro::Function {
+							ident: Ident {
+								span: ident.1,
+								name: ident.0,
+							},
+							params,
+						},
+						replacement_tokens: body_tokens,
+					},
+				});
 			}
-
-			nodes.push(Node {
-				span: dir_span,
-				ty: NodeTy::DefineDirective {},
-			});
 		}
 		PreprocStream::Undef {
 			kw: kw_span,

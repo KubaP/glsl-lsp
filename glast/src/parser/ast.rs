@@ -69,34 +69,34 @@ pub enum NodeTy {
 	VarDef { type_: Type, ident: Ident },
 	/// A variable definition containing multiple variables, e.g. `int i, j, k;`.
 	VarDefs(Vec<(Type, Ident)>),
-	/// A variable declaration, e.g. `int i = 0;`.
-	VarDecl {
+	/// A variable definition with initialization, e.g. `int i = 0;`.
+	VarDefInit {
 		type_: Type,
 		ident: Ident,
 		value: Option<Expr>,
 	},
-	/// A variable declaration containing multiple variables, e.g. `int i, j, k = 0;`.
-	VarDecls(Vec<(Type, Ident)>, Option<Expr>),
-	/// A function definition, e.g. `int foo(int i);`.
-	FnDef {
+	/// A variable definition with initialization, containing multiple variables, e.g. `int i, j, k = 0;`.
+	VarDefInits(Vec<(Type, Ident)>, Option<Expr>),
+	/// A function declaration, e.g. `int foo(int i);`.
+	FnDecl {
 		return_type: Type,
 		ident: Ident,
 		params: Vec<Param>,
 	},
-	/// A function declaration, e.g. `int foo(int i) { return i + 1; }`.
-	FnDecl {
+	/// A function definition, e.g. `int foo(int i) { return i + 1; }`.
+	FnDef {
 		return_type: Type,
 		ident: Ident,
 		params: Vec<Param>,
 		body: Scope,
 	},
-	/// A struct definition, e.g. `struct FooBar;`. This is an illegal GLSL statement.
-	StructDef {
+	/// A struct declaration, e.g. `struct FooBar;`. This is an illegal GLSL statement.
+	StructDecl {
 		qualifiers: Vec<Qualifier>,
 		ident: Ident,
 	},
-	/// A struct declaration, e.g. `struct FooBar { mat4 m; };`.
-	StructDecl {
+	/// A struct definition, e.g. `struct FooBar { mat4 m; };`.
+	StructDef {
 		qualifiers: Vec<Qualifier>,
 		ident: Ident,
 		body: Scope,
@@ -146,8 +146,10 @@ pub enum NodeTy {
 		src_str_num: Omittable<Spanned<usize>>,
 	},
 	/// A define directive, e.g. `#define TOGGLE 1`.
-	// TODO: Decide what to store here.
-	DefineDirective {},
+	DefineDirective {
+		macro_: Macro,
+		replacement_tokens: Vec<Spanned<Token>>,
+	},
 	/// An undef directive, e.g. `#undef TOGGLE`.
 	UndefDirective {
 		/// The name of the macro to un-define.
@@ -214,7 +216,7 @@ pub enum TypeTy {
 	Array(Primitive, ArrSize),
 	/// A 2D array type which contains zero or more values.
 	///
-	/// - `1` - Size of the outer array,
+	/// - `1` - Size of the outer array.
 	/// - `2` - Size of each inner array.
 	Array2D(Primitive, ArrSize, ArrSize),
 	/// An n-dimensional array type which contains zero or more values.
@@ -239,12 +241,12 @@ pub enum Primitive {
 	Vector(Fundamental, usize),
 	/// A float matrix type.
 	///
-	/// - `0` - Column count,
+	/// - `0` - Column count.
 	/// - `1` - Row count.
 	Matrix(usize, usize),
 	/// A double matrix type.
 	///
-	/// - `0` - Column count,
+	/// - `0` - Column count.
 	/// - `1` - Row count.
 	DMatrix(usize, usize),
 	/// A struct type.
@@ -366,6 +368,7 @@ pub enum QualifierTy {
 	Writeonly,
 }
 
+/// An individual layout property within a layout qualifier.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Layout {
 	pub ty: LayoutTy,
@@ -428,13 +431,22 @@ pub enum ProfileTy {
 	Es,
 }
 
-/// The behaviour for a GLSL extension.
+/// The behaviour of a GLSL extension.
 #[derive(Debug, Clone, PartialEq)]
 pub enum BehaviourTy {
 	Require,
 	Enable,
 	Warn,
 	Disable,
+}
+
+/// A macro definition.
+#[derive(Debug, Clone, PartialEq)]
+pub enum Macro {
+	/// An object-like macro.
+	Object { ident: Ident },
+	/// A function-like macro.
+	Function { ident: Ident, params: Vec<Ident> },
 }
 
 impl<T> Omittable<T> {
@@ -972,7 +984,7 @@ pub enum Lit {
 	///
 	/// This could be because:
 	/// - The number is too large to be represented by the relevant GLSL type, e.g.
-	///   `10000000000000000000000000000000000000`,
+	///   `10000000000000000000000000000000000000`.
 	/// - The number has an illegal suffix, e.g. `150abc`.
 	/// - The number has no digits, e.g. `0xU`.
 	InvalidNum,

@@ -46,13 +46,13 @@
 //!
 //! # Differences from the C preprocessor
 //! The GLSL preprocessor is based off the C++98 preprocessor, but it:
-//! - has no support for digraphs or trigraphs.
-//! - has no support for string or character literals, and hence no support for the stringizing operator,
-//! - has no support for universal character names (`\uXXXX` notation),
-//! - has no support for any number literals other than integers (with no prefixes/suffixes),
-//! - has the extra `version` and `extension` directives, and lacks the `include` directive,
-//! - has a different `line` directive, since GLSL has no concept of filenames,
-//! - has different pre-defined macros, (which depend on the exact GLSL version).
+//! - Has no support for digraphs or trigraphs.
+//! - Has no support for string or character literals, and hence no support for the stringizing operator.
+//! - Has no support for universal character names (`\uXXXX` notation).
+//! - Has no support for any number literals other than integers (with no prefixes/suffixes).
+//! - Has the extra `version` and `extension` directives, and lacks the `include` directive.
+//! - Has a different `line` directive, since GLSL has no concept of filenames.
+//! - Has different pre-defined macros, (which depend on the exact GLSL version).
 
 use super::{is_word, is_word_start, match_op, Lexer};
 use crate::{Span, Spanned};

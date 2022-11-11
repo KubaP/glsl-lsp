@@ -381,14 +381,14 @@ pub enum StmtDiag {
 	///
 	/// - `0` - The span where the semi-colon or equals-sign is expected.
 	VarDefExpectedSemiOrEqAfterIdents(Span),
-	/// ERROR - Did not find a value expression after the equals-sign in a variable declaration.
+	/// ERROR - Did not find a value expression after the equals-sign in a variable definition with initialization.
 	///
 	/// - `0` - The span where the expression is expected.
-	VarDeclExpectedValueAfterEq(Span),
-	/// ERROR - Did not find a semi-colon after the value expression in a variable declaration.
+	VarDefInitExpectedValueAfterEq(Span),
+	/// ERROR - Did not find a semi-colon after the value expression in a variable definition with initialization.
 	///
 	/// - `0` - The span where the semi-colon is expected.
-	VarDeclExpectedSemiAfterValue(Span),
+	VarDefInitExpectedSemiAfterValue(Span),
 
 	/* FUNCTIONS */
 	/// ERROR - Did not find a comma after a parameter in a function's parameter list. E.g. `void fn(foo bar)`.
@@ -441,10 +441,10 @@ pub enum StmtDiag {
 	///
 	/// - `0` - The span where the semi-colon is expected.
 	StructExpectedSemiAfterBodyOrInstance(Span),
-	/// ERROR - Found a struct definition which is not a valid GLSL statement. E.g. `struct Foo;`.
+	/// ERROR - Found a struct declaration which is not a valid GLSL statement. E.g. `struct Foo;`.
 	///
-	/// - `0` - The span of the definition.
-	StructDefIsInvalid(Span),
+	/// - `0` - The span of the declaration.
+	StructDeclIsInvalid(Span),
 
 	/* IF */
 	/// ERROR - Did not find an opening parenthesis after the `if` keyword.

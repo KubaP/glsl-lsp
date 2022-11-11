@@ -420,6 +420,54 @@ pub enum StmtDiag {
 	/// - `0` - The span where the semi-colon or opening brace is expected.
 	FnExpectedSemiOrLBraceAfterParams(Span),
 
+	/* SUBROUTINES */
+	/// ERROR - Did not find a variable definition after the `uniform` keyword in a subroutine definition. E.g.
+	/// `subroutine uniform struct;`.
+	///
+	/// - `0` - The span where the variable definition is expected.
+	SubroutineExpectedVarDefAfterUniformKw(Span),
+	/// ERROR - Did not find either a subroutine type declaration, an associated function definition, or a uniform
+	/// definition after the `subroutine` keyword. E.g. `subroutine struct Bar...`.
+	///
+	/// - `0` - The span where either of the options is expected.
+	SubroutineExpectedTypeFuncUniformAfterKw(Span),
+	/// ERROR - Did not find a comma after an ident in a subroutine's associated list. E.g. `subroutine(foo bar)`.
+	///
+	/// - `0` - The span where the comma is expected.
+	SubroutineAssociatedListExpectedCommaAfterIdent(Span),
+	/// ERROR - Did not find an ident after a comma in a subroutines's associated list. E.g. `subroutine(foo, )`.
+	///
+	/// - `0` - The span where the ident is expected.
+	SubroutineAssociatedListExpectedIdentAfterComma(Span),
+	/// ERROR - Did not find an ident between the opening parenthesis and the comma. E.g. `subroutine( , bar)`.
+	///
+	/// - `0` - The span where the ident is expected.
+	SubroutineAssociatedListExpectedIdentBetweenParenComma(Span),
+	/// ERROR - Did not find a closing parenthesis to close the associated subroutines list. E.g. `subroutine(foo`.
+	///
+	/// - `0` - The span where the closing parenthesis is expected.
+	SubroutineAssociatedListExpectedRParen(Span),
+	/// ERROR - Did not find a function definition after an associated subroutines list. E.g. `subroutine(foo,
+	/// bar) struct`.
+	///
+	/// - `0` - The span where the function definition is expected.
+	SubroutineExpectedFnDefAfterAssociatedList(Span),
+	/// ERROR - Found a function declaration after an associated subroutines list instead of a function definition.
+	/// E.g. `subroutine(foo, bar) int foo_1(int i);`.
+	///
+	/// - `0` - The span of the function declaration.
+	SubroutineExpectedFnDefAfterAssociatedListFoundDecl(Span),
+	/// ERROR - Did not find a list of associations in a subroutine associated function definition. E.g.
+	/// `subroutine int foo_1(int i) {}`.
+	///
+	/// - `0` - The span where the associations are expected.
+	SubroutineMissingAssociationsForFnDef(Span),
+	/// ERROR - Did not find the `uniform` keyword in a subroutine uniform definition. E.g. `subroutine foo
+	/// my_foo;`.
+	///
+	/// - `0` - The span where the keyword is expected.
+	SubroutineMissingUniformKwForUniformDef(Span),
+
 	/* STRUCTS */
 	/// ERROR - Did not find an identifier after the `struct` keyword. E.g. `struct;`.
 	///

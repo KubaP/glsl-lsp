@@ -1422,6 +1422,10 @@ fn parse_stmt(walker: &mut Walker, nodes: &mut Vec<ast::Node>) {
 			walker.push_colour(token_span, SyntaxToken::Keyword);
 			walker.push_syntax_diag(Syntax::FoundLonelyDefaultKw(token_span));
 		}
+		Token::Subroutine => {
+			invalidate_qualifiers(walker, qualifiers);
+			parse_subroutine(walker, nodes, token_span);
+		}
 		Token::Reserved(str) => {
 			invalidate_qualifiers(walker, qualifiers);
 			walker.push_colour(token_span, SyntaxToken::Invalid);
@@ -2745,6 +2749,298 @@ fn parse_function(
 			},
 		});
 		seek_next_stmt(walker);
+	}
+}
+
+/// Parses a subroutine type, associated function, or a subroutine uniform.
+///
+/// This function assumes that the `subroutine` keyword is not yet consumed.
+fn parse_subroutine(walker: &mut Walker, nodes: &mut Vec<Node>, kw_span: Span) {
+	walker.push_colour(kw_span, SyntaxToken::Keyword);
+	walker.advance();
+
+	let (token, token_span) = match walker.peek() {
+		Some(t) => t,
+		None => {
+			walker.push_syntax_diag(Syntax::Stmt(
+				StmtDiag::SubroutineExpectedTypeFuncUniformAfterKw(
+					kw_span.next_single_width(),
+				),
+			));
+			return;
+		}
+	};
+
+	if *token == Token::Uniform {
+		// We have a subroutine uniform definition.
+		let uniform_kw_span = token_span;
+		walker.push_colour(uniform_kw_span, SyntaxToken::Keyword);
+		walker.advance();
+		let mut inner = Vec::new();
+		try_parse_definition_declaration_expr(
+			walker,
+			&mut inner,
+			vec![],
+			false,
+		);
+
+		if inner.is_empty() {
+			walker.push_syntax_diag(Syntax::Stmt(
+				StmtDiag::SubroutineExpectedVarDefAfterUniformKw(
+					kw_span.next_single_width(),
+				),
+			));
+		} else {
+			let first = inner.remove(0);
+			match first.ty {
+				NodeTy::VarDef { type_, ident } => {
+					nodes.push(Node {
+						span: Span::new(kw_span.start, first.span.end),
+						ty: NodeTy::SubroutineUniformDef { type_, ident },
+					});
+				}
+				_ => {
+					walker.push_syntax_diag(Syntax::Stmt(
+						StmtDiag::SubroutineExpectedVarDefAfterUniformKw(
+							uniform_kw_span.next_single_width(),
+						),
+					));
+					nodes.push(first);
+				}
+			}
+			inner.into_iter().for_each(|n| nodes.push(n));
+		}
+	} else if *token == Token::LParen {
+		// We have an associated function definition.
+		let l_paren_span = token_span;
+		walker.push_colour(l_paren_span, SyntaxToken::Punctuation);
+		walker.advance();
+
+		// Look for any subroutine identifiers until we hit a closing `)` parenthesis.
+		#[derive(PartialEq)]
+		enum Prev {
+			None,
+			Ident,
+			Comma,
+			Invalid,
+		}
+		let mut prev = Prev::None;
+		let mut prev_span = l_paren_span;
+		let mut associations = Vec::new();
+		let r_paren_span = loop {
+			let (token, token_span) = match walker.peek() {
+				Some(t) => t,
+				None => {
+					walker.push_syntax_diag(Syntax::Stmt(
+						StmtDiag::SubroutineAssociatedListExpectedRParen(
+							prev_span.next_single_width(),
+						),
+					));
+					return;
+				}
+			};
+
+			match token {
+				Token::Comma => {
+					walker.push_colour(token_span, SyntaxToken::Punctuation);
+					walker.advance();
+					if prev == Prev::Comma {
+						walker.push_syntax_diag(Syntax::Stmt(
+							StmtDiag::SubroutineAssociatedListExpectedIdentAfterComma(
+								Span::new_between(prev_span, token_span),
+							),
+						));
+					} else if prev == Prev::None {
+						walker.push_syntax_diag(Syntax::Stmt(
+							StmtDiag::SubroutineAssociatedListExpectedIdentBetweenParenComma(
+								Span::new_between(l_paren_span, token_span),
+							),
+						));
+					}
+					prev = Prev::Comma;
+					prev_span = token_span;
+					continue;
+				}
+				Token::RParen => {
+					walker.push_colour(token_span, SyntaxToken::Punctuation);
+					walker.advance();
+					if prev == Prev::Comma {
+						walker.push_syntax_diag(Syntax::Stmt(
+							StmtDiag::SubroutineAssociatedListExpectedIdentAfterComma(
+								Span::new_between(prev_span, token_span),
+							),
+						));
+					}
+					break token_span;
+				}
+				Token::Ident(str) => {
+					associations.push(Ident {
+						name: str.to_owned(),
+						span: token_span,
+					});
+					walker.push_colour(token_span, SyntaxToken::UncheckedIdent);
+					walker.advance();
+					if prev == Prev::Ident {
+						walker.push_syntax_diag(Syntax::Stmt(StmtDiag::SubroutineAssociatedListExpectedCommaAfterIdent(
+							prev_span.next_single_width()
+						)));
+					}
+					prev = Prev::Ident;
+					prev_span = token_span;
+					continue;
+				}
+				_ => {
+					walker.push_colour(token_span, SyntaxToken::Invalid);
+					walker.advance();
+					prev = Prev::Invalid;
+					prev_span = token_span;
+				}
+			}
+		};
+
+		let mut inner = Vec::new();
+		try_parse_definition_declaration_expr(
+			walker,
+			&mut inner,
+			vec![],
+			false,
+		);
+
+		if inner.is_empty() {
+			walker.push_syntax_diag(Syntax::Stmt(
+				StmtDiag::SubroutineExpectedFnDefAfterAssociatedList(
+					r_paren_span.next_single_width(),
+				),
+			));
+		} else {
+			let first = inner.remove(0);
+			match first.ty {
+				NodeTy::FnDef {
+					return_type,
+					ident,
+					params,
+					body,
+				} => {
+					nodes.push(Node {
+						span: Span::new(kw_span.start, first.span.end),
+						ty: NodeTy::SubroutineFnDef {
+							associations,
+							return_type,
+							ident,
+							params,
+							body: Some(body),
+						},
+					});
+				}
+				NodeTy::FnDecl {
+					return_type,
+					ident,
+					params,
+				} => {
+					walker.push_syntax_diag(Syntax::Stmt(
+						StmtDiag::SubroutineExpectedFnDefAfterAssociatedListFoundDecl(
+							first.span,
+						),
+					));
+					nodes.push(Node {
+						span: Span::new(kw_span.start, first.span.end),
+						ty: NodeTy::SubroutineFnDef {
+							associations,
+							return_type,
+							ident,
+							params,
+							body: None,
+						},
+					});
+				}
+				_ => {
+					walker.push_syntax_diag(Syntax::Stmt(
+						StmtDiag::SubroutineExpectedFnDefAfterAssociatedList(
+							r_paren_span.next_single_width(),
+						),
+					));
+					nodes.push(first);
+				}
+			}
+		}
+		inner.into_iter().for_each(|n| nodes.push(n));
+	} else {
+		// We have a subroutine type declaration.
+		let mut inner = Vec::new();
+		try_parse_definition_declaration_expr(
+			walker,
+			&mut inner,
+			vec![],
+			false,
+		);
+
+		if inner.is_empty() {
+			walker.push_syntax_diag(Syntax::Stmt(
+				StmtDiag::SubroutineExpectedTypeFuncUniformAfterKw(
+					kw_span.next_single_width(),
+				),
+			));
+		} else {
+			let first = inner.remove(0);
+			match first.ty {
+				NodeTy::FnDecl {
+					return_type,
+					ident,
+					params,
+				} => {
+					nodes.push(Node {
+						span: Span::new(kw_span.start, first.span.end),
+						ty: NodeTy::SubroutineTypeDecl {
+							return_type,
+							ident,
+							params,
+						},
+					});
+				}
+				NodeTy::FnDef {
+					return_type,
+					ident,
+					params,
+					body,
+				} => {
+					walker.push_syntax_diag(Syntax::Stmt(
+						StmtDiag::SubroutineMissingAssociationsForFnDef(
+							Span::new_between(kw_span, return_type.span),
+						),
+					));
+					nodes.push(Node {
+						span: Span::new(kw_span.start, first.span.end),
+						ty: NodeTy::SubroutineFnDef {
+							associations: vec![],
+							return_type,
+							ident,
+							params,
+							body: Some(body),
+						},
+					});
+				}
+				NodeTy::VarDef { type_, ident } => {
+					walker.push_syntax_diag(Syntax::Stmt(
+						StmtDiag::SubroutineMissingUniformKwForUniformDef(
+							Span::new_between(kw_span, type_.span),
+						),
+					));
+					nodes.push(Node {
+						span: Span::new(kw_span.start, first.span.end),
+						ty: NodeTy::SubroutineUniformDef { type_, ident },
+					});
+				}
+				_ => {
+					walker.push_syntax_diag(Syntax::Stmt(
+						StmtDiag::SubroutineExpectedTypeFuncUniformAfterKw(
+							kw_span.next_single_width(),
+						),
+					));
+					nodes.push(first);
+				}
+			}
+			inner.into_iter().for_each(|n| nodes.push(n));
+		}
 	}
 }
 

@@ -90,6 +90,22 @@ pub enum NodeTy {
 		params: Vec<Param>,
 		body: Scope,
 	},
+	/// A subroutine type declaration, e.g. `subroutine int foo(int i);`.
+	SubroutineTypeDecl {
+		return_type: Type,
+		ident: Ident,
+		params: Vec<Param>,
+	},
+	/// A subroutine associated function definition, e.g. `subroutine(foo) int foo_1(int i) {/*...*/}`.
+	SubroutineFnDef {
+		associations: Vec<Ident>,
+		return_type: Type,
+		ident: Ident,
+		params: Vec<Param>,
+		body: Option<Scope>,
+	},
+	/// A subroutine uniform definition, e.g. `subroutine uniform foo my_foo;`.
+	SubroutineUniformDef { type_: Type, ident: Ident },
 	/// A struct declaration, e.g. `struct FooBar;`. This is an illegal GLSL statement.
 	StructDecl {
 		qualifiers: Vec<Qualifier>,

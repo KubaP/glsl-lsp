@@ -6,7 +6,7 @@ use super::{
 	SyntaxToken, Walker,
 };
 use crate::{
-	diag::{ExprDiag, Syntax},
+	diag::{ExprDiag, Semantic, Syntax},
 	lexer::{self, Token},
 	log, Either, Span, Spanned,
 };
@@ -38,11 +38,16 @@ pub(super) fn expr_parser(
 	walker: &mut Walker,
 	mode: Mode,
 	end_tokens: impl AsRef<[Token]>,
-) -> (Option<Expr>, Vec<Syntax>, Vec<Spanned<SyntaxToken>>) {
+) -> (
+	Option<Expr>,
+	Vec<Syntax>,
+	Vec<Semantic>,
+	Vec<Spanned<SyntaxToken>>,
+) {
 	let start_position = match walker.peek() {
 		Some((_, span)) => span.start,
 		// If we are at the end of the token stream, we can return early with nothing.
-		None => return (None, vec![], vec![]),
+		None => return (None, vec![], vec![], vec![]),
 	};
 
 	let mut parser = ShuntingYard {
@@ -51,15 +56,21 @@ pub(super) fn expr_parser(
 		groups: VecDeque::new(),
 		start_position,
 		mode,
-		diagnostics: Vec::new(),
+		syntax_diags: Vec::new(),
+		semantic_diags: Vec::new(),
 		syntax_tokens: Vec::new(),
 	};
 	parser.parse(walker, end_tokens.as_ref());
 
 	if let Some(expr) = parser.create_ast() {
-		(Some(expr), parser.diagnostics, parser.syntax_tokens)
+		(
+			Some(expr),
+			parser.syntax_diags,
+			parser.semantic_diags,
+			parser.syntax_tokens,
+		)
 	} else {
-		(None, parser.diagnostics, vec![])
+		(None, parser.syntax_diags, parser.semantic_diags, vec![])
 	}
 }
 
@@ -411,7 +422,9 @@ struct ShuntingYard {
 	mode: Mode,
 
 	/// Syntax diagnostics encountered during the parser execution.
-	diagnostics: Vec<Syntax>,
+	syntax_diags: Vec<Syntax>,
+	/// Semantic diagnostics encountered during the parser execution, (these will only be related to macros).
+	semantic_diags: Vec<Semantic>,
 
 	/// Syntax highlighting tokens created during the parser execution.
 	syntax_tokens: Vec<Spanned<SyntaxToken>>,
@@ -1425,7 +1438,7 @@ impl ShuntingYard {
 					if state == State::Operand =>
 				{
 					self.colour(
-						walker, 
+						walker,
 						span,
 						match token {
 							Token::Num { .. } => SyntaxToken::Number,
@@ -1455,7 +1468,7 @@ impl ShuntingYard {
 								ty: NodeTy::Lit(l),
 								span,
 							}));
-							self.diagnostics.push(d);
+							self.syntax_diags.push(d);
 						}
 					}
 
@@ -1470,7 +1483,8 @@ impl ShuntingYard {
 				Token::Num { .. } | Token::Bool(_)
 					if state == State::AfterOperand =>
 				{
-					self.colour(walker, 
+					self.colour(
+						walker,
 						span,
 						match token {
 							Token::Num { .. } => SyntaxToken::Number,
@@ -1494,7 +1508,7 @@ impl ShuntingYard {
 					} else {
 						// We are not in a delimited arity group. We don't perform error recovery because in this
 						// situation it's not as obvious what the behaviour should be, so we avoid any surprises.
-						self.diagnostics.push(Syntax::Expr(
+						self.syntax_diags.push(Syntax::Expr(
 							ExprDiag::FoundOperandAfterOperand(
 								self.get_previous_span().unwrap(),
 								span,
@@ -1514,7 +1528,7 @@ impl ShuntingYard {
 								ty: NodeTy::Lit(l),
 								span,
 							}));
-							self.diagnostics.push(d);
+							self.syntax_diags.push(d);
 						}
 					}
 
@@ -1572,7 +1586,7 @@ impl ShuntingYard {
 					} else {
 						// We are not in a delimited arity group. We don't perform error recovery because in this
 						// situation it's not as obvious what the behaviour should be, so we avoid any surprises.
-						self.diagnostics.push(Syntax::Expr(
+						self.syntax_diags.push(Syntax::Expr(
 							ExprDiag::FoundOperandAfterOperand(
 								self.get_previous_span().unwrap(),
 								span,
@@ -1628,7 +1642,7 @@ impl ShuntingYard {
 							self.set_op_rhs_toggle();
 						}
 						_ => {
-							self.diagnostics.push(Syntax::Expr(
+							self.syntax_diags.push(Syntax::Expr(
 								ExprDiag::InvalidPrefixOperator(span),
 							));
 							break 'main;
@@ -1676,7 +1690,7 @@ impl ShuntingYard {
 
 					match op {
 						lexer::OpTy::Flip | lexer::OpTy::Not => {
-							self.diagnostics.push(Syntax::Expr(
+							self.syntax_diags.push(Syntax::Expr(
 								ExprDiag::InvalidBinOrPostOperator(span),
 							));
 							break 'main;
@@ -1783,7 +1797,7 @@ impl ShuntingYard {
 							// this situation it's not as obvious what the behaviour should be, so we avoid any
 							// surprises.
 							if self.mode != Mode::TakeOneUnit {
-								self.diagnostics.push(Syntax::Expr(
+								self.syntax_diags.push(Syntax::Expr(
 									ExprDiag::FoundOperandAfterOperand(
 										self.get_previous_span().unwrap(),
 										span,
@@ -1847,7 +1861,7 @@ impl ShuntingYard {
 						}
 					}
 
-					self.diagnostics.push(if empty_group {
+					self.syntax_diags.push(if empty_group {
 						Syntax::Expr(ExprDiag::FoundEmptyParens(
 							Span::new_between(prev_op_span.unwrap(), span),
 						))
@@ -1881,7 +1895,7 @@ impl ShuntingYard {
 				Token::LBracket if state == State::Operand => {
 					self.colour(walker, span, SyntaxToken::Punctuation);
 					if self.mode != Mode::TakeOneUnit {
-						self.diagnostics.push(Syntax::Expr(
+						self.syntax_diags.push(Syntax::Expr(
 							ExprDiag::FoundLBracketInsteadOfOperand(
 								self.get_previous_span(),
 								span,
@@ -1925,7 +1939,7 @@ impl ShuntingYard {
 							}
 						}
 
-						self.diagnostics.push(Syntax::Expr(
+						self.syntax_diags.push(Syntax::Expr(
 							ExprDiag::FoundRBracketInsteadOfOperand(
 								prev_op_span.unwrap(),
 								span,
@@ -1980,7 +1994,7 @@ impl ShuntingYard {
 						self.register_arity_argument(span.start_zero_width());
 					} else {
 						if self.mode != Mode::TakeOneUnit {
-							self.diagnostics.push(Syntax::Expr(
+							self.syntax_diags.push(Syntax::Expr(
 								ExprDiag::FoundOperandAfterOperand(
 									self.get_previous_span().unwrap(),
 									span,
@@ -2045,7 +2059,7 @@ impl ShuntingYard {
 					}
 
 					if !empty_group {
-						self.diagnostics.push(Syntax::Expr(
+						self.syntax_diags.push(Syntax::Expr(
 							ExprDiag::FoundRBraceInsteadOfOperand(
 								prev_op_span.unwrap(),
 								span,
@@ -2099,7 +2113,7 @@ impl ShuntingYard {
 					// the list analysis will produce an error anyway, and we don't want two errors for the same
 					// incorrect syntax.
 					if !self.operators.is_empty() {
-						self.diagnostics.push(Syntax::Expr(
+						self.syntax_diags.push(Syntax::Expr(
 							ExprDiag::FoundCommaInsteadOfOperand(
 								self.get_previous_span().unwrap(),
 								span,
@@ -2112,7 +2126,7 @@ impl ShuntingYard {
 						})) = self.stack.back()
 						{
 						} else {
-							self.diagnostics.push(Syntax::Expr(
+							self.syntax_diags.push(Syntax::Expr(
 								ExprDiag::FoundCommaInsteadOfOperand(
 									self.get_previous_span().unwrap(),
 									span,
@@ -2172,7 +2186,7 @@ impl ShuntingYard {
 					//
 					// MAYBE: Should we make this a recoverable situation? (If so we need to consider arity)
 
-					self.diagnostics.push(Syntax::Expr(
+					self.syntax_diags.push(Syntax::Expr(
 						ExprDiag::FoundDotInsteadOfOperand(
 							self.get_previous_span(),
 							span,
@@ -2184,7 +2198,7 @@ impl ShuntingYard {
 					self.colour(walker, span, SyntaxToken::Operator);
 					if state == State::Operand {
 						// We have encountered something like: `foo + ?`.
-						self.diagnostics.push(Syntax::Expr(
+						self.syntax_diags.push(Syntax::Expr(
 							ExprDiag::FoundQuestionInsteadOfOperand(
 								self.get_previous_span(),
 								span,
@@ -2214,7 +2228,7 @@ impl ShuntingYard {
 
 					if state == State::Operand {
 						// We have encountered something like: `foo ? a + :`.
-						self.diagnostics.push(Syntax::Expr(
+						self.syntax_diags.push(Syntax::Expr(
 							ExprDiag::FoundColonInsteadOfOperand(
 								self.get_previous_span(),
 								span,
@@ -2237,7 +2251,7 @@ impl ShuntingYard {
 				}
 				_ => {
 					// We have encountered an unexpected token that's not allowed to be part of an expression.
-					self.diagnostics
+					self.syntax_diags
 						.push(Syntax::Expr(ExprDiag::FoundInvalidToken(span)));
 					break 'main;
 				}
@@ -2250,7 +2264,11 @@ impl ShuntingYard {
 				_ => just_started_arity_group = false,
 			}
 
-			walker.advance();
+			walker.advance_expr_parser(
+				&mut self.syntax_diags,
+				&mut self.semantic_diags,
+				&mut self.syntax_tokens,
+			);
 		}
 
 		if !self.groups.is_empty() {
@@ -2282,13 +2300,13 @@ impl ShuntingYard {
 				let group = self.groups.pop_back().unwrap();
 				match group {
 					Group::Paren(_, l_paren) => {
-						self.diagnostics.push(Syntax::Expr(
+						self.syntax_diags.push(Syntax::Expr(
 							ExprDiag::UnclosedParens(l_paren, group_end),
 						));
 						self.collapse_bracket(group, group_end);
 					}
 					Group::Index(_, l_bracket) => {
-						self.diagnostics.push(Syntax::Expr(
+						self.syntax_diags.push(Syntax::Expr(
 							ExprDiag::UnclosedIndexOperator(
 								l_bracket, group_end,
 							),
@@ -2296,13 +2314,13 @@ impl ShuntingYard {
 						self.collapse_index(group, group_end)
 					}
 					Group::FnCall(_, l_paren) => {
-						self.diagnostics.push(Syntax::Expr(
+						self.syntax_diags.push(Syntax::Expr(
 							ExprDiag::UnclosedFunctionCall(l_paren, group_end),
 						));
 						self.collapse_fn(group, group_end)
 					}
 					Group::Init(_, l_brace) => {
-						self.diagnostics.push(Syntax::Expr(
+						self.syntax_diags.push(Syntax::Expr(
 							ExprDiag::UnclosedInitializerList(
 								l_brace, group_end,
 							),
@@ -2310,7 +2328,7 @@ impl ShuntingYard {
 						self.collapse_init(group, group_end)
 					}
 					Group::ArrInit(_, l_paren) => {
-						self.diagnostics.push(Syntax::Expr(
+						self.syntax_diags.push(Syntax::Expr(
 							ExprDiag::UnclosedArrayConstructor(
 								l_paren, group_end,
 							),
@@ -2591,7 +2609,7 @@ impl ShuntingYard {
 						};
 						let args = process_fn_arr_constructor_args(
 							temp,
-							&mut self.diagnostics,
+							&mut self.syntax_diags,
 							l_paren,
 						);
 
@@ -2624,7 +2642,7 @@ impl ShuntingYard {
 
 						let args = process_initializer_list_args(
 							temp,
-							&mut self.diagnostics,
+							&mut self.syntax_diags,
 							l_brace,
 						);
 
@@ -2650,7 +2668,7 @@ impl ShuntingYard {
 
 						let args = process_fn_arr_constructor_args(
 							temp,
-							&mut self.diagnostics,
+							&mut self.syntax_diags,
 							l_paren,
 						);
 
@@ -2669,7 +2687,7 @@ impl ShuntingYard {
 						}
 
 						let args =
-							process_list_args(temp, &mut self.diagnostics);
+							process_list_args(temp, &mut self.syntax_diags);
 
 						stack.push_back(Expr {
 							ty: ExprTy::List { items: args },

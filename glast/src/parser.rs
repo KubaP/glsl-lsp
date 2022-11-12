@@ -755,11 +755,6 @@ pub(crate) struct Walker {
 impl Walker {
 	/// Constructs a new walker.
 	fn new(mut token_streams: Vec<TokenStream>) -> Self {
-		let mut active_macros = HashSet::new();
-		// Invariant: A macro cannot have no name (an empty identifier), so this won't cause any hashing clashes
-		// with valid macros. By using "" we can avoid having a special case for the root source stream.
-		active_macros.insert("".into());
-
 		let mut last_span = Span::new(0, 0);
 		for stream in token_streams.iter().rev() {
 			match stream.last() {
@@ -771,11 +766,27 @@ impl Walker {
 			}
 		}
 
-		let first_source = token_streams.remove(0); // Panic: Ensured by the caller.
+		// Deal with the possibility of having one or more streams that are all completely empty.
+		// Note: We don't have to deal with the possibility of the first token being a macro call site because a
+		// macro needs to be defined before it can be expanded.
+		let mut token_streams: Vec<_> = token_streams
+			.into_iter()
+			.filter(|s| !s.is_empty())
+			.collect();
+		let streams = if !token_streams.is_empty() {
+			vec![("".into(), token_streams.remove(0), 0)]
+		} else {
+			vec![]
+		};
+
+		let mut active_macros = HashSet::new();
+		// Invariant: A macro cannot have no name (an empty identifier), so this won't cause any hashing clashes
+		// with valid macros. By using "" we can avoid having a special case for the root source stream.
+		active_macros.insert("".into());
 
 		Self {
 			source_streams: token_streams,
-			streams: vec![("".into(), first_source, 0)],
+			streams,
 			macros: HashMap::new(),
 			macro_call_site: None,
 			active_macros,
@@ -890,6 +901,29 @@ impl Walker {
 		);
 	}
 
+	/// Advances the cursor by one.
+	///
+	/// This method is identical to `advance()` apart from that diagnostics and syntax highlighting tokens are
+	/// returned. This is necessary because otherwise the spans could be produced in the wrong order, if, for
+	/// example, the walker consumes a comment but the expresion syntax tokens are appended after the fact.
+	fn advance_expr_parser(
+		&mut self,
+		syntax_diags: &mut Vec<Syntax>,
+		semantic_diags: &mut Vec<Semantic>,
+		syntax_tokens: &mut Vec<Spanned<SyntaxToken>>,
+	) {
+		Self::move_cursor(
+			&mut self.source_streams,
+			&mut self.streams,
+			&mut self.macros,
+			&mut self.active_macros,
+			&mut self.macro_call_site,
+			syntax_diags,
+			semantic_diags,
+			syntax_tokens,
+		);
+	}
+
 	/// Returns whether the walker has reached the end of the token streams.
 	fn is_done(&self) -> bool {
 		self.streams.is_empty()
@@ -975,13 +1009,17 @@ impl Walker {
 							// stream.
 
 							let mut tmp_cursor = *cursor + 1;
-							let mut comment_spans = Vec::new();
+							let mut syntax_spans =
+								vec![(SyntaxToken::FunctionMacro, ident_span)];
 							loop {
 								match stream.get(tmp_cursor) {
 									Some((token, token_span)) => match token {
 										Token::LineComment(_)
 										| Token::BlockComment { .. } => {
-											comment_spans.push(token_span);
+											syntax_spans.push((
+												SyntaxToken::Comment,
+												*token_span,
+											));
 											tmp_cursor += 1;
 										}
 										_ => break,
@@ -994,13 +1032,7 @@ impl Walker {
 							let l_paren_span = match stream.get(tmp_cursor) {
 								Some((token, token_span)) => match token {
 									Token::LParen => {
-										for span in comment_spans {
-											syntax_tokens.push((
-												SyntaxToken::Comment,
-												*token_span,
-											));
-										}
-										syntax_tokens.push((
+										syntax_spans.push((
 											SyntaxToken::Punctuation,
 											*token_span,
 										));
@@ -1038,15 +1070,15 @@ impl Walker {
 									Some(t) => t,
 									None => {
 										syntax_diags.push(Syntax::PreprocDefine(PreprocDefineDiag::FunctionExpectedRParen(
-												prev_span.next_single_width()
-											)));
+											prev_span.next_single_width()
+										)));
 										break 'outer;
 									}
 								};
 
 								match token {
 									Token::Comma => {
-										syntax_tokens.push((
+										syntax_spans.push((
 											SyntaxToken::Punctuation,
 											*token_span,
 										));
@@ -1065,7 +1097,7 @@ impl Walker {
 									Token::RParen => {
 										if paren_groups == 0 {
 											// We have reached the end of this function-like macro call site.
-											syntax_tokens.push((
+											syntax_spans.push((
 												SyntaxToken::Punctuation,
 												*token_span,
 											));
@@ -1084,7 +1116,7 @@ impl Walker {
 									}
 									_ => {}
 								}
-								syntax_tokens.push((
+								syntax_spans.push((
 									token.non_semantic_colour(),
 									*token_span,
 								));
@@ -1143,10 +1175,7 @@ impl Walker {
 								);
 								if streams.len() == 1 {
 									// We only syntax highlight when it is the first macro call.
-									syntax_tokens.push((
-										SyntaxToken::FunctionMacro,
-										ident_span,
-									));
+									syntax_tokens.append(&mut syntax_spans);
 								}
 								continue;
 							}
@@ -1157,10 +1186,7 @@ impl Walker {
 							// call.
 							if streams.len() == 1 {
 								*macro_call_site = Some(call_site_span);
-								syntax_tokens.push((
-									SyntaxToken::FunctionMacro,
-									ident_span,
-								));
+								syntax_tokens.append(&mut syntax_spans);
 							}
 
 							active_macros.insert(ident.clone());
@@ -1259,18 +1285,23 @@ impl Walker {
 	}
 
 	/// Pushes a syntax diagnostic.
-	pub(crate) fn push_syntax_diag(&mut self, diag: Syntax) {
+	fn push_syntax_diag(&mut self, diag: Syntax) {
 		self.syntax_diags.push(diag);
 	}
 
 	/// Appends a collection of syntax diagnostics.
-	fn append_syntax_diags(&mut self, diags: &mut Vec<Syntax>) {
-		self.syntax_diags.append(diags);
+	fn append_syntax_diags(&mut self, syntax: &mut Vec<Syntax>) {
+		self.syntax_diags.append(syntax);
 	}
 
 	/// Pushes a semantic diagnostic.
-	pub(crate) fn push_semantic_diag(&mut self, diag: Semantic) {
+	fn push_semantic_diag(&mut self, diag: Semantic) {
 		self.semantic_diags.push(diag);
+	}
+
+	/// Appends a collection of semantic diagnostics.
+	fn append_semantic_diags(&mut self, semantic: &mut Vec<Semantic>) {
+		self.semantic_diags.append(semantic);
 	}
 
 	/// Pushes a syntax highlighting token over the given span.
@@ -1335,7 +1366,9 @@ fn invalidate_qualifiers(walker: &mut Walker, qualifiers: Vec<Qualifier>) {
 fn parse_stmt(walker: &mut Walker, nodes: &mut Vec<ast::Node>) {
 	let qualifiers = try_parse_qualifiers(walker);
 
-	let (token, token_span) = walker.get().expect("This function should be called from a loop that checks this invariant!");
+	let Some((token, token_span)) = walker.get() else {
+		return;
+	};
 
 	match token {
 		Token::LBrace => {
@@ -1408,21 +1441,25 @@ fn parse_stmt(walker: &mut Walker, nodes: &mut Vec<ast::Node>) {
 			invalidate_qualifiers(walker, qualifiers);
 			walker.push_colour(token_span, SyntaxToken::Punctuation);
 			walker.push_syntax_diag(Syntax::FoundUnmatchedRBrace(token_span));
+			walker.advance();
 		}
 		Token::Else => {
 			invalidate_qualifiers(walker, qualifiers);
 			walker.push_colour(token_span, SyntaxToken::Keyword);
 			walker.push_syntax_diag(Syntax::FoundLonelyElseKw(token_span));
+			walker.advance();
 		}
 		Token::Case => {
 			invalidate_qualifiers(walker, qualifiers);
 			walker.push_colour(token_span, SyntaxToken::Keyword);
 			walker.push_syntax_diag(Syntax::FoundLonelyCaseKw(token_span));
+			walker.advance();
 		}
 		Token::Default => {
 			invalidate_qualifiers(walker, qualifiers);
 			walker.push_colour(token_span, SyntaxToken::Keyword);
 			walker.push_syntax_diag(Syntax::FoundLonelyDefaultKw(token_span));
+			walker.advance();
 		}
 		Token::Subroutine => {
 			invalidate_qualifiers(walker, qualifiers);
@@ -1432,11 +1469,13 @@ fn parse_stmt(walker: &mut Walker, nodes: &mut Vec<ast::Node>) {
 			invalidate_qualifiers(walker, qualifiers);
 			walker.push_colour(token_span, SyntaxToken::Invalid);
 			walker.push_syntax_diag(Syntax::FoundReservedKw(token_span, str));
+			walker.advance();
 		}
 		Token::Invalid(c) => {
 			invalidate_qualifiers(walker, qualifiers);
 			walker.push_colour(token_span, SyntaxToken::Invalid);
 			walker.push_syntax_diag(Syntax::FoundIllegalChar(token_span, c));
+			walker.advance();
 		}
 		_ => try_parse_definition_declaration_expr(
 			walker, nodes, qualifiers, false,
@@ -1999,12 +2038,13 @@ fn try_parse_qualifiers(walker: &mut Walker) -> Vec<Qualifier> {
 						Mode::Default,
 						[Token::RParen],
 					) {
-						(Some(e), mut diags, mut colours) => {
+						(Some(e), mut syntax, mut semantic, mut colours) => {
 							walker.append_colours(&mut colours);
-							walker.append_syntax_diags(&mut diags);
+							walker.append_syntax_diags(&mut syntax);
+							walker.append_semantic_diags(&mut semantic);
 							e
 						}
-						(None, _, _) => {
+						(None, _, _, _) => {
 							// We are missing the expression.
 							walker.push_syntax_diag(Syntax::Stmt(
 								StmtDiag::LayoutExpectedExprAfterEq(
@@ -2051,10 +2091,12 @@ fn try_parse_definition_declaration_expr(
 	parsing_last_for_stmt: bool,
 ) {
 	// We attempt to parse an expression at the current position.
-	let (start, mut start_diags, mut start_colours) =
+	let (start, mut start_syntax, mut start_semantic, mut start_colours) =
 		match expr_parser(walker, Mode::Default, [Token::Semi]) {
-			(Some(expr), diags, colours) => (expr, diags, colours),
-			(None, _, _) => {
+			(Some(expr), syntax, semantic, colours) => {
+				(expr, syntax, semantic, colours)
+			}
+			(None, _, _, _) => {
 				// The current token cannot begin any sort of expression. Since this function gets called if all
 				// other statement branches have failed to match, it means that whatever we have cannot be a valid
 				// statement at all.
@@ -2077,7 +2119,8 @@ fn try_parse_definition_declaration_expr(
 				// statement.
 				invalidate_qualifiers(walker, qualifiers);
 				walker.append_colours(&mut start_colours);
-				walker.append_syntax_diags(&mut start_diags);
+				walker.append_syntax_diags(&mut start_syntax);
+				walker.append_semantic_diags(&mut start_semantic);
 				if parsing_last_for_stmt {
 					walker.push_syntax_diag(Syntax::Stmt(
 						StmtDiag::ForExpectedRParenAfterStmts(
@@ -2137,7 +2180,8 @@ fn try_parse_definition_declaration_expr(
 				invalidate_qualifiers(walker, qualifiers);
 				let semi_span = token_span;
 				walker.append_colours(&mut start_colours);
-				walker.append_syntax_diags(&mut start_diags);
+				walker.append_syntax_diags(&mut start_syntax);
+				walker.append_semantic_diags(&mut start_semantic);
 				walker.push_colour(semi_span, SyntaxToken::Punctuation);
 				walker.advance();
 				if parsing_last_for_stmt {
@@ -2155,7 +2199,8 @@ fn try_parse_definition_declaration_expr(
 				// We have an expression statement.
 				invalidate_qualifiers(walker, qualifiers);
 				walker.append_colours(&mut start_colours);
-				walker.append_syntax_diags(&mut start_diags);
+				walker.append_syntax_diags(&mut start_syntax);
+				walker.append_semantic_diags(&mut start_semantic);
 				nodes.push(Node {
 					span: start.span,
 					ty: NodeTy::Expr(start),
@@ -2169,35 +2214,42 @@ fn try_parse_definition_declaration_expr(
 		// initialization) or an expression statement.
 
 		// We attempt to parse an expression for the identifier(s).
-		let (ident_expr, mut ident_diags, mut ident_colours) =
-			match expr_parser(walker, Mode::BreakAtEq, [Token::Semi]) {
-				(Some(e), diags, colours) => (e, diags, colours),
-				(None, _, _) => {
-					// We have an expression followed by neither another expression nor a semi-colon. We treat this
-					// as an expression statement since that's the closest possible match.
-					invalidate_qualifiers(walker, qualifiers);
-					walker.append_colours(&mut start_colours);
-					walker.append_syntax_diags(&mut start_diags);
-					if parsing_last_for_stmt {
-						walker.push_syntax_diag(Syntax::Stmt(
-							StmtDiag::ForExpectedRParenAfterStmts(
-								start.span.next_single_width(),
-							),
-						))
-					} else {
-						walker.push_syntax_diag(Syntax::Stmt(
-							StmtDiag::ExprStmtExpectedSemiAfterExpr(
-								start.span.next_single_width(),
-							),
-						));
-					}
-					nodes.push(Node {
-						span: start.span,
-						ty: NodeTy::Expr(start),
-					});
-					return;
+		let (
+			ident_expr,
+			mut ident_syntax,
+			mut ident_semantic,
+			mut ident_colours,
+		) = match expr_parser(walker, Mode::BreakAtEq, [Token::Semi]) {
+			(Some(e), syntax, semantic, colours) => {
+				(e, syntax, semantic, colours)
+			}
+			(None, _, _, _) => {
+				// We have an expression followed by neither another expression nor a semi-colon. We treat this
+				// as an expression statement since that's the closest possible match.
+				invalidate_qualifiers(walker, qualifiers);
+				walker.append_colours(&mut start_colours);
+				walker.append_syntax_diags(&mut start_syntax);
+				walker.append_semantic_diags(&mut start_semantic);
+				if parsing_last_for_stmt {
+					walker.push_syntax_diag(Syntax::Stmt(
+						StmtDiag::ForExpectedRParenAfterStmts(
+							start.span.next_single_width(),
+						),
+					))
+				} else {
+					walker.push_syntax_diag(Syntax::Stmt(
+						StmtDiag::ExprStmtExpectedSemiAfterExpr(
+							start.span.next_single_width(),
+						),
+					));
 				}
-			};
+				nodes.push(Node {
+					span: start.span,
+					ty: NodeTy::Expr(start),
+				});
+				return;
+			}
+		};
 		let ident_span = ident_expr.span;
 
 		// We test if the identifier(s) expression can be converted into one or more variable identifiers.
@@ -2209,7 +2261,8 @@ fn try_parse_definition_declaration_expr(
 			// statement, and the second expression as invalid.
 			invalidate_qualifiers(walker, qualifiers);
 			walker.append_colours(&mut start_colours);
-			walker.append_syntax_diags(&mut start_diags);
+			walker.append_syntax_diags(&mut start_syntax);
+			walker.append_semantic_diags(&mut start_semantic);
 			if parsing_last_for_stmt {
 				walker.push_syntax_diag(Syntax::Stmt(
 					StmtDiag::ForExpectedRParenAfterStmts(
@@ -2237,7 +2290,7 @@ fn try_parse_definition_declaration_expr(
 		// We have one expression which can be converted to a type, and a second expression which can be converted
 		// to one or more identifiers. That means the first expression will have a syntax error about a missing
 		// operator between the two; we remove that error since in this case it's not applicable.
-		start_diags.retain(|e| {
+		start_syntax.retain(|e| {
 			if let Syntax::Expr(ExprDiag::FoundOperandAfterOperand(_, _)) = e {
 				false
 			} else {
@@ -2246,9 +2299,11 @@ fn try_parse_definition_declaration_expr(
 		});
 		type_.qualifiers = qualifiers;
 		walker.append_colours(&mut start_colours);
-		walker.append_syntax_diags(&mut start_diags);
+		walker.append_syntax_diags(&mut start_syntax);
+		walker.append_semantic_diags(&mut start_semantic);
 		walker.append_colours(&mut ident_colours);
-		walker.append_syntax_diags(&mut ident_diags);
+		walker.append_syntax_diags(&mut ident_syntax);
+		walker.append_semantic_diags(&mut ident_semantic);
 
 		fn var_def(
 			type_: Type,
@@ -2331,12 +2386,13 @@ fn try_parse_definition_declaration_expr(
 			// Consume the value expression.
 			let value_expr =
 				match expr_parser(walker, Mode::Default, [Token::Semi]) {
-					(Some(e), mut diags, mut colours) => {
+					(Some(e), mut syntax, mut semantic, mut colours) => {
 						walker.append_colours(&mut colours);
-						walker.append_syntax_diags(&mut diags);
+						walker.append_syntax_diags(&mut syntax);
+						walker.append_semantic_diags(&mut semantic);
 						e
 					}
-					(None, _, _) => {
+					(None, _, _, _) => {
 						walker.push_syntax_diag(Syntax::Stmt(
 							StmtDiag::VarDefInitExpectedValueAfterEq(
 								eq_span.next_single_width(),
@@ -2417,7 +2473,8 @@ fn try_parse_definition_declaration_expr(
 	// must therefore be a standalone expression statement.
 	let expr = start;
 	walker.append_colours(&mut start_colours);
-	walker.append_syntax_diags(&mut start_diags);
+	walker.append_syntax_diags(&mut start_syntax);
+	walker.append_semantic_diags(&mut start_semantic);
 
 	// Consume the `;` to end the statement.
 	let semi_span = match walker.peek() {
@@ -2573,9 +2630,10 @@ fn parse_function(
 			Mode::TakeOneUnit,
 			[Token::Semi, Token::LBrace],
 		) {
-			(Some(e), _, mut colours) => {
+			(Some(e), _, mut semantic, mut colours) => {
 				if let Some(type_) = Type::parse(&e) {
 					walker.append_colours(&mut colours);
+					walker.append_semantic_diags(&mut semantic);
 					type_
 				} else {
 					// We have an expression which cannot be parsed into a type. We ignore this and continue
@@ -2591,7 +2649,7 @@ fn parse_function(
 					continue;
 				}
 			}
-			(None, _, _) => {
+			(None, _, _, _) => {
 				// We immediately have a token that is not an expression. We ignore this and loop until we hit
 				// something recognizable.
 				let end_span = loop {
@@ -2629,8 +2687,11 @@ fn parse_function(
 			Mode::TakeOneUnit,
 			[Token::Semi, Token::LBrace],
 		) {
-			(Some(e), _, colours) => (e, colours),
-			(None, _, _) => {
+			(Some(e), _, mut semantic, colours) => {
+				walker.append_semantic_diags(&mut semantic);
+				(e, colours)
+			}
+			(None, _, _, _) => {
 				// We have a first expression and then something that is not an expression. We treat this as an
 				// anonymous parameter, whatever the current token is will be dealt with in the next iteration.
 				let param_span = Span::new(param_span_start, type_.span.end);
@@ -3064,9 +3125,10 @@ fn parse_struct(
 		Mode::TakeOneUnit,
 		[Token::LBrace, Token::Semi],
 	) {
-		(Some(e), _, mut colours) => match e.ty {
+		(Some(e), _, mut semantic, mut colours) => match e.ty {
 			ExprTy::Ident(i) => {
 				walker.append_colours(&mut colours);
+				walker.append_semantic_diags(&mut semantic);
 				i
 			}
 			_ => {
@@ -3077,7 +3139,7 @@ fn parse_struct(
 				return;
 			}
 		},
-		(None, _, _) => {
+		(None, _, _, _) => {
 			walker.push_syntax_diag(Syntax::Stmt(
 				StmtDiag::StructExpectedIdentAfterKw(
 					kw_span.next_single_width(),
@@ -3152,9 +3214,10 @@ fn parse_struct(
 
 	// Look for an optional instance identifier.
 	let instance = match expr_parser(walker, Mode::TakeOneUnit, [Token::Semi]) {
-		(Some(e), _, mut colours) => match e.ty {
+		(Some(e), _, mut semantic, mut colours) => match e.ty {
 			ExprTy::Ident(i) => {
 				walker.append_colours(&mut colours);
+				walker.append_semantic_diags(&mut semantic);
 				Omittable::Some(i)
 			}
 			_ => {
@@ -3339,12 +3402,13 @@ fn parse_if(walker: &mut Walker, nodes: &mut Vec<Node>, kw_span: Span) {
 				Mode::Default,
 				[Token::RParen, Token::LBrace],
 			) {
-				(Some(e), mut diags, mut colours) => {
+				(Some(e), mut syntax, mut semantic, mut colours) => {
 					walker.append_colours(&mut colours);
-					walker.append_syntax_diags(&mut diags);
+					walker.append_syntax_diags(&mut syntax);
+					walker.append_semantic_diags(&mut semantic);
 					Some(e)
 				}
-				(None, _, _) => {
+				(None, _, _, _) => {
 					if let Some(l_paren_span) = l_paren_span {
 						walker.push_syntax_diag(Syntax::Stmt(
 							StmtDiag::IfExpectedExprAfterLParen(
@@ -3646,12 +3710,13 @@ fn parse_switch(walker: &mut Walker, nodes: &mut Vec<Node>, kw_span: Span) {
 		Mode::Default,
 		[Token::RParen, Token::LBrace],
 	) {
-		(Some(e), mut diags, mut colours) => {
+		(Some(e), mut syntax, mut semantic, mut colours) => {
 			walker.append_colours(&mut colours);
-			walker.append_syntax_diags(&mut diags);
+			walker.append_syntax_diags(&mut syntax);
+			walker.append_semantic_diags(&mut semantic);
 			Some(e)
 		}
-		(None, _, _) => {
+		(None, _, _, _) => {
 			if let Some(l_paren_span) = l_paren_span {
 				walker.push_syntax_diag(Syntax::Stmt(
 					StmtDiag::SwitchExpectedExprAfterLParen(
@@ -3818,12 +3883,13 @@ fn parse_switch(walker: &mut Walker, nodes: &mut Vec<Node>, kw_span: Span) {
 				// Consume the expression.
 				let expr =
 					match expr_parser(walker, Mode::Default, [Token::Colon]) {
-						(Some(e), mut diags, mut colours) => {
+						(Some(e), mut syntax, mut semantic, mut colours) => {
 							walker.append_colours(&mut colours);
-							walker.append_syntax_diags(&mut diags);
+							walker.append_syntax_diags(&mut syntax);
+							walker.append_semantic_diags(&mut semantic);
 							Some(e)
 						}
-						(None, _, _) => {
+						(None, _, _, _) => {
 							walker.push_syntax_diag(Syntax::Stmt(
 								StmtDiag::SwitchExpectedExprAfterCaseKw(
 									case_kw_span.next_single_width(),
@@ -4312,12 +4378,13 @@ fn parse_while_loop(walker: &mut Walker, nodes: &mut Vec<Node>, kw_span: Span) {
 		Mode::Default,
 		[Token::RParen, Token::Semi],
 	) {
-		(Some(e), mut diags, mut colours) => {
+		(Some(e), mut syntax, mut semantic, mut colours) => {
 			walker.append_colours(&mut colours);
-			walker.append_syntax_diags(&mut diags);
+			walker.append_syntax_diags(&mut syntax);
+			walker.append_semantic_diags(&mut semantic);
 			Some(e)
 		}
-		(None, _, _) => {
+		(None, _, _, _) => {
 			if let Some(l_paren_span) = l_paren_span {
 				walker.push_syntax_diag(Syntax::Stmt(
 					StmtDiag::WhileExpectedExprAfterLParen(
@@ -4510,12 +4577,13 @@ fn parse_do_while_loop(
 		Mode::Default,
 		[Token::RParen, Token::Semi],
 	) {
-		(Some(e), mut diags, mut colours) => {
+		(Some(e), mut syntax, mut semantic, mut colours) => {
 			walker.append_colours(&mut colours);
-			walker.append_syntax_diags(&mut diags);
+			walker.append_syntax_diags(&mut syntax);
+			walker.append_semantic_diags(&mut semantic);
 			Some(e)
 		}
-		(None, _, _) => {
+		(None, _, _, _) => {
 			if let Some(l_paren_span) = l_paren_span {
 				walker.push_syntax_diag(Syntax::Stmt(
 					StmtDiag::WhileExpectedExprAfterLParen(
@@ -4681,12 +4749,13 @@ fn parse_return(walker: &mut Walker, nodes: &mut Vec<Node>, kw_span: Span) {
 
 	// Look for the optional return value expression.
 	let return_expr = match expr_parser(walker, Mode::Default, [Token::Semi]) {
-		(Some(expr), mut diags, mut colours) => {
-			walker.append_syntax_diags(&mut diags);
+		(Some(expr), mut syntax, mut semantic, mut colours) => {
 			walker.append_colours(&mut colours);
+			walker.append_syntax_diags(&mut syntax);
+			walker.append_semantic_diags(&mut semantic);
 			Omittable::Some(expr)
 		}
-		(None, _, _) => Omittable::None,
+		(None, _, _, _) => Omittable::None,
 	};
 
 	// Consume the `;` to end the statement.

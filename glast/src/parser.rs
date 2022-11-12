@@ -8,6 +8,8 @@
 pub mod ast;
 mod expression;
 mod syntax;
+#[cfg(test)]
+mod walker_tests;
 
 pub use syntax::*;
 

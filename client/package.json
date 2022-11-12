@@ -25,25 +25,22 @@
 					".glsl",
 					".vs",
 					".vert",
-					".vshader",
 					".v.glsl",
+					".tc",
+					".tesc",
+					".tc.glsl",
+					".te",
+					".tese",
+					".te.glsl",
 					".gs",
 					".geom",
-					".gshader",
 					".g.glsl",
 					".fs",
 					".frag",
-					".fshader",
-					".f.glsl"
+					".f.glsl",
+					".comp"
 				],
 				"configuration": "./glsl.language-configuration.json"
-			},
-			{
-				"id": "glsl_syntax_tree",
-				"extensions": [
-					".glsl.cst"
-				],
-				"configuration": "./glsl.cst.language-configuration.json"
 			}
 		],
 		"grammars": [
@@ -51,18 +48,9 @@
 				"language": "glsl",
 				"scopeName": "source.glsl",
 				"path": "./syntaxes/glsl.tmLanguage.json"
-			},
-			{
-				"language": "glsl_syntax_tree",
-				"scopeName": "source.glsl_syntax_tree",
-				"path": "./syntaxes/glsl.cst.tmLanguage.json"
 			}
 		],
 		"commands": [
-			{
-				"command": "glsl.syntaxTree",
-				"title": "GLSL: Show syntax tree"
-			}
 		],
 		"configuration": {
 			"type": "object",
@@ -86,7 +74,7 @@
 		"vscode:prepublish": "npm run build",
 		"build": "tsc -b",
 		"watch": "tsc -b -w",
-		"buildGrammar": "npx js-yaml syntaxes/glsl.tmLanguage.yaml > syntaxes/glsl.tmLanguage.json && npx js-yaml syntaxes/glsl.cst.tmLanguage.yaml > syntaxes/glsl.cst.tmLanguage.json"
+		"buildGrammar": "npx js-yaml syntaxes/glsl.tmLanguage.yaml > syntaxes/glsl.tmLanguage.json"
 	},
 	"dependencies": {
 		"vscode-languageclient": "^8.0.2"

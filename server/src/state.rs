@@ -1,10 +1,7 @@
-use crate::{diag, File};
-use glast::cst::Cst;
 use std::collections::HashMap;
-use tower_lsp::{
-	lsp_types::{InitializeParams, Position, Range, Url},
-	Client,
-};
+use tower_lsp::lsp_types::{InitializeParams, Url};
+
+use crate::File;
 
 /// The state of support for diagnostic-related functionality, as reported by the client.
 #[derive(Debug, Default)]
@@ -24,10 +21,6 @@ pub struct State {
 
 	/// Currently open files, (or previously opened within this session).
 	files: HashMap<Url, File>,
-
-	/// CSTs of requested files.
-	/// MAYBE: Clear entries after a timeout?
-	syntax_trees: HashMap<Url, (i32, Cst)>,
 }
 
 impl State {
@@ -37,7 +30,6 @@ impl State {
 		Self {
 			diagnostics: Default::default(),
 			files: HashMap::new(),
-			syntax_trees: HashMap::new(),
 		}
 	}
 
@@ -86,81 +78,5 @@ impl State {
 			Some(file) => file.update(version, contents),
 			None => unreachable!("[State::change_file] Received a file `uri: {uri}` which has not been opened yet."),
 		}
-	}
-
-	/// Publishes diagnostics for the workspace. This function takes care of selectively enabling features
-	/// depending on what the client supports.
-	///
-	/// *Note:* There is no workspace support yet. This currently publishes diagnostics for open or
-	/// previously-opened files.
-	pub async fn publish_diagnostics(&self, client: &Client) {
-		if !self.diagnostics.enabled {
-			return;
-		}
-
-		// Parse each file and convert any syntax errors into diagnostics and push them.
-		//
-		// Note: We don't cache any diagnostics to reuse them if the file doesn't change. Whilst this makes sense
-		// right now, in the future when the cross-file analysis eventually gets implemented, any primitive caching
-		// will be useless.
-		for (_, file) in &self.files {
-			let (_cst, errors) = glast::cst::parse_from_str(&file.contents);
-
-			let mut diagnostics = Vec::new();
-			errors.into_iter().for_each(|err| {
-				diag::to_diagnostic(
-					err,
-					&file,
-					&mut diagnostics,
-					&self.diagnostics,
-				)
-			});
-
-			client
-				.publish_diagnostics(
-					file.uri.clone(),
-					diagnostics,
-					self.diagnostics.versioning.then_some(file.version),
-				)
-				.await;
-		}
-	}
-
-	/// Returns a formatted CST for the specified file.
-	pub fn get_syntax_tree(&mut self, uri: Url, version: i32) -> String {
-		let file = self.files.get(&uri).expect(
-			&format!("[State::get_syntax_tree] Received a file `uri: {uri}` which has not been opened yet.")
-		);
-
-		// Parse the file and print the CST into a tree.
-		let (cst, _) = glast::cst::parse_from_str(&file.contents);
-		let string = glast::cst::print_tree(&cst);
-
-		// If this file's CST was already cached then update it, otherwise insert a new entry.
-		self.syntax_trees.insert(uri, (version, cst));
-
-		string
-	}
-
-	/// Returns a `Range` of the CST node within the formatted string, which corresponds to the CST node that the
-	/// cursor is over in the specified file.
-	pub fn get_syntax_tree_highlight(
-		&self,
-		_uri: Url,
-		_version: i32,
-		_cursor: Position,
-	) -> Range {
-		// TODO: Implement
-
-		Range::new(
-			Position {
-				line: 0,
-				character: 0,
-			},
-			Position {
-				line: 0,
-				character: 4,
-			},
-		)
 	}
 }

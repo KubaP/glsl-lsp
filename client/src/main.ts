@@ -17,7 +17,6 @@ export async function activate(context: ExtensionContext) {
 	ctx = await Context.new(context, serverPath);
 
 	// Register commands.
-	ctx.registerCommand("syntaxTree", commands.syntaxTree);
 
 	// Start the client.
 	ctx.client.start();

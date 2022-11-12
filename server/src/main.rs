@@ -5,8 +5,6 @@ use tower_lsp::jsonrpc::Result;
 use tower_lsp::lsp_types::*;
 use tower_lsp::{Client, LanguageServer, LspService, Server};
 
-mod diag;
-mod extensions;
 mod state;
 
 #[derive(Debug)]
@@ -109,7 +107,6 @@ impl LanguageServer for MyServer {
 
 		let mut state = self.state.lock().await;
 		state.open_file(uri, version, text);
-		state.publish_diagnostics(&self.client).await;
 	}
 
 	async fn did_change(&self, mut params: DidChangeTextDocumentParams) {
@@ -126,7 +123,6 @@ impl LanguageServer for MyServer {
 			params.text_document.version,
 			params.content_changes.remove(0).text,
 		);
-		state.publish_diagnostics(&self.client).await;
 	}
 
 	async fn did_save(&self, _params: DidSaveTextDocumentParams) {
@@ -145,61 +141,6 @@ impl LanguageServer for MyServer {
 	}
 }
 
-impl MyServer {
-	async fn syntax_tree_content(
-		&self,
-		params: extensions::SyntaxTreeContentParams,
-	) -> Result<extensions::SyntaxTreeContentResult> {
-		self.client
-			.log_message(
-				MessageType::INFO,
-				"Server received 'glsl/syntaxTreeContent' event.",
-			)
-			.await;
-
-		let mut state = self.state.lock().await;
-
-		Ok(extensions::SyntaxTreeContentResult {
-			cst: state.get_syntax_tree(
-				params.text_document_uri,
-				params.text_document_version,
-			),
-			highlight: Range::new(
-				Position {
-					line: 0,
-					character: 0,
-				},
-				Position {
-					line: 0,
-					character: 2,
-				},
-			),
-		})
-	}
-
-	async fn syntax_tree_highlight(
-		&self,
-		params: extensions::SyntaxTreeHighlightParams,
-	) -> Result<extensions::SyntaxTreeHighlightResult> {
-		self.client
-			.log_message(
-				MessageType::INFO,
-				"Server received 'glsl/syntaxTreeHighlight' event.",
-			)
-			.await;
-
-		let state = self.state.lock().await;
-
-		Ok(extensions::SyntaxTreeHighlightResult {
-			highlight: state.get_syntax_tree_highlight(
-				params.text_document_uri,
-				params.text_document_version,
-				params.cursor,
-			),
-		})
-	}
-}
-
 #[tokio::main]
 async fn main() {
 	let stdin = tokio::io::stdin();
@@ -209,14 +150,6 @@ async fn main() {
 		client,
 		state: Mutex::new(State::new()),
 	})
-	.custom_method(
-		extensions::SYNTAX_TREE_CONTENT,
-		MyServer::syntax_tree_content,
-	)
-	.custom_method(
-		extensions::SYNTAX_TREE_HIGHLIGHT,
-		MyServer::syntax_tree_highlight,
-	)
 	.finish();
 
 	Server::new(stdin, stdout, socket).serve(service).await;
@@ -281,6 +214,18 @@ impl File {
 			start: Position::new(start.0 as u32, start.1 as u32),
 			end: Position::new(end.0 as u32, end.1 as u32),
 		}
+	}
+
+	/// Converts an LSP `Position` to an offset position.
+	pub fn position_to_offset(&self, position: Position) -> usize {
+		let (_, char_offset) = self.lines.get(position.line as usize).unwrap();
+
+		*char_offset + position.character as usize
+	}
+
+	/// Converts an LSP `Range` to a [`Span`] type.
+	pub fn range_to_span(&self, range: Range) -> Span {
+		todo!()
 	}
 
 	fn generate_line_table(contents: &str) -> Vec<(usize, usize)> {

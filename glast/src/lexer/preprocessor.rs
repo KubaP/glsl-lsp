@@ -1453,7 +1453,7 @@ fn match_conditional_punctuation(lexer: &mut Lexer) -> ConditionToken {
 }
 
 /// Performs token concatenation on the given token stream.
-pub(crate) fn concat_object_macro_body(
+pub(crate) fn concat_macro_body(
 	tokens: super::TokenStream,
 ) -> (super::TokenStream, Vec<crate::diag::Syntax>) {
 	use crate::diag::{PreprocDefineDiag, Syntax};
@@ -1497,7 +1497,21 @@ pub(crate) fn concat_object_macro_body(
 						new_string.push_str(&next.0.to_string());
 						let mut lexer = Lexer::new(&new_string);
 						let mut result = super::parse_tokens(&mut lexer, true);
-						stack.append(&mut result);
+						if result.len() == 1 {
+							// We have successfully concatenated. Since the lexer starts off at 0, we need to
+							// modify the span to be correct.
+							let (token, _) = result.remove(0);
+							stack.push((
+								token,
+								Span::new(prev.1.start, next.1.end),
+							));
+						} else {
+							// We had two tokens which didn't concatenate, so we can just push them back into the
+							// stack as-is.
+							// TODO: Produce warning about unnecessary use.
+							stack.push(prev);
+							stack.push(next);
+						}
 					}
 				}
 				(Some(prev), None) => {

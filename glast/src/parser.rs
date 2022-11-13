@@ -1162,8 +1162,10 @@ impl Walker {
 								new_body.push((token.clone(), *token_span));
 							}
 							// Then, we perform token concatenation.
-							let (new_body, mut diags) = crate::lexer::preprocessor::
-							concat_object_macro_body(new_body);
+							let (new_body, mut diags) =
+								crate::lexer::preprocessor::concat_macro_body(
+									new_body,
+								);
 							syntax_diags.append(&mut diags);
 
 							if body.is_empty() {
@@ -1271,7 +1273,7 @@ impl Walker {
 		}
 	}
 
-	/// Un-registers a defined macro. Note: currently only supports object-like macros.
+	/// Un-registers a defined macro.
 	fn unregister_macro(&mut self, ident: &str, span: Span) {
 		match self.macros.remove(ident) {
 			Some(_) => self.push_colour(span, SyntaxToken::ObjectMacro),
@@ -2035,7 +2037,7 @@ fn try_parse_qualifiers(walker: &mut Walker) -> Vec<Qualifier> {
 					// Consume the expression.
 					let value_expr = match expr_parser(
 						walker,
-						Mode::Default,
+						Mode::DisallowTopLevelList,
 						[Token::RParen],
 					) {
 						(Some(e), mut syntax, mut semantic, mut colours) => {
@@ -3525,22 +3527,23 @@ fn parse_if(walker: &mut Walker, nodes: &mut Vec<Node>, kw_span: Span) {
 						let mut stmts = Vec::new();
 						parse_stmt(walker, &mut stmts);
 
-						let body =
-							if stmts.is_empty() {
-								if let Some(r_paren_span) = r_paren_span {
-									walker.push_syntax_diag(Syntax::Stmt(StmtDiag::IfExpectedLBraceOrExprAfterCond(
-									r_paren_span
-								)));
-								}
-								None
-							} else {
-								let stmt = stmts.remove(0);
-								let body = Scope {
-									span: stmt.span,
-									contents: vec![stmt],
-								};
-								Some(body)
+						let body = if stmts.is_empty() {
+							if let Some(r_paren_span) = r_paren_span {
+								walker.push_syntax_diag(Syntax::Stmt(
+									StmtDiag::IfExpectedLBraceOrStmtAfterRParen(
+										r_paren_span,
+									),
+								));
+							}
+							None
+						} else {
+							let stmt = stmts.remove(0);
+							let body = Scope {
+								span: stmt.span,
+								contents: vec![stmt],
 							};
+							Some(body)
+						};
 
 						let span = Span::new(
 							if first_iter {
@@ -4872,7 +4875,7 @@ fn parse_directive(
 				// Since object-like macros don't have parameters, we can perform the concatenation right here
 				// since we know the contents of the macro body will never change.
 				let (body_tokens, mut diags) =
-					preprocessor::concat_object_macro_body(body_tokens);
+					preprocessor::concat_macro_body(body_tokens);
 				walker.append_syntax_diags(&mut diags);
 				body_tokens.iter().for_each(|(t, s)| {
 					walker.push_colour(*s, t.non_semantic_colour())
@@ -5045,7 +5048,7 @@ fn parse_directive(
 							span: token_span,
 						})
 					}
-					_ => {
+					UndefToken::Invalid(_) => {
 						walker.push_syntax_diag(Syntax::PreprocDefine(
 							PreprocDefineDiag::UndefExpectedMacroName(
 								token_span,
@@ -5389,11 +5392,8 @@ fn parse_extension_directive(
 	) -> Option<(BehaviourTy, Option<Syntax>)> {
 		match str {
 			"require" => Some((BehaviourTy::Require, None)),
-
 			"enable" => Some((BehaviourTy::Enable, None)),
-
 			"warn" => Some((BehaviourTy::Warn, None)),
-
 			"disable" => Some((BehaviourTy::Disable, None)),
 			_ => {
 				let str = str.to_lowercase();
@@ -5406,7 +5406,6 @@ fn parse_extension_directive(
 							),
 						)),
 					)),
-
 					"enable" => Some((
 						BehaviourTy::Enable,
 						Some(Syntax::PreprocExt(
@@ -5415,7 +5414,6 @@ fn parse_extension_directive(
 							),
 						)),
 					)),
-
 					"warn" => Some((
 						BehaviourTy::Warn,
 						Some(Syntax::PreprocExt(
@@ -5424,7 +5422,6 @@ fn parse_extension_directive(
 							),
 						)),
 					)),
-
 					"disable" => Some((
 						BehaviourTy::Disable,
 						Some(Syntax::PreprocExt(

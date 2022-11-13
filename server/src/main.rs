@@ -1,11 +1,12 @@
+mod state;
+mod syntax;
+
 use crate::state::State;
 use glast::Span;
 use tokio::sync::Mutex;
 use tower_lsp::jsonrpc::Result;
 use tower_lsp::lsp_types::*;
 use tower_lsp::{Client, LanguageServer, LspService, Server};
-
-mod state;
 
 #[derive(Debug)]
 struct MyServer {
@@ -59,7 +60,25 @@ impl LanguageServer for MyServer {
 				selection_range_provider: None,
 				linked_editing_range_provider: None,
 				call_hierarchy_provider: None,
-				semantic_tokens_provider: None,
+				semantic_tokens_provider: Some(
+					SemanticTokensServerCapabilities::SemanticTokensOptions(
+						SemanticTokensOptions {
+							work_done_progress_options:
+								WorkDoneProgressOptions {
+									work_done_progress: None,
+								},
+							legend: SemanticTokensLegend {
+								token_types: syntax::TOKEN_TYPES
+									.into_iter()
+									.map(|s| SemanticTokenType::new(s))
+									.collect::<Vec<_>>(),
+								token_modifiers: vec![],
+							},
+							range: None,
+							full: Some(SemanticTokensFullOptions::Bool(true)),
+						},
+					),
+				),
 				moniker_provider: None,
 				workspace_symbol_provider: None,
 				workspace: None,
@@ -109,6 +128,8 @@ impl LanguageServer for MyServer {
 		state.open_file(uri, version, text);
 	}
 
+	/// This event triggers even if the file is modified outside of vscode, so we don't need to actively watch
+	/// files whilst we are running.
 	async fn did_change(&self, mut params: DidChangeTextDocumentParams) {
 		self.client
 			.log_message(
@@ -139,6 +160,27 @@ impl LanguageServer for MyServer {
 			)
 			.await;
 	}
+
+	async fn semantic_tokens_full(
+		&self,
+		params: SemanticTokensParams,
+	) -> Result<Option<SemanticTokensResult>> {
+		let _ = params;
+		self.client
+			.log_message(
+				MessageType::INFO,
+				"Server received 'textDocument/semanticTokens/full' event.",
+			)
+			.await;
+
+		let state = self.state.lock().await;
+		let result = state.provide_semantic_tokens(params.text_document.uri);
+
+		Ok(Some(SemanticTokensResult::Tokens(SemanticTokens {
+			result_id: None,
+			data: result,
+		})))
+	}
 }
 
 #[tokio::main]
@@ -158,21 +200,21 @@ async fn main() {
 /// A source file.
 #[derive(Debug)]
 pub struct File {
-	/// The file url.
+	/// The url of this file.
 	uri: Url,
-	/// The version number since the file was first opened in this session; this number increments on every change.
+	/// The version number of this file.
 	version: i32,
-	/// The file contents.
+	/// Contents of this file.
 	contents: String,
-	/// A character index-to-line conversion table.
+	/// A character-index to line conversion table.
 	///
-	/// - `0` - line number,
-	/// - `1` - character index which starts at the line number.
+	/// - `0` - Line number.
+	/// - `1` - Character index which starts at the line number.
 	lines: Vec<(usize, usize)>,
 }
 
 impl File {
-	/// Constructs a new `File` with the source string.
+	/// Constructs a new file with it's contents.
 	pub fn new(uri: Url, version: i32, contents: String) -> Self {
 		Self {
 			uri,
@@ -182,15 +224,15 @@ impl File {
 		}
 	}
 
-	/// Updates the `File` with new content, and performs any necessary recalculations.
+	/// Updates the files with new content, and performs any necessary recalculations.
 	pub fn update(&mut self, version: i32, contents: String) {
 		self.version = version;
 		self.lines = Self::generate_line_table(&contents);
 		self.contents = contents;
 	}
 
-	/// Converts a [`Span`] to an LSP `Range` type.
-	pub fn span_to_range(&self, span: Span) -> Range {
+	/// Converts a [`Span`] to an LSP [`Range`] type.
+	pub fn span_to_lsp(&self, span: Span) -> Range {
 		let mut start = (0, 0);
 		let mut end = (0, 0);
 
@@ -216,16 +258,23 @@ impl File {
 		}
 	}
 
-	/// Converts an LSP `Position` to an offset position.
-	pub fn position_to_offset(&self, position: Position) -> usize {
+	/// Converts a `Span`'s position to an LSP [`Position`] type.
+	pub fn position_to_lsp(&self, position: usize) -> Position {
+		let mut start = (0, 0);
+		for (a, b) in self.lines.iter().zip(self.lines.iter().skip(1)) {
+			if a.1 <= position && position < b.1 {
+				start = (a.0, position - a.1);
+			}
+		}
+
+		Position::new(start.0 as u32, start.1 as u32)
+	}
+
+	/// Converts an LSP [`Position`] to a `Span`'s position.
+	pub fn position_from_lsp(&self, position: Position) -> usize {
 		let (_, char_offset) = self.lines.get(position.line as usize).unwrap();
 
 		*char_offset + position.character as usize
-	}
-
-	/// Converts an LSP `Range` to a [`Span`] type.
-	pub fn range_to_span(&self, range: Range) -> Span {
-		todo!()
 	}
 
 	fn generate_line_table(contents: &str) -> Vec<(usize, usize)> {

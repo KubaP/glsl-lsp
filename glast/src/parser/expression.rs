@@ -1852,7 +1852,9 @@ impl ShuntingYard {
 					arity_state = Arity::PotentialEnd;
 
 					let prev_op_span = self.get_previous_span();
-					let empty_group = self.just_started_paren();
+					let just_started_paren = self.just_started_paren();
+					let just_started_fn_arr_init =
+						self.just_started_fn_arr_init();
 
 					match self.end_bracket_fn(span) {
 						Ok(_) => {}
@@ -1861,16 +1863,22 @@ impl ShuntingYard {
 						}
 					}
 
-					self.syntax_diags.push(if empty_group {
-						Syntax::Expr(ExprDiag::FoundEmptyParens(
-							Span::new_between(prev_op_span.unwrap(), span),
-						))
+					if just_started_paren {
+						self.syntax_diags.push(Syntax::Expr(
+							ExprDiag::FoundEmptyParens(Span::new(
+								prev_op_span.unwrap().start,
+								span.end,
+							)),
+						));
+					} else if just_started_fn_arr_init {
 					} else {
-						Syntax::Expr(ExprDiag::FoundRParenInsteadOfOperand(
-							prev_op_span.unwrap(),
-							span,
+						self.syntax_diags.push(Syntax::Expr(
+							ExprDiag::FoundRParenInsteadOfOperand(
+								prev_op_span.unwrap(),
+								span,
+							),
 						))
-					});
+					}
 
 					state = State::AfterOperand;
 

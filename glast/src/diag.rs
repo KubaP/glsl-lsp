@@ -91,7 +91,10 @@ pub enum Syntax {
 	///
 	/// - `0` - The span of the keyword.
 	FoundLonelyDefaultKw(Span),
-
+	/// ERROR - Found a block comment that is missing the closing tag (`*/`).
+	///
+	/// - `0` - The position where the closing tag is expected.
+	BlockCommentMissingEnd(Span),
 	/// Diagnostics for the `#version` directive.
 	PreprocVersion(PreprocVersionDiag),
 	/// Diagnostics for the `#extension` directive.
@@ -108,20 +111,9 @@ pub enum Syntax {
 	PreprocTrailingTokens(Span),
 	/// ERROR - Found an illegal preprocessor directive.
 	///
-	/// - `0` - The span of the directive,
+	/// - `0` - The span of the directive.
 	/// - `1` - The initial keyword and it's span, if there is one.
 	FoundIllegalPreproc(Span, Option<Spanned<String>>),
-
-	/// ERROR - Found a block comment that is missing the closing tag.
-	///
-	/// - `0` - The span where the closing tag is expected.
-	BlockCommentMissingEnd(Span),
-}
-
-impl Syntax {
-	pub fn get_severity(&self) -> Severity {
-		Severity::Error
-	}
 }
 
 /// Syntax diagnostics for expressions.
@@ -317,12 +309,6 @@ pub enum ExprDiag {
 	UnclosedArrayConstructor(Span, Span),
 }
 
-impl ExprDiag {
-	pub fn get_severity(&self) -> Severity {
-		Severity::Error
-	}
-}
-
 /// Syntax diagnostics for statement.
 #[derive(Debug)]
 #[non_exhaustive]
@@ -481,9 +467,14 @@ pub enum StmtDiag {
 	///
 	/// - `0` - The span of the statement.
 	StructInvalidStmtInBody(Span),
-	/// ERROR - Did not find an instance ident or a semi-colon after the struct body. E.g. `struct Foo { int i; }`.
+	/// ERROR - Found a struct body that has no statements. E.g. `struct Foo { };`.
 	///
-	/// - `0` - The span where the instance ident or semi-colon is expected.
+	/// - `0` - The span of the body.
+	StructExpectedAtLeastOneStmtInBody(Span),
+	/// ERROR - Did not find an instance identifier or a semi-colon after the struct body. E.g. `struct Foo { int
+	/// i; }`.
+	///
+	/// - `0` - The span of the invalid token(s).
 	StructExpectedInstanceOrSemiAfterBody(Span),
 	/// ERROR - Did not find a semi-colon after the struct body or optional instance ident. E.g. `struct Foo {}`.
 	///
@@ -509,8 +500,12 @@ pub enum StmtDiag {
 	IfExpectedRParenAfterExpr(Span),
 	// ERROR - Did not find an opening brace after the if condition.
 	///
-	/// - `0` - The span where the opening brace is expected.
-	IfExpectedLBraceOrExprAfterCond(Span),
+	/// - `0` - The position where the opening brace or statement is expected.
+	IfExpectedLBraceOrStmtAfterRParen(Span),
+	/// ERROR - Did not find the `if` keyword or an opening brace or a statement after the `else` keyword.
+	///
+	/// - `0` - The position where the keyword or opening brace or statement is expected.
+	IfExpectedIfOrLBraceOrStmtAfterElseKw(Span),
 
 	/* SWITCH */
 	/// ERROR - Did not find an opening parenthesis after the `switch` keyword.
@@ -637,12 +632,6 @@ pub enum StmtDiag {
 	ReturnExpectedSemiAfterExpr(Span),
 }
 
-impl StmtDiag {
-	pub fn get_severity(&self) -> Severity {
-		Severity::Error
-	}
-}
-
 /// Syntax diagnostics for the `#version` directive.
 #[derive(Debug)]
 #[non_exhaustive]
@@ -684,12 +673,6 @@ pub enum PreprocVersionDiag {
 	/// - `0` - The span of the word,
 	/// - `1` - The corrected spelling.
 	InvalidProfileCasing(Span, &'static str),
-}
-
-impl PreprocVersionDiag {
-	pub fn get_severity(&self) -> Severity {
-		Severity::Error
-	}
 }
 
 /// Syntax diagnostics for the `#extension` directive.
@@ -734,12 +717,6 @@ pub enum PreprocExtDiag {
 	InvalidBehaviourCasing(Span, &'static str),
 }
 
-impl PreprocExtDiag {
-	pub fn get_severity(&self) -> Severity {
-		Severity::Error
-	}
-}
-
 /// Syntax diagnostics for the `#line` directive.
 #[derive(Debug)]
 #[non_exhaustive]
@@ -755,12 +732,6 @@ pub enum PreprocLineDiag {
 	InvalidNumber(Span),
 }
 
-impl PreprocLineDiag {
-	pub fn get_severity(&self) -> Severity {
-		Severity::Error
-	}
-}
-
 /// Syntax diagnostics for the `#define` and `#undef` directives.
 #[derive(Debug)]
 #[non_exhaustive]
@@ -770,22 +741,27 @@ pub enum PreprocDefineDiag {
 	///
 	/// - `0` - The span where the macro name is expected.
 	DefineExpectedMacroName(Span),
+	/// ERROR - Did not find a parameter.
+	///
+	/// - `0` - The span of the invalid token.
+	ParamsExpectedParam(Span),
 	/// ERROR - Did not find a comma after a parameter in a macro's parameter list. E.g. `#define fn(foo bar)`.
 	///
-	/// - `0` - The span where the comma is expected.
-	FunctionExpectedCommaAfterParam(Span),
+	/// - `0` - The position where the comma is expected.
+	ParamsExpectedCommaAfterParam(Span),
 	/// ERROR - Did not find a paramater after a comma in a macro's parameter list. E.g. `#define fn(foo, )`.
 	///
 	/// - `0` - The span where the parameter is expected.
-	FunctionExpectedParamAfterComma(Span),
-	/// ERROR - Did not find a parameter between the opening parenthesis and the comma. E.g. `#define fn( , bar)`.
+	ParamsExpectedParamAfterComma(Span),
+	/// ERROR - Did not find a parameter between the opening parenthesis and the comma in a macro's parameter list.
+	/// E.g. `#define fn( , bar)`.
 	///
 	/// - `0` - The span where the parameter is expected.
-	FunctionExpectedParamBetweenParenComma(Span),
-	/// ERROR - Did not find a closing parenthesis. E.g. `#define fn(bar, baz `.
+	ParamsExpectedParamBetweenParenComma(Span),
+	/// ERROR - Did not find a closing parenthesis to a macro's parameter list. E.g. `#define fn(bar, baz `.
 	///
-	/// `0` - The span where the closing parenthesis is expected.
-	FunctionExpectedRParen(Span),
+	/// `0` - The position where the closing parenthesis is expected.
+	ParamsExpectedRParen(Span),
 
 	/* TOKEN CONCAT */
 	/// ERROR - Found a token concatenator (`##`) with no valid token on the left-hand side. E.g.
@@ -809,12 +785,6 @@ pub enum PreprocDefineDiag {
 	UndefExpectedMacroName(Span),
 }
 
-impl PreprocDefineDiag {
-	pub fn get_severity(&self) -> Severity {
-		Severity::Error
-	}
-}
-
 /// Syntax diagnostics for the conditional directives.
 #[derive(Debug)]
 #[non_exhaustive]
@@ -825,6 +795,48 @@ pub enum PreprocConditionalDiag {
 	UnmatchedElse(Span),
 	/// ERROR - Found an unmatched `#endif` directive.
 	UnmatchedEndIf(Span),
+}
+
+impl Syntax {
+	pub fn get_severity(&self) -> Severity {
+		Severity::Error
+	}
+}
+
+impl ExprDiag {
+	pub fn get_severity(&self) -> Severity {
+		Severity::Error
+	}
+}
+
+impl StmtDiag {
+	pub fn get_severity(&self) -> Severity {
+		Severity::Error
+	}
+}
+
+impl PreprocVersionDiag {
+	pub fn get_severity(&self) -> Severity {
+		Severity::Error
+	}
+}
+
+impl PreprocExtDiag {
+	pub fn get_severity(&self) -> Severity {
+		Severity::Error
+	}
+}
+
+impl PreprocLineDiag {
+	pub fn get_severity(&self) -> Severity {
+		Severity::Error
+	}
+}
+
+impl PreprocDefineDiag {
+	pub fn get_severity(&self) -> Severity {
+		Severity::Error
+	}
 }
 
 impl PreprocConditionalDiag {

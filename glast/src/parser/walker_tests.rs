@@ -23,17 +23,17 @@ macro_rules! assert_done {
 }
 macro_rules! register_obj_macro {
 	($walker:expr, $name:expr, $($token:expr),*) => {
-		$walker.register_macro(($name.into(), span(0, 0)), Macro::Object(vec![
+		$walker.register_macro($name.into(), span(0, 0), Macro::Object(vec![
 			$(($token, span(0, 0)))*
 		]));
 	};
 	($walker:expr, $name:expr) => {
-		$walker.register_macro(($name.into(), span(0, 0)), Macro::Object(vec![]));
+		$walker.register_macro($name.into(), span(0, 0), Macro::Object(vec![]));
 	};
 }
 macro_rules! register_fn_macro {
 	($walker:expr, $name:expr, $params:expr, $($token:expr),*) => {
-		$walker.register_macro(($name.into(), span(0, 0)), Macro::Function {
+		$walker.register_macro($name.into(), span(0, 0), Macro::Function {
 			params: $params,
 			body: vec![
 				$(
@@ -42,7 +42,7 @@ macro_rules! register_fn_macro {
 			]});
 	};
 	($walker:expr, $name:expr, $params:expr) => {
-		$walker.register_macro(($name.into(), span(0, 0)), Macro::Function {
+		$walker.register_macro($name.into(), span(0, 0), Macro::Function {
 			params: $params,
 			body: vec![]
 		});

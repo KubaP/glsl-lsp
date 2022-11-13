@@ -59,6 +59,14 @@ impl Semantic {
 			Self::UndefMacroNameUnresolved(_) => Severity::Warning,
 		}
 	}
+
+	/// Returns an error code of a diagnostic. Only error diagnostics will return `Some`.
+	pub fn get_error_code(&self) -> Option<&'static str> {
+		match self {
+			Self::FunctionMacroMismatchedArgCount(_, _) => Some("E001"),
+			_ => None,
+		}
+	}
 }
 
 /// All syntax diagnostics.

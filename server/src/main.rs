@@ -1,3 +1,4 @@
+mod diag;
 mod state;
 mod syntax;
 
@@ -125,7 +126,8 @@ impl LanguageServer for MyServer {
 		}
 
 		let mut state = self.state.lock().await;
-		state.open_file(uri, version, text);
+		state.open_file(uri.clone(), version, text);
+		state.publish_diagnostics(uri, &self.client).await;
 	}
 
 	/// This event triggers even if the file is modified outside of vscode, so we don't need to actively watch
@@ -140,10 +142,13 @@ impl LanguageServer for MyServer {
 
 		let mut state = self.state.lock().await;
 		state.change_file(
-			params.text_document.uri,
+			params.text_document.uri.clone(),
 			params.text_document.version,
 			params.content_changes.remove(0).text,
 		);
+		state
+			.publish_diagnostics(params.text_document.uri, &self.client)
+			.await;
 	}
 
 	async fn did_save(&self, _params: DidSaveTextDocumentParams) {

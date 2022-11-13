@@ -1,8 +1,11 @@
 use crate::File;
 use std::collections::HashMap;
-use tower_lsp::lsp_types::{
-	InitializeParams, PublishDiagnosticsClientCapabilities, SemanticToken,
-	SemanticTokensClientCapabilities, SemanticTokensFullOptions, Url,
+use tower_lsp::{
+	lsp_types::{
+		InitializeParams, PublishDiagnosticsClientCapabilities, SemanticToken,
+		SemanticTokensClientCapabilities, SemanticTokensFullOptions, Url,
+	},
+	Client,
 };
 
 /// The state of support for diagnostic-related functionality, as reported by the client.
@@ -116,8 +119,37 @@ impl State {
 	pub fn change_file(&mut self, uri: Url, version: i32, contents: String) {
 		match self.files.get_mut(&uri) {
 			Some(file) => file.update(version, contents),
-			None => unreachable!("[State::change_file] Received a file `uri: {uri}` which has not been opened yet"),
+			None => unreachable!("[State::change_file] Received a file `uri: {uri}` that has not been opened yet"),
 		}
+	}
+
+	/// Publishes diagnostics for the specified file.
+	pub async fn publish_diagnostics(&self, uri: Url, client: &Client) {
+		if !self.diag_support.enabled {
+			return;
+		}
+
+		let Some(file) = self.files.get(&uri) else {
+			unreachable!("[State::publish_diagnostics] Received a file `uri: {uri}` that has not been opened yet");
+		};
+
+		let (_, syntax, semantic, _) =
+			glast::parser::parse_from_str(&file.contents).root();
+		let mut diags = Vec::new();
+		crate::diag::convert(
+			syntax,
+			semantic,
+			&mut diags,
+			file,
+			self.diag_support.related_information,
+		);
+		client
+			.publish_diagnostics(
+				file.uri.clone(),
+				diags,
+				self.diag_support.versioning.then_some(file.version),
+			)
+			.await;
 	}
 
 	/// Fulfils the `textDocument/semanticTokens/full` request.
@@ -127,7 +159,7 @@ impl State {
 		}
 
 		let Some(file) = self.files.get(&uri) else {
-			unreachable!("[State::provide_semantic_tokens] Received a file `uri: {uri}` which has not been opened yet");
+			unreachable!("[State::provide_semantic_tokens] Received a file `uri: {uri}` that has not been opened yet");
 		};
 
 		let (_, _, _, tokens) =

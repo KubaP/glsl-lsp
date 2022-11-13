@@ -8,7 +8,7 @@ use super::{
 use crate::{
 	diag::{ExprDiag, Semantic, Syntax},
 	lexer::{self, Token},
-	log, Either, Span, Spanned,
+	Either, Span, Spanned,
 };
 use std::collections::VecDeque;
 
@@ -511,10 +511,10 @@ impl ShuntingYard {
 				#[cfg(debug_assertions)]
 				{
 					match op.ty {
-						OpTy::FnCallStart => log!("Mismatch between operator stack (Op::FnCallStart) and group stack (Group::Paren)!"),
-						OpTy::IndexStart => log!("Mismatch between operator stack (Op::IndexStart) and group stack (Group::Paren)!"),
-						OpTy::InitStart => log!("Mismatch between operator stack (Op::InitStart) and group stack (Group::Paren)!"),
-						OpTy::ArrInitStart => log!("Mismatch between operator stack (Op::ArrInitStart) and group stack (Group::Paren)!"),
+						OpTy::FnCallStart => panic!("Mismatch between operator stack (Op::FnCallStart) and group stack (Group::Paren)!"),
+						OpTy::IndexStart => panic!("Mismatch between operator stack (Op::IndexStart) and group stack (Group::Paren)!"),
+						OpTy::InitStart => panic!("Mismatch between operator stack (Op::InitStart) and group stack (Group::Paren)!"),
+						OpTy::ArrInitStart => panic!("Mismatch between operator stack (Op::ArrInitStart) and group stack (Group::Paren)!"),
 						_ => {}
 					}
 				}
@@ -554,10 +554,10 @@ impl ShuntingYard {
 				#[cfg(debug_assertions)]
 				{
 					match op.ty {
-						OpTy::ParenStart => log!("Mismatch between operator stack (Op::ParenStart) and group stack (Group::Fn)!"),
-						OpTy::IndexStart => log!("Mismatch between operator stack (Op::IndexStart) and group stack (Group::Fn)!"),
-						OpTy::InitStart => log!("Mismatch between operator stack (Op::InitStart) and group stack (Group::Fn)!"),
-						OpTy::ArrInitStart => log!("Mismatch between operator stack (Op::ArrInitStart) and group stack (Group::Fn)!"),
+						OpTy::ParenStart => panic!("Mismatch between operator stack (Op::ParenStart) and group stack (Group::Fn)!"),
+						OpTy::IndexStart => panic!("Mismatch between operator stack (Op::IndexStart) and group stack (Group::Fn)!"),
+						OpTy::InitStart => panic!("Mismatch between operator stack (Op::InitStart) and group stack (Group::Fn)!"),
+						OpTy::ArrInitStart => panic!("Mismatch between operator stack (Op::ArrInitStart) and group stack (Group::Fn)!"),
 						_ => {}
 					}
 				}
@@ -599,10 +599,10 @@ impl ShuntingYard {
 				#[cfg(debug_assertions)]
 				{
 					match op .ty{
-						OpTy::ParenStart => log!("Mismatch between operator stack (Op::ParenStart) and group stack (Group::Index)!"),
-						OpTy::FnCallStart => log!("Mismatch between operator stack (Op::FnCallStart) and group stack (Group::Index)!"),
-						OpTy::InitStart=> log!("Mismatch between operator stack (Op::InitStart) and group stack (Group::Index)!"),
-						OpTy::ArrInitStart => log!("Mismatch between operator stack (Op::ArrInitStart) and group stack (Group::Index)!"),
+						OpTy::ParenStart => panic!("Mismatch between operator stack (Op::ParenStart) and group stack (Group::Index)!"),
+						OpTy::FnCallStart => panic!("Mismatch between operator stack (Op::FnCallStart) and group stack (Group::Index)!"),
+						OpTy::InitStart=> panic!("Mismatch between operator stack (Op::InitStart) and group stack (Group::Index)!"),
+						OpTy::ArrInitStart => panic!("Mismatch between operator stack (Op::ArrInitStart) and group stack (Group::Index)!"),
 						_ => {}
 					}
 				}
@@ -642,10 +642,10 @@ impl ShuntingYard {
 				#[cfg(debug_assertions)]
 				{
 					match op.ty {
-						OpTy::ParenStart => log!("Mismatch between operator stack (Op::ParenStart) and group stack (Group::Init)!"),
-						OpTy::IndexStart => log!("Mismatch between operator stack (Op::IndexStart) and group stack (Group::Init)!"),
-						OpTy::FnCallStart => log!("Mismatch between operator stack (Op::FnCallStart) and group stack (Group::Init)!"),
-						OpTy::ArrInitStart => log!("Mismatch between operator stack (Op::ArrInitStart) and group stack (Group::Init)!"),
+						OpTy::ParenStart => panic!("Mismatch between operator stack (Op::ParenStart) and group stack (Group::Init)!"),
+						OpTy::IndexStart => panic!("Mismatch between operator stack (Op::IndexStart) and group stack (Group::Init)!"),
+						OpTy::FnCallStart => panic!("Mismatch between operator stack (Op::FnCallStart) and group stack (Group::Init)!"),
+						OpTy::ArrInitStart => panic!("Mismatch between operator stack (Op::ArrInitStart) and group stack (Group::Init)!"),
 						_ => {}
 					}
 				}
@@ -685,10 +685,10 @@ impl ShuntingYard {
 				#[cfg(debug_assertions)]
 				{
 					match op.ty {
-						OpTy::ParenStart => log!("Mismatch between operator stack (Op::ParenStart) and group stack (Group::ArrInit)!"),
-						OpTy::IndexStart => log!("Mismatch between operator stack (Op::IndexStart) and group stack (Group::ArrInit)!"),
-						OpTy::FnCallStart => log!("Mismatch between operator stack (Op::FnCallStart) and group stack (Group::ArrInit)!"),
-						OpTy::InitStart => log!("Mismatch between operator stack (Op::InitStart) and group stack (Group::ArrInit)!"),
+						OpTy::ParenStart => panic!("Mismatch between operator stack (Op::ParenStart) and group stack (Group::ArrInit)!"),
+						OpTy::IndexStart => panic!("Mismatch between operator stack (Op::IndexStart) and group stack (Group::ArrInit)!"),
+						OpTy::FnCallStart => panic!("Mismatch between operator stack (Op::FnCallStart) and group stack (Group::ArrInit)!"),
+						OpTy::InitStart => panic!("Mismatch between operator stack (Op::InitStart) and group stack (Group::ArrInit)!"),
 						_ => {}
 					}
 				}
@@ -724,9 +724,9 @@ impl ShuntingYard {
 				#[cfg(debug_assertions)]
 				{
 					match op.ty {
-						OpTy::FnCallStart => log!("Mismatch between operator stack (Op::FnCallStart) and group stack (Group::List)!"),
-						OpTy::InitStart => log!("Mismatch between operator stack (Op::InitStart) and group stack (Group::List)!"),
-						OpTy::ArrInitStart => log!("Mismatch between operator stack (Op::ArrInitStart) and group stack (Group::List)!"),
+						OpTy::FnCallStart => panic!("Mismatch between operator stack (Op::FnCallStart) and group stack (Group::List)!"),
+						OpTy::InitStart => panic!("Mismatch between operator stack (Op::InitStart) and group stack (Group::List)!"),
+						OpTy::ArrInitStart => panic!("Mismatch between operator stack (Op::ArrInitStart) and group stack (Group::List)!"),
 						_ => {}
 					}
 				}
@@ -783,7 +783,6 @@ impl ShuntingYard {
 					'inner: while let Some(current_group) = self.groups.back() {
 						match current_group {
 							Group::Init(_, _) => {
-								log!("Unclosed `}}` initializer list found!");
 								let current_group =
 									self.groups.pop_back().unwrap();
 								self.collapse_init(
@@ -795,7 +794,6 @@ impl ShuntingYard {
 								);
 							}
 							Group::Index(_, _) => {
-								log!("Unclosed `]` index operator found!");
 								let current_group =
 									self.groups.pop_back().unwrap();
 								self.collapse_index(
@@ -887,7 +885,6 @@ impl ShuntingYard {
 				'inner: while let Some(current_group) = self.groups.back() {
 					match current_group {
 						Group::Paren(_, _) => {
-							log!("Unclosed `)` parenthesis found!");
 							let current_group = self.groups.pop_back().unwrap();
 							self.collapse_bracket(
 								current_group,
@@ -898,7 +895,6 @@ impl ShuntingYard {
 							);
 						}
 						Group::FnCall(_, _) => {
-							log!("Unclosed `)` function call found!");
 							let current_group = self.groups.pop_back().unwrap();
 							self.collapse_fn(
 								current_group,
@@ -909,7 +905,6 @@ impl ShuntingYard {
 							);
 						}
 						Group::Init(_, _) => {
-							log!("Unclosed `}}` initializer list found!");
 							let current_group = self.groups.pop_back().unwrap();
 							self.collapse_init(
 								current_group,
@@ -920,7 +915,6 @@ impl ShuntingYard {
 							);
 						}
 						Group::ArrInit(_, _) => {
-							log!("Unclosed `)` array constructor found!");
 							let current_group = self.groups.pop_back().unwrap();
 							self.collapse_arr_init(
 								current_group,
@@ -994,7 +988,6 @@ impl ShuntingYard {
 				'inner: while let Some(current_group) = self.groups.back() {
 					match current_group {
 						Group::Paren(_, _) => {
-							log!("Unclosed `)` parenthesis found!");
 							let current_group = self.groups.pop_back().unwrap();
 							self.collapse_bracket(
 								current_group,
@@ -1005,7 +998,6 @@ impl ShuntingYard {
 							);
 						}
 						Group::Index(_, _) => {
-							log!("Unclosed `]` index operator found!");
 							let current_group = self.groups.pop_back().unwrap();
 							self.collapse_index(
 								current_group,
@@ -1013,7 +1005,6 @@ impl ShuntingYard {
 							);
 						}
 						Group::FnCall(_, _) => {
-							log!("Unclosed `)` function call found!");
 							let current_group = self.groups.pop_back().unwrap();
 							self.collapse_fn(
 								current_group,
@@ -1024,7 +1015,6 @@ impl ShuntingYard {
 							);
 						}
 						Group::ArrInit(_, _) => {
-							log!("Unclosed `)` array constructor found!");
 							let current_group = self.groups.pop_back().unwrap();
 							self.collapse_arr_init(
 								current_group,

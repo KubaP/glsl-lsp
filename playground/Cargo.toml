@@ -9,4 +9,4 @@ edition = "2021"
 gl = "0.14.0"
 glutin = "0.28.0"
 notify = "4.0.17"
-glast = { path = "../glast", features = ["logging"] }
+glast = { path = "../glast" }

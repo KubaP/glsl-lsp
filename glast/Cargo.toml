@@ -14,8 +14,3 @@ categories = ["parser-implementations", "rendering"]
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [dependencies]
-
-[features]
-# Debug logging to stdio. It is necessary to feature-gate this because the LSP server communicates over stdin/out,
-# and printing random debug stuff breaks the communication protocol.
-logging = []

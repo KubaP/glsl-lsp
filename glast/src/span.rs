@@ -184,8 +184,9 @@ impl std::fmt::Display for Span {
 
 /// Constructs a new [`Span`] from a start and end position.
 ///
-/// This is just a shorthand for [`Span::new()`], since that becomes a bit verbose to type out again and again
+/// This is just a shorthand for [`Span::new()`], since that becomes a bit verbose to type out again and again,
 /// especially in the unit test assertions.
+#[cfg(test)]
 pub(crate) fn span(start: usize, end: usize) -> Span {
 	Span { start, end }
 }

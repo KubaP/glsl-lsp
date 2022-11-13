@@ -32,10 +32,10 @@
 //! iterating over the [`TokenStream`]. The parsing functions provided in the `parser` module do this for you, but
 //! if you are performing your own manipulation you must perform these checks yourself.
 //!
-//! A potential idea for consideration would be to include the official-spec behaviour behind a flag (i.e. stop
-//! parsing after encountering an error). This is currently not a priority, but if you would like such
-//! functionality please file an issue on the github repository to show interest. An alternative would be to set a
-//! flag in the `Metadata` which signifies whether any errors were encountered.
+//! A potential idea for consideration would be to include the alternate behaviour behind a flag (i.e. stop parsing
+//! after encountering an error). This is currently not a priority, but if you would like such functionality please
+//! file an issue on the github repository to show interest. An alternative would be to set a flag in the
+//! `Metadata` which signifies whether any errors were encountered.
 //!
 //! For a BNF notation of the official lexer grammar, see
 //! [this](https://github.com/KubaP/glsl-lsp/blob/release/glast/docs/lexer_grammar.bnf) file.
@@ -65,7 +65,7 @@ pub type TokenStream = Vec<Spanned<Token>>;
 /// # Examples
 /// Parse a simple GLSL expression:
 /// ```rust
-/// # use glast::token::parse_from_str;
+/// # use glast::lexer::parse_from_str;
 /// let src = r#"
 /// int i = 5.0 + 1;
 /// "#;

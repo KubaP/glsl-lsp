@@ -9,8 +9,8 @@
 //! given diagnostic. Syntax diagnostics only return `Severity::Error`.
 //!
 //! There are a *lot* of individual syntax diagnostics for all sorts of edge cases. This approach was chosen in
-//! order to provide very specific diagnostics without having to hardcode `&'static` strings everywhere. In order
-//! to make the amount more managable, most diagnostics are split into nested enums.
+//! order to provide very specific and precise diagnostics without having to hardcode `&'static` strings
+//! everywhere. In order to make the amount more managable, most diagnostics are split into nested enums.
 
 use crate::{Span, Spanned};
 
@@ -22,6 +22,8 @@ pub enum Severity {
 }
 
 /// All semantic diagnostics.
+///
+/// Error diagnostics also have an associated error code.
 #[derive(Debug)]
 #[non_exhaustive]
 pub enum Semantic {
@@ -34,24 +36,26 @@ pub enum Semantic {
 	///
 	/// - `0` - The span of the call site.
 	EmptyMacroCallSite(Span),
-	/// ERROR - Found a function-like macro call site where the number of arguments doesn't match the number of
-	/// parameters as in the definition.
+	/// E001 - Found a function-like macro call site where the number of arguments doesn't match the number of
+	/// parameters in the definition.
 	///
 	/// - `0` - The span of the call site.
-	FunctionMacroMismatchedArgCount(Span),
-	/// WARNING - The macro name in an undef directive could not be resolved.
+	/// - `1` - The span of the macro definition.
+	FunctionMacroMismatchedArgCount(Span, Span),
+	/// WARNING - The macro name in an `#undef` directive could not be resolved.
 	///
 	/// - `0` - The span of the name.
 	UndefMacroNameUnresolved(Span),
 }
 
 impl Semantic {
+	/// Returns the severity of a diagnostic.
 	pub fn get_severity(&self) -> Severity {
 		match self {
 			Self::EmptyDirective(_) => Severity::Warning,
 			/* MACROS */
 			Self::EmptyMacroCallSite(_) => Severity::Warning,
-			Self::FunctionMacroMismatchedArgCount(_) => Severity::Error,
+			Self::FunctionMacroMismatchedArgCount(_, _) => Severity::Error,
 			Self::UndefMacroNameUnresolved(_) => Severity::Warning,
 		}
 	}
@@ -65,14 +69,14 @@ pub enum Syntax {
 	Expr(ExprDiag),
 	/// Diagnostics for statement.
 	Stmt(StmtDiag),
-	/// ERROR - Found an illegal character.
+	/// ERROR - Found an illegal character that is not part of the GLSL character set.
 	///
-	/// - `0` - The span of the character,
+	/// - `0` - The span of the character.
 	/// - `1` - The character.
 	FoundIllegalChar(Span, char),
 	/// ERROR - Found a reserved keyword.
 	///
-	/// - `0` - The span of the keyword,
+	/// - `0` - The span of the keyword.
 	/// - `1` - The keyword as a string.
 	FoundReservedKw(Span, String),
 	/// ERROR - Found a trailing closing brace that doesn't match-up with an opening brace.
@@ -145,7 +149,7 @@ pub enum ExprDiag {
 	/// Note that this error is not produced if we are within a delimited arity group, e.g. `fn(foo bar)`. In such
 	/// cases [`ExpectedCommaAfterArg`](Self::ExpectedCommaAfterArg) is produced instead.
 	///
-	/// - `0` - The span of the previous operand,
+	/// - `0` - The span of the previous operand.
 	/// - `1` - The span of the current operand.
 	FoundOperandAfterOperand(Span, Span),
 	/// ERROR - In the position that a prefix operator or an operand were expected to occur, we found an operator
@@ -156,7 +160,7 @@ pub enum ExprDiag {
 	/// Layout:
 	/// - `0` - The span of the operator.
 	InvalidPrefixOperator(Span),
-	/// ERROR - In the position that either a binary or postfix operator, or the end-of-expression, were expected
+	/// ERROR - In the position that either a binary or postfix operator or the end-of-expression were expected
 	/// to occur, we found an operator which is only valid as a prefix. E.g.
 	/// - `foo!`
 	/// - `foo~`
@@ -164,21 +168,21 @@ pub enum ExprDiag {
 	/// Layout:
 	/// - `0` - The span of the operator.
 	InvalidBinOrPostOperator(Span),
-	/// ERROR - In the position that either a prefix operator or an operand were expected to occur, we found a dot
-	/// (`.`). E.g.
+	/// ERROR - In the position that either a prefix operator or an operand were expected to occur, we found a dot.
+	/// E.g.
 	/// - `foo + .`
 	/// - `foo.bar(). .`
 	/// - `.`
 	///
 	/// Note that this error is generated if the first token encountered when parsing a new expression is a dot.
 	///
-	/// - `0` - The span of the previous operator (if there is one),
+	/// - `0` - The span of the previous operator, if there is one.
 	/// - `1` - The span of the dot.
 	FoundDotInsteadOfOperand(Option<Span>, Span),
 	/// ERROR - In the position that either a prefix operator or operand were expected to occur, we found a comma.
 	/// E.g. `foo + ,`.
 	///
-	/// - `0` - The span of the previous operator,
+	/// - `0` - The span of the previous operator.
 	/// - `1` - The span of the current comma.
 	FoundCommaInsteadOfOperand(Span, Span),
 	/// ERROR - In the position that either a prefix operator or operand were expected to occur, we found a
@@ -187,19 +191,18 @@ pub enum ExprDiag {
 	/// Note that this error is generated if the first token encountered when parsing a new expression is a
 	/// question mark.
 	///
-	/// - `0` - The span of the previous operator,
+	/// - `0` - The span of the previous operator, if there is one.
 	/// - `1` - The span of the current question mark.
 	FoundQuestionInsteadOfOperand(Option<Span>, Span),
 	/// ERROR - In the position that either a prefix operator or operand were expected to occur, we found a colon.
 	/// E.g. `foo ? bar + :`.
 	///
-	/// Note that this error is generated if the first token encountered when parsing a new expression is a colon
-	/// mark.
+	/// Note that this error is generated if the first token encountered when parsing a new expression is a colon.
 	///
-	/// - `0` - The span of the previous operator,
+	/// - `0` - The span of the previous operator, if there is one.
 	/// - `1` - The span of the current colon.
 	FoundColonInsteadOfOperand(Option<Span>, Span),
-	/// ERROR - Found a [`Token`](crate::lexer::Token) which cannot be part of an expression. E.g. `;`.
+	/// ERROR - Found a [`Token`](crate::lexer::Token) which cannot be part of an expression. E.g. `@`.
 	///
 	/// - `0` - The span of the token.
 	FoundInvalidToken(Span),
@@ -212,7 +215,7 @@ pub enum ExprDiag {
 	/// ERROR - In the position that either a prefix operator or an operand were expected to occur, we found the
 	/// start of an index operator (`[`). E.g. `foo + [`.
 	///
-	/// - `0` - The span of the previous operator (if there is one),
+	/// - `0` - The span of the previous operator, if there is one.
 	/// - `1` - The span of the opening bracket.
 	FoundLBracketInsteadOfOperand(Option<Span>, Span),
 	/// ERROR - In the position that either a prefix operator or an operand were expected to occur, we found a
@@ -220,28 +223,28 @@ pub enum ExprDiag {
 	/// - `(foo + )`
 	/// - `fn(bar - )`
 	///
-	/// Note: This error is not generated if the first token encountered when parsing a new expression is the
+	/// Note that this error is not generated if the first token encountered when parsing a new expression is the
 	/// closing parenthesis.
 	///
-	/// - `0` - The span of the previous operator,
+	/// - `0` - The span of the previous operator.
 	/// - `1` - The span on the closing parenthesis.
 	FoundRParenInsteadOfOperand(Span, Span),
 	/// ERROR - In the position that either a prefix operator or an operand were expected to occur, we found a
 	/// closing bracket (`]`). E.g. `i[5 + ]`.
 	///
-	/// Note: This error is not generated if the first token encountered when parsing a new expression is the
+	/// Note that this error is not generated if the first token encountered when parsing a new expression is the
 	/// closing bracket.
 	///
-	/// - `0` - The span of the previous operator,
+	/// - `0` - The span of the previous operator.
 	/// - `1` - The span of the closing parenthesis.
 	FoundRBracketInsteadOfOperand(Span, Span),
 	/// ERROR - In the position that either a prefix operator or an operand were expected to occur, we found a
 	/// closing brace (`}`). E.g. `{foo + }`.
 	///
-	/// Note: This error is not generated if the first token encountered when parsing a new expression is the
+	/// Note that this error is not generated if the first token encountered when parsing a new expression is the
 	/// closing brace.
 	///
-	/// - `0` - The span of the previous operator,
+	/// - `0` - The span of the previous operator.
 	/// - `1` - The span on the closing brace.
 	FoundRBraceInsteadOfOperand(Span, Span),
 
@@ -282,29 +285,29 @@ pub enum ExprDiag {
 	ExpectedExprBeforeComma(Span),
 
 	/* UNCLOSED GROUPS */
-	/// ERROR - Found an unclosed set of parenthesis, e.g. `(...`.
+	/// ERROR - Found an unclosed set of parenthesis. E.g. `(...`.
 	///
-	/// - `0` - The span of the opening `(`,
+	/// - `0` - The span of the opening `(`.
 	/// - `1` - The zero-width span at the end of the expression.
 	UnclosedParens(Span, Span),
-	/// ERROR - Found an unclosed index operator, e.g. `i[...`.
+	/// ERROR - Found an unclosed index operator. E.g. `i[...`.
 	///
-	/// - `0` - The span of the opening `[`,
+	/// - `0` - The span of the opening `[`.
 	/// - `1` - The zero-width span at the end of the expression.
 	UnclosedIndexOperator(Span, Span),
-	/// ERROR - Found an unclosed function call, e.g. `fn(...`.
+	/// ERROR - Found an unclosed function call. E.g. `fn(...`.
 	///
-	/// - `0` - The span of the opening `(`,
+	/// - `0` - The span of the opening `(`.
 	/// - `1` - The zero-width span at the end of the expression.
 	UnclosedFunctionCall(Span, Span),
-	/// ERROR - Found an unclosed initializer list, e.g. `{...`.
+	/// ERROR - Found an unclosed initializer list. E.g. `{...`.
 	///
-	/// - `0` - The span of the opening `{`,
+	/// - `0` - The span of the opening `{`.
 	/// - `1` - The zero-width span at the end of the expression.
 	UnclosedInitializerList(Span, Span),
-	/// ERROR - Found an unclosed array constructor, e.g. `int[](...`.
+	/// ERROR - Found an unclosed array constructor. E.g. `int[](...`.
 	///
-	/// - `0` - The span of the opening `(`,
+	/// - `0` - The span of the opening `(`.
 	/// - `1` - The zero-width span at the end of the expression.
 	UnclosedArrayConstructor(Span, Span),
 }
@@ -313,19 +316,19 @@ pub enum ExprDiag {
 #[derive(Debug)]
 #[non_exhaustive]
 pub enum StmtDiag {
-	/// ERROR - Did not find a semi-colon after an expression (to make it into a valid expression statement).
+	/// ERROR - Did not find a semi-colon after an expression, (to make it into a valid expression statement).
 	///
-	/// - `0` - The span where the semi-colon is expected.
+	/// - `0` - The position where the semi-colon is expected.
 	ExprStmtExpectedSemiAfterExpr(Span),
 	/// ERROR - Did not find a closing brace to finish a scope.
 	///
 	/// - `0` - The span of the scope's opening brace.
-	/// - `1` - The span where the closing brace is expected.
+	/// - `1` - The position where the closing brace is expected.
 	ScopeMissingRBrace(Span, Span),
 	/// ERROR - Found one or more qualifiers before a statement which cannot be preceded by qualifiers. E.g. `const
 	/// return;`.
 	///
-	/// - `0` - The span of the qualifiers.
+	/// - `0` - The span of the qualifier(s).
 	FoundQualifiersBeforeStmt(Span),
 
 	/* QUALIFIERS */
@@ -365,21 +368,21 @@ pub enum StmtDiag {
 	/* VARIABLES */
 	/// ERROR - Did not find a semi-colon or an equals-sign after the identifiers in a variable definition.
 	///
-	/// - `0` - The span where the semi-colon or equals-sign is expected.
+	/// - `0` - The position where the semi-colon or equals-sign is expected.
 	VarDefExpectedSemiOrEqAfterIdents(Span),
 	/// ERROR - Did not find a value expression after the equals-sign in a variable definition with initialization.
 	///
-	/// - `0` - The span where the expression is expected.
+	/// - `0` - The position where the expression is expected.
 	VarDefInitExpectedValueAfterEq(Span),
 	/// ERROR - Did not find a semi-colon after the value expression in a variable definition with initialization.
 	///
-	/// - `0` - The span where the semi-colon is expected.
+	/// - `0` - The position where the semi-colon is expected.
 	VarDefInitExpectedSemiAfterValue(Span),
 
 	/* FUNCTIONS */
 	/// ERROR - Did not find a comma after a parameter in a function's parameter list. E.g. `void fn(foo bar)`.
 	///
-	/// - `0` - The span where the comma is expected.
+	/// - `0` - The position where the comma is expected.
 	ParamsExpectedCommaAfterParam(Span),
 	/// ERROR - Did not find a paramater after a comma in a function's parameter list. E.g. `void fn(foo, )`.
 	///
@@ -403,23 +406,23 @@ pub enum StmtDiag {
 	ParamsExpectedRParen(Span),
 	/// ERROR - Did not find either a semi-colon or an opening brace after the parameter list. E.g. `void fn()`.
 	///
-	/// - `0` - The span where the semi-colon or opening brace is expected.
+	/// - `0` - The position where the semi-colon or opening brace is expected.
 	FnExpectedSemiOrLBraceAfterParams(Span),
 
 	/* SUBROUTINES */
 	/// ERROR - Did not find a variable definition after the `uniform` keyword in a subroutine definition. E.g.
 	/// `subroutine uniform struct;`.
 	///
-	/// - `0` - The span where the variable definition is expected.
+	/// - `0` - The position where the variable definition is expected.
 	SubroutineExpectedVarDefAfterUniformKw(Span),
 	/// ERROR - Did not find either a subroutine type declaration, an associated function definition, or a uniform
 	/// definition after the `subroutine` keyword. E.g. `subroutine struct Bar...`.
 	///
-	/// - `0` - The span where either of the options is expected.
+	/// - `0` - The position where either of the options is expected.
 	SubroutineExpectedTypeFuncUniformAfterKw(Span),
 	/// ERROR - Did not find a comma after an ident in a subroutine's associated list. E.g. `subroutine(foo bar)`.
 	///
-	/// - `0` - The span where the comma is expected.
+	/// - `0` - The position where the comma is expected.
 	SubroutineAssociatedListExpectedCommaAfterIdent(Span),
 	/// ERROR - Did not find an ident after a comma in a subroutines's associated list. E.g. `subroutine(foo, )`.
 	///
@@ -431,7 +434,7 @@ pub enum StmtDiag {
 	SubroutineAssociatedListExpectedIdentBetweenParenComma(Span),
 	/// ERROR - Did not find a closing parenthesis to close the associated subroutines list. E.g. `subroutine(foo`.
 	///
-	/// - `0` - The span where the closing parenthesis is expected.
+	/// - `0` - The position where the closing parenthesis is expected.
 	SubroutineAssociatedListExpectedRParen(Span),
 	/// ERROR - Did not find a function definition after an associated subroutines list. E.g. `subroutine(foo,
 	/// bar) struct`.
@@ -446,7 +449,7 @@ pub enum StmtDiag {
 	/// ERROR - Did not find a list of associations in a subroutine associated function definition. E.g.
 	/// `subroutine int foo_1(int i) {}`.
 	///
-	/// - `0` - The span where the associations are expected.
+	/// - `0` - The span where the associated-list are expected.
 	SubroutineMissingAssociationsForFnDef(Span),
 	/// ERROR - Did not find the `uniform` keyword in a subroutine uniform definition. E.g. `subroutine foo
 	/// my_foo;`.
@@ -455,13 +458,13 @@ pub enum StmtDiag {
 	SubroutineMissingUniformKwForUniformDef(Span),
 
 	/* STRUCTS */
-	/// ERROR - Did not find an identifier after the `struct` keyword. E.g. `struct;`.
+	/// ERROR - Did not find an identifier after the `struct` keyword.
 	///
-	/// - `0` - The span where the ident is expected.
+	/// - `0` - The span of the invalid token(s) or the position where the ident should be inserted.
 	StructExpectedIdentAfterKw(Span),
-	/// ERROR - Did not find an opening brace after the ident. E.g. `struct Foo`.
+	/// ERROR - Did not find an opening brace after the ident.
 	///
-	/// - `0` - The span where the opening brace is expected.
+	/// - `0` - The position where the opening brace should be inserted.
 	StructExpectedLBraceAfterIdent(Span),
 	/// ERROR - Found a statement within the struct body that is invalid. E.g. `struct Foo { return; };`.
 	///
@@ -478,27 +481,27 @@ pub enum StmtDiag {
 	StructExpectedInstanceOrSemiAfterBody(Span),
 	/// ERROR - Did not find a semi-colon after the struct body or optional instance ident. E.g. `struct Foo {}`.
 	///
-	/// - `0` - The span where the semi-colon is expected.
+	/// - `0` - The position where the semi-colon should be inserted.
 	StructExpectedSemiAfterBodyOrInstance(Span),
-	/// ERROR - Found a struct declaration which is not a valid GLSL statement. E.g. `struct Foo;`.
+	/// ERROR - Found a struct declaration, which is not a legal GLSL statement. E.g. `struct Foo;`.
 	///
 	/// - `0` - The span of the declaration.
-	StructDeclIsInvalid(Span),
+	StructDeclIsIllegal(Span),
 
-	/* IF */
+	/* IF STATEMENTS */
 	/// ERROR - Did not find an opening parenthesis after the `if` keyword.
 	///
-	/// - `0` - The span where the opening parenthesis is expected.
+	/// - `0` - The position where the opening parenthesis is expected.
 	IfExpectedLParenAfterKw(Span),
 	/// ERROR - Did not find an expression after the opening parenthesis.
 	///
-	/// - `0` - The span where the expression is expected.
+	/// - `0` - The position where the expression is expected.
 	IfExpectedExprAfterLParen(Span),
 	/// ERROR - Did not find a closing parenthesis after the expression.
 	///
-	/// - `0` - The span where the closing parenthesis is expected.
+	/// - `0` - The position where the closing parenthesis is expected.
 	IfExpectedRParenAfterExpr(Span),
-	// ERROR - Did not find an opening brace after the if condition.
+	/// ERROR - Did not find an opening brace or a statement after the if/else-if-condition header.
 	///
 	/// - `0` - The position where the opening brace or statement is expected.
 	IfExpectedLBraceOrStmtAfterRParen(Span),
@@ -507,22 +510,22 @@ pub enum StmtDiag {
 	/// - `0` - The position where the keyword or opening brace or statement is expected.
 	IfExpectedIfOrLBraceOrStmtAfterElseKw(Span),
 
-	/* SWITCH */
+	/* SWITCH STATEMENTS */
 	/// ERROR - Did not find an opening parenthesis after the `switch` keyword.
 	///
-	/// - `0` - The span where the opening parenthesis is expected.
+	/// - `0` - The position where the opening parenthesis is expected.
 	SwitchExpectedLParenAfterKw(Span),
 	/// ERROR - Did not find an expression after the opening parenthesis.
 	///
-	/// - `0` - The span where the expression is expected.
+	/// - `0` - The position where the expression is expected.
 	SwitchExpectedExprAfterLParen(Span),
 	/// ERROR - Did not find a closing parenthesis after the expression.
 	///
-	/// - `0` - The span where the closing parenthesis is expected.
+	/// - `0` - The position where the closing parenthesis is expected.
 	SwitchExpectedRParenAfterExpr(Span),
 	/// ERROR - Did not find an opening brace after the switch condition.
 	///
-	/// - `0` - The span where the opening brace is expected.
+	/// - `0` - The position where the opening brace is expected.
 	SwitchExpectedLBraceAfterCond(Span),
 	/// ERROR - Found a switch body which is empty.
 	///
@@ -534,101 +537,101 @@ pub enum StmtDiag {
 	SwitchExpectedCaseOrDefaultKwOrEnd(Span),
 	/// ERROR - Did not find an expression after the `case` keyword.
 	///
-	/// - `0` - The span where the expression is expected.
+	/// - `0` - The position where the expression is expected.
 	SwitchExpectedExprAfterCaseKw(Span),
 	/// ERROR - Did not find a colon after the case expression.
 	///
-	/// - `0` - The span where the colon is expected.
+	/// - `0` - The position where the colon is expected.
 	SwitchExpectedColonAfterCaseExpr(Span),
 	/// ERROR - Did not find a colon after the `default` keyword.
 	///
-	/// - `0` - The span where the colon is expected.
+	/// - `0` - The position where the colon is expected.
 	SwitchExpectedColonAfterDefaultKw(Span),
 	/// ERROR - Did not find a closing brace at the end of the body.
 	///
-	/// - `0` - The span where the brace is expected.
+	/// - `0` - The position where the brace is expected.
 	SwitchExpectedRBrace(Span),
 
 	/* FOR LOOPS */
 	/// ERROR - Did not find an opening parenthesis after the `for` keyword.
 	///
-	/// - `0` - The span where the opening parenthesis is expected.
+	/// - `0` - The position where the opening parenthesis is expected.
 	ForExpectedLParenAfterKw(Span),
 	/// ERROR - Did not find an initialization statement after the opening parenthesis.
 	///
-	/// - `0` - The span where the statement is expected.
+	/// - `0` - The position where the statement is expected.
 	ForExpectedInitStmt(Span),
 	/// ERROR - Did not find a conditional statement after the opening parenthesis.
 	///
-	/// - `0` - The span where the statement is expected.
+	/// - `0` - The position where the statement is expected.
 	ForExpectedCondStmt(Span),
 	/// ERROR - Did not find an increment statement after the opening parenthesis.
 	///
-	/// - `0` - The span where the statement is expected.
+	/// - `0` - The position where the statement is expected.
 	ForExpectedIncStmt(Span),
-	/// ERROR - Did not find all 3 statements before reaching the closing parenthesis.
+	/// ERROR - Did not find 3 statements before reaching the closing parenthesis.
 	///
-	/// - `0` - The span where the statements were expected.
+	/// - `0` - The span of the early closing parenthesis.
 	ForExpected3Stmts(Span),
 	/// ERROR - Did not find a closing parenthesis after the 3 statements.
 	///
-	/// - `0` - The span where the closing parenthesis is expected.
+	/// - `0` - The position where the closing parenthesis is expected.
 	ForExpectedRParenAfterStmts(Span),
-	/// ERROR - Did not find an opening brace after the for header.
+	/// ERROR - Did not find an opening brace after the for-loop header.
 	///
-	/// - `0` - The span where the opening brace is expected.
+	/// - `0` - The position where the opening brace is expected.
 	ForExpectedLBraceAfterHeader(Span),
 
-	/* DO/WHILE LOOPS */
+	/* WHILE/DO-WHILE LOOPS */
 	/// ERROR - Did not find an opening parenthesis after the `while` keyword.
 	///
-	/// - `0` - The span where the opening parenthesis is expected.
+	/// - `0` - The position where the opening parenthesis is expected.
 	WhileExpectedLParenAfterKw(Span),
 	/// ERROR - Did not find an expression after the opening parenthesis.
 	///
-	/// - `0` - The span where the expression is expected.
+	/// - `0` - The position where the expression is expected.
 	WhileExpectedExprAfterLParen(Span),
 	/// ERROR - Did not find a closing parenthesis after the expression.
 	///
-	/// - `0` - The span where the closing parenthesis is expected.
+	/// - `0` - The position where the closing parenthesis is expected.
 	WhileExpectedRParenAfterExpr(Span),
 	/// ERROR - Did not find an opening brace after the while-loop condition.
 	///
-	/// - `0` - The span where the opening brace is expected.
+	/// - `0` - The position where the opening brace is expected.
 	WhileExpectedLBraceAfterCond(Span),
 	/// ERROR - Did not find an opening brace after the `do` keyword.
 	///
-	/// - `0` - The span where the opening brace is expected.
+	/// - `0` - The position where the opening brace is expected.
 	DoWhileExpectedLBraceAfterKw(Span),
 	/// ERROR - Did not find the `while` keyword after the body of a do-while loop.
 	///
-	/// - `0` - The span where the keyword is expected.
+	/// - `0` - The position where the keyword is expected.
 	DoWhileExpectedWhileAfterBody(Span),
-	/// ERROR - Did not find a semi-colon after the do-while-loop condition.
+	/// ERROR - Did not find a semi-colon after the do-while-loop.
 	///
-	/// - `0` - The span where the semi-colon is expected.
+	/// - `0` - The position where the semi-colon is expected.
 	DoWhileExpectedSemiAfterRParen(Span),
 
 	/* SINGLE-KEYWORD CONTROL FLOW */
 	/// ERROR - Did not find a semi-colon after the `break` keyword.
 	///
-	/// - `0` - The span where the semi-colon is expected.
+	/// - `0` - The position where the semi-colon is expected.
 	BreakExpectedSemiAfterKw(Span),
 	/// ERROR - Did not find a semi-colon after the `continue` keyword.
 	///
-	/// - `0` - The span where the semi-colon is expected.
+	/// - `0` - The position where the semi-colon is expected.
 	ContinueExpectedSemiAfterKw(Span),
 	/// ERROR - Did not find a semi-colon after the `discar` keyword.
 	///
-	/// - `0` - The span where the semi-colon is expected.
+	/// - `0` - The position where the semi-colon is expected.
 	DiscardExpectedSemiAfterKw(Span),
 	/// ERROR - Did not find a semi-colon or an expression after the `return` keyword.
 	///
-	/// - `0` - The span where the semi-colon or expression is expected.
+	/// - `0` - The position where the semi-colon or expression is expected.
 	ReturnExpectedSemiOrExprAfterKw(Span),
 	/// ERROR - Did not find a semi-colon after the `return` expression.
 	///
-	/// - `0` - The span where the semi-colon is expected.
+	/// - `0` - The position where the semi-colon is expected.
 	ReturnExpectedSemiAfterExpr(Span),
 }
 
@@ -638,39 +641,39 @@ pub enum StmtDiag {
 pub enum PreprocVersionDiag {
 	/// ERROR - Did not find a number after the `version` keyword.
 	///
-	/// - `0` - The span of the incorrect token or the position where the number should be inserted.
+	/// - `0` - The span of the incorrect token or the position where the number is expected.
 	ExpectedNumber(Span),
 	/// ERROR - Did not find a number after the `version` keyword, but did find a profile. E.g. `#version core`.
 	///
 	/// - `0` - The span between the keyword and profile.
 	MissingNumberBetweenKwAndProfile(Span),
-	/// ERROR - Found a number-like token which can't be successfully parsed as a number for the version. E.g.
-	/// `#version 19617527`.
+	/// ERROR - Found a number-like token that can't be successfully parsed as a version number. E.g. `#version
+	/// 1961752700000000000`.
 	///
 	/// - `0` - The span of the number-like token.
 	InvalidNumber(Span),
-	/// ERROR - Found a version number that is not a valid GLSL version. E.g. `#version 480`.
+	/// ERROR - Found a number that can't be parsed as a valid GLSL version. E.g. `#version 480`.
 	///
-	/// - `0` - The span of the nubmer,
+	/// - `0` - The span of the number.
 	/// - `1` - The number.
 	InvalidVersion(Span, usize),
-	/// ERROR - Found a version number that is not currently supported by this crate. E.g. `#version 300`.
+	/// ERROR - Found a GLSL version number that is not currently supported by this crate. E.g. `#version 300`.
 	///
-	/// - `0` - The span of the number,
+	/// - `0` - The span of the number.
 	/// - `1` - The number.
 	UnsupportedVersion(Span, usize),
 	/// ERROR - Did not find a profile after the version number.
 	///
-	/// - `0` - The span of the incorrect token or the position where the profile should be inserted.
+	/// - `0` - The span of the incorrect token or the position where the profile is expected.
 	ExpectedProfile(Span),
-	/// ERROR - Found a word token that isn't a valid profile. E.g. `#version 450 foobar`.
+	/// ERROR - Found a word that can't be parsed as a valid profile. E.g. `#version 450 foobar`.
 	///
 	/// - `0` - The span of the word.
 	InvalidProfile(Span),
-	/// ERROR - Found a word token that would be a valid profile with the correct capitalization. E.g. `#version
+	/// ERROR - Found a word that would be a valid profile with the correct capitalization. E.g. `#version
 	/// 450 CoRe`.
 	///
-	/// - `0` - The span of the word,
+	/// - `0` - The span of the word.
 	/// - `1` - The corrected spelling.
 	InvalidProfileCasing(Span, &'static str),
 }
@@ -679,16 +682,16 @@ pub enum PreprocVersionDiag {
 #[derive(Debug)]
 #[non_exhaustive]
 pub enum PreprocExtDiag {
-	/// ERROR - Did not find an extension name after the `extension` keyword.
+	/// ERROR - Did not find a name after the `extension` keyword.
 	///
-	/// - `0` - The span of the incorrect token or the position where the name should be inserted.
+	/// - `0` - The span of the incorrect token or the position where the name is expected.
 	ExpectedName(Span),
 	/// ERROR - Did not find a name after the `extension` keyword, but did find a colon. E.g. `#extension :
 	/// enable`.
 	///
 	/// - `0` - The span between the keyword and colon.
 	MissingNameBetweenKwAndColon(Span),
-	/// ERROR - Did not find a number after the `extension` keyword, but did find a behaviour. E.g. `#extension
+	/// ERROR - Did not find a name after the `extension` keyword, but did find a behaviour. E.g. `#extension
 	/// enable`.
 	///
 	/// - `0` - The span between the keyword and behaviour.
@@ -699,20 +702,20 @@ pub enum PreprocExtDiag {
 	MissingColonBetweenNameAndBehaviour(Span),
 	/// ERROR - Did not find a colon after the extension name.
 	///
-	/// - `0` - The span of the incorrect token or the position where the colon should be inserted.
+	/// - `0` - The span of the incorrect token or the position where the colon is expected.
 	ExpectedColon(Span),
 	/// ERROR - Did not find a behaviour after the colon.
 	///
-	/// - `0` - The span of the incorrect token or the position where the behaviour should be inserted.
+	/// - `0` - The span of the incorrect token or the position where the behaviour is expected.
 	ExpectedBehaviour(Span),
-	/// ERROR - Found a word token that isn't a valid behaviour. E.g. `#extension all : foobar`.
+	/// ERROR - Found a word that can't be parsed as a valid behaviour. E.g. `#extension all : foobar`.
 	///
 	/// - `0` - The span of the word.
 	InvalidBehaviour(Span),
-	/// ERROR - Found a word token that would be a valid behaviour with the correct capitalization. E.g. `#extension
-	/// all : EnAbLe`.
+	/// ERROR - Found a word that would be a valid behaviour with the correct capitalization. E.g.
+	/// `#extension all : EnAbLe`.
 	///
-	/// - `0` - The span of the word,
+	/// - `0` - The span of the word.
 	/// - `1` - The corrected spelling.
 	InvalidBehaviourCasing(Span, &'static str),
 }
@@ -723,9 +726,9 @@ pub enum PreprocExtDiag {
 pub enum PreprocLineDiag {
 	/// ERROR - Did not find a number after the `line` keyword.
 	///
-	/// - `0` - The span of the incorrect token or the position where the number should be inserted.
+	/// - `0` - The span of the incorrect token or the position where the number is expected.
 	ExpectedNumber(Span),
-	/// ERROR - Found a number-like token which can't be successfully parsed as a line number. E.g.
+	/// ERROR - Found a number-like token that can't be successfully parsed as a line number. E.g.
 	/// `#line 100000000000000000000`.
 	///
 	/// - `0` - The span of the number-like token.
@@ -739,7 +742,7 @@ pub enum PreprocDefineDiag {
 	/* DEFINE */
 	/// ERROR - Did not find an identifier token after the `define` keyword.
 	///
-	/// - `0` - The span where the macro name is expected.
+	/// - `0` - The position where the macro name is expected.
 	DefineExpectedMacroName(Span),
 	/// ERROR - Did not find a parameter.
 	///
@@ -764,24 +767,26 @@ pub enum PreprocDefineDiag {
 	ParamsExpectedRParen(Span),
 
 	/* TOKEN CONCAT */
-	/// ERROR - Found a token concatenator (`##`) with no valid token on the left-hand side. E.g.
+	/// ERROR - Found a token concatenation operator (`##`) with no valid token on the left-hand side. E.g.
 	/// ```c
 	/// #define FOO ## 0
 	/// ```
+	///
 	/// - `0` - The span of the operator.
 	TokenConcatMissingLHS(Span),
-	/// ERROR - Found a token concatenator (`##`) with no valid token on the right-hand side. E.g.
+	/// ERROR - Found a token concatenation operator (`##`) with no valid token on the right-hand side. E.g.
 	/// ```c
 	/// #define FOO 500 ##
 	/// #define FOO 90 ## ## 00
 	/// ```
+	///
 	/// - `0` - The span of the operator.
 	TokenConcatMissingRHS(Span),
 
 	/* UNDEF */
 	/// ERROR - Did not find an identifier token after the `undef` keyword.
 	///
-	/// - `0` - The span where the macro name is expected.
+	/// - `0` - The span of the incorrect token or the position where the macro name should be inserted.
 	UndefExpectedMacroName(Span),
 }
 
@@ -790,10 +795,16 @@ pub enum PreprocDefineDiag {
 #[non_exhaustive]
 pub enum PreprocConditionalDiag {
 	/// ERROR - Found an unmatched `#elif` directive.
+	///
+	/// - `0` - The span of the directive.
 	UnmatchedElseIf(Span),
 	/// ERROR - Found an unmatched `#else` directive.
+	///
+	/// - `0` - The span of the directive.
 	UnmatchedElse(Span),
 	/// ERROR - Found an unmatched `#endif` directive.
+	///
+	/// - `0` - The span of the directive.
 	UnmatchedEndIf(Span),
 }
 

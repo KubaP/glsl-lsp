@@ -1,7 +1,7 @@
 //! Types and functionality related to the parser.
 //!
 //! This module contains the structs and enums used to represent the AST, and the
-//! [`parse_from_str()`]/[`parse_from_token_stream()`] functions which return a [`TokenTree`], which can be used to
+//! [`parse_from_str()`]/[`parse_from_token_stream()`] functions that return a [`TokenTree`], which can be used to
 //! parse the tokens into an abstract syntax tree ([`ParseResult`]). The [`ast`] submodule contains the AST types
 //! themselves. There is also the [`SyntaxToken`] type used to represent syntax highlighting spans.
 
@@ -117,7 +117,7 @@ pub enum ParseErr {
 /// - `[6, 7]` will produce: `foo EEE 100 bar`.
 /// - `[1, 2, 6, 7]` will produce: `foo AAA 50 BBB EEE 100 bar`.
 ///
-/// ## Order by nesting
+/// ## Order by nesting (Not implemented yet)
 /// Each encountered group of conditions (an `ifdef`/`ifndef`/`if` - `elif`/`else` - `endif`) creates a newly
 /// nested group. Within each group the individual conditions are numbered by order of appearance from 0. You pass
 /// slices of numbers that denote which conditions to enable into the
@@ -140,7 +140,7 @@ pub enum ParseErr {
 /// int i = 5.0 + 1;
 /// "#;
 /// let trees = parse_from_str(&src);
-/// let (ast, _, _) = trees.root();
+/// let (ast, _, _, _) = trees.root();
 /// ```
 ///
 /// # Further reading

@@ -8,7 +8,7 @@
 //! - [`Omittable`] - A type representing optional grammar elements.
 //!
 //! In general, types are laid out as follows:
-//! ```
+//! ```ignore
 //! pub struct _LangFeature_ {
 //!     /// The specific type of this node.
 //!     pub ty: _LangFeature_Ty,

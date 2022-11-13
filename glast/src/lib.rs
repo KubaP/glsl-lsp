@@ -1,11 +1,10 @@
 //! *glast* is a crate for parsing and manipulating **gl**sl **a**bstract **s**yntax **t**rees, and a lot more.
 //!
-//! ⚠ This crate is still heavily **work-in-progress**. It can't correctly deal with all GLSL 4.50/4.60 language
-//! constructs yet. ⚠
+//! ⚠ This crate is still heavily **work-in-progress**. ⚠
 //!
 //! This crate is split into modules representing the different stages of parsing/manipulation:
-//! - [`lexer`] - All things related to the lexer.
-//! - [`parser`] - All things related to the parser.
+//! - [`lexer`] - Lexer and the token stream.
+//! - [`parser`] - Parser and the AST.
 //! - `analyzer` - AST analysis, such as name resolution (⚠ Currently unimplemented).
 //!
 //! You can invoke a specific parsing stage individually, such as calling
@@ -40,8 +39,12 @@
 //!
 //! ### Parser
 //! This is the next transformation in the parsing pipeline, and it converts the tokenstream into a tree that only
-//! contains semantic information, loosing things like irrelevant punctuation symbols or comments. The tokenstream
-//! would become (in pseudocode):
+//! contains semantic information, loosing things like irrelevant punctuation symbols or comments.
+//!
+//! Firstly, conditional compilation is applied to the token stream. Then, the resulting tokenstream is parsed,
+//! expanding any macros in the process.
+//!
+//! The tokenstream would become (in pseudocode):
 //! ```text
 //! VariableDeclaration {
 //!     type: Primitive.Int,
@@ -53,6 +56,10 @@
 //!     }
 //! }
 //! ```
+//!
+//! ### Analyzer
+//! This is the final stage of the parsing pipeline, and includes actions such as name resolution and
+//! type-checking. ⚠ This module is NOT YET IMPLEMENTED
 
 pub mod diag;
 pub mod lexer;

@@ -2646,8 +2646,10 @@ fn parse_function(
 		}
 		let param_span_start = token_span.start;
 
+		let qualifiers = try_parse_qualifiers(walker);
+
 		// Consume the type.
-		let type_ = match expr_parser(
+		let mut type_ = match expr_parser(
 			walker,
 			Mode::TakeOneUnit,
 			[Token::Semi, Token::LBrace],
@@ -2716,6 +2718,7 @@ fn parse_function(
 			(None, _, _, _) => {
 				// We have a first expression and then something that is not an expression. We treat this as an
 				// anonymous parameter, whatever the current token is will be dealt with in the next iteration.
+				type_.qualifiers = qualifiers;
 				let param_span = Span::new(param_span_start, type_.span.end);
 				params.push(Param {
 					span: param_span,
@@ -2738,6 +2741,7 @@ fn parse_function(
 			// to an identifier for the parameter. We treat the first type expression as an anonymous parameter,
 			// and the second expression as invalid.
 			let param_span = Span::new(param_span_start, type_.span.end);
+			type_.qualifiers = qualifiers;
 			params.push(Param {
 				span: Span::new(param_span_start, type_.span.end),
 				type_,
@@ -2754,6 +2758,7 @@ fn parse_function(
 			continue;
 		};
 
+		type_.qualifiers = qualifiers;
 		let (type_, ident) =
 			combine_type_with_idents(type_, ident_info).remove(0);
 		let param_span = Span::new(param_span_start, ident_span.end);

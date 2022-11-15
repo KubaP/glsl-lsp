@@ -1791,7 +1791,7 @@ fn try_parse_qualifiers(walker: &mut Walker) -> Vec<Qualifier> {
 				let mut prev = Prev::None;
 				let mut prev_span = l_paren_span;
 				let mut layouts = Vec::new();
-				loop {
+				let r_paren_span = loop {
 					let (token, token_span) = match walker.get() {
 						Some(t) => t,
 						None => {
@@ -1845,7 +1845,7 @@ fn try_parse_qualifiers(walker: &mut Walker) -> Vec<Qualifier> {
 								SyntaxToken::Punctuation,
 							);
 							walker.advance();
-							break;
+							break token_span;
 						}
 						_ => {}
 					}
@@ -2075,8 +2075,12 @@ fn try_parse_qualifiers(walker: &mut Walker) -> Vec<Qualifier> {
 						span: Span::new(layout_span_start, value_expr.span.end),
 						ty: constructor(Some(value_expr)),
 					});
-				}
+				};
 
+				qualifiers.push(Qualifier {
+					span: Span::new(kw_span.start, r_paren_span.end),
+					ty: QualifierTy::Layout(layouts),
+				});
 				continue;
 			}
 			_ => break,
@@ -4296,11 +4300,12 @@ fn parse_for_loop(walker: &mut Walker, nodes: &mut Vec<Node>, kw_span: Span) {
 			}
 		}
 
+		let qualifiers = try_parse_qualifiers(walker);
 		let mut stmt = Vec::new();
 		try_parse_definition_declaration_expr(
 			walker,
 			&mut stmt,
-			vec![],
+			qualifiers,
 			counter == 2,
 		);
 
@@ -4312,8 +4317,8 @@ fn parse_for_loop(walker: &mut Walker, nodes: &mut Vec<Node>, kw_span: Span) {
 			} else if counter == 2 {
 				inc = Some(stmt.remove(0));
 			}
+			counter += 1;
 		}
-		counter += 1;
 	};
 
 	// Consume the `{`.

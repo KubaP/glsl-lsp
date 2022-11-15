@@ -1473,6 +1473,15 @@ fn parse_tokens(lexer: &mut Lexer, parsing_define_body: bool) -> TokenStream {
 						end: lexer.position(),
 					},
 				));
+			} else {
+				lexer.advance();
+				tokens.push((
+					Token::Invalid(current),
+					Span {
+						start: buffer_start,
+						end: lexer.position(),
+					},
+				));
 			}
 		} else {
 			// This character isn't valid to start any token.

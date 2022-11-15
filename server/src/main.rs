@@ -120,7 +120,6 @@ impl LanguageServer for MyServer {
 		} = params.text_document;
 
 		// Ignore non-GLSL files.
-		// PERF: This should be impossible because the client defines the language id's to trigger on.
 		if language_id != "glsl" {
 			return;
 		}
@@ -213,7 +212,7 @@ pub struct File {
 	contents: String,
 	/// A character-index to line conversion table.
 	///
-	/// - `0` - Line number.
+	/// - `0` - Line number, (same as vector index).
 	/// - `1` - Character index which starts at the line number.
 	lines: Vec<(usize, usize)>,
 }

@@ -2043,6 +2043,7 @@ impl ShuntingYard {
 					{
 						self.register_arity_argument(span.start_zero_width());
 					}
+					let prev_arity = arity_state;
 					arity_state = Arity::PotentialEnd;
 
 					let prev_op_span = self.get_previous_span();
@@ -2056,7 +2057,7 @@ impl ShuntingYard {
 						}
 					}
 
-					if !empty_group {
+					if !empty_group && prev_arity != Arity::PotentialEnd {
 						self.syntax_diags.push(Syntax::Expr(
 							ExprDiag::FoundRBraceInsteadOfOperand(
 								prev_op_span.unwrap(),

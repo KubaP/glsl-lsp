@@ -14,9 +14,9 @@ pub struct DiagState {
 	/// Whether the client supports diagnostics at all.
 	pub enabled: bool,
 	/// Whether the client supports showing related information in diagnostics.
-	pub related_information: bool,
+	pub supports_related_information: bool,
 	/// Whether the client supports versioning file changes.
-	pub versioning: bool,
+	pub supports_versioning: bool,
 }
 
 /// The state of support for semantic highlighting, as reported by the client.
@@ -31,9 +31,10 @@ pub struct SemanticsState {
 
 #[derive(Debug)]
 pub struct State {
-	/// The state of diagnostic-related feature support.
-	diag_support: DiagState,
-	semantic_support: SemanticsState,
+	/// The state of diagnostic-related functionality.
+	diag_state: DiagState,
+	/// The state of semantic highlighting.
+	semantic_state: SemanticsState,
 
 	/// Currently open files, (or previously opened within this session).
 	files: HashMap<Url, File>,
@@ -44,8 +45,8 @@ impl State {
 	/// communication and sends over it's capabilities (to [`initialize()`](Self::initialize())).
 	pub fn new() -> Self {
 		Self {
-			diag_support: Default::default(),
-			semantic_support: Default::default(),
+			diag_state: Default::default(),
+			semantic_state: Default::default(),
 			files: HashMap::new(),
 		}
 	}
@@ -66,19 +67,23 @@ impl State {
 				data_support: _,
 			}) = cap.publish_diagnostics
 			{
-				self.diag_support.enabled = true;
-				self.diag_support.related_information =
+				self.diag_state.enabled = true;
+				self.diag_state.supports_related_information =
 					related_information.unwrap_or(false);
-				self.diag_support.versioning = version_support.unwrap_or(false);
+				self.diag_state.supports_versioning =
+					version_support.unwrap_or(false);
 			}
 			if let Some(SemanticTokensClientCapabilities {
 				dynamic_registration: _,
 				// Which request types the client supports (might send out).
 				requests,
+				// The token types the client natively supports.
 				token_types: _,
-				token_modifiers: _,
+				/// The token modifiers the client natively supports.
+					token_modifiers: _,
 				// Guaranteed to be `vec!["relative"]`
 				formats: _,
+				// Whether the client supports overlapping tokens.
 				overlapping_token_support: _,
 				// Whether the client supports tokens spanning multiple lines.
 				multiline_token_support,
@@ -86,15 +91,15 @@ impl State {
 			{
 				if let Some(SemanticTokensFullOptions::Bool(b)) = requests.full
 				{
-					self.semantic_support.enabled = b;
+					self.semantic_state.enabled = b;
 				} else if let Some(SemanticTokensFullOptions::Delta {
 					..
 				}) = requests.full
 				{
-					self.semantic_support.enabled = true;
+					self.semantic_state.enabled = true;
 				}
 				if let Some(b) = multiline_token_support {
-					self.semantic_support.supports_multiline = b;
+					self.semantic_state.supports_multiline = b;
 				}
 			}
 		}
@@ -125,7 +130,7 @@ impl State {
 
 	/// Publishes diagnostics for the specified file.
 	pub async fn publish_diagnostics(&self, uri: Url, client: &Client) {
-		if !self.diag_support.enabled {
+		if !self.diag_state.enabled {
 			return;
 		}
 
@@ -141,20 +146,20 @@ impl State {
 			semantic,
 			&mut diags,
 			file,
-			self.diag_support.related_information,
+			self.diag_state.supports_related_information,
 		);
 		client
 			.publish_diagnostics(
 				file.uri.clone(),
 				diags,
-				self.diag_support.versioning.then_some(file.version),
+				self.diag_state.supports_versioning.then_some(file.version),
 			)
 			.await;
 	}
 
 	/// Fulfils the `textDocument/semanticTokens/full` request.
 	pub fn provide_semantic_tokens(&self, uri: Url) -> Vec<SemanticToken> {
-		if !self.semantic_support.enabled {
+		if !self.semantic_state.enabled {
 			return vec![];
 		}
 
@@ -167,7 +172,7 @@ impl State {
 		crate::syntax::convert(
 			tokens,
 			file,
-			self.semantic_support.supports_multiline,
+			self.semantic_state.supports_multiline,
 		)
 	}
 }

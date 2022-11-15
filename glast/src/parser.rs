@@ -7,6 +7,7 @@
 
 pub mod ast;
 mod expression;
+mod printing;
 mod syntax;
 #[cfg(test)]
 mod walker_tests;
@@ -377,6 +378,36 @@ pub fn parse_from_token_stream(
 		syntax_diags,
 		contains_conditional_compilation: true,
 	}
+}
+
+/// Pretty-prints the AST.
+///
+/// The output is not stable and can be changed at any time, so the specific formatting should not be relied upon.
+///
+/// # Examples
+/// Print a simple GLSL expression:
+/// ```rust
+/// # use glast::parser::{parse_from_str, print_ast};
+/// let src = r#"
+/// int i = 5.0 + 1;
+/// "#;
+/// let (ast, _, _, _) = parse_from_str(&src).root();
+/// println!("{}", print_ast(ast));
+/// ```
+/// Would result in:
+/// ```text
+/// VarDef(
+///     type: int
+///     ident: i
+///     value: BinOp(
+///         op: +
+///         left: 5.0
+///         right: 1
+///     )
+/// )
+/// ```
+pub fn print_ast(ast: Vec<Node>) -> String {
+	printing::print_ast(ast)
 }
 
 /// A tree of token streams generated from a GLSL source string.

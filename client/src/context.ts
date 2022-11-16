@@ -17,8 +17,8 @@ export class Context {
 	}
 
 	static async new(vscode_context: ExtensionContext, serverPath: string): Promise<Context> {
-		// Create a output channel for logging information from the client, and for LSP tracing if `glsl.trace.server`
-		// is set to `true`.
+		// Create a output channel for logging information from the client, and for LSP tracing if
+		// `glsl.trace.server` is set to `true`.
 		const output = window.createOutputChannel("GLSL Client");
 
 		// Define the options for the server process.
@@ -97,10 +97,10 @@ export function getActiveGLSLEditor(): vscode.TextEditor | undefined {
 }
 
 /**
- * Returns the `TextEditor` which contains the `tree.glsl.cst` file, if one is visible is one.
+ * Returns the `TextEditor` which contains the `tree.ast.glsl` file, if one is visible is one.
  */
-export function getSyntaxTreeEditor(): vscode.TextEditor | undefined {
+export function getAstEditor(): vscode.TextEditor | undefined {
 	return vscode.window.visibleTextEditors.find((value) => {
-		return value.document.languageId === "glsl_syntax_tree";
+		return value.document.languageId === "glsl_ast";
 	});
 }

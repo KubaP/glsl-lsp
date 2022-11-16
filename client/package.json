@@ -41,6 +41,13 @@
 					".comp"
 				],
 				"configuration": "./glsl.language-configuration.json"
+			},
+			{
+				"id": "glsl_ast",
+				"extensions": [
+					".ast.glsl"
+				],
+				"configuration": "./glsl.ast.language-configuration.json"
 			}
 		],
 		"grammars": [
@@ -51,7 +58,20 @@
 			}
 		],
 		"commands": [
+			{
+				"command": "glsl.showAst",
+				"category": "GLSL (extension debug)",
+				"title": "Show AST"
+			}
 		],
+		"menus": {
+			"commandPalette": [
+				{
+					"command": "glsl.showAst",
+					"when": "editorLangId == glsl"
+				}
+			]
+		},
 		"configuration": {
 			"type": "object",
 			"title": "GLSL",

@@ -1,4 +1,5 @@
 mod diag;
+mod extensions;
 mod state;
 mod syntax;
 
@@ -187,6 +188,25 @@ impl LanguageServer for MyServer {
 	}
 }
 
+impl MyServer {
+	async fn ast_content(
+		&self,
+		params: extensions::AstContentParams,
+	) -> Result<extensions::AstContentResult> {
+		self.client
+			.log_message(
+				MessageType::INFO,
+				"Server received 'glsl/astContent' event.",
+			)
+			.await;
+
+		let state = self.state.lock().await;
+		Ok(extensions::AstContentResult {
+			ast: state.provide_ast(params.text_document_uri),
+		})
+	}
+}
+
 #[tokio::main]
 async fn main() {
 	let stdin = tokio::io::stdin();
@@ -196,6 +216,7 @@ async fn main() {
 		client,
 		state: Mutex::new(State::new()),
 	})
+	.custom_method(extensions::AST_CONTENT, MyServer::ast_content)
 	.finish();
 
 	Server::new(stdin, stdout, socket).serve(service).await;

@@ -175,4 +175,15 @@ impl State {
 			self.semantic_state.supports_multiline,
 		)
 	}
+
+	/// Fulfils the `glsl/astContent` request.
+	pub fn provide_ast(&self, uri: Url) -> String {
+		let Some(file) = self.files.get(&uri)else{
+			unreachable!("[State::provide_ast] Received a file `uri: {uri}` that has not been opened yet");	
+		};
+
+		let (ast, _, _, _) =
+			glast::parser::parse_from_str(&file.contents).root();
+		glast::parser::print_ast(ast)
+	}
 }

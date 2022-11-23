@@ -1,3 +1,5 @@
+//! The parser for conditional directive expressions.
+
 use super::{
 	ast::conditional::{BinOp, BinOpTy, Expr, ExprTy, PreOp, PreOpTy},
 	ast::Ident,
@@ -10,7 +12,18 @@ use crate::{
 };
 use std::collections::VecDeque;
 
+/*
+The functionality of this parser is largely copied from the expression parser. The decision to copy the relevant
+parts of the code over was done in order to prevent the complexity of the expression parser from growing even
+larger. There are already a *lot* of conditions and checks and feature-gates, adding more would make it even
+less maintainable. Furthermore, this parser uses an entirely different token type so the amount of direct code
+reuse would be limited anyway.
+*/
+
 /// Tries to parse a conditional directive expression.
+///
+/// This function consumes all of the tokens; if a syntax error is encountered and the parser cannot continue, it
+/// will invalidate the rest of the tokens.
 pub(super) fn cond_parser(
 	tokens: Vec<Spanned<ConditionToken>>,
 ) -> (
@@ -21,16 +34,9 @@ pub(super) fn cond_parser(
 ) {
 	let mut walker = Walker { tokens, cursor: 0 };
 
-	let start_position = match walker.peek() {
-		Some((_, span)) => span.start,
-		// If we are at the end of the token stream, we can return early with nothing.
-		None => return (None, vec![], vec![], vec![]),
-	};
-
 	let mut parser = ShuntingYard {
 		stack: VecDeque::new(),
 		operators: VecDeque::new(),
-		start_position,
 		groups: Vec::new(),
 		syntax_diags: Vec::new(),
 		semantic_diags: Vec::new(),
@@ -38,36 +44,34 @@ pub(super) fn cond_parser(
 	};
 	parser.parse(&mut walker);
 
-	if let Some(expr) = parser.create_ast() {
-		(
-			Some(expr),
-			parser.syntax_diags,
-			parser.semantic_diags,
-			parser.syntax_tokens,
-		)
-	} else {
-		(None, parser.syntax_diags, parser.semantic_diags, vec![])
-	}
+	(
+		parser.create_ast(),
+		parser.syntax_diags,
+		parser.semantic_diags,
+		parser.syntax_tokens,
+	)
 }
 
+/// Allows for stepping through a conditional token stream.
 struct Walker {
+	/// The conditional expression token stream.
 	tokens: Vec<Spanned<ConditionToken>>,
+	/// The index of the current token.
 	cursor: usize,
 }
 
 impl Walker {
+	/// Returns a reference to the current token under the cursor, without advancing the cursor.
 	fn peek(&self) -> Option<Spanned<&ConditionToken>> {
 		self.tokens.get(self.cursor).map(|(t, s)| (t, *s))
 	}
 
-	fn get(&self) -> Option<Spanned<ConditionToken>> {
-		self.tokens.get(self.cursor).cloned()
-	}
-
+	/// Advances the cursor by one.
 	fn advance(&mut self) {
 		self.cursor += 1;
 	}
 
+	/// Returns whether the walker has reached the end of the token stream.
 	fn is_done(&self) -> bool {
 		self.cursor == self.tokens.len()
 	}
@@ -119,39 +123,30 @@ enum OpTy {
 	Neg(bool),
 	Flip(bool),
 	Not(bool),
+	/* GROUPS */
 	/// The `(` token.
 	ParenStart,
 	/// A parenthesis group. This operator spans from the opening parenthesis to the closing parenthesis.
 	///
-	/// - `0` - Whether to consume a node for the inner expression within the `(...)` parenthesis,
-	/// - `1` - The span of the opening parenthesis,
+	/// - `0` - Whether to consume a node for the inner expression within the `(...)` parenthesis.
+	/// - `1` - The span of the opening parenthesis.
 	/// - `2` - The span of the closing parenthesis. If this is zero-width, that means there is no `)` token
 	///   present.
 	Paren(bool, Span, Span),
 	/// The `defined` token.
 	DefinedStart,
-	/// A defined group. This operator spans from the keyword to either the closing parenthesis (if there is an
-	/// opening one), or to the end of the first identifier after the keyword.
+	/// A defined operator group. This operator spans from the keyword to either the closing parenthesis (if there
+	/// is an opening one), or to the end of the first identifier after the keyword.
 	///
 	/// - `0` - Whether to consume a node for the inner expression.
 	/// - `1` - The optional span of the opening parenthesis.
-	/// - `2` - The span of the closing parenthesis. If this is zero-width, that means there is no `)` token
-	///   present.
+	/// - `2` - The span of the closing parenthesis if there is an opening parenthesis, or the span of the first
+	///   identifier after the `defined` keyword. If this is zero-width, that means neither tokens are present.
 	Defined(bool, Option<Span>, Span),
 }
 
-enum Group {
-	/// - `0` - Whether this group has an inner expression within the parenthesis.
-	/// - `1` - The span of the opening parenthesis.
-	Paren(bool, Span),
-	/// - `0` - Whether this group has an inner expression within the parenthesis.
-	/// - `1` - The span of the `defined` keyword.
-	/// - `2` - The optional span of the opening parenthesis.
-	Defined(bool, Span, Option<Span>),
-}
-
 impl Op {
-	/// Converts from a lexer `OpTy` token to the `Op2` type used in this expression parser.
+	/// Converts from a lexer `ConditionalToken` token to the `Op` type used in this expression parser.
 	fn from_token(token: ConditionToken, span: Span) -> Self {
 		Self {
 			span,
@@ -177,7 +172,7 @@ impl Op {
 				ConditionToken::Le => OpTy::Le(false),
 				ConditionToken::Not | ConditionToken::Flip | _ => {
 					// These tokens are handled by individual branches in the main parser loop.
-					unreachable!("[Op::from_token] Given a `token` which should never be handled by this function.")
+					unreachable!("Given a conditional `token` which should never be handled by this function.")
 				}
 			},
 		}
@@ -202,7 +197,7 @@ impl Op {
 			OpTy::XorXor(_) => 9,
 			OpTy::OrOr(_) => 7,
 			// These are never directly checked for precedence, but rather have special branches.
-			_ => panic!("The operator {self:?} does not have a precedence value because it should never be passed into this function. Something has gone wrong!"),
+			_ => panic!("The conditional expression operator {self:?} does not have a precedence value because it should never be passed into this function. Something has gone wrong!"),
 		}
 	}
 
@@ -227,7 +222,7 @@ impl Op {
 				OpTy::Lt(_) => BinOpTy::Lt,
 				OpTy::Ge(_) => BinOpTy::Ge,
 				OpTy::Le(_) => BinOpTy::Le,
-				_ => unreachable!("[Op::to_bin_op] Given a `ty` which should not be handled here.")
+				_ => unreachable!("Given a conditional expression `ty` which should not be handled here.")
 			};
 
 		BinOp {
@@ -237,19 +232,35 @@ impl Op {
 	}
 }
 
+/// An open grouping of items.
+enum Group {
+	/// A parenthesis group.
+	///
+	/// - `0` - Whether this group has an inner expression within the parenthesis.
+	/// - `1` - The span of the opening parenthesis.
+	Paren(bool, Span),
+	/// A defined operator group.
+	///
+	/// - `0` - Whether this group has an inner expression within the parenthesis.
+	/// - `1` - The span of the `defined` keyword.
+	/// - `2` - The optional span of the opening parenthesis.
+	Defined(bool, Span, Option<Span>),
+}
+
+/// The implementation of a shunting yard-based parser.
 struct ShuntingYard {
 	/// The final output stack in RPN.
 	stack: VecDeque<Either<Node, Op>>,
 	/// Temporary stack to hold operators.
 	operators: VecDeque<Op>,
-	/// The start position of the first item in this expression.
-	start_position: usize,
-	/// Groups.
+	/// Temporary stack to hold item groups. The last entry is the group being currently parsed.
 	groups: Vec<Group>,
 
 	/// Syntax diagnostics encountered during the parser execution.
 	syntax_diags: Vec<Syntax>,
-	/// Semantic diagnostics encountered during the parser execution, (these will only be related to macros).
+	/// Semantic diagnostics encountered during the parser execution.
+	///
+	/// Note that this is currently unused as no semantic diagnostics are generated.
 	semantic_diags: Vec<Semantic>,
 
 	/// Syntax highlighting tokens created during the parser execution.
@@ -266,7 +277,7 @@ impl ShuntingYard {
 			match back.ty {
 				// Group delimiter start operators always have the highest precedence, so we don't need to check
 				// further.
-				OpTy::ParenStart => break,
+				OpTy::ParenStart | OpTy::DefinedStart => break,
 				_ => {}
 			}
 
@@ -282,12 +293,9 @@ impl ShuntingYard {
 		self.operators.push_back(op);
 	}
 
-	/// Registers the end of a bracket group, popping any operators until the start of the group is reached.
-	fn end_bracket(
-		&mut self,
-		end_span: Span,
-		/* r_comments: Comments, */
-	) -> Result<(), ()> {
+	/// Registers the end of a parenthesis or defined operator group, popping any operators until the start of the
+	/// group is reached.
+	fn end_paren_defined(&mut self, end_span: Span) -> Result<(), ()> {
 		let group = if !self.groups.is_empty() {
 			self.groups.remove(self.groups.len() - 1)
 		} else {
@@ -334,6 +342,8 @@ impl ShuntingYard {
 		Ok(())
 	}
 
+	/// Registers the end of a defined operator group, popping any operators until the start of the group is
+	/// reached.
 	fn end_defined_group(&mut self, end_span: Span) {
 		let group = if !self.groups.is_empty() {
 			self.groups.remove(self.groups.len() - 1)
@@ -365,7 +375,7 @@ impl ShuntingYard {
 		}
 	}
 
-	/// Sets the toggle on the last operator that it has a right-hand side operand (if applicable).
+	/// Sets the toggle on the last operator that it has a right-hand side operand, (if applicable).
 	fn set_op_rhs_toggle(&mut self) {
 		if let Some(op) = self.operators.back_mut() {
 			match &mut op.ty {
@@ -401,7 +411,7 @@ impl ShuntingYard {
 		}
 	}
 
-	/// Returns whether we have just started a parenthesis group.
+	/// Returns whether we have just started to parse a parenthesis group, i.e. `..(<HERE>`.
 	fn just_started_paren(&self) -> bool {
 		if let Some(Group::Paren(has_inner, _)) = self.groups.last() {
 			*has_inner == false
@@ -432,6 +442,7 @@ impl ShuntingYard {
 		}
 	}
 
+	/// Pushes a syntax highlighting token over the given span.
 	fn colour(&mut self, _walker: &Walker, span: Span, token: SyntaxToken) {
 		self.syntax_tokens.push((token, span));
 	}
@@ -450,7 +461,13 @@ impl ShuntingYard {
 		}
 		let mut state = State::Operand;
 
+		// This is set to `true` when a `defined` token is encountered, and it is reset to `false` upon the next
+		// iteration.
 		let mut previously_started_defined = false;
+
+		// If this is set to `true`, that means that the parser has exited early because of a syntax error and we
+		// want to invalidate the rest of the tokens, (if there are any).
+		let mut invalidate_rest = false;
 
 		'main: while !walker.is_done() {
 			let (token, span) = match walker.peek() {
@@ -487,6 +504,8 @@ impl ShuntingYard {
 							span,
 						),
 					));
+
+					invalidate_rest = true;
 					break 'main;
 				}
 				ConditionToken::Ident(s) if state == State::Operand => {
@@ -530,6 +549,8 @@ impl ShuntingYard {
 							span,
 						),
 					));
+
+					invalidate_rest = true;
 					break 'main;
 				}
 				ConditionToken::Sub if state == State::Operand => {
@@ -560,6 +581,7 @@ impl ShuntingYard {
 					self.syntax_diags.push(Syntax::Expr(
 						ExprDiag::InvalidBinOrPostOperator(span),
 					));
+					invalidate_rest = true;
 					break 'main;
 				}
 				ConditionToken::LParen if state == State::Operand => {
@@ -584,13 +606,17 @@ impl ShuntingYard {
 							span,
 						),
 					));
+					invalidate_rest = true;
 					break 'main;
 				}
 				ConditionToken::RParen if state == State::AfterOperand => {
 					self.colour(walker, span, SyntaxToken::Punctuation);
-					match self.end_bracket(span) {
+					match self.end_paren_defined(span) {
 						Ok(_) => {}
-						Err(_) => break 'main,
+						Err(_) => {
+							invalidate_rest = true;
+							break 'main;
+						}
 					}
 
 					// We don't switch state since after a `)`, we are expecting an operator, i.e.
@@ -600,9 +626,12 @@ impl ShuntingYard {
 					self.colour(walker, span, SyntaxToken::Punctuation);
 					let prev_op_span = self.get_previous_span();
 					let just_started_paren = self.just_started_paren();
-					match self.end_bracket(span) {
+					match self.end_paren_defined(span) {
 						Ok(_) => {}
-						Err(_) => break 'main,
+						Err(_) => {
+							invalidate_rest = true;
+							break 'main;
+						}
 					}
 
 					if just_started_paren {
@@ -640,20 +669,19 @@ impl ShuntingYard {
 							span,
 						),
 					));
+					invalidate_rest = true;
 					break 'main;
 				}
 				ConditionToken::InvalidNum(_) => {
 					self.colour(walker, span, SyntaxToken::Invalid);
-					// FIXME: Since the calling code doesn't do any further iteration, we need to syntax highlight
-					// the invalid tokens here, until we run out.
+					invalidate_rest = true;
 					break 'main;
 				}
 				ConditionToken::Invalid(_) => {
 					// We have encountered an unexpected token that's not allowed to be part of an expression.
 					self.syntax_diags
 						.push(Syntax::Expr(ExprDiag::FoundInvalidToken(span)));
-					// FIXME: Since the calling code doesn't do any further iteration, we need to syntax highlight
-					// the invalid tokens here, until we run out.
+					invalidate_rest = true;
 					break 'main;
 				}
 				_ if state == State::AfterOperand => {
@@ -672,9 +700,23 @@ impl ShuntingYard {
 			walker.advance();
 		}
 
+		if invalidate_rest {
+			walker.advance();
+			while let Some((_, span)) = walker.peek() {
+				self.colour(walker, span, SyntaxToken::Invalid);
+				walker.advance();
+			}
+		}
+
+		// Close any open groups. Any groups still open must be missing a closing delimiter.
 		if !self.groups.is_empty() {
+			// The end position of this expression will be the end position of the last parsed item. This is
+			// important because in the case of encountering an error, the relevant branches above will consume the
+			// rest of the tokens since no further processing is done outside of this function. That means that
+			// naively getting the last token span could potentially result in an incorrect span.
 			let group_end = self.get_previous_span().unwrap().end_zero_width();
 
+			// We don't take ownership of the groups because the `end_paren_defined()` method does that.
 			while let Some(group) = self.groups.last() {
 				match group {
 					Group::Paren(_, l_paren) => {
@@ -698,11 +740,13 @@ impl ShuntingYard {
 						}
 					}
 				}
-				let _ = self.end_bracket(group_end);
+				let _ = self.end_paren_defined(group_end);
 			}
 		}
 
-		// We may have leftover operators which need moving.
+		// If there is an open group, then all of the operators will have been already moved as part of the
+		// ending function. However, if we didn't need to close any groups, we may have leftover operators which
+		// still need moving.
 		while let Some(op) = self.operators.pop_back() {
 			self.stack.push_back(Either::Right(op));
 		}
@@ -873,7 +917,7 @@ impl ShuntingYard {
 						});
 					}
 					_ => {
-						panic!("Invalid operator {op:?} in shunting yard stack. This operator should never be present in the final RPN output stack.");
+						panic!("Invalid operator {op:?} in conditional expression shunting yard stack. This operator should never be present in the final RPN stack.");
 					}
 				},
 			}
@@ -886,7 +930,7 @@ impl ShuntingYard {
 
 		#[cfg(debug_assertions)]
 		if stack.len() != 1 {
-			panic!("After processing the shunting yard output stack, we are left with more than one expression. This should not happen.");
+			panic!("After processing the conditional expression shunting yard output stack, we are left with more than one expression. This should not happen.");
 		}
 
 		// Return the one root expression.

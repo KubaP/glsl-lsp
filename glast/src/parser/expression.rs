@@ -1,3 +1,5 @@
+//! The parser for general expressions.
+
 use super::{
 	ast::{
 		BinOp, BinOpTy, Expr, ExprTy, Ident, Lit, PostOp, PostOpTy, PreOp,
@@ -13,7 +15,7 @@ use crate::{
 use std::collections::VecDeque;
 
 /*
-Useful links related to expression parsing:
+Useful reading links related to expression parsing:
 
 https://petermalmgren.com/three-rust-parsers/
 	- recursive descent parser
@@ -53,7 +55,7 @@ pub(super) fn expr_parser(
 	let mut parser = ShuntingYard {
 		stack: VecDeque::new(),
 		operators: VecDeque::new(),
-		groups: VecDeque::new(),
+		groups: Vec::new(),
 		start_position,
 		mode,
 		syntax_diags: Vec::new(),
@@ -62,16 +64,12 @@ pub(super) fn expr_parser(
 	};
 	parser.parse(walker, end_tokens.as_ref());
 
-	if let Some(expr) = parser.create_ast() {
-		(
-			Some(expr),
-			parser.syntax_diags,
-			parser.semantic_diags,
-			parser.syntax_tokens,
-		)
-	} else {
-		(None, parser.syntax_diags, parser.semantic_diags, vec![])
-	}
+	(
+		parser.create_ast(),
+		parser.syntax_diags,
+		parser.semantic_diags,
+		parser.syntax_tokens,
+	)
 }
 
 /// Configures the behaviour of the expression parser.
@@ -198,36 +196,36 @@ enum OpTy {
 	/* GROUPS */
 	/// A parenthesis group. This operator spans from the opening parenthesis to the closing parenthesis.
 	///
-	/// - `0` - Whether to consume a node for the inner expression within the `(...)` parenthesis,
-	/// - `1` - The span of the opening parenthesis,
+	/// - `0` - Whether to consume a node for the inner expression within the `(...)` parenthesis.
+	/// - `1` - The span of the opening parenthesis.
 	/// - `2` - The span of the closing parenthesis. If this is zero-width, that means there is no `)` token
 	///   present.
 	Paren(bool, Span, Span),
 	/// A function call. This operator spans from the opening parenthesis to the closing parenthesis.
 	///
 	/// - `0` - The number of nodes to consume for the arguments; this includes the function identifier node, so it
-	///   will always be `1` or greater,
+	///   will always be `1` or greater.
 	/// - `1` - The span of the opening parenthesis.
 	/// - `2` - The span of the closing parenthesis. If this is zero-width, that means there is no `)` token
 	///   present.
 	FnCall(usize, Span, Span),
 	/// An index operator. This operator spans from the opening bracket to the closing bracket.
 	///
-	/// - `0` - Whether to consume a node for the expression within the `[...]` brackets,
-	/// - `1` - The span of the opening bracket,
+	/// - `0` - Whether to consume a node for the expression within the `[...]` brackets.
+	/// - `1` - The span of the opening bracket.
 	/// - `2` - The span of the closing bracket. If this is zero-width, that means there is no `]` token present.
 	Index(bool, Span, Span),
 	/// An initializer list. This operator spans from the opening brace to the closing brace.
 	///
-	/// - `0` - The number of nodes to consume for the arguments,
-	/// - `1` - The span of the opening brace,
+	/// - `0` - The number of nodes to consume for the arguments.
+	/// - `1` - The span of the opening brace.
 	/// - `2` - The span of the closing brace. If this is zero-width, that means there is no `}` token present.
 	Init(usize, Span, Span),
 	/// An array initializer. This operator spans from the opening parenthesis to the closing parenthesis.
 	///
 	/// - `0` - The number of nodes to consume for the arguments; this includes the index expression node, so it
 	///   will always be `1` or greater.
-	/// - `1` - The span of the opening parenthesis,
+	/// - `1` - The span of the opening parenthesis.
 	/// - `2` - The span of the closing parenthesis. If this is zero-width, that means there is no `)` token
 	///   present.
 	ArrInit(usize, Span, Span),
@@ -238,7 +236,7 @@ enum OpTy {
 }
 
 impl Op {
-	/// Converts from a lexer `OpTy` token to the `Op2` type used in this expression parser.
+	/// Converts from a lexer `OpTy` token to the `Op` type used in this expression parser.
 	fn from_token(token: lexer::OpTy, span: Span) -> Self {
 		Self {
 			span,
@@ -371,12 +369,12 @@ impl Op {
 enum Group {
 	/// A parenthesis group.
 	///
-	/// - `0` - Whether this group has an inner expression within the parenthesis,
+	/// - `0` - Whether this group has an inner expression within the parenthesis.
 	/// - `1` - The span of the opening parenthesis.
 	Paren(bool, Span),
 	/// A function call.
 	///
-	/// - `0` - The number of expressions to consume for the arguments,
+	/// - `0` - The number of expressions to consume for the arguments.
 	/// - `1` - The span of the opening parenthesis.
 	FnCall(usize, Span),
 	/// An index operator.
@@ -386,17 +384,17 @@ enum Group {
 	Index(bool, Span),
 	/// An initializer list.
 	///
-	/// - `0` - The number of expressions to consume for the arguments,
+	/// - `0` - The number of expressions to consume for the arguments.
 	/// - `1` - The span of the opening brace.
 	Init(usize, Span),
 	/// An array constructor.
 	///
-	/// - `0` - The number of expressions to consume for the arguments,
+	/// - `0` - The number of expressions to consume for the arguments.
 	/// - `1` - The span of the opening parenthesis.
 	ArrInit(usize, Span),
 	/// A general list **outside** of function calls, initializer lists and array constructors.
 	///
-	/// - `0` - The number of expressions to consume for the arguments,
+	/// - `0` - The number of expressions to consume for the arguments.
 	/// - `1` - The starting position of this list.
 	///
 	/// # Invariants
@@ -408,14 +406,14 @@ enum Group {
 	Ternary,
 }
 
+/// The implementation of a shunting yard-based parser.
 struct ShuntingYard {
 	/// The final output stack in RPN.
 	stack: VecDeque<Either<Node, Op>>,
 	/// Temporary stack to hold operators.
 	operators: VecDeque<Op>,
 	/// Temporary stack to hold item groups. The top-most entry is the group being currently parsed.
-	groups: VecDeque<Group>,
-	/* comments: Vec<(Comment, Span)>, */
+	groups: Vec<Group>,
 	/// The start position of the first item in this expression.
 	start_position: usize,
 	/// The behavioural mode of the parser.
@@ -423,7 +421,7 @@ struct ShuntingYard {
 
 	/// Syntax diagnostics encountered during the parser execution.
 	syntax_diags: Vec<Syntax>,
-	/// Semantic diagnostics encountered during the parser execution, (these will only be related to macros).
+	/// Semantic diagnostics encountered during the parser execution; (these will only be related to macros).
 	semantic_diags: Vec<Semantic>,
 
 	/// Syntax highlighting tokens created during the parser execution.
@@ -436,7 +434,7 @@ impl ShuntingYard {
 	fn push_operator(&mut self, op: Op) {
 		if let OpTy::TernaryC(_) = op.ty {
 			// This completes the ternary.
-			match self.groups.pop_back() {
+			match self.groups.pop() {
 				Some(group) => match group {
 					Group::Ternary => {}
 					_ => panic!("Should be in ternary group"),
@@ -498,12 +496,7 @@ impl ShuntingYard {
 	///
 	/// `end_span` is the span which marks the end of this parenthesis group. It may be the span of the `)` token,
 	/// or it may be a zero-width span if this group was collapsed without a matching closing delimiter.
-	fn collapse_bracket(
-		&mut self,
-		group: Group,
-		end_span: Span,
-		/* end_comments: Comments, */
-	) {
+	fn collapse_paren(&mut self, group: Group, end_span: Span) {
 		if let Group::Paren(has_inner, l_paren) = group {
 			while self.operators.back().is_some() {
 				let op = self.operators.pop_back().unwrap();
@@ -539,14 +532,9 @@ impl ShuntingYard {
 	/// # Invariants
 	/// Assumes that `group` is of type [`Group::Fn`].
 	///
-	/// `end_span` is the span which marks the end of this function call group. It may be the span of the `)` token,
-	/// or it may be a zero-width span if this group was collapsed without a matching closing delimiter.
-	fn collapse_fn(
-		&mut self,
-		group: Group,
-		end_span: Span,
-		/* end_comments: Comments, */
-	) {
+	/// `end_span` is the span which marks the end of this function call group. It may be the span of the `)`
+	/// token, or it may be a zero-width span if this group was collapsed without a matching closing delimiter.
+	fn collapse_fn(&mut self, group: Group, end_span: Span) {
 		if let Group::FnCall(count, l_paren) = group {
 			while self.operators.back().is_some() {
 				let op = self.operators.pop_back().unwrap();
@@ -586,12 +574,7 @@ impl ShuntingYard {
 	///
 	/// `end_span` is the span which marks the end of this index group. It may be a span of the `]` token, or it
 	/// may be a zero-width span if this group was collapsed without a matching closing delimiter.
-	fn collapse_index(
-		&mut self,
-		group: Group,
-		end_span: Span,
-		/* end_comments: Comments, */
-	) {
+	fn collapse_index(&mut self, group: Group, end_span: Span) {
 		if let Group::Index(contains_i, l_bracket) = group {
 			while self.operators.back().is_some() {
 				let op = self.operators.pop_back().unwrap();
@@ -629,12 +612,7 @@ impl ShuntingYard {
 	///
 	/// `end_span` is the span which marks the end of this initializer list group. It may be a span of the `}`
 	/// token, or it may be a zero-width span if this group was collapsed without a matching closing delimiter.
-	fn collapse_init(
-		&mut self,
-		group: Group,
-		end_span: Span,
-		/* end_comments: Comments, */
-	) {
+	fn collapse_init(&mut self, group: Group, end_span: Span) {
 		if let Group::Init(count, l_brace) = group {
 			while self.operators.back().is_some() {
 				let op = self.operators.pop_back().unwrap();
@@ -672,12 +650,7 @@ impl ShuntingYard {
 	///
 	/// `end_span` is the span which marks the end of this array constructor group. It may be a span of the `)`
 	/// token, or it may be a zero-width span if this group was collapsed without a matching closing delimiter.
-	fn collapse_arr_init(
-		&mut self,
-		group: Group,
-		end_span: Span,
-		/* end_comments: Comments, */
-	) {
+	fn collapse_arr_init(&mut self, group: Group, end_span: Span) {
 		if let Group::ArrInit(count, l_paren) = group {
 			while self.operators.back().is_some() {
 				let op = self.operators.pop_back().unwrap();
@@ -754,14 +727,10 @@ impl ShuntingYard {
 		}
 	}
 
-	/// Registers the end of a bracket, function call or array constructor group, popping any operators until the
-	/// start of the group is reached.
-	fn end_bracket_fn(
-		&mut self,
-		end_span: Span,
-		/* r_comments: Comments, */
-	) -> Result<(), ()> {
-		let current_group = match self.groups.back() {
+	/// Registers the end of a parenthesis, function call or array constructor group, popping any operators until
+	/// the start of the group is reached.
+	fn end_paren_fn(&mut self, end_span: Span) -> Result<(), ()> {
+		let current_group = match self.groups.last() {
 			Some(t) => t,
 			None => {
 				// Since we have no groups, that means we have a lonely `)`. This means we want to stop parsing
@@ -780,11 +749,10 @@ impl ShuntingYard {
 				if self.exists_paren_fn_group() {
 					// We have at least one other group to close before we can close the bracket/function/array
 					// constructor group.
-					'inner: while let Some(current_group) = self.groups.back() {
+					'inner: while let Some(current_group) = self.groups.last() {
 						match current_group {
 							Group::Init(_, _) => {
-								let current_group =
-									self.groups.pop_back().unwrap();
+								let current_group = self.groups.pop().unwrap();
 								self.collapse_init(
 									current_group,
 									Span::new(
@@ -794,16 +762,14 @@ impl ShuntingYard {
 								);
 							}
 							Group::Index(_, _) => {
-								let current_group =
-									self.groups.pop_back().unwrap();
+								let current_group = self.groups.pop().unwrap();
 								self.collapse_index(
 									current_group,
 									end_span.start_zero_width(),
 								)
 							}
 							Group::List(_, _) => {
-								let current_group =
-									self.groups.pop_back().unwrap();
+								let current_group = self.groups.pop().unwrap();
 
 								self.collapse_list(
 									current_group,
@@ -828,7 +794,7 @@ impl ShuntingYard {
 									}
 								}
 
-								self.groups.pop_back();
+								self.groups.pop();
 							}
 							Group::Paren(_, _)
 							| Group::FnCall(_, _)
@@ -843,9 +809,9 @@ impl ShuntingYard {
 			}
 		}
 
-		let group = self.groups.pop_back().unwrap();
+		let group = self.groups.pop().unwrap();
 		match group {
-			Group::Paren(_, _) => self.collapse_bracket(group, end_span),
+			Group::Paren(_, _) => self.collapse_paren(group, end_span),
 			Group::FnCall(_, _) => self.collapse_fn(group, end_span),
 			Group::ArrInit(_, _) => self.collapse_arr_init(group, end_span),
 			// Either the inner-most group is already a parenthesis-delimited group, or we've closed all inner
@@ -859,12 +825,8 @@ impl ShuntingYard {
 	/// reached.
 	///
 	/// `end_span` is a span which ends at the end of this index operator. (The start value is irrelevant).
-	fn end_index(
-		&mut self,
-		end_span: Span,
-		/* r_comments: Comments, */
-	) -> Result<(), ()> {
-		let current_group = match self.groups.back() {
+	fn end_index(&mut self, end_span: Span) -> Result<(), ()> {
+		let current_group = match self.groups.last() {
 			Some(t) => t,
 			None => {
 				// Since we have no groups, that means we have a lonely `]`. This means we want to stop parsing
@@ -882,11 +844,11 @@ impl ShuntingYard {
 
 			if self.exists_index_group() {
 				// We have at least one other group to close before we can close the index group.
-				'inner: while let Some(current_group) = self.groups.back() {
+				'inner: while let Some(current_group) = self.groups.last() {
 					match current_group {
 						Group::Paren(_, _) => {
-							let current_group = self.groups.pop_back().unwrap();
-							self.collapse_bracket(
+							let current_group = self.groups.pop().unwrap();
+							self.collapse_paren(
 								current_group,
 								Span::new(
 									end_span.end_at_previous().end,
@@ -895,7 +857,7 @@ impl ShuntingYard {
 							);
 						}
 						Group::FnCall(_, _) => {
-							let current_group = self.groups.pop_back().unwrap();
+							let current_group = self.groups.pop().unwrap();
 							self.collapse_fn(
 								current_group,
 								Span::new(
@@ -905,7 +867,7 @@ impl ShuntingYard {
 							);
 						}
 						Group::Init(_, _) => {
-							let current_group = self.groups.pop_back().unwrap();
+							let current_group = self.groups.pop().unwrap();
 							self.collapse_init(
 								current_group,
 								Span::new(
@@ -915,7 +877,7 @@ impl ShuntingYard {
 							);
 						}
 						Group::ArrInit(_, _) => {
-							let current_group = self.groups.pop_back().unwrap();
+							let current_group = self.groups.pop().unwrap();
 							self.collapse_arr_init(
 								current_group,
 								Span::new(
@@ -938,10 +900,10 @@ impl ShuntingYard {
 								}
 							}
 
-							self.groups.pop_back();
+							self.groups.pop();
 						}
 						Group::List(_, _) => {
-							let current_group = self.groups.pop_back().unwrap();
+							let current_group = self.groups.pop().unwrap();
 							self.collapse_list(
 								current_group,
 								end_span.end_at_previous().end,
@@ -957,19 +919,15 @@ impl ShuntingYard {
 			}
 		}
 
-		let group = self.groups.pop_back().unwrap();
+		let group = self.groups.pop().unwrap();
 		self.collapse_index(group, end_span);
 		Ok(())
 	}
 
 	/// Registers the end of an initializer list group, popping any operators until the start of the group is
 	/// reached.
-	fn end_init(
-		&mut self,
-		end_span: Span,
-		/* r_comments: Comments, */
-	) -> Result<(), ()> {
-		let current_group = match self.groups.back() {
+	fn end_init(&mut self, end_span: Span) -> Result<(), ()> {
+		let current_group = match self.groups.last() {
 			Some(t) => t,
 			None => {
 				// Since we have no groups, that means we have a lonely `}`. This means we want to stop parsing
@@ -985,11 +943,11 @@ impl ShuntingYard {
 
 			if self.exists_init_group() {
 				// We have at least one other group to close before we can close the initializer group.
-				'inner: while let Some(current_group) = self.groups.back() {
+				'inner: while let Some(current_group) = self.groups.last() {
 					match current_group {
 						Group::Paren(_, _) => {
-							let current_group = self.groups.pop_back().unwrap();
-							self.collapse_bracket(
+							let current_group = self.groups.pop().unwrap();
+							self.collapse_paren(
 								current_group,
 								Span::new(
 									end_span.end_at_previous().end,
@@ -998,14 +956,14 @@ impl ShuntingYard {
 							);
 						}
 						Group::Index(_, _) => {
-							let current_group = self.groups.pop_back().unwrap();
+							let current_group = self.groups.pop().unwrap();
 							self.collapse_index(
 								current_group,
 								end_span.start_zero_width(),
 							);
 						}
 						Group::FnCall(_, _) => {
-							let current_group = self.groups.pop_back().unwrap();
+							let current_group = self.groups.pop().unwrap();
 							self.collapse_fn(
 								current_group,
 								Span::new(
@@ -1015,7 +973,7 @@ impl ShuntingYard {
 							);
 						}
 						Group::ArrInit(_, _) => {
-							let current_group = self.groups.pop_back().unwrap();
+							let current_group = self.groups.pop().unwrap();
 							self.collapse_arr_init(
 								current_group,
 								Span::new(
@@ -1038,7 +996,7 @@ impl ShuntingYard {
 								}
 							}
 
-							self.groups.pop_back();
+							self.groups.pop();
 						}
 						// See `List` documentation.
 						Group::List(_, _) => unreachable!(),
@@ -1052,7 +1010,7 @@ impl ShuntingYard {
 			}
 		}
 
-		let group = self.groups.pop_back().unwrap();
+		let group = self.groups.pop().unwrap();
 		self.collapse_init(group, end_span);
 		Ok(())
 	}
@@ -1060,7 +1018,7 @@ impl ShuntingYard {
 	/// Registers the end of a sub-expression, popping any operators until the start of the group (or expression)
 	/// is reached.
 	fn register_arity_argument(&mut self, end_span: Span) {
-		while let Some(group) = self.groups.back_mut() {
+		while let Some(group) = self.groups.last_mut() {
 			match group {
 				Group::FnCall(count, _)
 				| Group::Init(count, _)
@@ -1098,11 +1056,11 @@ impl ShuntingYard {
 				// We want to move all existing operators up to the function call, initializer list, or array
 				// constructor start delimiter to the stack, to clear it for the next expression.
 				Group::Paren(_, _) => {
-					let group = self.groups.pop_back().unwrap();
-					self.collapse_bracket(group, end_span);
+					let group = self.groups.pop().unwrap();
+					self.collapse_paren(group, end_span);
 				}
 				Group::Index(_, _) => {
-					let group = self.groups.pop_back().unwrap();
+					let group = self.groups.pop().unwrap();
 					self.collapse_index(group, end_span);
 				}
 				Group::Ternary => {
@@ -1117,7 +1075,7 @@ impl ShuntingYard {
 						}
 					}
 
-					self.groups.pop_back();
+					self.groups.pop();
 				}
 			}
 		}
@@ -1129,7 +1087,7 @@ impl ShuntingYard {
 			let moved = self.operators.pop_back().unwrap();
 			self.stack.push_back(Either::Right(moved));
 		}
-		self.groups.push_back(Group::List(
+		self.groups.push(Group::List(
 			if self.stack.is_empty() && self.operators.is_empty() {
 				0
 			} else {
@@ -1139,7 +1097,7 @@ impl ShuntingYard {
 		))
 	}
 
-	/// Sets the toggle on the last operator that it has a right-hand side operand (if applicable).
+	/// Sets the toggle on the last operator that it has a right-hand side operand, (if applicable).
 	fn set_op_rhs_toggle(&mut self) {
 		if let Some(op) = self.operators.back_mut() {
 			match &mut op.ty {
@@ -1184,11 +1142,23 @@ impl ShuntingYard {
 				_ => {}
 			}
 		}
-		if let Some(group) = self.groups.back_mut() {
+		if let Some(group) = self.groups.last_mut() {
 			match group {
 				Group::Paren(b, _) | Group::Index(b, _) => *b = true,
 				_ => {}
 			}
+		}
+	}
+
+	/// Returns whether we have just started to parse a parenthesis group, i.e. `..(<HERE>`.
+	fn just_started_paren(&self) -> bool {
+		if let Some(current_group) = self.groups.last() {
+			match current_group {
+				Group::Paren(has_inner, _) => *has_inner == false,
+				_ => false,
+			}
+		} else {
+			false
 		}
 	}
 
@@ -1214,7 +1184,7 @@ impl ShuntingYard {
 
 	/// Returns whether we have just started to parse an initializer list, i.e. `..{<HERE>`
 	fn just_started_init(&self) -> bool {
-		if let Some(current_group) = self.groups.back() {
+		if let Some(current_group) = self.groups.last() {
 			match current_group {
 				Group::Init(count, _) => *count == 0,
 				_ => false,
@@ -1224,19 +1194,9 @@ impl ShuntingYard {
 		}
 	}
 
-	fn just_started_paren(&self) -> bool {
-		if let Some(current_group) = self.groups.back() {
-			match current_group {
-				Group::Paren(has_inner, _) => *has_inner == false,
-				_ => false,
-			}
-		} else {
-			false
-		}
-	}
-
+	/// Returns whether we are currently within a ternary expression group.
 	fn is_in_ternary(&self) -> bool {
-		if let Some(current_group) = self.groups.back() {
+		if let Some(current_group) = self.groups.last() {
 			match current_group {
 				Group::Ternary => true,
 				_ => false,
@@ -1246,9 +1206,10 @@ impl ShuntingYard {
 		}
 	}
 
-	/// Returns whether we are currently in a function call, initializer list or array constructor group.
+	/// Returns whether we are currently in a function call, initializer list, array constructor, or general list
+	/// group.
 	fn is_in_variable_arg_group(&self) -> bool {
-		if let Some(current_group) = self.groups.back() {
+		if let Some(current_group) = self.groups.last() {
 			match current_group {
 				Group::FnCall(_, _)
 				| Group::Init(_, _)
@@ -1328,6 +1289,7 @@ impl ShuntingYard {
 		}
 	}
 
+	/// Pushes a syntax highlighting token over the given span.
 	fn colour(&mut self, walker: &Walker, span: Span, token: SyntaxToken) {
 		// When we are within a macro, we don't want to produce syntax tokens.
 		if walker.streams.len() == 1 {
@@ -1732,7 +1694,7 @@ impl ShuntingYard {
 						span,
 						ty: OpTy::ParenStart,
 					});
-					self.groups.push_back(Group::Paren(false, span));
+					self.groups.push(Group::Paren(false, span));
 
 					can_start = Start::None;
 
@@ -1747,7 +1709,7 @@ impl ShuntingYard {
 							span,
 							ty: OpTy::FnCallStart,
 						});
-						self.groups.push_back(Group::FnCall(0, span));
+						self.groups.push(Group::FnCall(0, span));
 
 						// We switch state since after a `(` we are expecting an operand, i.e.
 						// `fn( 1..` rather than`fn( +..`.1
@@ -1764,7 +1726,7 @@ impl ShuntingYard {
 							span,
 							ty: OpTy::ArrInitStart,
 						});
-						self.groups.push_back(Group::ArrInit(0, span));
+						self.groups.push(Group::ArrInit(0, span));
 
 						// We switch state since after a `(` we are expecting an operand, i.e.
 						// `int[]( 1,..` rather than`int[]( +1,..`.
@@ -1803,7 +1765,7 @@ impl ShuntingYard {
 							span,
 							ty: OpTy::ParenStart,
 						});
-						self.groups.push_back(Group::Paren(false, span));
+						self.groups.push(Group::Paren(false, span));
 
 						state = State::Operand;
 
@@ -1820,7 +1782,7 @@ impl ShuntingYard {
 					}
 					arity_state = Arity::PotentialEnd;
 
-					match self.end_bracket_fn(span) {
+					match self.end_paren_fn(span) {
 						Ok(_) => {}
 						Err(_) => {
 							break 'main;
@@ -1846,7 +1808,7 @@ impl ShuntingYard {
 					let just_started_fn_arr_init =
 						self.just_started_fn_arr_init();
 
-					match self.end_bracket_fn(span) {
+					match self.end_paren_fn(span) {
 						Ok(_) => {}
 						Err(_) => {
 							break 'main;
@@ -1882,7 +1844,7 @@ impl ShuntingYard {
 						span,
 						ty: OpTy::IndexStart,
 					});
-					self.groups.push_back(Group::Index(false, span));
+					self.groups.push(Group::Index(false, span));
 
 					state = State::Operand;
 
@@ -1970,7 +1932,7 @@ impl ShuntingYard {
 						span,
 						ty: OpTy::InitStart,
 					});
-					self.groups.push_back(Group::Init(0, span));
+					self.groups.push(Group::Init(0, span));
 
 					can_start = Start::None;
 
@@ -2009,7 +1971,7 @@ impl ShuntingYard {
 						span,
 						ty: OpTy::InitStart,
 					});
-					self.groups.push_back(Group::Init(0, span));
+					self.groups.push(Group::Init(0, span));
 
 					state = State::Operand;
 
@@ -2135,7 +2097,7 @@ impl ShuntingYard {
 					}
 
 					if can_start == Start::EmptyIndex {
-						match self.groups.back_mut() {
+						match self.groups.last_mut() {
 							Some(g) => match g {
 								Group::Index(contains_i, _) => {
 									*contains_i = false;
@@ -2209,7 +2171,7 @@ impl ShuntingYard {
 						span,
 						ty: OpTy::TernaryQ(false),
 					});
-					self.groups.push_back(Group::Ternary);
+					self.groups.push(Group::Ternary);
 
 					// We switch state since after the `?` we are expecting an operand, such as:
 					// `foo ? bar`.
@@ -2270,14 +2232,13 @@ impl ShuntingYard {
 			);
 		}
 
+		// Close any open groups. Any groups still open must be missing a closing delimiter.
 		if !self.groups.is_empty() {
 			// The end position of this expression will be the end position of the last parsed item.
 			let group_end = self.get_previous_span().unwrap().end_zero_width();
 
-			// Close any open groups.
-			//
-			// Note: we don't take ownership of the group because the individual `collapse_*()` methods do that.
-			while let Some(group) = self.groups.back_mut() {
+			// We don't take ownership of the groups because the individual `collapse_*()` methods do that.
+			while let Some(group) = self.groups.last_mut() {
 				match group {
 					Group::FnCall(_, _)
 					| Group::Init(_, _)
@@ -2287,22 +2248,22 @@ impl ShuntingYard {
 						}
 					}
 					// A list always goes to the end of the expression, so we never increment the counter in the
-					// main loop, hence we must always do it here.
+					// main loop for the final expression, hence we must always do it here.
 					Group::List(count, _) => *count += 1,
 					_ => {}
 				}
 
-				// After the first iteration, reset to false because if there are more groups, then they definitely
-				// have at least one argument; this empty group.
+				// After the first iteration, we reset to false because if there are more groups, then they
+				// definitely have at least one argument.
 				just_started_arity_group = false;
 
-				let group = self.groups.pop_back().unwrap();
+				let group = self.groups.pop().unwrap();
 				match group {
 					Group::Paren(_, l_paren) => {
 						self.syntax_diags.push(Syntax::Expr(
 							ExprDiag::UnclosedParens(l_paren, group_end),
 						));
-						self.collapse_bracket(group, group_end);
+						self.collapse_paren(group, group_end);
 					}
 					Group::Index(_, l_bracket) => {
 						self.syntax_diags.push(Syntax::Expr(
@@ -2769,7 +2730,7 @@ impl ShuntingYard {
 						});
 					}
 					_ => {
-						panic!("Invalid operator {op:?} in shunting yard stack. This operator should never be present in the final RPN output stack.");
+						panic!("Invalid operator {op:?} in shunting yard stack. This operator should never be present in the final RPN stack.");
 					}
 				},
 			}

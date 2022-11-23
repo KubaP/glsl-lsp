@@ -802,6 +802,18 @@ pub enum PreprocDefineDiag {
 #[derive(Debug)]
 #[non_exhaustive]
 pub enum PreprocConditionalDiag {
+	/// ERROR - Did not find an identifier token after the `ifdef` keyword.
+	///
+	/// - `0` - The span of the incorrect token or the position where the macro name should be inserted.
+	ExpectedNameAfterIfDef(Span),
+	/// ERROR - Did not find an identifier token after the `ifndef` keyword.
+	///
+	/// - `0` - The span of the incorrect token or the position where the macro name should be inserted.
+	ExpectedNameAfterIfNotDef(Span),
+	/// ERROR - Did not find an expression after the `if` keyword.
+	/// 
+	/// - `0` - The position where the expression should be inserted.
+	ExpectedExprAfterIf(Span),
 	/// ERROR - Found an unmatched `#elif` directive.
 	///
 	/// - `0` - The span of the directive.

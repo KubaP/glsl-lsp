@@ -6,6 +6,7 @@
 //! themselves. There is also the [`SyntaxToken`] type used to represent syntax highlighting spans.
 
 pub mod ast;
+mod conditional_expression;
 mod expression;
 mod printing;
 mod syntax;
@@ -26,6 +27,7 @@ use crate::{
 		},
 		OpTy, Token, TokenStream,
 	},
+	parser::conditional_expression::cond_parser,
 	Either, Span, Spanned,
 };
 use ast::*;
@@ -212,7 +214,11 @@ pub fn parse_from_token_stream(
 	//
 	// order-by-appearance: [(0, 0), (1, 0), (2, 1), (3, 0)]
 
-	fn push_condition(arena: &mut Vec<TreeNode>, id: NodeId) -> NodeId {
+	fn push_condition(
+		arena: &mut Vec<TreeNode>,
+		if_condition: ConditionalIf,
+		id: NodeId,
+	) -> NodeId {
 		let new_id = arena.len();
 		arena.push(TreeNode {
 			parent: Some(id),
@@ -223,7 +229,8 @@ pub fn parse_from_token_stream(
 			.unwrap() // Panic: `id` is always valid.
 			.contents
 			.push(Content::ConditionalBlock {
-				if_: new_id,
+				if_: if_condition,
+				if_node: new_id,
 				completed_if: false,
 				elses: vec![],
 			});
@@ -260,6 +267,8 @@ pub fn parse_from_token_stream(
 	// valid.
 	let mut order_by_appearance = vec![(0, 0)];
 	let mut syntax_diags = Vec::new();
+	let mut semantic_diags = Vec::new();
+	let mut syntax_tokens = Vec::new();
 
 	// We consume all of the tokens from the beginning.
 	loop {
@@ -269,17 +278,172 @@ pub fn parse_from_token_stream(
 			break;
 		};
 
+		use crate::lexer::preprocessor::ConditionToken;
+
 		match token {
 			Token::Directive(d) => match d {
-				PreprocStream::IfDef { .. }
-				| PreprocStream::IfNotDef { .. }
-				| PreprocStream::If { .. } => {
-					let new_id =
-						push_condition(&mut arena, *stack.last().unwrap());
+				PreprocStream::IfDef { kw, mut tokens } => {
+					syntax_tokens.push((
+						SyntaxToken::Directive,
+						token_span.first_char(),
+					));
+					syntax_tokens.push((SyntaxToken::Directive, kw));
+
+					// We are expecting an identifier as the first token.
+					let ident = if tokens.is_empty() {
+						syntax_diags.push(Syntax::PreprocConditional(
+							PreprocConditionalDiag::ExpectedNameAfterIfDef(
+								kw.next_single_width(),
+							),
+						));
+						None
+					} else {
+						let (token, span) = tokens.remove(0);
+						match token {
+							ConditionToken::Ident(str) => {
+								syntax_tokens.push((SyntaxToken::Ident, span));
+								Some(Ident { name: str, span })
+							}
+							_ => {
+								syntax_diags.push(Syntax::PreprocConditional(
+									PreprocConditionalDiag::ExpectedNameAfterIfDef(
+										span.next_single_width(),
+									),
+								));
+								None
+							}
+						}
+					};
+
+					// Check for any trailing tokens.
+					if !tokens.is_empty() {
+						let start = tokens.first().unwrap().1.start;
+						let end = tokens.last().unwrap().1.end;
+						syntax_diags.push(Syntax::PreprocTrailingTokens(
+							Span::new(start, end),
+						));
+						for (_, span) in tokens {
+							syntax_tokens.push((SyntaxToken::Invalid, span));
+						}
+					}
+
+					let new_id = push_condition(
+						&mut arena,
+						ConditionalIf::IfDef { ident },
+						*stack.last().unwrap(),
+					);
 					order_by_appearance.push((new_id, *stack.last().unwrap()));
 					stack.push(new_id);
 				}
-				PreprocStream::ElseIf { .. } => {
+				PreprocStream::IfNotDef { kw, mut tokens } => {
+					syntax_tokens.push((
+						SyntaxToken::Directive,
+						token_span.first_char(),
+					));
+					syntax_tokens.push((SyntaxToken::Directive, kw));
+
+					// We are expecting an identifier as the first token.
+					let ident = if tokens.is_empty() {
+						syntax_diags.push(Syntax::PreprocConditional(
+							PreprocConditionalDiag::ExpectedNameAfterIfNotDef(
+								kw.next_single_width(),
+							),
+						));
+						None
+					} else {
+						let (token, span) = tokens.remove(0);
+						match token {
+							ConditionToken::Ident(str) => {
+								syntax_tokens.push((SyntaxToken::Ident, span));
+								Some(Ident { name: str, span })
+							}
+							_ => {
+								syntax_diags.push(Syntax::PreprocConditional(
+									PreprocConditionalDiag::ExpectedNameAfterIfNotDef(
+										span.next_single_width(),
+									),
+								));
+								None
+							}
+						}
+					};
+
+					// Check for any trailing tokens.
+					if !tokens.is_empty() {
+						let start = tokens.first().unwrap().1.start;
+						let end = tokens.last().unwrap().1.end;
+						syntax_diags.push(Syntax::PreprocTrailingTokens(
+							Span::new(start, end),
+						));
+						for (_, span) in tokens {
+							syntax_tokens.push((SyntaxToken::Invalid, span));
+						}
+					}
+
+					let new_id = push_condition(
+						&mut arena,
+						ConditionalIf::IfNotDef { ident },
+						*stack.last().unwrap(),
+					);
+					order_by_appearance.push((new_id, *stack.last().unwrap()));
+					stack.push(new_id);
+				}
+				PreprocStream::If { kw, tokens } => {
+					syntax_tokens.push((
+						SyntaxToken::Directive,
+						token_span.first_char(),
+					));
+					syntax_tokens.push((SyntaxToken::Directive, kw));
+
+					// We are expecting an identifier as the first token.
+					let expr = if tokens.is_empty() {
+						syntax_diags.push(Syntax::PreprocConditional(
+							PreprocConditionalDiag::ExpectedExprAfterIf(
+								kw.next_single_width(),
+							),
+						));
+						None
+					} else {
+						let (expr, mut syntax, mut semantic, mut colours) =
+							cond_parser(tokens);
+						syntax_diags.append(&mut syntax);
+						semantic_diags.append(&mut semantic);
+						syntax_tokens.append(&mut colours);
+						expr
+					};
+
+					let new_id = push_condition(
+						&mut arena,
+						ConditionalIf::If { expr },
+						*stack.last().unwrap(),
+					);
+					order_by_appearance.push((new_id, *stack.last().unwrap()));
+					stack.push(new_id);
+				}
+				PreprocStream::ElseIf { kw, tokens } => {
+					syntax_tokens.push((
+						SyntaxToken::Directive,
+						token_span.first_char(),
+					));
+					syntax_tokens.push((SyntaxToken::Directive, kw));
+
+					// We are expecting an identifier as the first token.
+					let expr = if tokens.is_empty() {
+						syntax_diags.push(Syntax::PreprocConditional(
+							PreprocConditionalDiag::ExpectedExprAfterIf(
+								kw.next_single_width(),
+							),
+						));
+						None
+					} else {
+						let (expr, mut syntax, mut semantic, mut colours) =
+							cond_parser(tokens);
+						syntax_diags.append(&mut syntax);
+						semantic_diags.append(&mut semantic);
+						syntax_tokens.append(&mut colours);
+						expr
+					};
+
 					if stack.len() > 1 {
 						stack.pop();
 						let new_id = arena.len();
@@ -291,13 +455,16 @@ pub fn parse_from_token_stream(
 						let container =
 							arena.get_mut(*stack.last().unwrap()).unwrap(); // Panic: the `id` is always valid.
 						if let Some(Content::ConditionalBlock {
-							if_: _,
 							completed_if,
 							elses,
+							..
 						}) = container.contents.last_mut()
 						{
 							*completed_if = true;
-							elses.push((Condition::ElseIf, new_id));
+							elses.push((
+								ConditionalElse::ElseIf { expr },
+								new_id,
+							));
 							order_by_appearance
 								.push((new_id, *stack.last().unwrap()));
 							stack.push(new_id);
@@ -314,7 +481,23 @@ pub fn parse_from_token_stream(
 						));
 					}
 				}
-				PreprocStream::Else { .. } => {
+				PreprocStream::Else { kw, tokens } => {
+					syntax_tokens.push((
+						SyntaxToken::Directive,
+						token_span.first_char(),
+					));
+					syntax_tokens.push((SyntaxToken::Directive, kw));
+
+					// We are not expecting anything after `#else`.
+					if !tokens.is_empty() {
+						let span = Span::new(
+							tokens.first().unwrap().1.start,
+							tokens.last().unwrap().1.end,
+						);
+						syntax_diags.push(Syntax::PreprocTrailingTokens(span));
+						syntax_tokens.push((SyntaxToken::Invalid, span));
+					}
+
 					if stack.len() > 1 {
 						stack.pop();
 						let new_id = arena.len();
@@ -326,13 +509,13 @@ pub fn parse_from_token_stream(
 						let container =
 							arena.get_mut(*stack.last().unwrap()).unwrap();
 						if let Some(Content::ConditionalBlock {
-							if_: _,
 							completed_if,
 							elses,
+							..
 						}) = container.contents.last_mut()
 						{
 							*completed_if = true;
-							elses.push((Condition::Else, new_id));
+							elses.push((ConditionalElse::Else, new_id));
 							order_by_appearance
 								.push((new_id, *stack.last().unwrap()));
 							stack.push(new_id);
@@ -349,7 +532,23 @@ pub fn parse_from_token_stream(
 						));
 					}
 				}
-				PreprocStream::EndIf { .. } => {
+				PreprocStream::EndIf { kw, tokens } => {
+					syntax_tokens.push((
+						SyntaxToken::Directive,
+						token_span.first_char(),
+					));
+					syntax_tokens.push((SyntaxToken::Directive, kw));
+
+					// We are not expecting anything after `#endif`.
+					if !tokens.is_empty() {
+						let span = Span::new(
+							tokens.first().unwrap().1.start,
+							tokens.last().unwrap().1.end,
+						);
+						syntax_diags.push(Syntax::PreprocTrailingTokens(span));
+						syntax_tokens.push((SyntaxToken::Invalid, span));
+					}
+
 					if stack.len() > 1 {
 						stack.pop();
 					} else {
@@ -371,7 +570,9 @@ pub fn parse_from_token_stream(
 			),
 		}
 	}
-
+	dbg!(&arena);
+	dbg!(&syntax_diags);
+	dbg!(&syntax_tokens);
 	TokenTree {
 		arena,
 		order_by_appearance,
@@ -642,7 +843,11 @@ impl TokenTree {
 				*content_idx += 1;
 				match inner {
 					Content::Tokens(s) => streams.push(s.clone()),
-					Content::ConditionalBlock { if_, elses, .. } => {
+					Content::ConditionalBlock {
+						if_node: if_,
+						elses,
+						..
+					} => {
 						// Check if any of the conditional branches match the current key number.
 						if let Some(current_order_id) = current_key_node_id {
 							if *if_ == current_order_id {
@@ -719,20 +924,14 @@ enum Content {
 	/// A conditional block. Each branch points to a node in the tree arena; each node contains further nested
 	/// content.
 	ConditionalBlock {
+		if_: ConditionalIf,
 		/// Tokens by default are pushed into this node.
-		if_: NodeId,
+		if_node: NodeId,
 		/// This flag is set to `true` when we encounter an `elif`/`else`.
 		completed_if: bool,
 		/// If `completed_if` is set to `true`, tokens are pushed into the last node in this vector.
-		elses: Vec<(Condition, NodeId)>,
+		elses: Vec<(ConditionalElse, NodeId)>,
 	},
-}
-
-/// The type of an extra conditional branch.
-#[derive(Debug)]
-enum Condition {
-	ElseIf,
-	Else,
 }
 
 /// Information necessary to expand a macro.

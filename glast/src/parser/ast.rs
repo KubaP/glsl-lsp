@@ -858,7 +858,7 @@ impl Primitive {
 	}
 }
 
-/* EXPRESSION-RELATED TYPES BELOW */
+/* EXPRESSION-RELATED STUFF BELOW */
 
 /// An expression node.
 #[derive(Debug, Clone, PartialEq)]
@@ -1169,5 +1169,103 @@ impl Lit {
 			Self::InvalidNum,
 			Syntax::Expr(ExprDiag::UnparsableNumber(span)),
 		))
+	}
+}
+
+/* CONDITIONAL COMPILATION STUFF BELOW */
+
+/// The first conditional branch.
+#[derive(Debug, Clone, PartialEq)]
+pub enum ConditionalIf {
+	/// An `#ifdef` directive.
+	IfDef { ident: Option<Ident> },
+	/// An `#ifndef` directive.
+	IfNotDef { ident: Option<Ident> },
+	/// An `#if` directive.
+	If { expr: Option<conditional::Expr> },
+}
+
+/// An extra conditional branch.
+#[derive(Debug, Clone, PartialEq)]
+pub enum ConditionalElse {
+	/// An `#elif` directive.
+	ElseIf { expr: Option<conditional::Expr> },
+	/// An `#else` directive.
+	Else,
+}
+
+/// AST items for conditional directive expressions.
+pub mod conditional {
+	use crate::Span;
+
+	/// An expression node.
+	#[derive(Debug, Clone, PartialEq)]
+	pub struct Expr {
+		pub ty: ExprTy,
+		pub span: Span,
+	}
+
+	#[derive(Debug, Clone, PartialEq)]
+	pub enum ExprTy {
+		/// An integer literal.
+		Num(usize),
+		/// An identifier.
+		Ident(super::Ident),
+		/// A prefix operator.
+		Prefix { op: PreOp, expr: Option<Box<Expr>> },
+		/// A binary expression.
+		Binary {
+			left: Box<Expr>,
+			op: BinOp,
+			right: Option<Box<Expr>>,
+		},
+		/// A set of parenthesis.
+		Parens { expr: Option<Box<Expr>> },
+		/// The `defined` operator.
+		Defined { expr: Option<Box<Expr>> },
+	}
+
+	/// A binary operator.
+	#[derive(Debug, Clone, PartialEq)]
+	pub struct BinOp {
+		pub ty: BinOpTy,
+		pub span: Span,
+	}
+
+	#[derive(Debug, Clone, PartialEq)]
+	pub enum BinOpTy {
+		Add,
+		Sub,
+		Mul,
+		Div,
+		Rem,
+		And,
+		Or,
+		Xor,
+		LShift,
+		RShift,
+		EqEq,
+		NotEq,
+		AndAnd,
+		OrOr,
+		XorXor,
+		Gt,
+		Lt,
+		Ge,
+		Le,
+	}
+
+	/// A prefix operator.
+	#[derive(Debug, Clone, PartialEq)]
+	pub struct PreOp {
+		pub ty: PreOpTy,
+		pub span: Span,
+	}
+
+	#[derive(Debug, Clone, PartialEq)]
+	pub enum PreOpTy {
+		Neg,
+		Flip,
+		Not,
 	}
 }

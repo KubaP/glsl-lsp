@@ -318,6 +318,17 @@ pub enum ExprDiag {
 	/// - `0` - The span of the opening `(`.
 	/// - `1` - The zero-width span at the end of the expression.
 	UnclosedArrayConstructor(Span, Span),
+
+	/* DEFINED OPERATOR - ONLY PRESENT WITHIN EXPRESSIONS IN CONDITIONAL DIRECTIVES */
+	/// ERROR - Did not find anything after the `defined` keyword.
+	///
+	/// - `0` - The position where the ident is expected.
+	ExpectedIdentAfterDefinedOp(Span),
+	/// ERROR - Found an unclosed `define` operator. E.g. `defined(foobar`.
+	///
+	/// - `0` - The span of the opening `(`.
+	/// - `1` - The zero-width span at the end of the expression.
+	UnclosedDefinedOp(Span, Span),
 }
 
 /// Syntax diagnostics for statement.
@@ -811,7 +822,7 @@ pub enum PreprocConditionalDiag {
 	/// - `0` - The span of the incorrect token or the position where the macro name should be inserted.
 	ExpectedNameAfterIfNotDef(Span),
 	/// ERROR - Did not find an expression after the `if` keyword.
-	/// 
+	///
 	/// - `0` - The position where the expression should be inserted.
 	ExpectedExprAfterIf(Span),
 	/// ERROR - Found an unmatched `#elif` directive.

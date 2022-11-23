@@ -31,7 +31,7 @@ pub(super) fn cond_parser(
 		stack: VecDeque::new(),
 		operators: VecDeque::new(),
 		start_position,
-		paren_groups: Vec::new(),
+		groups: Vec::new(),
 		syntax_diags: Vec::new(),
 		semantic_diags: Vec::new(),
 		syntax_tokens: Vec::new(),
@@ -119,7 +119,6 @@ enum OpTy {
 	Neg(bool),
 	Flip(bool),
 	Not(bool),
-	Defined(bool),
 	/// The `(` token.
 	ParenStart,
 	/// A parenthesis group. This operator spans from the opening parenthesis to the closing parenthesis.
@@ -129,6 +128,26 @@ enum OpTy {
 	/// - `2` - The span of the closing parenthesis. If this is zero-width, that means there is no `)` token
 	///   present.
 	Paren(bool, Span, Span),
+	/// The `defined` token.
+	DefinedStart,
+	/// A defined group. This operator spans from the keyword to either the closing parenthesis (if there is an
+	/// opening one), or to the end of the first identifier after the keyword.
+	///
+	/// - `0` - Whether to consume a node for the inner expression.
+	/// - `1` - The optional span of the opening parenthesis.
+	/// - `2` - The span of the closing parenthesis. If this is zero-width, that means there is no `)` token
+	///   present.
+	Defined(bool, Option<Span>, Span),
+}
+
+enum Group {
+	/// - `0` - Whether this group has an inner expression within the parenthesis.
+	/// - `1` - The span of the opening parenthesis.
+	Paren(bool, Span),
+	/// - `0` - Whether this group has an inner expression within the parenthesis.
+	/// - `1` - The span of the `defined` keyword.
+	/// - `2` - The optional span of the opening parenthesis.
+	Defined(bool, Span, Option<Span>),
 }
 
 impl Op {
@@ -225,11 +244,8 @@ struct ShuntingYard {
 	operators: VecDeque<Op>,
 	/// The start position of the first item in this expression.
 	start_position: usize,
-	/// Parenthesis groups.
-	///
-	/// - `0` - Whether this group has an inner expression within the parenthesis.
-	/// - `1` - The span of the opening parenthesis.
-	paren_groups: Vec<(bool, Span)>,
+	/// Groups.
+	groups: Vec<Group>,
 
 	/// Syntax diagnostics encountered during the parser execution.
 	syntax_diags: Vec<Syntax>,
@@ -272,29 +288,81 @@ impl ShuntingYard {
 		end_span: Span,
 		/* r_comments: Comments, */
 	) -> Result<(), ()> {
-		let (has_inner, l_paren) = if !self.paren_groups.is_empty() {
-			self.paren_groups.remove(self.paren_groups.len() - 1)
+		let group = if !self.groups.is_empty() {
+			self.groups.remove(self.groups.len() - 1)
 		} else {
 			return Err(());
 		};
 
-		while self.operators.back().is_some() {
-			let op = self.operators.pop_back().unwrap();
+		match group {
+			Group::Paren(has_inner, l_paren) => {
+				while self.operators.back().is_some() {
+					let op = self.operators.pop_back().unwrap();
 
-			if let OpTy::ParenStart = op.ty {
-				self.stack.push_back(Either::Right(Op {
-					span: Span::new(l_paren.start, end_span.end),
-					ty: OpTy::Paren(has_inner, l_paren, end_span),
-				}));
-				break;
-			} else {
-				// Any other operators get moved, since we are moving everything until we hit the start
-				// delimiter.
-				self.stack.push_back(Either::Right(op));
+					if let OpTy::ParenStart = op.ty {
+						self.stack.push_back(Either::Right(Op {
+							span: Span::new(l_paren.start, end_span.end),
+							ty: OpTy::Paren(has_inner, l_paren, end_span),
+						}));
+						break;
+					} else {
+						// Any other operators get moved, since we are moving everything until we hit the start
+						// delimiter.
+						self.stack.push_back(Either::Right(op));
+					}
+				}
+			}
+			Group::Defined(has_inner, defined, l_paren) => {
+				while self.operators.back().is_some() {
+					let op = self.operators.pop_back().unwrap();
+
+					if let OpTy::DefinedStart = op.ty {
+						self.stack.push_back(Either::Right(Op {
+							span: Span::new(defined.start, end_span.end),
+							ty: OpTy::Defined(has_inner, l_paren, end_span),
+						}));
+						break;
+					} else {
+						// Any other operators get moved, since we are moving everything until we hit the start
+						// delimiter.
+						self.stack.push_back(Either::Right(op));
+					}
+				}
 			}
 		}
 
 		Ok(())
+	}
+
+	fn end_defined_group(&mut self, end_span: Span) {
+		let group = if !self.groups.is_empty() {
+			self.groups.remove(self.groups.len() - 1)
+		} else {
+			unreachable!()
+		};
+
+		match group {
+			Group::Paren(_, _) => {
+				unreachable!()
+			}
+			Group::Defined(has_inner, defined, l_paren) => {
+				while self.operators.back().is_some() {
+					let op = self.operators.pop_back().unwrap();
+
+					if let OpTy::DefinedStart = op.ty {
+						self.stack.push_back(Either::Right(Op {
+							span: Span::new(defined.start, end_span.end),
+							ty: OpTy::Defined(has_inner, l_paren, end_span),
+						}));
+						break;
+					} else {
+						// Any other operators get moved, since we are moving everything until we hit the start
+						// delimiter.
+						self.stack.push_back(Either::Right(op));
+					}
+				}
+			}
+		}
 	}
 
 	/// Sets the toggle on the last operator that it has a right-hand side operand (if applicable).
@@ -326,14 +394,16 @@ impl ShuntingYard {
 				_ => {}
 			}
 		}
-		if let Some((b, _)) = self.paren_groups.last_mut() {
+		if let Some(Group::Paren(b, _) | Group::Defined(b, _, _)) =
+			self.groups.last_mut()
+		{
 			*b = true;
 		}
 	}
 
 	/// Returns whether we have just started a parenthesis group.
 	fn just_started_paren(&self) -> bool {
-		if let Some((has_inner, _)) = self.paren_groups.last() {
+		if let Some(Group::Paren(has_inner, _)) = self.groups.last() {
 			*has_inner == false
 		} else {
 			false
@@ -380,6 +450,8 @@ impl ShuntingYard {
 		}
 		let mut state = State::Operand;
 
+		let mut previously_started_defined = false;
+
 		'main: while !walker.is_done() {
 			let (token, span) = match walker.peek() {
 				Some(t) => t,
@@ -415,9 +487,7 @@ impl ShuntingYard {
 							span,
 						),
 					));
-
-					// We don't change state since even though we found an operand instead of an operator, after
-					// this operand we will still be expecting an operator.
+					break 'main;
 				}
 				ConditionToken::Ident(s) if state == State::Operand => {
 					self.colour(walker, span, SyntaxToken::UncheckedIdent);
@@ -434,6 +504,14 @@ impl ShuntingYard {
 					// `..10 + i` instead of `..10 i`.
 					state = State::AfterOperand;
 					self.set_op_rhs_toggle();
+
+					// If we are parsing a `defined` but we are not in a group (which means we have no
+					// parenthesis), we want to reset the flag back to false. If we are in a defined parenthesis
+					// group, the closing parenthesis will take care of resetting the flag.
+					if previously_started_defined {
+						previously_started_defined = false;
+						self.end_defined_group(span);
+					}
 				}
 				ConditionToken::Ident(s) if state == State::AfterOperand => {
 					self.colour(walker, span, SyntaxToken::UncheckedIdent);
@@ -452,9 +530,7 @@ impl ShuntingYard {
 							span,
 						),
 					));
-
-					// We don't change state since even though we found an operand instead of an operator, after
-					// this operand we will still be expecting an operator.
+					break 'main;
 				}
 				ConditionToken::Sub if state == State::Operand => {
 					self.colour(walker, span, SyntaxToken::Operator);
@@ -488,12 +564,17 @@ impl ShuntingYard {
 				}
 				ConditionToken::LParen if state == State::Operand => {
 					self.colour(walker, span, SyntaxToken::Punctuation);
-					self.set_op_rhs_toggle();
-					self.operators.push_back(Op {
-						span,
-						ty: OpTy::ParenStart,
-					});
-					self.paren_groups.push((false, span));
+					if previously_started_defined {
+						let Some(Group::Defined(_, _, l_paren_span)) = self.groups.last_mut()  else {unreachable!();};
+						*l_paren_span = Some(span);
+					} else {
+						self.set_op_rhs_toggle();
+						self.operators.push_back(Op {
+							span,
+							ty: OpTy::ParenStart,
+						});
+						self.groups.push(Group::Paren(false, span));
+					}
 				}
 				ConditionToken::LParen if state == State::AfterOperand => {
 					self.colour(walker, span, SyntaxToken::Punctuation);
@@ -542,13 +623,32 @@ impl ShuntingYard {
 
 					state = State::AfterOperand;
 				}
+				ConditionToken::Defined if state == State::Operand => {
+					self.colour(walker, span, SyntaxToken::Keyword);
+					self.push_operator(Op {
+						span,
+						ty: OpTy::DefinedStart,
+					});
+					self.groups.push(Group::Defined(false, span, None));
+					previously_started_defined = true;
+				}
+				ConditionToken::Defined if state == State::AfterOperand => {
+					self.colour(walker, span, SyntaxToken::Keyword);
+					self.syntax_diags.push(Syntax::Expr(
+						ExprDiag::FoundOperandAfterOperand(
+							self.get_previous_span().unwrap(),
+							span,
+						),
+					));
+					break 'main;
+				}
 				ConditionToken::InvalidNum(_) => {
 					self.colour(walker, span, SyntaxToken::Invalid);
 					// FIXME: Since the calling code doesn't do any further iteration, we need to syntax highlight
 					// the invalid tokens here, until we run out.
 					break 'main;
 				}
-				ConditionToken::Invalid(_) | ConditionToken::Defined => {
+				ConditionToken::Invalid(_) => {
 					// We have encountered an unexpected token that's not allowed to be part of an expression.
 					self.syntax_diags
 						.push(Syntax::Expr(ExprDiag::FoundInvalidToken(span)));
@@ -564,10 +664,45 @@ impl ShuntingYard {
 				_ => unreachable!(),
 			}
 
+			match token {
+				ConditionToken::Defined => {}
+				_ => previously_started_defined = false,
+			}
+
 			walker.advance();
 		}
 
-		// qe may have leftover operators which need moving.
+		if !self.groups.is_empty() {
+			let group_end = self.get_previous_span().unwrap().end_zero_width();
+
+			while let Some(group) = self.groups.last() {
+				match group {
+					Group::Paren(_, l_paren) => {
+						self.syntax_diags.push(Syntax::Expr(
+							ExprDiag::UnclosedParens(*l_paren, group_end),
+						));
+					}
+					Group::Defined(_, kw, l_paren) => {
+						if let Some(l_paren) = l_paren {
+							self.syntax_diags.push(Syntax::Expr(
+								ExprDiag::UnclosedDefinedOp(
+									*l_paren, group_end,
+								),
+							));
+						} else {
+							self.syntax_diags.push(Syntax::Expr(
+								ExprDiag::ExpectedIdentAfterDefinedOp(
+									kw.next_single_width(),
+								),
+							));
+						}
+					}
+				}
+				let _ = self.end_bracket(group_end);
+			}
+		}
+
+		// We may have leftover operators which need moving.
 		while let Some(op) = self.operators.pop_back() {
 			self.stack.push_back(Either::Right(op));
 		}
@@ -677,6 +812,20 @@ impl ShuntingYard {
 						stack.push_back(Expr {
 							span: op.span,
 							ty: ExprTy::Parens {
+								expr: expr.map(|e| Box::from(e)),
+							},
+						});
+					}
+					OpTy::Defined(has_inner, l_paren, end) => {
+						let expr = if has_inner {
+							Some(pop_back(&mut stack))
+						} else {
+							None
+						};
+
+						stack.push_back(Expr {
+							span: Span::new(op.span.start, end.end),
+							ty: ExprTy::Defined {
 								expr: expr.map(|e| Box::from(e)),
 							},
 						});

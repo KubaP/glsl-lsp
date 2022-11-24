@@ -74,3 +74,27 @@ pub enum Either<L, R> {
 	Left(L),
 	Right(R),
 }
+
+/// Describes the GLSL version.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum GlslVersion {
+	_450,
+	Unsupported,
+}
+
+impl GlslVersion {
+	/// Parses a number into a GLSL version.
+	fn parse(num: usize) -> Option<Self> {
+		match num {
+			450 => Some(Self::_450),
+			_ => None,
+		}
+	}
+}
+
+impl Default for GlslVersion {
+	fn default() -> Self {
+		// TODO: The default GLSL version in reality is 110, but we currently don't support that.
+		Self::Unsupported
+	}
+}

@@ -55,7 +55,7 @@
 //! - Has different pre-defined macros, (which depend on the exact GLSL version).
 
 use super::{is_word, is_word_start, match_op, Lexer};
-use crate::{Span, Spanned};
+use crate::{GlslVersion, Span, Spanned};
 
 /// A vector of tokens representing a specific preprocessor directive.
 ///
@@ -485,9 +485,17 @@ pub(super) fn construct_empty(
 pub(super) fn parse_version(
 	lexer: &mut Lexer,
 	directive_kw_span: Span,
-) -> TokenStream {
+	is_first_non_comment_token: bool,
+) -> (TokenStream, Option<GlslVersion>) {
 	let mut tokens = Vec::new();
 	let mut buffer = String::new();
+
+	// Whether we are parsing the first token of this version directive's content.
+	let mut first_internal_token = true;
+	// This value is returned to the main lexer, which in turn can dynamically set it's own version number if the
+	// appropriate circumstances are met.
+	let mut version = None;
+
 	// We continue off from where the lexer previously stopped.
 	while !lexer.is_done() {
 		let buffer_start = lexer.position();
@@ -563,6 +571,16 @@ pub(super) fn parse_version(
 						} else {
 							match usize::from_str_radix(&buffer, 10) {
 								Ok(num) => {
+									// This number is the first token after the `#version` keyword. If this
+									// directive is also the first non-comment token in the parent lexer, that
+									// means this version number (assuming it's a valid GLSL version) should be
+									// set.
+									if is_first_non_comment_token
+										&& first_internal_token
+									{
+										version = GlslVersion::parse(num);
+									}
+
 									tokens.push((
 										VersionToken::Num(num),
 										Span {
@@ -613,6 +631,15 @@ pub(super) fn parse_version(
 					} else {
 						match usize::from_str_radix(&buffer, 10) {
 							Ok(num) => {
+								// This number is the first token after the `#version` keyword. If this directive
+								// is also the first non-comment token in the parent lexer, that means this version
+								// number (assuming it's a valid GLSL version) should be set.
+								if is_first_non_comment_token
+									&& first_internal_token
+								{
+									version = GlslVersion::parse(num);
+								}
+
 								tokens.push((
 									VersionToken::Num(num),
 									Span {
@@ -650,12 +677,17 @@ pub(super) fn parse_version(
 				},
 			));
 		}
+
+		first_internal_token = false;
 	}
 
-	TokenStream::Version {
-		kw: directive_kw_span,
-		tokens,
-	}
+	(
+		TokenStream::Version {
+			kw: directive_kw_span,
+			tokens,
+		},
+		version,
+	)
 }
 
 /// Parses an `#extension` directive.

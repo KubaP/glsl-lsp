@@ -42,7 +42,7 @@
 
 pub mod preprocessor;
 
-use crate::{Span, Spanned};
+use crate::{GlslVersion, Span, Spanned};
 
 /// A vector of tokens representing a GLSL source string.
 pub type TokenStream = Vec<Spanned<Token>>;
@@ -90,6 +90,10 @@ pub fn parse_from_str(source: &str) -> (TokenStream, Metadata) {
 #[derive(Debug, Clone, PartialEq)]
 #[non_exhaustive]
 pub struct Metadata {
+	/// The detected GLSL version of the source string. In accordance with the specification, this is only set when
+	/// the lexer encounters a valid `#version` directive as the first token in the source string (barring any
+	/// whitespace).
+	pub version: GlslVersion,
 	/// Whether the GLSL source string contains any condition compilation directives.
 	pub contains_conditional_compilation: bool,
 }
@@ -588,6 +592,11 @@ fn parse_tokens(lexer: &mut Lexer, parsing_define_body: bool) -> TokenStream {
 	// the next iteration of the loop starts a new token. If it's \r\n then the next iteration will consume the \n,
 	// after which we do _another_ iteration to start a new token.
 	let mut buffer = String::new();
+
+	// This flag is set to true when we encounter our first directive. This flag is used to detect the first
+	// directive, and if it's a version directive, and if the version directive contains a valid GLSL version
+	// number, we can set the version number of the lexer.
+	let mut parsed_directive_yet = false;
 	'outer: while !lexer.is_done() {
 		let buffer_start = lexer.position();
 		// Peek the current character.
@@ -1123,6 +1132,24 @@ fn parse_tokens(lexer: &mut Lexer, parsing_define_body: bool) -> TokenStream {
 			lexer.advance();
 		} else if can_start_directive && current == '#' && !parsing_define_body
 		{
+			// The first time we come across a directive, we want to check whether it is the first token other than
+			// whitespace. If so, and if it turns out we are parsing a version directive, we have change the
+			// version number for the lexer to the parsed value.
+			let mut first_directive = false;
+			if !parsed_directive_yet {
+				first_directive = true;
+				for (token, _) in &tokens {
+					match token {
+						Token::LineComment(_) | Token::BlockComment { .. } => {}
+						_ => {
+							first_directive = false;
+							break;
+						}
+					}
+				}
+				parsed_directive_yet = true;
+			};
+
 			// If we are parsing a directive string, then the only difference in behaviour is that we don't start a
 			// new directive within the existing directive. This means the `#` character will be treated as an
 			// invalid character instead.
@@ -1268,16 +1295,29 @@ fn parse_tokens(lexer: &mut Lexer, parsing_define_body: bool) -> TokenStream {
 
 			// Consume the rest of the directive, and create appropriate tokens depending on the directive keyword.
 			match buffer.as_ref() {
-				"version" => tokens.push((
-					Token::Directive(preprocessor::parse_version(
+				"version" => {
+					let (stream, version) = preprocessor::parse_version(
 						lexer,
 						directive_kw_span,
-					)),
-					Span {
-						start: directive_start,
-						end: lexer.position(),
-					},
-				)),
+						first_directive,
+					);
+					tokens.push((
+						Token::Directive(stream),
+						Span {
+							start: directive_start,
+							end: lexer.position(),
+						},
+					));
+					if first_directive {
+						if let Some(version) = version {
+							if version == GlslVersion::Unsupported {
+								break 'outer;
+							} else {
+								lexer.metadata.version = version;
+							}
+						}
+					}
+				}
 				"extension" => tokens.push((
 					Token::Directive(preprocessor::parse_extension(
 						lexer,
@@ -1521,6 +1561,7 @@ impl Lexer {
 			chars: source.chars().collect(),
 			cursor: 0,
 			metadata: Metadata {
+				version: Default::default(),
 				contains_conditional_compilation: false,
 			},
 		};

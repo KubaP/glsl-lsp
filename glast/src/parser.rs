@@ -28,7 +28,7 @@ use crate::{
 		OpTy, Token, TokenStream,
 	},
 	parser::conditional_expression::cond_parser,
-	Either, Span, Spanned,
+	Either, GlslVersion, Span, Spanned,
 };
 use ast::*;
 use expression::{expr_parser, Mode};
@@ -49,9 +49,16 @@ pub type ParseResult = (
 	Vec<Spanned<SyntaxToken>>,
 );
 
-/// An error type for parsing operations.
+/// An error type for the first step of the parsing operations.
 #[derive(Debug)]
 pub enum ParseErr {
+	/// The token stream from the lexer is from an unsupported GLSL version.
+	UnsupportedVersion(GlslVersion),
+}
+
+/// An error type for the second step of the parsing operations, (after conditional compilation has been applied).
+#[derive(Debug)]
+pub enum TreeParseErr {
 	/// This number doesn't map to a conditional branch.
 	InvalidNum(usize),
 	/// This number has a dependent number that was not specified in the key.
@@ -149,7 +156,7 @@ pub enum ParseErr {
 /// # Further reading
 /// See the documentation of the [`TokenTree`] struct for a more in-depth explanation about why this seemingly
 /// roundabout method is necessary.
-pub fn parse_from_str(source: &str) -> TokenTree {
+pub fn parse_from_str(source: &str) -> Result<TokenTree, ParseErr> {
 	let (token_stream, metadata) = crate::lexer::parse_from_str(source);
 	parse_from_token_stream(token_stream, metadata)
 }
@@ -160,10 +167,15 @@ pub fn parse_from_str(source: &str) -> TokenTree {
 pub fn parse_from_token_stream(
 	mut token_stream: TokenStream,
 	metadata: crate::lexer::Metadata,
-) -> TokenTree {
+) -> Result<TokenTree, ParseErr> {
+	// Check the GLSL version as detected by the lexer.
+	if metadata.version == GlslVersion::Unsupported {
+		return Err(ParseErr::UnsupportedVersion(metadata.version));
+	}
+
 	// Skip tree generation if there are no conditional compilation blocks.
 	if !metadata.contains_conditional_compilation {
-		return TokenTree {
+		return Ok(TokenTree {
 			arena: vec![TreeNode {
 				parent: None,
 				contents: vec![Content::Tokens(token_stream)],
@@ -171,7 +183,7 @@ pub fn parse_from_token_stream(
 			order_by_appearance: vec![],
 			syntax_diags: vec![],
 			contains_conditional_compilation: false,
-		};
+		});
 	}
 
 	// Below is a simple arena-based tree structure. Here is an example of how the source would be represented in
@@ -573,12 +585,12 @@ pub fn parse_from_token_stream(
 	dbg!(&arena);
 	dbg!(&syntax_diags);
 	dbg!(&syntax_tokens);
-	TokenTree {
+	Ok(TokenTree {
 		arena,
 		order_by_appearance,
 		syntax_diags,
 		contains_conditional_compilation: true,
-	}
+	})
 }
 
 /// Pretty-prints the AST.

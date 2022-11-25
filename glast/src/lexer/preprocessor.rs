@@ -490,8 +490,8 @@ pub(super) fn parse_version(
 	let mut tokens = Vec::new();
 	let mut buffer = String::new();
 
-	// Whether we are parsing the first token of this version directive's content.
-	let mut first_internal_token = true;
+	// Whether we are parsing the first number token of this version directive's content.
+	let mut first_number = true;
 	// This value is returned to the main lexer, which in turn can dynamically set it's own version number if the
 	// appropriate circumstances are met.
 	let mut version = None;
@@ -576,9 +576,10 @@ pub(super) fn parse_version(
 									// means this version number (assuming it's a valid GLSL version) should be
 									// set.
 									if is_first_non_comment_token
-										&& first_internal_token
+										&& first_number
 									{
 										version = GlslVersion::parse(num);
+										first_number = false;
 									}
 
 									tokens.push((
@@ -634,10 +635,9 @@ pub(super) fn parse_version(
 								// This number is the first token after the `#version` keyword. If this directive
 								// is also the first non-comment token in the parent lexer, that means this version
 								// number (assuming it's a valid GLSL version) should be set.
-								if is_first_non_comment_token
-									&& first_internal_token
-								{
+								if is_first_non_comment_token && first_number {
 									version = GlslVersion::parse(num);
+									first_number = false;
 								}
 
 								tokens.push((
@@ -677,8 +677,6 @@ pub(super) fn parse_version(
 				},
 			));
 		}
-
-		first_internal_token = false;
 	}
 
 	(

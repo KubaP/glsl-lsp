@@ -1174,24 +1174,27 @@ impl Lit {
 
 /* CONDITIONAL COMPILATION STUFF BELOW */
 
-/// The first conditional branch.
+/// A conditional directive.
 #[derive(Debug, Clone, PartialEq)]
-pub enum ConditionalIf {
+pub struct Conditional {
+	pub ty: ConditionalTy,
+	pub span: Span,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub enum ConditionalTy {
 	/// An `#ifdef` directive.
 	IfDef { ident: Option<Ident> },
 	/// An `#ifndef` directive.
 	IfNotDef { ident: Option<Ident> },
 	/// An `#if` directive.
 	If { expr: Option<conditional::Expr> },
-}
-
-/// An extra conditional branch.
-#[derive(Debug, Clone, PartialEq)]
-pub enum ConditionalElse {
 	/// An `#elif` directive.
 	ElseIf { expr: Option<conditional::Expr> },
 	/// An `#else` directive.
 	Else,
+	/// An `#endif` directive.
+	End,
 }
 
 /// AST items for conditional directive expressions.

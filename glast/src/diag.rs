@@ -825,6 +825,11 @@ pub enum PreprocConditionalDiag {
 	///
 	/// - `0` - The position where the expression should be inserted.
 	ExpectedExprAfterIf(Span),
+	/// ERROR - Did not find an `#endif` directive to close a conditional block.
+	///
+	/// - `0` - The span of the opening `#ifdef`/`#ifndef`/`#if` directive.
+	/// - `1` - The zero-width span at the end of the expression.
+	UnclosedBlock(Span, Span),
 	/// ERROR - Found an unmatched `#elif` directive.
 	///
 	/// - `0` - The span of the directive.

@@ -169,16 +169,18 @@ pub fn parse_from_token_stream(
 	metadata: crate::lexer::Metadata,
 ) -> Result<TokenTree, ParseErr> {
 	// Check the GLSL version as detected by the lexer.
-	if metadata.version == GlslVersion::Unsupported {
+	if metadata.version == GlslVersion::Unsupported && !token_stream.is_empty()
+	{
 		return Err(ParseErr::UnsupportedVersion(metadata.version));
 	}
 
-	// Skip tree generation if there are no conditional compilation blocks.
-	if !metadata.contains_conditional_compilation {
+	// Skip tree generation if there are no conditional compilation blocks, or if the token stream is empty.
+	if !metadata.contains_conditional_compilation || token_stream.is_empty() {
 		return Ok(TokenTree {
-			arena: vec![TreeNode {
+			arena: vec![token_stream],
+			tree: vec![TreeNode {
 				parent: None,
-				contents: vec![Content::Tokens(token_stream)],
+				children: vec![Either::Left(0)],
 			}],
 			order_by_appearance: vec![],
 			syntax_diags: vec![],
@@ -203,7 +205,7 @@ pub fn parse_from_token_stream(
 	// bar
 	// baz
 	//
-	// tree representation:
+	// Tree representation:
 	//
 	// Node(                                   0
 	//     Tokens[foo],                        |
@@ -224,63 +226,33 @@ pub fn parse_from_token_stream(
 	//     Tokens[bar, baz],                   |
 	// )
 	//
-	// order-by-appearance: [(0, 0), (1, 0), (2, 1), (3, 0)]
+	// order-by-appearance: [(0, [0]), (1, [0]), (2, [1, 0]), (3, [0])]
 
-	fn push_condition(
-		arena: &mut Vec<TreeNode>,
-		if_condition: ConditionalIf,
-		id: NodeId,
-	) -> NodeId {
-		let new_id = arena.len();
-		arena.push(TreeNode {
-			parent: Some(id),
-			contents: vec![Content::Tokens(vec![])],
-		});
-		arena
-			.get_mut(id)
-			.unwrap() // Panic: `id` is always valid.
-			.contents
-			.push(Content::ConditionalBlock {
-				if_: if_condition,
-				if_node: new_id,
-				completed_if: false,
-				elses: vec![],
-			});
-		new_id
-	}
+	let token_stream_end = token_stream.last().unwrap().1.end;
 
-	fn push_token(
-		arena: &mut Vec<TreeNode>,
-		id: NodeId,
-		token: Spanned<Token>,
-	) {
-		let node = arena.get_mut(id).unwrap(); // Panic: `id` is always valid.
-		match node.contents.last_mut() {
-			Some(content) => match content {
-				Content::Tokens(v) => v.push(token),
-				Content::ConditionalBlock { .. } => {
-					node.contents.push(Content::Tokens(vec![token]));
-				}
-			},
-			None => node.contents.push(Content::Tokens(vec![token])),
-		};
-	}
-
-	// The arena containing all of the nodes. The IDs are just `usize` indexes into this vector.
-	let mut arena = vec![TreeNode {
+	let mut arena = Vec::new();
+	let mut tree = vec![TreeNode {
 		parent: None,
-		contents: vec![Content::Tokens(vec![])],
+		children: Vec::new(),
 	}];
-	// The stack representing the IDs of currently nested nodes. The first ID always refers to the root node.
-	// Invariant: Any time this is `pop()`ed a length check is made to ensure that `[0]` is always valid.
-	let mut stack = vec![0];
-	// A vector which creates a mapping between `order-of-appearance` -> `node ID, parent node ID`. The parent node
-	// ID is tracked so that in the `parse_by_order_of_appearance()` method we can validate whether the order is
+	// A vector which creates a mapping between `order-of-appearance` -> `(node ID, parent IDs)`. The parent node
+	// IDs are tracked so that in the `parse_by_order_of_appearance()` method we can validate whether the key is
 	// valid.
-	let mut order_by_appearance = vec![(0, 0)];
+	let mut order_by_appearance = vec![(0, vec![0])];
 	let mut syntax_diags = Vec::new();
 	let mut semantic_diags = Vec::new();
 	let mut syntax_tokens = Vec::new();
+
+	// The current grouping of tokens. This is pushed into the arena whenever we encounter a branch that creates a
+	// new tree node.
+	let mut current_tokens = Vec::with_capacity(100);
+	// The stack representing the IDs of currently nested nodes. The first ID always refers to the root node.
+	// Invariant: Any time this is `pop()`ed a length check is made to ensure that `[0]` is always valid.
+	let mut stack: Vec<NodeId> = vec![0];
+
+	fn top(stack: &[NodeId]) -> NodeId {
+		*stack.last().unwrap()
+	}
 
 	// We consume all of the tokens from the beginning.
 	loop {
@@ -339,13 +311,35 @@ pub fn parse_from_token_stream(
 						}
 					}
 
-					let new_id = push_condition(
-						&mut arena,
-						ConditionalIf::IfDef { ident },
-						*stack.last().unwrap(),
+					// Finish the current token group.
+					let idx = arena.len();
+					arena.push(std::mem::take(&mut current_tokens));
+					tree.get_mut(top(&stack))
+						.unwrap()
+						.children
+						.push(Either::Left(idx));
+
+					// Create a new condition block, and a new node for the `ifdef` condition.
+					let idx = tree.len();
+					tree.push(TreeNode {
+						parent: Some(top(&stack)),
+						children: Vec::new(),
+					});
+					tree.get_mut(top(&stack)).unwrap().children.push(
+						Either::Right(ConditionBlock {
+							conditions: vec![(
+								Conditional {
+									span: token_span,
+									ty: ConditionalTy::IfDef { ident },
+								},
+								idx,
+							)],
+							end: None,
+							span: token_span,
+						}),
 					);
-					order_by_appearance.push((new_id, *stack.last().unwrap()));
-					stack.push(new_id);
+					order_by_appearance.push((idx, stack.clone()));
+					stack.push(idx);
 				}
 				PreprocStream::IfNotDef { kw, mut tokens } => {
 					syntax_tokens.push((
@@ -392,13 +386,35 @@ pub fn parse_from_token_stream(
 						}
 					}
 
-					let new_id = push_condition(
-						&mut arena,
-						ConditionalIf::IfNotDef { ident },
-						*stack.last().unwrap(),
+					// Finish the current token group.
+					let idx = arena.len();
+					arena.push(std::mem::take(&mut current_tokens));
+					tree.get_mut(top(&stack))
+						.unwrap()
+						.children
+						.push(Either::Left(idx));
+
+					// Create a new condition block, and a new node for the `ifdef` condition.
+					let idx = tree.len();
+					tree.push(TreeNode {
+						parent: Some(top(&stack)),
+						children: Vec::new(),
+					});
+					tree.get_mut(top(&stack)).unwrap().children.push(
+						Either::Right(ConditionBlock {
+							conditions: vec![(
+								Conditional {
+									span: token_span,
+									ty: ConditionalTy::IfNotDef { ident },
+								},
+								idx,
+							)],
+							end: None,
+							span: token_span,
+						}),
 					);
-					order_by_appearance.push((new_id, *stack.last().unwrap()));
-					stack.push(new_id);
+					order_by_appearance.push((idx, stack.clone()));
+					stack.push(idx);
 				}
 				PreprocStream::If { kw, tokens } => {
 					syntax_tokens.push((
@@ -424,13 +440,35 @@ pub fn parse_from_token_stream(
 						expr
 					};
 
-					let new_id = push_condition(
-						&mut arena,
-						ConditionalIf::If { expr },
-						*stack.last().unwrap(),
+					// Finish the current token group.
+					let idx = arena.len();
+					arena.push(std::mem::take(&mut current_tokens));
+					tree.get_mut(top(&stack))
+						.unwrap()
+						.children
+						.push(Either::Left(idx));
+
+					// Create a new condition block, and a new node for the `ifdef` condition.
+					let idx = tree.len();
+					tree.push(TreeNode {
+						parent: Some(top(&stack)),
+						children: Vec::new(),
+					});
+					tree.get_mut(top(&stack)).unwrap().children.push(
+						Either::Right(ConditionBlock {
+							conditions: vec![(
+								Conditional {
+									span: token_span,
+									ty: ConditionalTy::If { expr },
+								},
+								idx,
+							)],
+							end: None,
+							span: token_span,
+						}),
 					);
-					order_by_appearance.push((new_id, *stack.last().unwrap()));
-					stack.push(new_id);
+					order_by_appearance.push((idx, stack.clone()));
+					stack.push(idx);
 				}
 				PreprocStream::ElseIf { kw, tokens } => {
 					syntax_tokens.push((
@@ -457,36 +495,36 @@ pub fn parse_from_token_stream(
 					};
 
 					if stack.len() > 1 {
+						// Finish the current token group for the previous conditional node.
+						let idx = arena.len();
+						arena.push(std::mem::take(&mut current_tokens));
+						tree.get_mut(top(&stack))
+							.unwrap()
+							.children
+							.push(Either::Left(idx));
 						stack.pop();
-						let new_id = arena.len();
-						arena.push(TreeNode {
-							parent: Some(*stack.last().unwrap()),
-							contents: vec![],
-						});
 
-						let container =
-							arena.get_mut(*stack.last().unwrap()).unwrap(); // Panic: the `id` is always valid.
-						if let Some(Content::ConditionalBlock {
-							completed_if,
-							elses,
-							..
-						}) = container.contents.last_mut()
-						{
-							*completed_if = true;
-							elses.push((
-								ConditionalElse::ElseIf { expr },
-								new_id,
-							));
-							order_by_appearance
-								.push((new_id, *stack.last().unwrap()));
-							stack.push(new_id);
-						} else {
-							syntax_diags.push(Syntax::PreprocConditional(
-								PreprocConditionalDiag::UnmatchedElseIf(
-									token_span,
-								),
-							));
-						}
+						// By popping the stack, we are now pointing to the parent node that is the conditional
+						// block.
+
+						// Create a new node for the `elif` condition.
+						let idx = tree.len();
+						tree.push(TreeNode {
+							parent: Some(top(&stack)),
+							children: Vec::new(),
+						});
+						let Either::Right(cond_block) = tree.get_mut(top(&stack)).unwrap().children.last_mut().unwrap() else { unreachable!() };
+						cond_block.conditions.push((
+							Conditional {
+								span: token_span,
+								ty: ConditionalTy::ElseIf { expr },
+							},
+							idx,
+						));
+						cond_block.span =
+							Span::new(cond_block.span.start, token_span.end);
+						order_by_appearance.push((idx, stack.clone()));
+						stack.push(idx);
 					} else {
 						syntax_diags.push(Syntax::PreprocConditional(
 							PreprocConditionalDiag::UnmatchedElseIf(token_span),
@@ -511,33 +549,36 @@ pub fn parse_from_token_stream(
 					}
 
 					if stack.len() > 1 {
+						// Finish the current token group for the previous conditional node.
+						let idx = arena.len();
+						arena.push(std::mem::take(&mut current_tokens));
+						tree.get_mut(top(&stack))
+							.unwrap()
+							.children
+							.push(Either::Left(idx));
 						stack.pop();
-						let new_id = arena.len();
-						arena.push(TreeNode {
-							parent: Some(*stack.last().unwrap()),
-							contents: vec![],
-						});
 
-						let container =
-							arena.get_mut(*stack.last().unwrap()).unwrap();
-						if let Some(Content::ConditionalBlock {
-							completed_if,
-							elses,
-							..
-						}) = container.contents.last_mut()
-						{
-							*completed_if = true;
-							elses.push((ConditionalElse::Else, new_id));
-							order_by_appearance
-								.push((new_id, *stack.last().unwrap()));
-							stack.push(new_id);
-						} else {
-							syntax_diags.push(Syntax::PreprocConditional(
-								PreprocConditionalDiag::UnmatchedElse(
-									token_span,
-								),
-							));
-						}
+						// By popping the stack, we are now pointing to the parent node that is the conditional
+						// block.
+
+						// Create a new node for the `else` condition.
+						let idx = tree.len();
+						tree.push(TreeNode {
+							parent: Some(top(&stack)),
+							children: Vec::new(),
+						});
+						let Either::Right(cond_block) = tree.get_mut(top(&stack)).unwrap().children.last_mut().unwrap() else { unreachable!() };
+						cond_block.conditions.push((
+							Conditional {
+								span: token_span,
+								ty: ConditionalTy::Else,
+							},
+							idx,
+						));
+						cond_block.span =
+							Span::new(cond_block.span.start, token_span.end);
+						order_by_appearance.push((idx, stack.clone()));
+						stack.push(idx);
 					} else {
 						syntax_diags.push(Syntax::PreprocConditional(
 							PreprocConditionalDiag::UnmatchedElse(token_span),
@@ -562,31 +603,69 @@ pub fn parse_from_token_stream(
 					}
 
 					if stack.len() > 1 {
+						// Finish the current token group for the previous conditional node.
+						let idx = arena.len();
+						arena.push(std::mem::take(&mut current_tokens));
+						tree.get_mut(top(&stack))
+							.unwrap()
+							.children
+							.push(Either::Left(idx));
 						stack.pop();
+
+						// By popping the stack, we are now pointing to the parent node that is the conditional
+						// block.
+
+						// Close the condition block.
+						let Either::Right(cond_block) = tree.get_mut(top(&stack)).unwrap().children.last_mut().unwrap() else { unreachable!() };
+						cond_block.end = Some(Conditional {
+							span: token_span,
+							ty: ConditionalTy::End,
+						});
+						cond_block.span =
+							Span::new(cond_block.span.start, token_span.end);
 					} else {
 						syntax_diags.push(Syntax::PreprocConditional(
 							PreprocConditionalDiag::UnmatchedEndIf(token_span),
 						));
 					}
 				}
-				_ => push_token(
-					&mut arena,
-					*stack.last().unwrap(),
-					(Token::Directive(d), token_span),
-				),
+				_ => current_tokens.push((Token::Directive(d), token_span)),
 			},
-			_ => push_token(
-				&mut arena,
-				*stack.last().unwrap(),
-				(token, token_span),
-			),
+			_ => current_tokens.push((token, token_span)),
 		}
 	}
-	dbg!(&arena);
-	dbg!(&syntax_diags);
-	dbg!(&syntax_tokens);
+
+	// Finish the current group of remaining tokens.
+	if !current_tokens.is_empty() {
+		let idx = arena.len();
+		arena.push(std::mem::take(&mut current_tokens));
+		tree.get_mut(top(&stack))
+			.unwrap()
+			.children
+			.push(Either::Left(idx));
+	}
+	stack.pop();
+
+	// If we still have nodes on the stack, that means we have one or more unclosed condition blocks.
+	if stack.len() > 0 {
+		let Either::Right(cond) = tree.get_mut(top(&stack)).unwrap().children.last_mut().unwrap() else { unreachable!(); };
+		cond.span = Span::new(cond.span.start, token_stream_end);
+		let if_span = cond.conditions[0].0.span;
+		syntax_diags.push(Syntax::PreprocConditional(
+			PreprocConditionalDiag::UnclosedBlock(
+				if_span,
+				Span::new(token_stream_end, token_stream_end),
+			),
+		));
+	}
+
+	//dbg!(&arena);
+	//dbg!(&tree);
+	//dbg!(&syntax_diags);
+	//dbg!(&syntax_tokens);
 	Ok(TokenTree {
 		arena,
+		tree,
 		order_by_appearance,
 		syntax_diags,
 		contains_conditional_compilation: true,
@@ -720,25 +799,33 @@ pub fn print_ast(ast: Vec<Node>) -> String {
 /// results in this sort of stuff (the approach taken by this crate) being necessary to achieve 100%
 /// specification-defined behaviour.
 pub struct TokenTree {
-	/// The arena of [`TreeNode`]s.
+	/// The arena of token streams.
 	///
 	/// # Invariants
-	/// `[0]` always contains a value. If `contains_conditional_compilation` is `false`, this is:
+	/// If `contains_conditional_compilation` is `false`, this is:
 	/// ```ignore
-	/// TreeNode {
-	///		parent: None,
-	///		content: vec![Content::Tokens(entire_token_stream)],
-	///	}
+	/// vec![enitire_token_stream]
 	/// ```
-	arena: Vec<TreeNode>,
+	arena: Vec<TokenStream>,
+	/// The tree.
+	///
+	/// # Invariants
+	/// If `contains_conditional_compilation` is `false`, this is:
+	/// ```ignore
+	/// vec![TreeNode {
+	///     parent: None,
+	///     children: vec![Either::Left(0)]
+	/// }]
+	/// ```
+	tree: Vec<TreeNode>,
 	/// IDs of the relevant nodes ordered by appearance.
 	///
 	/// - `0` - The ID of the `[n]`th conditional node.
-	/// - `1` - The ID of the node which this conditional node depends on.
+	/// - `1` - The IDs of the nodes which this conditional node depends on.
 	///
 	/// # Invariants
 	/// If `contains_conditional_compilation` is `false`, this is empty.
-	order_by_appearance: Vec<(NodeId, NodeId)>,
+	order_by_appearance: Vec<(NodeId, Vec<NodeId>)>,
 
 	/// Syntax diagnostics related to conditional compilation directives.
 	///
@@ -747,7 +834,7 @@ pub struct TokenTree {
 	#[allow(unused)]
 	syntax_diags: Vec<Syntax>,
 
-	/// Whether there are any conditional compilation brances.
+	/// Whether there are any conditional compilation branches.
 	contains_conditional_compilation: bool,
 }
 
@@ -763,21 +850,18 @@ impl TokenTree {
 	pub fn root(&self) -> ParseResult {
 		// Get the relevant streams for the root branch.
 		let streams = if !self.contains_conditional_compilation {
-			// Panic: See invariant.
-			match self.arena.get(0).unwrap().contents.first().unwrap() {
-				Content::Tokens(s) => vec![s.clone()],
-				Content::ConditionalBlock { .. } => unreachable!(),
-			}
+			vec![self.arena.get(0).unwrap().clone()]
 		} else {
 			let mut streams = Vec::new();
-			let node = self.arena.get(0).unwrap();
-			for content in &node.contents {
-				match content {
-					Content::Tokens(s) => streams.push(s.clone()),
-					Content::ConditionalBlock { .. } => {}
+			let node = self.tree.get(0).unwrap();
+			for child in &node.children {
+				match child {
+					Either::Left(idx) => {
+						streams.push(self.arena.get(*idx).unwrap().clone())
+					}
+					Either::Right(_) => {}
 				}
 			}
-
 			streams
 		};
 
@@ -795,7 +879,7 @@ impl TokenTree {
 		)
 	}
 
-	/// Parses a token tree by enabling conditional branches in the order of their appearance.
+	/* /// Parses a token tree by enabling conditional branches in the order of their appearance.
 	///
 	/// This method can return an `Err` in the following cases:
 	/// - The `key` has a number which doesn't map to a conditional compilation branch.
@@ -807,11 +891,11 @@ impl TokenTree {
 	pub fn parse_by_order_of_appearance(
 		&self,
 		key: impl AsRef<[usize]>,
-	) -> Result<ParseResult, ParseErr> {
+	) -> Result<ParseResult, TreeParseErr> {
 		let order = key.as_ref();
 
 		if !self.contains_conditional_compilation {
-			return Err(ParseErr::NoConditionalBranches);
+			return Err(TreeParseErr::NoConditionalBranches);
 		}
 
 		// Check that the key is valid.
@@ -820,11 +904,11 @@ impl TokenTree {
 			for num in order {
 				let (id, parent_id) = match self.order_by_appearance.get(*num) {
 					Some(t) => t,
-					None => return Err(ParseErr::InvalidNum(*num)),
+					None => return Err(TreeParseErr::InvalidNum(*num)),
 				};
 
-				if !visited_node_ids.contains(parent_id) {
-					return Err(ParseErr::InvalidChain(*num));
+				if !visited_node_ids.contains(parent_id.first().unwrap()) {
+					return Err(TreeParseErr::InvalidChain(*num));
 				}
 
 				visited_node_ids.push(*id);
@@ -910,40 +994,40 @@ impl TokenTree {
 		key: impl AsRef<[(usize, usize)]>,
 	) -> Option<ParseResult> {
 		todo!()
-	}
+	} */
 }
 
 type NodeId = usize;
+type ArenaId = usize;
 
 /// A node within the token tree.
 #[derive(Debug)]
 struct TreeNode {
-	#[allow(unused)]
+	/// The parent of this node.
 	parent: Option<NodeId>,
-	/// The contents of this node.
-	contents: Vec<Content>,
+	/// The children/contents of this node. Each entry either points to a token stream (in the arena), or is a
+	/// condition block which points to child nodes.
+	children: Vec<Either<ArenaId, ConditionBlock>>,
 }
 
-/// This enum is used to group together tokens into logical groups.
-///
-/// Individual tokens are grouped together as much as possible within the [`Tokens`](Content::Tokens) variant,
-/// until a [`ConditionalBlock`](Content::ConditionalBlock) is encountered. Once the block is over however, another
-/// `Tokens` group is created.
 #[derive(Debug)]
-enum Content {
-	/// A vector of tokens appearing one after another.
-	Tokens(Vec<Spanned<Token>>),
-	/// A conditional block. Each branch points to a node in the tree arena; each node contains further nested
-	/// content.
-	ConditionalBlock {
-		if_: ConditionalIf,
-		/// Tokens by default are pushed into this node.
-		if_node: NodeId,
-		/// This flag is set to `true` when we encounter an `elif`/`else`.
-		completed_if: bool,
-		/// If `completed_if` is set to `true`, tokens are pushed into the last node in this vector.
-		elses: Vec<(ConditionalElse, NodeId)>,
-	},
+struct ConditionBlock {
+	/// The individual condition blocks.
+	///
+	/// # Invariants
+	/// The entry at `[0]` will be a `ConditionalTy::IfDef/IfNotDef/If` variant.
+	///
+	/// A `ConditionalTy::End` will never be present.
+	conditions: Vec<(Conditional, NodeId)>,
+	/// The `#endif` directive.
+	///
+	/// This is separate because the `#endif` doesn't contain any children, (since it ends the condition block),
+	/// hence a `NodeId` would be incorrect.
+	///
+	/// # Invariants
+	/// This will be a `ConditionalTy::End` variant.
+	end: Option<Conditional>,
+	span: Span,
 }
 
 /// Information necessary to expand a macro.

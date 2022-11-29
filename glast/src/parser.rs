@@ -176,11 +176,20 @@ pub fn parse_from_token_stream(
 
 	// Skip tree generation if there are no conditional compilation blocks, or if the token stream is empty.
 	if !metadata.contains_conditional_compilation || token_stream.is_empty() {
+		let span = if !token_stream.is_empty() {
+			Span::new(
+				token_stream.first().unwrap().1.start,
+				token_stream.last().unwrap().1.end,
+			)
+		} else {
+			Span::new(0, 0)
+		};
 		return Ok(TokenTree {
 			arena: vec![token_stream],
 			tree: vec![TreeNode {
 				parent: None,
 				children: vec![Either::Left(0)],
+				span,
 			}],
 			order_by_appearance: vec![],
 			syntax_diags: vec![],
@@ -234,6 +243,7 @@ pub fn parse_from_token_stream(
 	let mut tree = vec![TreeNode {
 		parent: None,
 		children: Vec::new(),
+		span: Span::new(0, 0),
 	}];
 	// A vector which creates a mapping between `order-of-appearance` -> `(node ID, parent IDs)`. The parent node
 	// IDs are tracked so that in the `parse_by_order_of_appearance()` method we can validate whether the key is
@@ -324,6 +334,7 @@ pub fn parse_from_token_stream(
 					tree.push(TreeNode {
 						parent: Some(top(&stack)),
 						children: Vec::new(),
+						span: token_span,
 					});
 					tree.get_mut(top(&stack)).unwrap().children.push(
 						Either::Right(ConditionBlock {
@@ -335,7 +346,6 @@ pub fn parse_from_token_stream(
 								idx,
 							)],
 							end: None,
-							span: token_span,
 						}),
 					);
 					order_by_appearance.push((idx, stack.clone()));
@@ -399,6 +409,7 @@ pub fn parse_from_token_stream(
 					tree.push(TreeNode {
 						parent: Some(top(&stack)),
 						children: Vec::new(),
+						span: token_span,
 					});
 					tree.get_mut(top(&stack)).unwrap().children.push(
 						Either::Right(ConditionBlock {
@@ -410,7 +421,6 @@ pub fn parse_from_token_stream(
 								idx,
 							)],
 							end: None,
-							span: token_span,
 						}),
 					);
 					order_by_appearance.push((idx, stack.clone()));
@@ -453,6 +463,7 @@ pub fn parse_from_token_stream(
 					tree.push(TreeNode {
 						parent: Some(top(&stack)),
 						children: Vec::new(),
+						span: token_span,
 					});
 					tree.get_mut(top(&stack)).unwrap().children.push(
 						Either::Right(ConditionBlock {
@@ -464,7 +475,6 @@ pub fn parse_from_token_stream(
 								idx,
 							)],
 							end: None,
-							span: token_span,
 						}),
 					);
 					order_by_appearance.push((idx, stack.clone()));
@@ -512,8 +522,11 @@ pub fn parse_from_token_stream(
 						tree.push(TreeNode {
 							parent: Some(top(&stack)),
 							children: Vec::new(),
+							span: token_span,
 						});
-						let Either::Right(cond_block) = tree.get_mut(top(&stack)).unwrap().children.last_mut().unwrap() else { unreachable!() };
+						let node = tree.get_mut(top(&stack)).unwrap();
+						node.span.end = token_span.end;
+						let Either::Right(cond_block) = node.children.last_mut().unwrap() else { unreachable!() };
 						cond_block.conditions.push((
 							Conditional {
 								span: token_span,
@@ -521,8 +534,6 @@ pub fn parse_from_token_stream(
 							},
 							idx,
 						));
-						cond_block.span =
-							Span::new(cond_block.span.start, token_span.end);
 						order_by_appearance.push((idx, stack.clone()));
 						stack.push(idx);
 					} else {
@@ -566,8 +577,11 @@ pub fn parse_from_token_stream(
 						tree.push(TreeNode {
 							parent: Some(top(&stack)),
 							children: Vec::new(),
+							span: token_span,
 						});
-						let Either::Right(cond_block) = tree.get_mut(top(&stack)).unwrap().children.last_mut().unwrap() else { unreachable!() };
+						let node = tree.get_mut(top(&stack)).unwrap();
+						node.span.end = token_span.end;
+						let Either::Right(cond_block) = node.children.last_mut().unwrap() else { unreachable!() };
 						cond_block.conditions.push((
 							Conditional {
 								span: token_span,
@@ -575,8 +589,6 @@ pub fn parse_from_token_stream(
 							},
 							idx,
 						));
-						cond_block.span =
-							Span::new(cond_block.span.start, token_span.end);
 						order_by_appearance.push((idx, stack.clone()));
 						stack.push(idx);
 					} else {
@@ -616,22 +628,30 @@ pub fn parse_from_token_stream(
 						// block.
 
 						// Close the condition block.
-						let Either::Right(cond_block) = tree.get_mut(top(&stack)).unwrap().children.last_mut().unwrap() else { unreachable!() };
+						let node = tree.get_mut(top(&stack)).unwrap();
+						node.span.end = token_span.end;
+						let Either::Right(cond_block) = node.children.last_mut().unwrap() else { unreachable!() };
 						cond_block.end = Some(Conditional {
 							span: token_span,
 							ty: ConditionalTy::End,
 						});
-						cond_block.span =
-							Span::new(cond_block.span.start, token_span.end);
 					} else {
 						syntax_diags.push(Syntax::PreprocConditional(
 							PreprocConditionalDiag::UnmatchedEndIf(token_span),
 						));
 					}
 				}
-				_ => current_tokens.push((Token::Directive(d), token_span)),
+				_ => {
+					let node = tree.get_mut(top(&stack)).unwrap();
+					node.span.end = token_span.end;
+					current_tokens.push((Token::Directive(d), token_span));
+				}
 			},
-			_ => current_tokens.push((token, token_span)),
+			_ => {
+				let node = tree.get_mut(top(&stack)).unwrap();
+				node.span.end = token_span.end;
+				current_tokens.push((token, token_span));
+			}
 		}
 	}
 
@@ -648,8 +668,9 @@ pub fn parse_from_token_stream(
 
 	// If we still have nodes on the stack, that means we have one or more unclosed condition blocks.
 	if stack.len() > 0 {
-		let Either::Right(cond) = tree.get_mut(top(&stack)).unwrap().children.last_mut().unwrap() else { unreachable!(); };
-		cond.span = Span::new(cond.span.start, token_stream_end);
+		let node = tree.get_mut(top(&stack)).unwrap();
+		node.span.end = token_stream_end;
+		let Either::Right(cond) = node.children.last_mut().unwrap() else { unreachable!(); };
 		let if_span = cond.conditions[0].0.span;
 		syntax_diags.push(Syntax::PreprocConditional(
 			PreprocConditionalDiag::UnclosedBlock(
@@ -844,10 +865,23 @@ impl TokenTree {
 	/// Whilst this is guaranteed to succeed, if the entire source string is wrapped within a conditional block
 	/// this will return an empty AST.
 	///
+	/// # Syntax highlighting
+	/// The `syntax_highlight_entire_file` parameter controls whether to produce syntax tokens for the entire file,
+	/// not just for the root tokens. This involves parsing all conditional blocks in order to produce the syntax
+	/// highlighting information. Whilst this functionality uses the smallest possible number of permutations that
+	/// cover the entire file, if there are a lot of conditional blocks that can mean the source string gets parsed
+	/// many times, which may have performance implications.
+	///
+	/// The actual syntax highlighting results are based off the chosen permutations which cannot be controlled. If
+	/// you require more control, you must manually parse the relevant permutations and collect the tokens
+	/// yourself.
+	///
+	/// If there are no conditional blocks, this parameter does nothing.
+	///
 	/// # Examples
 	/// For a fully detailed example on how to use this method to create an abstract syntax tree, see the
 	/// documentation for the [`parse_from_str()`] function.
-	pub fn root(&self) -> ParseResult {
+	pub fn root(&self, syntax_highlight_entire_file: bool) -> ParseResult {
 		// Get the relevant streams for the root branch.
 		let streams = if !self.contains_conditional_compilation {
 			vec![self.arena.get(0).unwrap().clone()]
@@ -865,6 +899,201 @@ impl TokenTree {
 			streams
 		};
 
+		// Parse the root branch.
+		let mut walker = Walker::new(streams);
+		let mut nodes = Vec::new();
+		while !walker.is_done() {
+			parse_stmt(&mut walker, &mut nodes);
+		}
+
+		if syntax_highlight_entire_file && self.contains_conditional_compilation
+		{
+			let mut root_tokens = std::mem::take(&mut walker.syntax_tokens);
+			let mut tokens = Vec::with_capacity(walker.syntax_tokens.len());
+
+			// Each key points to the nodes which contain the tokens of the conditional branch. If we want
+			// information about the conditional directive itself, we have to look at the parent.
+			let keys = self
+				.minimal_no_of_permutations_for_complete_syntax_highlighting();
+
+			// Move over the root tokens before any conditional scope.
+			let first_node = self.tree.get(keys[0][0]).unwrap();
+			let span = Span::new(0, first_node.span.start);
+			loop {
+				let (_, s) = match root_tokens.get(0) {
+					Some(t) => t,
+					None => break,
+				};
+
+				if span.contains(*s) {
+					tokens.push(root_tokens.remove(0));
+				} else {
+					break;
+				}
+			}
+
+			// Deal with all tokens produced from conditional scopes, as well as root tokens in-between conditional
+			// scopes, (if any).
+			for (i, key) in keys.iter().enumerate() {
+				let node = self.tree.get(key[0]).unwrap();
+
+				let (_, _, _, mut new_tokens) =
+					self.parse_node_ids_chronologically(key);
+				loop {
+					let (_, s) = match new_tokens.get(0) {
+						Some(t) => t,
+						None => break,
+					};
+
+					if s.is_before_pos(node.span.start) {
+						new_tokens.remove(0);
+						continue;
+					}
+
+					if node.span.contains(*s) {
+						tokens.push(new_tokens.remove(0));
+					} else {
+						break;
+					}
+				}
+
+				if let Some(next_key) = keys.get(i + 1) {
+					let next_node = self.tree.get(next_key[0]).unwrap();
+					let span = Span::new(node.span.end, next_node.span.start);
+					if !span.is_zero_width() {
+						// We have another conditional block after this one; there may be root tokens in-between
+						// these two blocks.
+						loop {
+							let (_, s) = match root_tokens.get(0) {
+								Some(t) => t,
+								None => break,
+							};
+
+							if span.contains(*s) {
+								tokens.push(root_tokens.remove(0));
+							} else {
+								break;
+							}
+						}
+					}
+				}
+			}
+
+			// Append any remaining root tokens.
+			tokens.append(&mut root_tokens);
+
+			(nodes, walker.syntax_diags, walker.semantic_diags, tokens)
+		} else {
+			(
+				nodes,
+				walker.syntax_diags,
+				walker.semantic_diags,
+				walker.syntax_tokens,
+			)
+		}
+	}
+
+	/// Parses a token tree by enabling conditional branches in the order of their appearance.
+	///
+	/// This method can return an `Err` in the following cases:
+	/// - The `key` has a number which doesn't map to a conditional compilation branch.
+	/// - The `key` has a number which depends on another number that is missing.
+	///
+	/// # Examples
+	/// For a fully detailed example on how to use this method to create an abstract syntax tree, see the
+	/// documentation for the [`parse_from_str()`] function.
+	pub fn parse_by_order_of_appearance(
+		&self,
+		key: impl AsRef<[usize]>,
+	) -> Result<ParseResult, TreeParseErr> {
+		let key = key.as_ref();
+
+		if !self.contains_conditional_compilation {
+			return Err(TreeParseErr::NoConditionalBranches);
+		}
+
+		let mut nodes = Vec::with_capacity(key.len());
+		// Check that the key is valid.
+		{
+			let mut visited_node_ids = vec![0];
+			for num in key {
+				let (id, parent_id) = match self.order_by_appearance.get(*num) {
+					Some(t) => t,
+					None => return Err(TreeParseErr::InvalidNum(*num)),
+				};
+
+				if !visited_node_ids.contains(parent_id.first().unwrap()) {
+					return Err(TreeParseErr::InvalidChain(*num));
+				}
+
+				visited_node_ids.push(*id);
+				nodes.push(*id);
+			}
+		}
+
+		Ok(self.parse_node_ids_chronologically(&nodes))
+	}
+
+	/// TODO: Implement.
+	#[allow(unused)]
+	pub fn parse_by_order_of_nesting(
+		&self,
+		key: impl AsRef<[(usize, usize)]>,
+	) -> Option<ParseResult> {
+		todo!()
+	}
+
+	/// Parses the specified nodes.
+	///
+	/// # Invariants
+	/// At least one node needs to be specified.
+	///
+	/// The IDs of the nodes-to-parse should be in a chronological order.
+	///
+	/// The IDs should map to a valid permutation of conditional blocks.
+	fn parse_node_ids_chronologically(&self, nodes: &[NodeId]) -> ParseResult {
+		if nodes.is_empty() {
+			panic!("Expected at least one node to evaluate");
+		}
+
+		let mut nodes_idx = 0;
+		let mut streams = Vec::new();
+		let mut node_stack = vec![(0, 0)];
+		// Invariant: We have at least one node, so at least one iteration of this loop can be performed without
+		// any panics.
+		'outer: loop {
+			let (node_id, child_idx) = node_stack.last_mut().unwrap();
+			let node = &self.tree[*node_id];
+
+			// Consume the next content element in this node.
+			while let Some(child) = node.children.get(*child_idx) {
+				*child_idx += 1;
+				match child {
+					Either::Left(arena_id) => {
+						streams.push(self.arena[*arena_id].clone())
+					}
+					Either::Right(ConditionBlock { conditions, .. }) => {
+						// Check if any of the conditional branches match the current key number.
+						for (_, node_id) in conditions {
+							if *node_id == nodes[nodes_idx] {
+								node_stack.push((*node_id, 0));
+								nodes_idx += 1;
+								continue 'outer;
+							}
+						}
+					}
+				}
+			}
+
+			// We have consumed all the content of this node which means we can pop it from the stack and continue
+			// with the parent node, (if there is one).
+			if node_stack.len() > 1 {
+				node_stack.pop();
+			} else {
+				break 'outer;
+			}
+		}
+
 		let mut walker = Walker::new(streams);
 		let mut nodes = Vec::new();
 		while !walker.is_done() {
@@ -879,122 +1108,43 @@ impl TokenTree {
 		)
 	}
 
-	/* /// Parses a token tree by enabling conditional branches in the order of their appearance.
-	///
-	/// This method can return an `Err` in the following cases:
-	/// - The `key` has a number which doesn't map to a conditional compilation branch.
-	/// - The `key` has a number which depends on another number that is missing.
-	///
-	/// # Examples
-	/// For a fully detailed example on how to use this method to create an abstract syntax tree, see the
-	/// documentation for the [`parse_from_str()`] function.
-	pub fn parse_by_order_of_appearance(
+	/// Returns all of the (by-order-of-appearance) keys (**of node IDs, not order-of-appearance numbers**)
+	/// required to fully syntax highlight the entire source string.
+	fn minimal_no_of_permutations_for_complete_syntax_highlighting(
 		&self,
-		key: impl AsRef<[usize]>,
-	) -> Result<ParseResult, TreeParseErr> {
-		let order = key.as_ref();
+	) -> Vec<Vec<NodeId>> {
+		let mut chains_of_nodes = Vec::new();
+		for (id, required_ids) in self.order_by_appearance.iter().skip(1) {
+			let mut new_chain = required_ids[1..].to_vec();
+			new_chain.push(*id);
 
-		if !self.contains_conditional_compilation {
-			return Err(TreeParseErr::NoConditionalBranches);
-		}
+			// We may have a chain of nodes which fully fits within this new chain. For example, we could have a
+			// chain `[0, 4]`, and the new chain we have is `[0, 4, 5]`. In this case, the existing chain is wholly
+			// unnecessary because all of the lines of code in that chain will be covered in this new chain, (plus
+			// the lines of code in the new `5` branch). Since we are trying to find the minimal number of
+			// permutations to cover the whole file, we can discard the existing chain.
 
-		// Check that the key is valid.
-		{
-			let mut visited_node_ids = vec![0];
-			for num in order {
-				let (id, parent_id) = match self.order_by_appearance.get(*num) {
-					Some(t) => t,
-					None => return Err(TreeParseErr::InvalidNum(*num)),
-				};
+			// See if any existing chains are contained within the new one.
+			let idx = chains_of_nodes
+				.iter()
+				.position(|v: &Vec<usize>| new_chain.starts_with(v.as_ref()));
 
-				if !visited_node_ids.contains(parent_id.first().unwrap()) {
-					return Err(TreeParseErr::InvalidChain(*num));
-				}
-
-				visited_node_ids.push(*id);
-			}
-		}
-
-		let mut key_idx = 0;
-		let mut streams = Vec::new();
-		let mut nodes = vec![(0, 0)];
-		'outer: loop {
-			// Get the ID of the conditional node that the current key points to.
-			let current_key_node_id = {
-				match order.get(key_idx) {
-					Some(num) => match self.order_by_appearance.get(*num) {
-						Some((arena_id, _)) => Some(*arena_id),
-						// Panic: We have validated above that all the numbers are valid.
-						None => unreachable!(),
-					},
-					None => None,
-				}
-			};
-
-			let (node_id, content_idx) = nodes.last_mut().unwrap();
-			let node = self.arena.get(*node_id).unwrap();
-
-			// Consume the next content element in this node.
-			while let Some(inner) = &node.contents.get(*content_idx) {
-				*content_idx += 1;
-				match inner {
-					Content::Tokens(s) => streams.push(s.clone()),
-					Content::ConditionalBlock {
-						if_node: if_,
-						elses,
-						..
-					} => {
-						// Check if any of the conditional branches match the current key number.
-						if let Some(current_order_id) = current_key_node_id {
-							if *if_ == current_order_id {
-								nodes.push((*if_, 0));
-								key_idx += 1;
-								continue 'outer;
-							} else {
-								for (_, else_) in elses {
-									if *else_ == current_order_id {
-										nodes.push((*else_, 0));
-										key_idx += 1;
-										continue 'outer;
-									}
-								}
-							}
-						}
-					}
-				}
+			if let Some(idx) = idx {
+				// `idx` points to an existing chain of nodes that is part of the new chain of nodes being added
+				// right now. That means the existing chain can be removed because this new chain will cover 100%
+				// of the old chain.
+				chains_of_nodes.remove(idx);
 			}
 
-			// We have consumed all the content of this node which means we can pop it from the stack and continue
-			// with the parent node (if there is one).
-			if nodes.len() > 1 {
-				nodes.pop();
-			} else {
-				break 'outer;
-			}
+			chains_of_nodes.push(new_chain);
 		}
-
-		let mut walker = Walker::new(streams);
-		let mut nodes = Vec::new();
-		while !walker.is_done() {
-			parse_stmt(&mut walker, &mut nodes);
-		}
-
-		Ok((
-			nodes,
-			walker.syntax_diags,
-			walker.semantic_diags,
-			walker.syntax_tokens,
-		))
+		chains_of_nodes
 	}
 
-	/// TODO: Implement.
-	#[allow(unused)]
-	pub fn parse_by_order_of_nesting(
-		&self,
-		key: impl AsRef<[(usize, usize)]>,
-	) -> Option<ParseResult> {
-		todo!()
-	} */
+	/// Returns whether the source string contains any conditional compilation branches.
+	pub fn contains_conditional_compilation(&self) -> bool {
+		self.contains_conditional_compilation
+	}
 }
 
 type NodeId = usize;
@@ -1004,10 +1154,12 @@ type ArenaId = usize;
 #[derive(Debug)]
 struct TreeNode {
 	/// The parent of this node.
+	#[allow(unused)]
 	parent: Option<NodeId>,
 	/// The children/contents of this node. Each entry either points to a token stream (in the arena), or is a
 	/// condition block which points to child nodes.
 	children: Vec<Either<ArenaId, ConditionBlock>>,
+	span: Span,
 }
 
 #[derive(Debug)]
@@ -1027,7 +1179,6 @@ struct ConditionBlock {
 	/// # Invariants
 	/// This will be a `ConditionalTy::End` variant.
 	end: Option<Conditional>,
-	span: Span,
 }
 
 /// Information necessary to expand a macro.

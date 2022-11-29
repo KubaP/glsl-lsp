@@ -69,9 +69,24 @@ impl Span {
 		self.start == self.end
 	}
 
+	/// Returns whether this span is located before the other span.
+	pub fn is_before(&self, span: &Self) -> bool {
+		self.end <= span.start
+	}
+
 	/// Returns whether this span is located after the other span.
-	pub fn is_after(&self, other: &Self) -> bool {
-		self.start >= other.end
+	pub fn is_after(&self, span: &Self) -> bool {
+		self.start >= span.end
+	}
+
+	/// Returns whether this span is located before the position.
+	pub fn is_before_pos(&self, pos: usize) -> bool {
+		self.end <= pos
+	}
+
+	/// Returns whether this span is located before the position.
+	pub fn is_after_pos(&self, pos: usize) -> bool {
+		self.start >= pos
 	}
 
 	/// Returns whether the beginning of this span is located at or after the specified position.
@@ -79,8 +94,13 @@ impl Span {
 		self.start >= position
 	}
 
+	/// Returns whether a span lies within this span.
+	pub fn contains(&self, span: Self) -> bool {
+		self.start <= span.start && span.end <= self.end
+	}
+
 	/// Returns whether a position lies within this span.
-	pub fn contains(&self, position: usize) -> bool {
+	pub fn contains_pos(&self, position: usize) -> bool {
 		self.start <= position && position <= self.end
 	}
 

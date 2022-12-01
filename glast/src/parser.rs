@@ -147,10 +147,12 @@ pub enum TreeParseErr {
 /// ```rust
 /// # use glast::parser::parse_from_str;
 /// let src = r#"
+/// ##version 450 core
 /// int i = 5.0 + 1;
 /// "#;
-/// let trees = parse_from_str(&src);
-/// let (ast, _, _, _) = trees.root();
+/// let trees = parse_from_str(&src).unwrap();
+/// let (ast, _, _, _) = trees.root(false); // We don't care about extra
+///                                         // syntax highlighting information
 /// ```
 ///
 /// # Further reading
@@ -250,8 +252,6 @@ pub fn parse_from_token_stream(
 	// valid.
 	let mut order_by_appearance = vec![(0, vec![0])];
 	let mut syntax_diags = Vec::new();
-	let mut semantic_diags = Vec::new();
-	let mut syntax_tokens = Vec::new();
 
 	// The current grouping of tokens. This is pushed into the arena whenever we encounter a branch that creates a
 	// new tree node.
@@ -277,11 +277,10 @@ pub fn parse_from_token_stream(
 		match token {
 			Token::Directive(d) => match d {
 				PreprocStream::IfDef { kw, mut tokens } => {
-					syntax_tokens.push((
-						SyntaxToken::Directive,
-						token_span.first_char(),
-					));
-					syntax_tokens.push((SyntaxToken::Directive, kw));
+					let mut syntax_tokens = vec![
+						(SyntaxToken::Directive, token_span.first_char()),
+						(SyntaxToken::Directive, kw),
+					];
 
 					// We are expecting an identifier as the first token.
 					let ident = if tokens.is_empty() {
@@ -344,6 +343,7 @@ pub fn parse_from_token_stream(
 									ty: ConditionalTy::IfDef { ident },
 								},
 								idx,
+								syntax_tokens,
 							)],
 							end: None,
 						}),
@@ -352,11 +352,10 @@ pub fn parse_from_token_stream(
 					stack.push(idx);
 				}
 				PreprocStream::IfNotDef { kw, mut tokens } => {
-					syntax_tokens.push((
-						SyntaxToken::Directive,
-						token_span.first_char(),
-					));
-					syntax_tokens.push((SyntaxToken::Directive, kw));
+					let mut syntax_tokens = vec![
+						(SyntaxToken::Directive, token_span.first_char()),
+						(SyntaxToken::Directive, kw),
+					];
 
 					// We are expecting an identifier as the first token.
 					let ident = if tokens.is_empty() {
@@ -419,6 +418,7 @@ pub fn parse_from_token_stream(
 									ty: ConditionalTy::IfNotDef { ident },
 								},
 								idx,
+								syntax_tokens,
 							)],
 							end: None,
 						}),
@@ -427,11 +427,10 @@ pub fn parse_from_token_stream(
 					stack.push(idx);
 				}
 				PreprocStream::If { kw, tokens } => {
-					syntax_tokens.push((
-						SyntaxToken::Directive,
-						token_span.first_char(),
-					));
-					syntax_tokens.push((SyntaxToken::Directive, kw));
+					let mut syntax_tokens = vec![
+						(SyntaxToken::Directive, token_span.first_char()),
+						(SyntaxToken::Directive, kw),
+					];
 
 					// We are expecting an identifier as the first token.
 					let expr = if tokens.is_empty() {
@@ -442,10 +441,9 @@ pub fn parse_from_token_stream(
 						));
 						None
 					} else {
-						let (expr, mut syntax, mut semantic, mut colours) =
+						let (expr, mut syntax, mut colours) =
 							cond_parser(tokens);
 						syntax_diags.append(&mut syntax);
-						semantic_diags.append(&mut semantic);
 						syntax_tokens.append(&mut colours);
 						expr
 					};
@@ -473,6 +471,7 @@ pub fn parse_from_token_stream(
 									ty: ConditionalTy::If { expr },
 								},
 								idx,
+								syntax_tokens,
 							)],
 							end: None,
 						}),
@@ -481,11 +480,10 @@ pub fn parse_from_token_stream(
 					stack.push(idx);
 				}
 				PreprocStream::ElseIf { kw, tokens } => {
-					syntax_tokens.push((
-						SyntaxToken::Directive,
-						token_span.first_char(),
-					));
-					syntax_tokens.push((SyntaxToken::Directive, kw));
+					let mut syntax_tokens = vec![
+						(SyntaxToken::Directive, token_span.first_char()),
+						(SyntaxToken::Directive, kw),
+					];
 
 					// We are expecting an identifier as the first token.
 					let expr = if tokens.is_empty() {
@@ -496,10 +494,9 @@ pub fn parse_from_token_stream(
 						));
 						None
 					} else {
-						let (expr, mut syntax, mut semantic, mut colours) =
+						let (expr, mut syntax, mut colours) =
 							cond_parser(tokens);
 						syntax_diags.append(&mut syntax);
-						semantic_diags.append(&mut semantic);
 						syntax_tokens.append(&mut colours);
 						expr
 					};
@@ -533,6 +530,7 @@ pub fn parse_from_token_stream(
 								ty: ConditionalTy::ElseIf { expr },
 							},
 							idx,
+							syntax_tokens,
 						));
 						order_by_appearance.push((idx, stack.clone()));
 						stack.push(idx);
@@ -543,11 +541,10 @@ pub fn parse_from_token_stream(
 					}
 				}
 				PreprocStream::Else { kw, tokens } => {
-					syntax_tokens.push((
-						SyntaxToken::Directive,
-						token_span.first_char(),
-					));
-					syntax_tokens.push((SyntaxToken::Directive, kw));
+					let mut syntax_tokens = vec![
+						(SyntaxToken::Directive, token_span.first_char()),
+						(SyntaxToken::Directive, kw),
+					];
 
 					// We are not expecting anything after `#else`.
 					if !tokens.is_empty() {
@@ -588,6 +585,7 @@ pub fn parse_from_token_stream(
 								ty: ConditionalTy::Else,
 							},
 							idx,
+							syntax_tokens,
 						));
 						order_by_appearance.push((idx, stack.clone()));
 						stack.push(idx);
@@ -598,11 +596,10 @@ pub fn parse_from_token_stream(
 					}
 				}
 				PreprocStream::EndIf { kw, tokens } => {
-					syntax_tokens.push((
-						SyntaxToken::Directive,
-						token_span.first_char(),
-					));
-					syntax_tokens.push((SyntaxToken::Directive, kw));
+					let mut syntax_tokens = vec![
+						(SyntaxToken::Directive, token_span.first_char()),
+						(SyntaxToken::Directive, kw),
+					];
 
 					// We are not expecting anything after `#endif`.
 					if !tokens.is_empty() {
@@ -615,6 +612,8 @@ pub fn parse_from_token_stream(
 					}
 
 					if stack.len() > 1 {
+						let node = tree.get_mut(top(&stack)).unwrap();
+						node.span.end = token_span.end;
 						// Finish the current token group for the previous conditional node.
 						let idx = arena.len();
 						arena.push(std::mem::take(&mut current_tokens));
@@ -631,10 +630,13 @@ pub fn parse_from_token_stream(
 						let node = tree.get_mut(top(&stack)).unwrap();
 						node.span.end = token_span.end;
 						let Either::Right(cond_block) = node.children.last_mut().unwrap() else { unreachable!() };
-						cond_block.end = Some(Conditional {
-							span: token_span,
-							ty: ConditionalTy::End,
-						});
+						cond_block.end = Some((
+							Conditional {
+								span: token_span,
+								ty: ConditionalTy::End,
+							},
+							syntax_tokens,
+						));
 					} else {
 						syntax_diags.push(Syntax::PreprocConditional(
 							PreprocConditionalDiag::UnmatchedEndIf(token_span),
@@ -683,7 +685,6 @@ pub fn parse_from_token_stream(
 	//dbg!(&arena);
 	//dbg!(&tree);
 	//dbg!(&syntax_diags);
-	//dbg!(&syntax_tokens);
 	Ok(TokenTree {
 		arena,
 		tree,
@@ -702,13 +703,18 @@ pub fn parse_from_token_stream(
 /// ```rust
 /// # use glast::parser::{parse_from_str, print_ast};
 /// let src = r#"
+/// ##version 450 core
 /// int i = 5.0 + 1;
 /// "#;
-/// let (ast, _, _, _) = parse_from_str(&src).root();
+/// let (ast, _, _, _) = parse_from_str(&src).unwrap().root(false);
 /// println!("{}", print_ast(ast));
 /// ```
 /// Would result in:
 /// ```text
+/// #Version(
+///     version: 450
+///     profile: core
+/// ),
 /// VarDef(
 ///     type: int
 ///     ident: i
@@ -900,7 +906,7 @@ impl TokenTree {
 		};
 
 		// Parse the root branch.
-		let mut walker = Walker::new(streams);
+		let mut walker = Walker::new(streams, vec![]);
 		let mut nodes = Vec::new();
 		while !walker.is_done() {
 			parse_stmt(&mut walker, &mut nodes);
@@ -1058,6 +1064,8 @@ impl TokenTree {
 
 		let mut nodes_idx = 0;
 		let mut streams = Vec::new();
+		let mut conditional_syntax_tokens = Vec::new();
+		let mut end_tokens_stack = Vec::new();
 		let mut node_stack = vec![(0, 0)];
 		// Invariant: We have at least one node, so at least one iteration of this loop can be performed without
 		// any panics.
@@ -1072,12 +1080,16 @@ impl TokenTree {
 					Either::Left(arena_id) => {
 						streams.push(self.arena[*arena_id].clone())
 					}
-					Either::Right(ConditionBlock { conditions, .. }) => {
+					Either::Right(ConditionBlock { conditions, end }) => {
 						// Check if any of the conditional branches match the current key number.
-						for (_, node_id) in conditions {
+						for (_, node_id, tokens) in conditions {
 							if *node_id == nodes[nodes_idx] {
+								conditional_syntax_tokens.push(tokens.clone());
 								node_stack.push((*node_id, 0));
 								nodes_idx += 1;
+								if let Some((_, tokens)) = end {
+									end_tokens_stack.push(tokens.clone());
+								}
 								continue 'outer;
 							}
 						}
@@ -1089,12 +1101,13 @@ impl TokenTree {
 			// with the parent node, (if there is one).
 			if node_stack.len() > 1 {
 				node_stack.pop();
+				conditional_syntax_tokens.push(end_tokens_stack.pop().unwrap());
 			} else {
 				break 'outer;
 			}
 		}
 
-		let mut walker = Walker::new(streams);
+		let mut walker = Walker::new(streams, conditional_syntax_tokens);
 		let mut nodes = Vec::new();
 		while !walker.is_done() {
 			parse_stmt(&mut walker, &mut nodes);
@@ -1170,7 +1183,7 @@ struct ConditionBlock {
 	/// The entry at `[0]` will be a `ConditionalTy::IfDef/IfNotDef/If` variant.
 	///
 	/// A `ConditionalTy::End` will never be present.
-	conditions: Vec<(Conditional, NodeId)>,
+	conditions: Vec<(Conditional, NodeId, Vec<Spanned<SyntaxToken>>)>,
 	/// The `#endif` directive.
 	///
 	/// This is separate because the `#endif` doesn't contain any children, (since it ends the condition block),
@@ -1178,7 +1191,7 @@ struct ConditionBlock {
 	///
 	/// # Invariants
 	/// This will be a `ConditionalTy::End` variant.
-	end: Option<Conditional>,
+	end: Option<(Conditional, Vec<Spanned<SyntaxToken>>)>,
 }
 
 /// Information necessary to expand a macro.
@@ -1223,6 +1236,11 @@ pub(crate) struct Walker {
 
 	/// The syntax highlighting tokens created from the tokens parsed so-far.
 	syntax_tokens: Vec<Spanned<SyntaxToken>>,
+	/// The syntax highlighting tokens for any conditional directives.
+	///
+	/// - `0` - The span of the entire directive.
+	/// - `1` - The syntax tokens.
+	conditional_syntax_tokens: Vec<(Span, Vec<Spanned<SyntaxToken>>)>,
 
 	/// The last span in the source string.
 	last_span: Span,
@@ -1231,7 +1249,10 @@ pub(crate) struct Walker {
 #[allow(unused)]
 impl Walker {
 	/// Constructs a new walker.
-	fn new(mut token_streams: Vec<TokenStream>) -> Self {
+	fn new(
+		mut token_streams: Vec<TokenStream>,
+		conditional_syntax_tokens: Vec<Vec<Spanned<SyntaxToken>>>,
+	) -> Self {
 		let mut last_span = Span::new(0, 0);
 		for stream in token_streams.iter().rev() {
 			match stream.last() {
@@ -1270,6 +1291,22 @@ impl Walker {
 			syntax_diags: Vec::new(),
 			semantic_diags: Vec::new(),
 			syntax_tokens: Vec::new(),
+			conditional_syntax_tokens: conditional_syntax_tokens
+				.into_iter()
+				.filter_map(|v| {
+					if !v.is_empty() {
+						Some((
+							Span::new(
+								v.first().unwrap().1.start,
+								v.last().unwrap().1.end,
+							),
+							v,
+						))
+					} else {
+						None
+					}
+				})
+				.collect(),
 			last_span,
 		}
 	}
@@ -1793,14 +1830,77 @@ impl Walker {
 	fn push_colour(&mut self, span: Span, token: SyntaxToken) {
 		// When we are within a macro, we don't want to produce syntax tokens.
 		// Note: This functionality is duplicated in the `ShuntingYard::colour()` method.
-		if self.streams.len() == 1 {
+		if self.streams.len() != 1 {
+			return;
+		}
+
+		if self.conditional_syntax_tokens.is_empty() {
+			self.syntax_tokens.push((token, span));
+		} else {
+			let mut previous_span = self
+				.syntax_tokens
+				.get(0)
+				.map(|(_, s)| *s)
+				.unwrap_or(Span::new(0, 0));
+			while let Some(bottom) = self.conditional_syntax_tokens.first() {
+				if bottom.0.is_before(&previous_span) {
+					// We have already consumes syntax tokens for the conditional directive so we want to discard
+					// current ones. This happens if error recovery consumes conditional directive symbols.
+					self.conditional_syntax_tokens.remove(0);
+					continue;
+				} else if bottom.0.is_before(&span) {
+					// The current conditional syntax tokens are before this new span, so we must add them
+					// beforehand.
+					let (_, mut tokens) =
+						self.conditional_syntax_tokens.remove(0);
+					self.syntax_tokens.append(&mut tokens);
+					continue;
+				} else {
+					break;
+				}
+			}
 			self.syntax_tokens.push((token, span));
 		}
 	}
 
 	/// Appends a collection of syntax highlighting tokens.
 	fn append_colours(&mut self, colours: &mut Vec<Spanned<SyntaxToken>>) {
-		self.syntax_tokens.append(colours);
+		if self.conditional_syntax_tokens.is_empty() {
+			self.syntax_tokens.append(colours);
+		} else if !self.conditional_syntax_tokens.is_empty()
+			&& !colours.is_empty()
+		{
+			let previous_span = self
+				.syntax_tokens
+				.last()
+				.map(|(_, s)| *s)
+				.unwrap_or(Span::new(0, 0));
+			for colour in colours.into_iter() {
+				let span = &colour.1;
+				while let Some(bottom) = self.conditional_syntax_tokens.first()
+				{
+					if bottom.0.is_before(&previous_span) {
+						// We have already consumes syntax tokens for the conditional directive so we want to
+						// discard current ones. This happens if error recovery consumes conditional directive
+						// symbols.
+						self.conditional_syntax_tokens.remove(0);
+						continue;
+					} else if bottom.0.is_before(&span) {
+						// The current conditional syntax tokens are before this new span, so we must add them
+						// beforehand.
+						let (_, mut tokens) =
+							self.conditional_syntax_tokens.remove(0);
+						self.syntax_tokens.append(&mut tokens);
+						continue;
+					} else {
+						break;
+					}
+				}
+			}
+		} else {
+			// If we are not appending anything, we can't know whether we can append any conditional expression
+			// tokens, hence we do nothing.
+		}
 	}
 }
 

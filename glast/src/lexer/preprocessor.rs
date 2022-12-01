@@ -54,7 +54,7 @@
 //! - Has a different `line` directive, since GLSL has no concept of filenames.
 //! - Has different pre-defined macros, (which depend on the exact GLSL version).
 
-use super::{is_word, is_word_start, match_op, Lexer};
+use super::{is_word, is_word_start, Lexer};
 use crate::{GlslVersion, Span, Spanned};
 
 /// A vector of tokens representing a specific preprocessor directive.
@@ -1393,13 +1393,26 @@ pub(super) fn parse_condition(
 				}
 			}
 		} else if is_conditional_punctuation_start(&current) {
-			tokens.push((
-				match_conditional_punctuation(lexer),
-				Span {
-					start: buffer_start,
-					end: lexer.position(),
-				},
-			));
+			match match_conditional_punctuation(lexer) {
+				Some(t) => tokens.push((
+					t,
+					Span {
+						start: buffer_start,
+						end: lexer.position(),
+					},
+				)),
+				None => {
+					// We could have a single `=`, which isn't a valid operator, (unlike in the main lexer).
+					lexer.advance();
+					tokens.push((
+						ConditionToken::Invalid(current),
+						Span {
+							start: buffer_start,
+							end: lexer.position(),
+						},
+					));
+				}
+			}
 		} else if current.is_whitespace() {
 			// We ignore whitespace characters.
 			lexer.advance();
@@ -1454,8 +1467,16 @@ fn is_conditional_punctuation_start(c: &char) -> bool {
 	}
 }
 
+macro_rules! match_op {
+	($lexer:ident, $str:expr, $token:expr) => {
+		if $lexer.take_pat($str) {
+			return Some($token);
+		}
+	};
+}
+
 /// Matches a punctuation symbol.
-fn match_conditional_punctuation(lexer: &mut Lexer) -> ConditionToken {
+fn match_conditional_punctuation(lexer: &mut Lexer) -> Option<ConditionToken> {
 	match_op!(lexer, "==", ConditionToken::EqEq);
 	match_op!(lexer, "!=", ConditionToken::NotEq);
 	match_op!(lexer, ">=", ConditionToken::Ge);
@@ -1479,7 +1500,7 @@ fn match_conditional_punctuation(lexer: &mut Lexer) -> ConditionToken {
 	match_op!(lexer, "&", ConditionToken::And);
 	match_op!(lexer, "|", ConditionToken::Or);
 	match_op!(lexer, "^", ConditionToken::Xor);
-	unreachable!("[preprocessor::match_conditional_punctuation] Exhausted all of the patterns without matching anything");
+	None
 }
 
 /// Performs token concatenation on the given token stream.

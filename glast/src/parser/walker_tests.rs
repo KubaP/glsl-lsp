@@ -56,7 +56,7 @@ mod single_source {
 	#[test]
 	fn no_macro() {
 		let tokens = lexer::parse_from_str("int foo 9 /*...*/bar").0;
-		let mut walker = Walker::new(vec![tokens]);
+		let mut walker = Walker::new(vec![tokens], vec![]);
 		assert_token!(walker, Token::Ident("int".into()));
 		walker.advance();
 		assert_token!(walker, Token::Ident("foo".into()));
@@ -84,7 +84,7 @@ mod single_source {
 		"#,
 		)
 		.0;
-		let mut walker = Walker::new(vec![tokens]);
+		let mut walker = Walker::new(vec![tokens], vec![]);
 		register_obj_macro!(walker, "BAR", Token::Ident("bar".into()));
 		assert_token!(walker, Token::Ident("int".into()));
 		walker.advance();
@@ -114,7 +114,7 @@ mod single_source {
 		"#,
 		)
 		.0;
-		let mut walker = Walker::new(vec![tokens]);
+		let mut walker = Walker::new(vec![tokens], vec![]);
 		register_obj_macro!(walker, "FOO", Token::Ident("foo".into()));
 		register_obj_macro!(walker, "BAR", Token::Ident("FOO".into()));
 		assert_token!(walker, Token::Ident("int".into()));
@@ -144,7 +144,7 @@ mod single_source {
 		"#,
 		)
 		.0;
-		let mut walker = Walker::new(vec![tokens]);
+		let mut walker = Walker::new(vec![tokens], vec![]);
 		register_obj_macro!(walker, "FOO");
 		assert_token!(walker, Token::Ident("int".into()));
 		walker.advance();
@@ -171,7 +171,7 @@ mod single_source {
 		"#,
 		)
 		.0;
-		let mut walker = Walker::new(vec![tokens]);
+		let mut walker = Walker::new(vec![tokens], vec![]);
 		register_fn_macro!(
 			walker,
 			"BAR",
@@ -209,7 +209,7 @@ mod single_source {
 		"#,
 		)
 		.0;
-		let mut walker = Walker::new(vec![tokens]);
+		let mut walker = Walker::new(vec![tokens], vec![]);
 		register_fn_macro!(
 			walker,
 			"FOO",
@@ -258,7 +258,7 @@ mod single_source {
 		"#,
 		)
 		.0;
-		let mut walker = Walker::new(vec![tokens]);
+		let mut walker = Walker::new(vec![tokens], vec![]);
 		register_fn_macro!(
 			walker,
 			"BAR",
@@ -294,7 +294,7 @@ mod multi_source {
 			lexer::parse_from_str("int foo 9").0,
 			lexer::parse_from_str("/*...*/bar").0,
 		];
-		let mut walker = Walker::new(tokens);
+		let mut walker = Walker::new(tokens, vec![]);
 		assert_token!(walker, Token::Ident("int".into()));
 		walker.advance();
 		assert_token!(walker, Token::Ident("foo".into()));
@@ -320,7 +320,7 @@ mod multi_source {
 			lexer::parse_from_str("int foo 9/*...*/").0,
 			lexer::parse_from_str("BAR").0,
 		];
-		let mut walker = Walker::new(tokens);
+		let mut walker = Walker::new(tokens, vec![]);
 		register_obj_macro!(walker, "BAR", Token::Ident("bar".into()));
 		assert_token!(walker, Token::Ident("int".into()));
 		walker.advance();
@@ -348,7 +348,7 @@ mod multi_source {
 			lexer::parse_from_str("int foo 9/*...*/").0,
 			lexer::parse_from_str("BAR").0,
 		];
-		let mut walker = Walker::new(tokens);
+		let mut walker = Walker::new(tokens, vec![]);
 		register_obj_macro!(walker, "FOO", Token::Ident("foo".into()));
 		register_obj_macro!(walker, "BAR", Token::Ident("FOO".into()));
 		assert_token!(walker, Token::Ident("int".into()));
@@ -376,7 +376,7 @@ mod multi_source {
 			lexer::parse_from_str("int foo 9/*...*/").0,
 			lexer::parse_from_str("FOO").0,
 		];
-		let mut walker = Walker::new(tokens);
+		let mut walker = Walker::new(tokens, vec![]);
 		register_obj_macro!(walker, "FOO");
 		assert_token!(walker, Token::Ident("int".into()));
 		walker.advance();
@@ -401,7 +401,7 @@ mod multi_source {
 			lexer::parse_from_str("int foo 9/*...*/").0,
 			lexer::parse_from_str("BAR(p)").0,
 		];
-		let mut walker = Walker::new(tokens);
+		let mut walker = Walker::new(tokens, vec![]);
 		register_fn_macro!(
 			walker,
 			"BAR",
@@ -437,7 +437,7 @@ mod multi_source {
 			lexer::parse_from_str("int foo 9/*...*/").0,
 			lexer::parse_from_str("BAR(p)").0,
 		];
-		let mut walker = Walker::new(tokens);
+		let mut walker = Walker::new(tokens, vec![]);
 		register_fn_macro!(
 			walker,
 			"FOO",
@@ -484,7 +484,7 @@ mod multi_source {
 			lexer::parse_from_str("int foo 9/*...*/").0,
 			lexer::parse_from_str("BAR(p)").0,
 		];
-		let mut walker = Walker::new(tokens);
+		let mut walker = Walker::new(tokens, vec![]);
 		register_fn_macro!(
 			walker,
 			"BAR",
@@ -522,7 +522,7 @@ mod function_macros {
 		"#,
 		)
 		.0;
-		let mut walker = Walker::new(vec![tokens]);
+		let mut walker = Walker::new(vec![tokens], vec![]);
 		register_fn_macro!(
 			walker,
 			"BAR",

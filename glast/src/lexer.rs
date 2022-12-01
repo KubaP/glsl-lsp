@@ -1746,7 +1746,6 @@ macro_rules! match_op {
 		}
 	};
 }
-pub(self) use match_op;
 
 /// Matches a punctuation symbol.
 fn match_punctuation(lexer: &mut Lexer) -> Token {

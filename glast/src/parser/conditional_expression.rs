@@ -6,7 +6,7 @@ use super::{
 	SyntaxToken,
 };
 use crate::{
-	diag::{ExprDiag, Semantic, Syntax},
+	diag::{ExprDiag, Syntax},
 	lexer::preprocessor::ConditionToken,
 	Either, Span, Spanned,
 };
@@ -15,7 +15,7 @@ use std::collections::VecDeque;
 /*
 The functionality of this parser is largely copied from the expression parser. The decision to copy the relevant
 parts of the code over was done in order to prevent the complexity of the expression parser from growing even
-larger. There are already a *lot* of conditions and checks and feature-gates, adding more would make it even
+larger. There are already a *lot* of conditions and checks and feature-gates; adding more would make it even
 less maintainable. Furthermore, this parser uses an entirely different token type so the amount of direct code
 reuse would be limited anyway.
 */
@@ -26,12 +26,7 @@ reuse would be limited anyway.
 /// will invalidate the rest of the tokens.
 pub(super) fn cond_parser(
 	tokens: Vec<Spanned<ConditionToken>>,
-) -> (
-	Option<Expr>,
-	Vec<Syntax>,
-	Vec<Semantic>,
-	Vec<Spanned<SyntaxToken>>,
-) {
+) -> (Option<Expr>, Vec<Syntax>, Vec<Spanned<SyntaxToken>>) {
 	let mut walker = Walker { tokens, cursor: 0 };
 
 	let mut parser = ShuntingYard {
@@ -39,7 +34,6 @@ pub(super) fn cond_parser(
 		operators: VecDeque::new(),
 		groups: Vec::new(),
 		syntax_diags: Vec::new(),
-		semantic_diags: Vec::new(),
 		syntax_tokens: Vec::new(),
 	};
 	parser.parse(&mut walker);
@@ -47,7 +41,6 @@ pub(super) fn cond_parser(
 	(
 		parser.create_ast(),
 		parser.syntax_diags,
-		parser.semantic_diags,
 		parser.syntax_tokens,
 	)
 }
@@ -197,7 +190,7 @@ impl Op {
 			OpTy::XorXor(_) => 9,
 			OpTy::OrOr(_) => 7,
 			// These are never directly checked for precedence, but rather have special branches.
-			_ => panic!("The conditional expression operator {self:?} does not have a precedence value because it should never be passed into this function. Something has gone wrong!"),
+			_ => unreachable!("The conditional expression operator {self:?} does not have a precedence value because it should never be passed into this function. Something has gone wrong!"),
 		}
 	}
 
@@ -258,10 +251,6 @@ struct ShuntingYard {
 
 	/// Syntax diagnostics encountered during the parser execution.
 	syntax_diags: Vec<Syntax>,
-	/// Semantic diagnostics encountered during the parser execution.
-	///
-	/// Note that this is currently unused as no semantic diagnostics are generated.
-	semantic_diags: Vec<Semantic>,
 
 	/// Syntax highlighting tokens created during the parser execution.
 	syntax_tokens: Vec<Spanned<SyntaxToken>>,
@@ -344,7 +333,7 @@ impl ShuntingYard {
 
 	/// Registers the end of a defined operator group, popping any operators until the start of the group is
 	/// reached.
-	fn end_defined_group(&mut self, end_span: Span) {
+	fn end_defined(&mut self, end_span: Span) {
 		let group = if !self.groups.is_empty() {
 			self.groups.remove(self.groups.len() - 1)
 		} else {
@@ -443,7 +432,7 @@ impl ShuntingYard {
 	}
 
 	/// Pushes a syntax highlighting token over the given span.
-	fn colour(&mut self, _walker: &Walker, span: Span, token: SyntaxToken) {
+	fn colour(&mut self, span: Span, token: SyntaxToken) {
 		self.syntax_tokens.push((token, span));
 	}
 
@@ -478,8 +467,6 @@ impl ShuntingYard {
 
 			match token {
 				ConditionToken::Num(num) if state == State::Operand => {
-					self.colour(walker, span, SyntaxToken::Number);
-
 					self.stack.push_back(Either::Left(Node {
 						ty: NodeTy::Num(*num),
 						span,
@@ -489,10 +476,10 @@ impl ShuntingYard {
 					// `..10 + 5` instead of `..10 5`.
 					state = State::AfterOperand;
 					self.set_op_rhs_toggle();
+
+					self.colour(span, SyntaxToken::Number);
 				}
 				ConditionToken::Num(num) if state == State::AfterOperand => {
-					self.colour(walker, span, SyntaxToken::Number);
-
 					self.stack.push_back(Either::Left(Node {
 						ty: NodeTy::Num(*num),
 						span,
@@ -509,8 +496,6 @@ impl ShuntingYard {
 					break 'main;
 				}
 				ConditionToken::Ident(s) if state == State::Operand => {
-					self.colour(walker, span, SyntaxToken::UncheckedIdent);
-
 					self.stack.push_back(Either::Left(Node {
 						ty: NodeTy::Ident(Ident {
 							name: s.clone(),
@@ -529,12 +514,12 @@ impl ShuntingYard {
 					// group, the closing parenthesis will take care of resetting the flag.
 					if previously_started_defined {
 						previously_started_defined = false;
-						self.end_defined_group(span);
+						self.end_defined(span);
 					}
+
+					self.colour(span, SyntaxToken::UncheckedIdent);
 				}
 				ConditionToken::Ident(s) if state == State::AfterOperand => {
-					self.colour(walker, span, SyntaxToken::UncheckedIdent);
-
 					self.stack.push_back(Either::Left(Node {
 						ty: NodeTy::Ident(Ident {
 							name: s.clone(),
@@ -554,30 +539,32 @@ impl ShuntingYard {
 					break 'main;
 				}
 				ConditionToken::Sub if state == State::Operand => {
-					self.colour(walker, span, SyntaxToken::Operator);
 					self.push_operator(Op {
 						span,
 						ty: OpTy::Neg(false),
 					});
+
+					self.colour(span, SyntaxToken::Operator);
 				}
 				ConditionToken::Not if state == State::Operand => {
-					self.colour(walker, span, SyntaxToken::Operator);
 					self.push_operator(Op {
 						span,
 						ty: OpTy::Not(false),
 					});
+
+					self.colour(span, SyntaxToken::Operator);
 				}
 				ConditionToken::Flip if state == State::Operand => {
-					self.colour(walker, span, SyntaxToken::Operator);
 					self.push_operator(Op {
 						span,
 						ty: OpTy::Flip(false),
 					});
+
+					self.colour(span, SyntaxToken::Operator);
 				}
 				ConditionToken::Not | ConditionToken::Flip
 					if state == State::AfterOperand =>
 				{
-					self.colour(walker, span, SyntaxToken::Operator);
 					self.syntax_diags.push(Syntax::Expr(
 						ExprDiag::InvalidBinOrPostOperator(span),
 					));
@@ -585,7 +572,6 @@ impl ShuntingYard {
 					break 'main;
 				}
 				ConditionToken::LParen if state == State::Operand => {
-					self.colour(walker, span, SyntaxToken::Punctuation);
 					if previously_started_defined {
 						let Some(Group::Defined(_, _, l_paren_span)) = self.groups.last_mut()  else {unreachable!();};
 						*l_paren_span = Some(span);
@@ -597,9 +583,10 @@ impl ShuntingYard {
 						});
 						self.groups.push(Group::Paren(false, span));
 					}
+
+					self.colour(span, SyntaxToken::Punctuation);
 				}
 				ConditionToken::LParen if state == State::AfterOperand => {
-					self.colour(walker, span, SyntaxToken::Punctuation);
 					self.syntax_diags.push(Syntax::Expr(
 						ExprDiag::FoundOperandAfterOperand(
 							self.get_previous_span().unwrap(),
@@ -610,7 +597,6 @@ impl ShuntingYard {
 					break 'main;
 				}
 				ConditionToken::RParen if state == State::AfterOperand => {
-					self.colour(walker, span, SyntaxToken::Punctuation);
 					match self.end_paren_defined(span) {
 						Ok(_) => {}
 						Err(_) => {
@@ -619,11 +605,12 @@ impl ShuntingYard {
 						}
 					}
 
+					self.colour(span, SyntaxToken::Punctuation);
+
 					// We don't switch state since after a `)`, we are expecting an operator, i.e.
 					// `..) + 5` rather than `..) 5`
 				}
 				ConditionToken::RParen if state == State::Operand => {
-					self.colour(walker, span, SyntaxToken::Punctuation);
 					let prev_op_span = self.get_previous_span();
 					let just_started_paren = self.just_started_paren();
 					match self.end_paren_defined(span) {
@@ -651,18 +638,20 @@ impl ShuntingYard {
 					}
 
 					state = State::AfterOperand;
+
+					self.colour(span, SyntaxToken::Punctuation);
 				}
 				ConditionToken::Defined if state == State::Operand => {
-					self.colour(walker, span, SyntaxToken::Keyword);
 					self.push_operator(Op {
 						span,
 						ty: OpTy::DefinedStart,
 					});
 					self.groups.push(Group::Defined(false, span, None));
 					previously_started_defined = true;
+
+					self.colour(span, SyntaxToken::Keyword);
 				}
 				ConditionToken::Defined if state == State::AfterOperand => {
-					self.colour(walker, span, SyntaxToken::Keyword);
 					self.syntax_diags.push(Syntax::Expr(
 						ExprDiag::FoundOperandAfterOperand(
 							self.get_previous_span().unwrap(),
@@ -673,7 +662,6 @@ impl ShuntingYard {
 					break 'main;
 				}
 				ConditionToken::InvalidNum(_) => {
-					self.colour(walker, span, SyntaxToken::Invalid);
 					invalidate_rest = true;
 					break 'main;
 				}
@@ -685,13 +673,16 @@ impl ShuntingYard {
 					break 'main;
 				}
 				_ if state == State::AfterOperand => {
-					self.colour(walker, span, SyntaxToken::Operator);
 					self.push_operator(Op::from_token(token.clone(), span));
 					state = State::Operand;
+
+					self.colour(span, SyntaxToken::Operator);
 				}
 				_ => unreachable!(),
 			}
 
+			// Reset the flag. We do this here to avoid having to sprinkle every branch other than the `Defined`
+			// branch with a reset, as that would be needlessly verbose.
 			match token {
 				ConditionToken::Defined => {}
 				_ => previously_started_defined = false,
@@ -700,10 +691,11 @@ impl ShuntingYard {
 			walker.advance();
 		}
 
+		// If we break early because of a syntax error, we want to colour the rest of the tokens as invalid.
 		if invalidate_rest {
 			walker.advance();
 			while let Some((_, span)) = walker.peek() {
-				self.colour(walker, span, SyntaxToken::Invalid);
+				self.colour(span, SyntaxToken::Invalid);
 				walker.advance();
 			}
 		}
@@ -754,7 +746,7 @@ impl ShuntingYard {
 
 	/// Converts the internal RPN stack into a singular `Expr` node, which contains the entire expression.
 	fn create_ast(&mut self) -> Option<Expr> {
-		if self.stack.len() == 0 {
+		if self.stack.is_empty() {
 			return None;
 		}
 
@@ -846,7 +838,7 @@ impl ShuntingYard {
 							},
 						});
 					}
-					OpTy::Paren(has_inner, l_paren, end) => {
+					OpTy::Paren(has_inner, _l_paren, _end) => {
 						let expr = if has_inner {
 							Some(pop_back(&mut stack))
 						} else {
@@ -860,7 +852,7 @@ impl ShuntingYard {
 							},
 						});
 					}
-					OpTy::Defined(has_inner, l_paren, end) => {
+					OpTy::Defined(has_inner, _l_paren, end) => {
 						let expr = if has_inner {
 							Some(pop_back(&mut stack))
 						} else {
@@ -917,7 +909,7 @@ impl ShuntingYard {
 						});
 					}
 					_ => {
-						panic!("Invalid operator {op:?} in conditional expression shunting yard stack. This operator should never be present in the final RPN stack.");
+						unreachable!("Invalid operator {op:?} in conditional expression shunting yard stack. This operator should never be present in the final RPN stack.");
 					}
 				},
 			}
@@ -928,9 +920,8 @@ impl ShuntingYard {
 			stack.push_back(expr);
 		}
 
-		#[cfg(debug_assertions)]
 		if stack.len() != 1 {
-			panic!("After processing the conditional expression shunting yard output stack, we are left with more than one expression. This should not happen.");
+			unreachable!("After processing the conditional expression shunting yard output stack, we are left with more than one expression. This should not happen.");
 		}
 
 		// Return the one root expression.

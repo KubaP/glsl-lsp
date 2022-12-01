@@ -318,7 +318,7 @@ impl Op {
 			| OpTy::LShiftEq(_)
 			| OpTy::RShiftEq(_) => 1,
 			// These are never directly checked for precedence, but rather have special branches.
-			_ => panic!("The operator {self:?} does not have a precedence value because it should never be passed into this function. Something has gone wrong!"),
+			_ => unreachable!("The operator {self:?} does not have a precedence value because it should never be passed into this function. Something has gone wrong!"),
 		}
 	}
 
@@ -437,9 +437,9 @@ impl ShuntingYard {
 			match self.groups.pop() {
 				Some(group) => match group {
 					Group::Ternary => {}
-					_ => panic!("Should be in ternary group"),
+					_ => unreachable!("Should be in ternary group"),
 				},
-				None => panic!("Should be in ternary group"),
+				None => unreachable!("Should be in ternary group"),
 			};
 		}
 
@@ -504,10 +504,10 @@ impl ShuntingYard {
 				#[cfg(debug_assertions)]
 				{
 					match op.ty {
-						OpTy::FnCallStart => panic!("Mismatch between operator stack (Op::FnCallStart) and group stack (Group::Paren)!"),
-						OpTy::IndexStart => panic!("Mismatch between operator stack (Op::IndexStart) and group stack (Group::Paren)!"),
-						OpTy::InitStart => panic!("Mismatch between operator stack (Op::InitStart) and group stack (Group::Paren)!"),
-						OpTy::ArrInitStart => panic!("Mismatch between operator stack (Op::ArrInitStart) and group stack (Group::Paren)!"),
+						OpTy::FnCallStart => unreachable!("Mismatch between operator stack (Op::FnCallStart) and group stack (Group::Paren)!"),
+						OpTy::IndexStart => unreachable!("Mismatch between operator stack (Op::IndexStart) and group stack (Group::Paren)!"),
+						OpTy::InitStart => unreachable!("Mismatch between operator stack (Op::InitStart) and group stack (Group::Paren)!"),
+						OpTy::ArrInitStart => unreachable!("Mismatch between operator stack (Op::ArrInitStart) and group stack (Group::Paren)!"),
 						_ => {}
 					}
 				}
@@ -542,10 +542,10 @@ impl ShuntingYard {
 				#[cfg(debug_assertions)]
 				{
 					match op.ty {
-						OpTy::ParenStart => panic!("Mismatch between operator stack (Op::ParenStart) and group stack (Group::Fn)!"),
-						OpTy::IndexStart => panic!("Mismatch between operator stack (Op::IndexStart) and group stack (Group::Fn)!"),
-						OpTy::InitStart => panic!("Mismatch between operator stack (Op::InitStart) and group stack (Group::Fn)!"),
-						OpTy::ArrInitStart => panic!("Mismatch between operator stack (Op::ArrInitStart) and group stack (Group::Fn)!"),
+						OpTy::ParenStart => unreachable!("Mismatch between operator stack (Op::ParenStart) and group stack (Group::Fn)!"),
+						OpTy::IndexStart => unreachable!("Mismatch between operator stack (Op::IndexStart) and group stack (Group::Fn)!"),
+						OpTy::InitStart => unreachable!("Mismatch between operator stack (Op::InitStart) and group stack (Group::Fn)!"),
+						OpTy::ArrInitStart => unreachable!("Mismatch between operator stack (Op::ArrInitStart) and group stack (Group::Fn)!"),
 						_ => {}
 					}
 				}
@@ -582,10 +582,10 @@ impl ShuntingYard {
 				#[cfg(debug_assertions)]
 				{
 					match op .ty{
-						OpTy::ParenStart => panic!("Mismatch between operator stack (Op::ParenStart) and group stack (Group::Index)!"),
-						OpTy::FnCallStart => panic!("Mismatch between operator stack (Op::FnCallStart) and group stack (Group::Index)!"),
-						OpTy::InitStart=> panic!("Mismatch between operator stack (Op::InitStart) and group stack (Group::Index)!"),
-						OpTy::ArrInitStart => panic!("Mismatch between operator stack (Op::ArrInitStart) and group stack (Group::Index)!"),
+						OpTy::ParenStart => unreachable!("Mismatch between operator stack (Op::ParenStart) and group stack (Group::Index)!"),
+						OpTy::FnCallStart => unreachable!("Mismatch between operator stack (Op::FnCallStart) and group stack (Group::Index)!"),
+						OpTy::InitStart=> unreachable!("Mismatch between operator stack (Op::InitStart) and group stack (Group::Index)!"),
+						OpTy::ArrInitStart => unreachable!("Mismatch between operator stack (Op::ArrInitStart) and group stack (Group::Index)!"),
 						_ => {}
 					}
 				}
@@ -620,10 +620,10 @@ impl ShuntingYard {
 				#[cfg(debug_assertions)]
 				{
 					match op.ty {
-						OpTy::ParenStart => panic!("Mismatch between operator stack (Op::ParenStart) and group stack (Group::Init)!"),
-						OpTy::IndexStart => panic!("Mismatch between operator stack (Op::IndexStart) and group stack (Group::Init)!"),
-						OpTy::FnCallStart => panic!("Mismatch between operator stack (Op::FnCallStart) and group stack (Group::Init)!"),
-						OpTy::ArrInitStart => panic!("Mismatch between operator stack (Op::ArrInitStart) and group stack (Group::Init)!"),
+						OpTy::ParenStart => unreachable!("Mismatch between operator stack (Op::ParenStart) and group stack (Group::Init)!"),
+						OpTy::IndexStart => unreachable!("Mismatch between operator stack (Op::IndexStart) and group stack (Group::Init)!"),
+						OpTy::FnCallStart => unreachable!("Mismatch between operator stack (Op::FnCallStart) and group stack (Group::Init)!"),
+						OpTy::ArrInitStart => unreachable!("Mismatch between operator stack (Op::ArrInitStart) and group stack (Group::Init)!"),
 						_ => {}
 					}
 				}
@@ -658,10 +658,10 @@ impl ShuntingYard {
 				#[cfg(debug_assertions)]
 				{
 					match op.ty {
-						OpTy::ParenStart => panic!("Mismatch between operator stack (Op::ParenStart) and group stack (Group::ArrInit)!"),
-						OpTy::IndexStart => panic!("Mismatch between operator stack (Op::IndexStart) and group stack (Group::ArrInit)!"),
-						OpTy::FnCallStart => panic!("Mismatch between operator stack (Op::FnCallStart) and group stack (Group::ArrInit)!"),
-						OpTy::InitStart => panic!("Mismatch between operator stack (Op::InitStart) and group stack (Group::ArrInit)!"),
+						OpTy::ParenStart => unreachable!("Mismatch between operator stack (Op::ParenStart) and group stack (Group::ArrInit)!"),
+						OpTy::IndexStart => unreachable!("Mismatch between operator stack (Op::IndexStart) and group stack (Group::ArrInit)!"),
+						OpTy::FnCallStart => unreachable!("Mismatch between operator stack (Op::FnCallStart) and group stack (Group::ArrInit)!"),
+						OpTy::InitStart => unreachable!("Mismatch between operator stack (Op::InitStart) and group stack (Group::ArrInit)!"),
 						_ => {}
 					}
 				}
@@ -697,9 +697,9 @@ impl ShuntingYard {
 				#[cfg(debug_assertions)]
 				{
 					match op.ty {
-						OpTy::FnCallStart => panic!("Mismatch between operator stack (Op::FnCallStart) and group stack (Group::List)!"),
-						OpTy::InitStart => panic!("Mismatch between operator stack (Op::InitStart) and group stack (Group::List)!"),
-						OpTy::ArrInitStart => panic!("Mismatch between operator stack (Op::ArrInitStart) and group stack (Group::List)!"),
+						OpTy::FnCallStart => unreachable!("Mismatch between operator stack (Op::FnCallStart) and group stack (Group::List)!"),
+						OpTy::InitStart => unreachable!("Mismatch between operator stack (Op::InitStart) and group stack (Group::List)!"),
+						OpTy::ArrInitStart => unreachable!("Mismatch between operator stack (Op::ArrInitStart) and group stack (Group::List)!"),
 						_ => {}
 					}
 				}
@@ -1381,6 +1381,7 @@ impl ShuntingYard {
 				{
 				} else if *token == Token::RBrace && self.exists_init_group() {
 				} else {
+					// TODO: Register syntax error if previous was operator.
 					break 'main;
 				}
 			}
@@ -1389,15 +1390,6 @@ impl ShuntingYard {
 				Token::Num { .. } | Token::Bool(_)
 					if state == State::Operand =>
 				{
-					self.colour(
-						walker,
-						span,
-						match token {
-							Token::Num { .. } => SyntaxToken::Number,
-							Token::Bool(_) => SyntaxToken::Boolean,
-							_ => unreachable!(),
-						},
-					);
 					// If we previously had a token which can end an argument of an arity group, and we are in a
 					// delimited arity group, we want to increase the arity, for example:
 					// `fn(10, 5` or `fn(10 5` or `{1+1  100`
@@ -1431,10 +1423,7 @@ impl ShuntingYard {
 					can_start = Start::None;
 
 					self.set_op_rhs_toggle();
-				}
-				Token::Num { .. } | Token::Bool(_)
-					if state == State::AfterOperand =>
-				{
+
 					self.colour(
 						walker,
 						span,
@@ -1444,6 +1433,10 @@ impl ShuntingYard {
 							_ => unreachable!(),
 						},
 					);
+				}
+				Token::Num { .. } | Token::Bool(_)
+					if state == State::AfterOperand =>
+				{
 					if self.mode == Mode::TakeOneUnit {
 						break 'main;
 					}
@@ -1486,11 +1479,20 @@ impl ShuntingYard {
 
 					can_start = Start::None;
 
+					self.colour(
+						walker,
+						span,
+						match token {
+							Token::Num { .. } => SyntaxToken::Number,
+							Token::Bool(_) => SyntaxToken::Boolean,
+							_ => unreachable!(),
+						},
+					);
+
 					// We don't change state since even though we found an operand instead of an operator, after
 					// this operand we will still be expecting an operator.
 				}
 				Token::Ident(s) if state == State::Operand => {
-					self.colour(walker, span, SyntaxToken::UncheckedIdent);
 					// If we previously had a token which can end an argument of an arity group, and we are in a
 					// delimited arity group, we want to increase the arity, for example:
 					// `fn(10, i` or `fn(10 i` or `{1+1  i`
@@ -1519,9 +1521,10 @@ impl ShuntingYard {
 					can_start = Start::FnOrArr;
 
 					self.set_op_rhs_toggle();
+
+					self.colour(walker, span, SyntaxToken::UncheckedIdent);
 				}
 				Token::Ident(s) if state == State::AfterOperand => {
-					self.colour(walker, span, SyntaxToken::UncheckedIdent);
 					if self.mode == Mode::TakeOneUnit {
 						break 'main;
 					}
@@ -1559,11 +1562,12 @@ impl ShuntingYard {
 					// After an identifier, we may start a function call.
 					can_start = Start::FnOrArr;
 
+					self.colour(walker, span, SyntaxToken::UncheckedIdent);
+
 					// We don't change state since even though we found an operand instead of an operator, after
 					// this operand we will still be expecting an operator.
 				}
 				Token::Op(op) if state == State::Operand => {
-					self.colour(walker, span, SyntaxToken::Operator);
 					if (self.mode == Mode::BreakAtEq
 						|| self.mode == Mode::TakeOneUnit)
 						&& *op == lexer::OpTy::Eq
@@ -1630,9 +1634,10 @@ impl ShuntingYard {
 					}
 
 					can_start = Start::None;
+
+					self.colour(walker, span, SyntaxToken::Operator);
 				}
 				Token::Op(op) if state == State::AfterOperand => {
-					self.colour(walker, span, SyntaxToken::Operator);
 					if (self.mode == Mode::BreakAtEq
 						|| self.mode == Mode::TakeOneUnit)
 						&& *op == lexer::OpTy::Eq
@@ -1673,9 +1678,10 @@ impl ShuntingYard {
 					arity_state = Arity::Operator;
 
 					can_start = Start::None;
+
+					self.colour(walker, span, SyntaxToken::Operator);
 				}
 				Token::LParen if state == State::Operand => {
-					self.colour(walker, span, SyntaxToken::Punctuation);
 					// If we previously had a token which can end an argument of an arity group, and we are in a
 					// delimited arity group, we want to increase the arity, for example:
 					// `fn(10, (` or `fn(10 (` or `{1+1  (`
@@ -1698,11 +1704,12 @@ impl ShuntingYard {
 
 					can_start = Start::None;
 
+					self.colour(walker, span, SyntaxToken::Punctuation);
+
 					// We don't switch state since after a `(`, we are expecting an operand, i.e.
 					// `..+ ( 1 *` rather than `..+ ( *`.
 				}
 				Token::LParen if state == State::AfterOperand => {
-					self.colour(walker, span, SyntaxToken::Punctuation);
 					if can_start == Start::FnOrArr {
 						// We have `ident(` which makes this a function call.
 						self.operators.push_back(Op {
@@ -1772,9 +1779,10 @@ impl ShuntingYard {
 						can_start = Start::None;
 					}
 					arity_state = Arity::Operator;
+
+					self.colour(walker, span, SyntaxToken::Punctuation);
 				}
 				Token::RParen if state == State::AfterOperand => {
-					self.colour(walker, span, SyntaxToken::Punctuation);
 					if !self.just_started_fn_arr_init()
 						&& self.is_in_variable_arg_group()
 					{
@@ -1791,11 +1799,12 @@ impl ShuntingYard {
 
 					can_start = Start::None;
 
+					self.colour(walker, span, SyntaxToken::Punctuation);
+
 					// We don't switch state since after a `)`, we are expecting an operator, i.e.
 					// `..) + 5` rather than `..) 5`.
 				}
 				Token::RParen if state == State::Operand => {
-					self.colour(walker, span, SyntaxToken::Punctuation);
 					if self.is_in_variable_arg_group()
 						&& !just_started_arity_group
 					{
@@ -1835,9 +1844,10 @@ impl ShuntingYard {
 					state = State::AfterOperand;
 
 					can_start = Start::None;
+
+					self.colour(walker, span, SyntaxToken::Punctuation);
 				}
 				Token::LBracket if state == State::AfterOperand => {
-					self.colour(walker, span, SyntaxToken::Punctuation);
 					// We switch state since after a `[`, we are expecting an operand, i.e.
 					// `i[5 +..` rather than `i[+..`.
 					self.operators.push_back(Op {
@@ -1851,9 +1861,10 @@ impl ShuntingYard {
 					arity_state = Arity::Operator;
 
 					can_start = Start::EmptyIndex;
+
+					self.colour(walker, span, SyntaxToken::Punctuation);
 				}
 				Token::LBracket if state == State::Operand => {
-					self.colour(walker, span, SyntaxToken::Punctuation);
 					if self.mode != Mode::TakeOneUnit {
 						self.syntax_diags.push(Syntax::Expr(
 							ExprDiag::FoundLBracketInsteadOfOperand(
@@ -1865,7 +1876,6 @@ impl ShuntingYard {
 					break 'main;
 				}
 				Token::RBracket if state == State::AfterOperand => {
-					self.colour(walker, span, SyntaxToken::Punctuation);
 					// We don't switch state since after a `]`, we are expecting an operator, i.e.
 					// `..] + 5` instead of `..] 5`.
 					match self.end_index(span) {
@@ -1879,9 +1889,10 @@ impl ShuntingYard {
 					can_start = Start::ArrInit;
 
 					arity_state = Arity::PotentialEnd;
+
+					self.colour(walker, span, SyntaxToken::Punctuation);
 				}
 				Token::RBracket if state == State::Operand => {
-					self.colour(walker, span, SyntaxToken::Punctuation);
 					if can_start == Start::EmptyIndex {
 						match self.end_index(span) {
 							Ok(_) => {}
@@ -1911,9 +1922,10 @@ impl ShuntingYard {
 					state = State::AfterOperand;
 
 					arity_state = Arity::PotentialEnd;
+
+					self.colour(walker, span, SyntaxToken::Punctuation);
 				}
 				Token::LBrace if state == State::Operand => {
-					self.colour(walker, span, SyntaxToken::Punctuation);
 					// If we previously had a token which can end an argument of an arity group, and we are in a
 					// delimited arity group, we want to increase the arity, for example:
 					// `{10, {` or `{10 {` or `{1+1  {`
@@ -1938,11 +1950,12 @@ impl ShuntingYard {
 
 					just_started_arity_group = true;
 
+					self.colour(walker, span, SyntaxToken::Punctuation);
+
 					// We don't switch state since after a `{`, we are expecting an operand, i.e.
 					// `..+ {1,` rather than `..+ {,`.
 				}
 				Token::LBrace if state == State::AfterOperand => {
-					self.colour(walker, span, SyntaxToken::Punctuation);
 					// If we previously had a token which can end an argument of an arity group, and we are in a
 					// delimited arity group, we want to increase the arity, for example:
 					// `{10, {` or `{10 {` or `{1+1  {`
@@ -1978,9 +1991,10 @@ impl ShuntingYard {
 					can_start = Start::None;
 
 					just_started_arity_group = true;
+
+					self.colour(walker, span, SyntaxToken::Punctuation);
 				}
 				Token::RBrace if state == State::AfterOperand => {
-					self.colour(walker, span, SyntaxToken::Punctuation);
 					if self.is_in_variable_arg_group() {
 						self.register_arity_argument(span.start_zero_width());
 					}
@@ -1995,11 +2009,12 @@ impl ShuntingYard {
 
 					can_start = Start::None;
 
+					self.colour(walker, span, SyntaxToken::Punctuation);
+
 					// We don't switch state since after a `}`, we are expecting an operator, i.e.
 					// `..}, {..` rather than `..} {..`.
 				}
 				Token::RBrace if state == State::Operand => {
-					self.colour(walker, span, SyntaxToken::Punctuation);
 					if self.is_in_variable_arg_group()
 						&& !just_started_arity_group
 					{
@@ -2033,9 +2048,10 @@ impl ShuntingYard {
 					state = State::AfterOperand;
 
 					can_start = Start::None;
+
+					self.colour(walker, span, SyntaxToken::Punctuation);
 				}
 				Token::Comma if state == State::AfterOperand => {
-					self.colour(walker, span, SyntaxToken::Punctuation);
 					if (self.mode == Mode::DisallowTopLevelList
 						|| self.mode == Mode::TakeOneUnit)
 						&& self.groups.is_empty()
@@ -2059,9 +2075,10 @@ impl ShuntingYard {
 					state = State::Operand;
 
 					can_start = Start::None;
+
+					self.colour(walker, span, SyntaxToken::Punctuation);
 				}
 				Token::Comma if state == State::Operand => {
-					self.colour(walker, span, SyntaxToken::Punctuation);
 					if (self.mode == Mode::DisallowTopLevelList
 						|| self.mode == Mode::TakeOneUnit)
 						&& self.groups.is_empty()
@@ -2121,9 +2138,10 @@ impl ShuntingYard {
 					}));
 
 					can_start = Start::None;
+
+					self.colour(walker, span, SyntaxToken::Punctuation);
 				}
 				Token::Dot if state == State::AfterOperand => {
-					self.colour(walker, span, SyntaxToken::Operator);
 					// We don't need to consider arity because a dot after an operand will always be a valid object
 					// access notation, and in the alternate branch we don't recover from the error.
 
@@ -2137,9 +2155,10 @@ impl ShuntingYard {
 					state = State::Operand;
 
 					can_start = Start::None;
+
+					self.colour(walker, span, SyntaxToken::Operator);
 				}
 				Token::Dot if state == State::Operand => {
-					self.colour(walker, span, SyntaxToken::Operator);
 					// We have encountered something like: `foo + . ` or `foo.bar(). . `.
 					//
 					// We do not recover from this error because we currently mandate that the `ExprTy::ObjAccess`
@@ -2156,7 +2175,6 @@ impl ShuntingYard {
 					break 'main;
 				}
 				Token::Question => {
-					self.colour(walker, span, SyntaxToken::Operator);
 					if state == State::Operand {
 						// We have encountered something like: `foo + ?`.
 						self.syntax_diags.push(Syntax::Expr(
@@ -2180,9 +2198,10 @@ impl ShuntingYard {
 					can_start = Start::None;
 
 					arity_state = Arity::Operator;
+
+					self.colour(walker, span, SyntaxToken::Operator);
 				}
 				Token::Colon => {
-					self.colour(walker, span, SyntaxToken::Operator);
 					if !self.is_in_ternary() {
 						break 'main;
 					}
@@ -2209,6 +2228,8 @@ impl ShuntingYard {
 					can_start = Start::None;
 
 					arity_state = Arity::Operator;
+
+					self.colour(walker, span, SyntaxToken::Operator);
 				}
 				_ => {
 					// We have encountered an unexpected token that's not allowed to be part of an expression.
@@ -2313,7 +2334,7 @@ impl ShuntingYard {
 
 	/// Converts the internal RPN stack into a singular `Expr` node, which contains the entire expression.
 	fn create_ast(&mut self) -> Option<Expr> {
-		if self.stack.len() == 0 {
+		if self.stack.is_empty() {
 			return None;
 		}
 
@@ -2542,7 +2563,7 @@ impl ShuntingYard {
 							span,
 						});
 					}
-					OpTy::Paren(has_inner, l_paren, end) => {
+					OpTy::Paren(has_inner, _l_paren, _end) => {
 						let expr = if has_inner {
 							Some(pop_back(&mut stack))
 						} else {
@@ -2565,7 +2586,7 @@ impl ShuntingYard {
 						// Get the identifier (which is the first expression).
 						let ident = match temp.pop_front().unwrap().ty {
 							ExprTy::Ident(ident) => ident,
-							_ => panic!("The first expression of a function call operator is not an identifier!")
+							_ => unreachable!("The first expression of a function call operator is not an identifier!")
 						};
 						let args = process_fn_arr_constructor_args(
 							temp,
@@ -2578,7 +2599,7 @@ impl ShuntingYard {
 							ty: ExprTy::FnCall { ident, args },
 						});
 					}
-					OpTy::Index(contains_i, l_bracket, end) => {
+					OpTy::Index(contains_i, _l_bracket, end) => {
 						let i = if contains_i {
 							Some(Box::from(pop_back(&mut stack)))
 						} else {
@@ -2594,7 +2615,7 @@ impl ShuntingYard {
 							},
 						});
 					}
-					OpTy::Init(count, l_brace, end) => {
+					OpTy::Init(count, l_brace, _end) => {
 						let mut temp = VecDeque::new();
 						for _ in 0..count {
 							temp.push_front(pop_back(&mut stack));
@@ -2622,7 +2643,7 @@ impl ShuntingYard {
 						match arr.ty {
 							ExprTy::Index { .. } => {}
 							_ => {
-								panic!("The first expression of an array constructor operator is not an `Expr::Index`!");
+								unreachable!("The first expression of an array constructor operator is not an `Expr::Index`!");
 							}
 						}
 
@@ -2730,7 +2751,7 @@ impl ShuntingYard {
 						});
 					}
 					_ => {
-						panic!("Invalid operator {op:?} in shunting yard stack. This operator should never be present in the final RPN stack.");
+						unreachable!("Invalid operator {op:?} in shunting yard stack. This operator should never be present in the final RPN stack.");
 					}
 				},
 			}
@@ -2741,9 +2762,8 @@ impl ShuntingYard {
 			stack.push_back(expr);
 		}
 
-		#[cfg(debug_assertions)]
 		if stack.len() != 1 {
-			panic!("After processing the shunting yard output stack, we are left with more than one expression. This should not happen.");
+			unreachable!("After processing the shunting yard output stack, we are left with more than one expression. This should not happen.");
 		}
 
 		// Return the one root expression.

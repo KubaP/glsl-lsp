@@ -42,6 +42,13 @@ pub enum Semantic {
 	/// - `0` - The span of the call site.
 	/// - `1` - The span of the macro definition.
 	FunctionMacroMismatchedArgCount(Span, Span),
+	/// WARNING - Found a token concatenation operator that is unnecessary. E.g.
+	/// ```c
+	/// #define FOO a ## = b
+	/// ```
+	///
+	/// - `0` - The span of the operator.
+	TokenConcatUnnecessary(Span),
 	/// WARNING - The macro name in an `#undef` directive could not be resolved.
 	///
 	/// - `0` - The span of the name.
@@ -56,6 +63,7 @@ impl Semantic {
 			/* MACROS */
 			Self::EmptyMacroCallSite(_) => Severity::Warning,
 			Self::FunctionMacroMismatchedArgCount(_, _) => Severity::Error,
+			Self::TokenConcatUnnecessary(_) => Severity::Warning,
 			Self::UndefMacroNameUnresolved(_) => Severity::Warning,
 		}
 	}

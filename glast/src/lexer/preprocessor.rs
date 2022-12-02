@@ -1506,11 +1506,16 @@ fn match_conditional_punctuation(lexer: &mut Lexer) -> Option<ConditionToken> {
 /// Performs token concatenation on the given token stream.
 pub(crate) fn concat_macro_body(
 	tokens: super::TokenStream,
-) -> (super::TokenStream, Vec<crate::diag::Syntax>) {
-	use crate::diag::{PreprocDefineDiag, Syntax};
+) -> (
+	super::TokenStream,
+	Vec<crate::diag::Syntax>,
+	Vec<crate::diag::Semantic>,
+) {
+	use crate::diag::{PreprocDefineDiag, Semantic, Syntax};
 
 	let mut stack = Vec::new();
-	let mut diags = Vec::new();
+	let mut syntax_diags = Vec::new();
+	let mut semantic_diags = Vec::new();
 
 	let mut tokens = tokens.into_iter();
 	while let Some(token) = tokens.next() {
@@ -1523,7 +1528,7 @@ pub(crate) fn concat_macro_body(
 					if next.0 == super::Token::MacroConcat {
 						// We have something like `foobar ## ##`. We cannot concatenate two concat operators, so we
 						// just emit the tokens as-is.
-						diags.push(Syntax::PreprocDefine(
+						syntax_diags.push(Syntax::PreprocDefine(
 							PreprocDefineDiag::TokenConcatMissingRHS(token.1),
 						));
 						stack.push(prev);
@@ -1559,26 +1564,28 @@ pub(crate) fn concat_macro_body(
 						} else {
 							// We had two tokens which didn't concatenate, so we can just push them back into the
 							// stack as-is.
-							// TODO: Produce warning about unnecessary use.
+							semantic_diags.push(
+								Semantic::TokenConcatUnnecessary(token.1),
+							);
 							stack.push(prev);
 							stack.push(next);
 						}
 					}
 				}
 				(Some(prev), None) => {
-					diags.push(Syntax::PreprocDefine(
+					syntax_diags.push(Syntax::PreprocDefine(
 						PreprocDefineDiag::TokenConcatMissingRHS(token.1),
 					));
 					stack.push(prev);
 				}
 				(None, Some(next)) => {
-					diags.push(Syntax::PreprocDefine(
+					syntax_diags.push(Syntax::PreprocDefine(
 						PreprocDefineDiag::TokenConcatMissingLHS(token.1),
 					));
 					if next.0 == super::Token::MacroConcat {
 						// We begin the replacement-list with `## ##`. We cannot concatenate two concat operators,
 						// so we just emit the tokens as-is.
-						diags.push(Syntax::PreprocDefine(
+						syntax_diags.push(Syntax::PreprocDefine(
 							PreprocDefineDiag::TokenConcatMissingRHS(token.1),
 						));
 						stack.push((
@@ -1602,10 +1609,10 @@ pub(crate) fn concat_macro_body(
 				}
 				(None, None) => {
 					// The entire replacement-list is just `##`.
-					diags.push(Syntax::PreprocDefine(
+					syntax_diags.push(Syntax::PreprocDefine(
 						PreprocDefineDiag::TokenConcatMissingLHS(token.1),
 					));
-					diags.push(Syntax::PreprocDefine(
+					syntax_diags.push(Syntax::PreprocDefine(
 						PreprocDefineDiag::TokenConcatMissingRHS(token.1),
 					));
 					stack.push((
@@ -1623,5 +1630,5 @@ pub(crate) fn concat_macro_body(
 		}
 	}
 
-	(stack, diags)
+	(stack, syntax_diags, semantic_diags)
 }

@@ -1755,11 +1755,12 @@ impl Walker {
 								new_body.push((token.clone(), *token_span));
 							}
 							// Then, we perform token concatenation.
-							let (new_body, mut diags) =
+							let (new_body, mut syntax, mut semantic) =
 								crate::lexer::preprocessor::concat_macro_body(
 									new_body,
 								);
-							syntax_diags.append(&mut diags);
+							syntax_diags.append(&mut syntax);
+							semantic_diags.append(&mut semantic);
 
 							if body.is_empty() {
 								// The macro is empty, so we want to move to the next token of the existing stream.
@@ -5630,9 +5631,10 @@ fn parse_directive(
 
 				// Since object-like macros don't have parameters, we can perform the concatenation right here
 				// since we know the contents of the macro body will never change.
-				let (body_tokens, mut diags) =
+				let (body_tokens, mut syntax, mut semantic) =
 					preprocessor::concat_macro_body(body_tokens);
-				walker.append_syntax_diags(&mut diags);
+				walker.append_syntax_diags(&mut syntax);
+				walker.append_semantic_diags(&mut semantic);
 				body_tokens.iter().for_each(|(t, s)| {
 					walker.push_colour_with_modifiers(
 						*s,
@@ -5794,6 +5796,14 @@ fn parse_directive(
 						}
 					}
 				};
+
+				// We can't perform the token concatenation right here since the contents of the macro body will
+				// change depending on the parameters, but we can still concatenate in order to find any
+				// syntactical/semantic diagnostics.
+				let (_, mut syntax, mut semantic) =
+					preprocessor::concat_macro_body(body_tokens.clone());
+				walker.append_syntax_diags(&mut syntax);
+				walker.append_semantic_diags(&mut semantic);
 
 				// Syntax highlight the body. If any identifier matches a parameter, we correctly highlight that.
 				body_tokens.iter().for_each(|(t, s)| match t {

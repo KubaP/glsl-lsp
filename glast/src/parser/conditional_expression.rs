@@ -3,7 +3,7 @@
 use super::{
 	ast::conditional::{BinOp, BinOpTy, Expr, ExprTy, PreOp, PreOpTy},
 	ast::Ident,
-	SyntaxToken,
+	SyntaxModifiers, SyntaxToken, SyntaxType,
 };
 use crate::{
 	diag::{ExprDiag, Syntax},
@@ -26,7 +26,7 @@ reuse would be limited anyway.
 /// will invalidate the rest of the tokens.
 pub(super) fn cond_parser(
 	tokens: Vec<Spanned<ConditionToken>>,
-) -> (Option<Expr>, Vec<Syntax>, Vec<Spanned<SyntaxToken>>) {
+) -> (Option<Expr>, Vec<Syntax>, Vec<SyntaxToken>) {
 	let mut walker = Walker { tokens, cursor: 0 };
 
 	let mut parser = ShuntingYard {
@@ -253,7 +253,7 @@ struct ShuntingYard {
 	syntax_diags: Vec<Syntax>,
 
 	/// Syntax highlighting tokens created during the parser execution.
-	syntax_tokens: Vec<Spanned<SyntaxToken>>,
+	syntax_tokens: Vec<SyntaxToken>,
 }
 
 impl ShuntingYard {
@@ -432,8 +432,12 @@ impl ShuntingYard {
 	}
 
 	/// Pushes a syntax highlighting token over the given span.
-	fn colour(&mut self, span: Span, token: SyntaxToken) {
-		self.syntax_tokens.push((token, span));
+	fn colour(&mut self, span: Span, token: SyntaxType) {
+		self.syntax_tokens.push(SyntaxToken {
+			ty: token,
+			modifiers: SyntaxModifiers::CONDITIONAL,
+			span,
+		});
 	}
 
 	/// Parses a list of tokens. Populates the internal `stack` with a RPN output.
@@ -477,7 +481,7 @@ impl ShuntingYard {
 					state = State::AfterOperand;
 					self.set_op_rhs_toggle();
 
-					self.colour(span, SyntaxToken::Number);
+					self.colour(span, SyntaxType::Number);
 				}
 				ConditionToken::Num(num) if state == State::AfterOperand => {
 					self.stack.push_back(Either::Left(Node {
@@ -517,7 +521,7 @@ impl ShuntingYard {
 						self.end_defined(span);
 					}
 
-					self.colour(span, SyntaxToken::UncheckedIdent);
+					self.colour(span, SyntaxType::UncheckedIdent);
 				}
 				ConditionToken::Ident(s) if state == State::AfterOperand => {
 					self.stack.push_back(Either::Left(Node {
@@ -544,7 +548,7 @@ impl ShuntingYard {
 						ty: OpTy::Neg(false),
 					});
 
-					self.colour(span, SyntaxToken::Operator);
+					self.colour(span, SyntaxType::Operator);
 				}
 				ConditionToken::Not if state == State::Operand => {
 					self.push_operator(Op {
@@ -552,7 +556,7 @@ impl ShuntingYard {
 						ty: OpTy::Not(false),
 					});
 
-					self.colour(span, SyntaxToken::Operator);
+					self.colour(span, SyntaxType::Operator);
 				}
 				ConditionToken::Flip if state == State::Operand => {
 					self.push_operator(Op {
@@ -560,7 +564,7 @@ impl ShuntingYard {
 						ty: OpTy::Flip(false),
 					});
 
-					self.colour(span, SyntaxToken::Operator);
+					self.colour(span, SyntaxType::Operator);
 				}
 				ConditionToken::Not | ConditionToken::Flip
 					if state == State::AfterOperand =>
@@ -584,7 +588,7 @@ impl ShuntingYard {
 						self.groups.push(Group::Paren(false, span));
 					}
 
-					self.colour(span, SyntaxToken::Punctuation);
+					self.colour(span, SyntaxType::Punctuation);
 				}
 				ConditionToken::LParen if state == State::AfterOperand => {
 					self.syntax_diags.push(Syntax::Expr(
@@ -605,7 +609,7 @@ impl ShuntingYard {
 						}
 					}
 
-					self.colour(span, SyntaxToken::Punctuation);
+					self.colour(span, SyntaxType::Punctuation);
 
 					// We don't switch state since after a `)`, we are expecting an operator, i.e.
 					// `..) + 5` rather than `..) 5`
@@ -639,7 +643,7 @@ impl ShuntingYard {
 
 					state = State::AfterOperand;
 
-					self.colour(span, SyntaxToken::Punctuation);
+					self.colour(span, SyntaxType::Punctuation);
 				}
 				ConditionToken::Defined if state == State::Operand => {
 					self.push_operator(Op {
@@ -649,7 +653,7 @@ impl ShuntingYard {
 					self.groups.push(Group::Defined(false, span, None));
 					previously_started_defined = true;
 
-					self.colour(span, SyntaxToken::Keyword);
+					self.colour(span, SyntaxType::Keyword);
 				}
 				ConditionToken::Defined if state == State::AfterOperand => {
 					self.syntax_diags.push(Syntax::Expr(
@@ -676,7 +680,7 @@ impl ShuntingYard {
 					self.push_operator(Op::from_token(token.clone(), span));
 					state = State::Operand;
 
-					self.colour(span, SyntaxToken::Operator);
+					self.colour(span, SyntaxType::Operator);
 				}
 				_ => unreachable!(),
 			}
@@ -695,7 +699,7 @@ impl ShuntingYard {
 		if invalidate_rest {
 			walker.advance();
 			while let Some((_, span)) = walker.peek() {
-				self.colour(span, SyntaxToken::Invalid);
+				self.colour(span, SyntaxType::Invalid);
 				walker.advance();
 			}
 		}

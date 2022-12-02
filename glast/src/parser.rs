@@ -42,12 +42,8 @@ use std::collections::{HashMap, HashSet};
 /// - `2` - Any semantic diagnostics created during parsing, (this will only contain semantic diagnostics related
 ///   to macros and macro expansion).
 /// - `3` - Syntax highlighting tokens.
-pub type ParseResult = (
-	Vec<Node>,
-	Vec<Syntax>,
-	Vec<Semantic>,
-	Vec<Spanned<SyntaxToken>>,
-);
+pub type ParseResult =
+	(Vec<Node>, Vec<Syntax>, Vec<Semantic>, Vec<SyntaxToken>);
 
 /// An error type for the first step of the parsing operations.
 #[derive(Debug)]
@@ -278,8 +274,16 @@ pub fn parse_from_token_stream(
 			Token::Directive(d) => match d {
 				PreprocStream::IfDef { kw, mut tokens } => {
 					let mut syntax_tokens = vec![
-						(SyntaxToken::Directive, token_span.first_char()),
-						(SyntaxToken::Directive, kw),
+						SyntaxToken {
+							ty: SyntaxType::DirectiveHash,
+							modifiers: SyntaxModifiers::empty(),
+							span: token_span.first_char(),
+						},
+						SyntaxToken {
+							ty: SyntaxType::DirectiveName,
+							modifiers: SyntaxModifiers::empty(),
+							span: kw,
+						},
 					];
 
 					// We are expecting an identifier as the first token.
@@ -294,7 +298,11 @@ pub fn parse_from_token_stream(
 						let (token, span) = tokens.remove(0);
 						match token {
 							ConditionToken::Ident(str) => {
-								syntax_tokens.push((SyntaxToken::Ident, span));
+								syntax_tokens.push(SyntaxToken {
+									ty: SyntaxType::Ident,
+									modifiers: SyntaxModifiers::CONDITIONAL,
+									span,
+								});
 								Some(Ident { name: str, span })
 							}
 							_ => {
@@ -316,7 +324,11 @@ pub fn parse_from_token_stream(
 							Span::new(start, end),
 						));
 						for (_, span) in tokens {
-							syntax_tokens.push((SyntaxToken::Invalid, span));
+							syntax_tokens.push(SyntaxToken {
+								ty: SyntaxType::Invalid,
+								modifiers: SyntaxModifiers::CONDITIONAL,
+								span,
+							});
 						}
 					}
 
@@ -353,8 +365,16 @@ pub fn parse_from_token_stream(
 				}
 				PreprocStream::IfNotDef { kw, mut tokens } => {
 					let mut syntax_tokens = vec![
-						(SyntaxToken::Directive, token_span.first_char()),
-						(SyntaxToken::Directive, kw),
+						SyntaxToken {
+							ty: SyntaxType::DirectiveHash,
+							modifiers: SyntaxModifiers::empty(),
+							span: token_span.first_char(),
+						},
+						SyntaxToken {
+							ty: SyntaxType::DirectiveName,
+							modifiers: SyntaxModifiers::empty(),
+							span: kw,
+						},
 					];
 
 					// We are expecting an identifier as the first token.
@@ -369,7 +389,11 @@ pub fn parse_from_token_stream(
 						let (token, span) = tokens.remove(0);
 						match token {
 							ConditionToken::Ident(str) => {
-								syntax_tokens.push((SyntaxToken::Ident, span));
+								syntax_tokens.push(SyntaxToken {
+									ty: SyntaxType::Ident,
+									modifiers: SyntaxModifiers::CONDITIONAL,
+									span,
+								});
 								Some(Ident { name: str, span })
 							}
 							_ => {
@@ -391,7 +415,11 @@ pub fn parse_from_token_stream(
 							Span::new(start, end),
 						));
 						for (_, span) in tokens {
-							syntax_tokens.push((SyntaxToken::Invalid, span));
+							syntax_tokens.push(SyntaxToken {
+								ty: SyntaxType::Invalid,
+								modifiers: SyntaxModifiers::CONDITIONAL,
+								span,
+							});
 						}
 					}
 
@@ -428,8 +456,16 @@ pub fn parse_from_token_stream(
 				}
 				PreprocStream::If { kw, tokens } => {
 					let mut syntax_tokens = vec![
-						(SyntaxToken::Directive, token_span.first_char()),
-						(SyntaxToken::Directive, kw),
+						SyntaxToken {
+							ty: SyntaxType::DirectiveHash,
+							modifiers: SyntaxModifiers::empty(),
+							span: token_span.first_char(),
+						},
+						SyntaxToken {
+							ty: SyntaxType::DirectiveName,
+							modifiers: SyntaxModifiers::empty(),
+							span: kw,
+						},
 					];
 
 					// We are expecting an identifier as the first token.
@@ -481,8 +517,16 @@ pub fn parse_from_token_stream(
 				}
 				PreprocStream::ElseIf { kw, tokens } => {
 					let mut syntax_tokens = vec![
-						(SyntaxToken::Directive, token_span.first_char()),
-						(SyntaxToken::Directive, kw),
+						SyntaxToken {
+							ty: SyntaxType::DirectiveHash,
+							modifiers: SyntaxModifiers::empty(),
+							span: token_span.first_char(),
+						},
+						SyntaxToken {
+							ty: SyntaxType::DirectiveName,
+							modifiers: SyntaxModifiers::empty(),
+							span: kw,
+						},
 					];
 
 					// We are expecting an identifier as the first token.
@@ -542,8 +586,16 @@ pub fn parse_from_token_stream(
 				}
 				PreprocStream::Else { kw, tokens } => {
 					let mut syntax_tokens = vec![
-						(SyntaxToken::Directive, token_span.first_char()),
-						(SyntaxToken::Directive, kw),
+						SyntaxToken {
+							ty: SyntaxType::DirectiveHash,
+							modifiers: SyntaxModifiers::empty(),
+							span: token_span.first_char(),
+						},
+						SyntaxToken {
+							ty: SyntaxType::DirectiveName,
+							modifiers: SyntaxModifiers::empty(),
+							span: kw,
+						},
 					];
 
 					// We are not expecting anything after `#else`.
@@ -553,7 +605,11 @@ pub fn parse_from_token_stream(
 							tokens.last().unwrap().1.end,
 						);
 						syntax_diags.push(Syntax::PreprocTrailingTokens(span));
-						syntax_tokens.push((SyntaxToken::Invalid, span));
+						syntax_tokens.push(SyntaxToken {
+							ty: SyntaxType::Invalid,
+							modifiers: SyntaxModifiers::CONDITIONAL,
+							span,
+						});
 					}
 
 					if stack.len() > 1 {
@@ -597,8 +653,16 @@ pub fn parse_from_token_stream(
 				}
 				PreprocStream::EndIf { kw, tokens } => {
 					let mut syntax_tokens = vec![
-						(SyntaxToken::Directive, token_span.first_char()),
-						(SyntaxToken::Directive, kw),
+						SyntaxToken {
+							ty: SyntaxType::DirectiveHash,
+							modifiers: SyntaxModifiers::empty(),
+							span: token_span.first_char(),
+						},
+						SyntaxToken {
+							ty: SyntaxType::DirectiveName,
+							modifiers: SyntaxModifiers::empty(),
+							span: kw,
+						},
 					];
 
 					// We are not expecting anything after `#endif`.
@@ -608,7 +672,11 @@ pub fn parse_from_token_stream(
 							tokens.last().unwrap().1.end,
 						);
 						syntax_diags.push(Syntax::PreprocTrailingTokens(span));
-						syntax_tokens.push((SyntaxToken::Invalid, span));
+						syntax_tokens.push(SyntaxToken {
+							ty: SyntaxType::Invalid,
+							modifiers: SyntaxModifiers::CONDITIONAL,
+							span,
+						});
 					}
 
 					if stack.len() > 1 {
@@ -926,7 +994,7 @@ impl TokenTree {
 			let first_node = self.tree.get(keys[0][0]).unwrap();
 			let span = Span::new(0, first_node.span.start);
 			loop {
-				let (_, s) = match root_tokens.get(0) {
+				let SyntaxToken { span: s, .. } = match root_tokens.get(0) {
 					Some(t) => t,
 					None => break,
 				};
@@ -946,7 +1014,7 @@ impl TokenTree {
 				let (_, _, _, mut new_tokens) =
 					self.parse_node_ids_chronologically(key);
 				loop {
-					let (_, s) = match new_tokens.get(0) {
+					let SyntaxToken { span: s, .. } = match new_tokens.get(0) {
 						Some(t) => t,
 						None => break,
 					};
@@ -970,10 +1038,11 @@ impl TokenTree {
 						// We have another conditional block after this one; there may be root tokens in-between
 						// these two blocks.
 						loop {
-							let (_, s) = match root_tokens.get(0) {
-								Some(t) => t,
-								None => break,
-							};
+							let SyntaxToken { span: s, .. } =
+								match root_tokens.get(0) {
+									Some(t) => t,
+									None => break,
+								};
 
 							if span.contains(*s) {
 								tokens.push(root_tokens.remove(0));
@@ -1183,7 +1252,7 @@ struct ConditionBlock {
 	/// The entry at `[0]` will be a `ConditionalTy::IfDef/IfNotDef/If` variant.
 	///
 	/// A `ConditionalTy::End` will never be present.
-	conditions: Vec<(Conditional, NodeId, Vec<Spanned<SyntaxToken>>)>,
+	conditions: Vec<(Conditional, NodeId, Vec<SyntaxToken>)>,
 	/// The `#endif` directive.
 	///
 	/// This is separate because the `#endif` doesn't contain any children, (since it ends the condition block),
@@ -1191,7 +1260,7 @@ struct ConditionBlock {
 	///
 	/// # Invariants
 	/// This will be a `ConditionalTy::End` variant.
-	end: Option<(Conditional, Vec<Spanned<SyntaxToken>>)>,
+	end: Option<(Conditional, Vec<SyntaxToken>)>,
 }
 
 /// Information necessary to expand a macro.
@@ -1235,12 +1304,12 @@ pub(crate) struct Walker {
 	semantic_diags: Vec<Semantic>,
 
 	/// The syntax highlighting tokens created from the tokens parsed so-far.
-	syntax_tokens: Vec<Spanned<SyntaxToken>>,
+	syntax_tokens: Vec<SyntaxToken>,
 	/// The syntax highlighting tokens for any conditional directives.
 	///
 	/// - `0` - The span of the entire directive.
 	/// - `1` - The syntax tokens.
-	conditional_syntax_tokens: Vec<(Span, Vec<Spanned<SyntaxToken>>)>,
+	conditional_syntax_tokens: Vec<(Span, Vec<SyntaxToken>)>,
 
 	/// The last span in the source string.
 	last_span: Span,
@@ -1251,7 +1320,7 @@ impl Walker {
 	/// Constructs a new walker.
 	fn new(
 		mut token_streams: Vec<TokenStream>,
-		conditional_syntax_tokens: Vec<Vec<Spanned<SyntaxToken>>>,
+		conditional_syntax_tokens: Vec<Vec<SyntaxToken>>,
 	) -> Self {
 		let mut last_span = Span::new(0, 0);
 		for stream in token_streams.iter().rev() {
@@ -1297,8 +1366,8 @@ impl Walker {
 					if !v.is_empty() {
 						Some((
 							Span::new(
-								v.first().unwrap().1.start,
-								v.last().unwrap().1.end,
+								v.first().unwrap().span.start,
+								v.last().unwrap().span.end,
 							),
 							v,
 						))
@@ -1424,7 +1493,7 @@ impl Walker {
 		&mut self,
 		syntax_diags: &mut Vec<Syntax>,
 		semantic_diags: &mut Vec<Semantic>,
-		syntax_tokens: &mut Vec<Spanned<SyntaxToken>>,
+		syntax_tokens: &mut Vec<SyntaxToken>,
 	) {
 		Self::move_cursor(
 			&mut self.source_streams,
@@ -1458,7 +1527,7 @@ impl Walker {
 		macro_call_site: &mut Option<Span>,
 		syntax_diags: &mut Vec<Syntax>,
 		semantic_diags: &mut Vec<Semantic>,
-		syntax_tokens: &mut Vec<Spanned<SyntaxToken>>,
+		syntax_tokens: &mut Vec<SyntaxToken>,
 	) {
 		let mut dont_increment = false;
 		'outer: while let Some((identifier, stream, cursor)) =
@@ -1523,17 +1592,22 @@ impl Walker {
 							// stream.
 
 							let mut tmp_cursor = *cursor + 1;
-							let mut syntax_spans =
-								vec![(SyntaxToken::FunctionMacro, ident_span)];
+							let mut syntax_spans = vec![SyntaxToken {
+								ty: SyntaxType::FunctionMacro,
+								modifiers: SyntaxModifiers::empty(),
+								span: ident_span,
+							}];
 							loop {
 								match stream.get(tmp_cursor) {
 									Some((token, token_span)) => match token {
 										Token::LineComment(_)
 										| Token::BlockComment { .. } => {
-											syntax_spans.push((
-												SyntaxToken::Comment,
-												*token_span,
-											));
+											syntax_spans.push(SyntaxToken {
+												ty: SyntaxType::Comment,
+												modifiers:
+													SyntaxModifiers::empty(),
+												span: *token_span,
+											});
 											tmp_cursor += 1;
 										}
 										_ => break,
@@ -1546,10 +1620,11 @@ impl Walker {
 							let l_paren_span = match stream.get(tmp_cursor) {
 								Some((token, token_span)) => match token {
 									Token::LParen => {
-										syntax_spans.push((
-											SyntaxToken::Punctuation,
-											*token_span,
-										));
+										syntax_spans.push(SyntaxToken {
+											ty: SyntaxType::Punctuation,
+											modifiers: SyntaxModifiers::empty(),
+											span: *token_span,
+										});
 										*cursor = tmp_cursor + 1;
 										*token_span
 									}
@@ -1591,10 +1666,11 @@ impl Walker {
 
 								match token {
 									Token::Comma => {
-										syntax_spans.push((
-											SyntaxToken::Punctuation,
-											*token_span,
-										));
+										syntax_spans.push(SyntaxToken {
+											ty: SyntaxType::Punctuation,
+											modifiers: SyntaxModifiers::empty(),
+											span: *token_span,
+										});
 										if paren_groups == 0 {
 											let arg = std::mem::take(&mut arg);
 											args.push(arg);
@@ -1610,10 +1686,12 @@ impl Walker {
 									Token::RParen => {
 										if paren_groups == 0 {
 											// We have reached the end of this function-like macro call site.
-											syntax_spans.push((
-												SyntaxToken::Punctuation,
-												*token_span,
-											));
+											syntax_spans.push(SyntaxToken {
+												ty: SyntaxType::Punctuation,
+												modifiers:
+													SyntaxModifiers::empty(),
+												span: *token_span,
+											});
 											let arg = std::mem::take(&mut arg);
 											args.push(arg);
 											// It is important that we don't increment the cursor to the next token
@@ -1629,10 +1707,11 @@ impl Walker {
 									}
 									_ => {}
 								}
-								syntax_spans.push((
-									token.non_semantic_colour(),
-									*token_span,
-								));
+								syntax_spans.push(SyntaxToken {
+									ty: token.non_semantic_colour(),
+									modifiers: SyntaxModifiers::empty(),
+									span: *token_span,
+								});
 								arg.push((token.clone(), *token_span));
 								*cursor += 1;
 							};
@@ -1720,10 +1799,11 @@ impl Walker {
 								);
 								if streams.len() == 1 {
 									// We only syntax highlight when it is the first macro call.
-									syntax_tokens.push((
-										SyntaxToken::ObjectMacro,
-										ident_span,
-									));
+									syntax_tokens.push(SyntaxToken {
+										ty: SyntaxType::ObjectMacro,
+										modifiers: SyntaxModifiers::empty(),
+										span: ident_span,
+									});
 								}
 								continue;
 							}
@@ -1734,10 +1814,11 @@ impl Walker {
 							// call.
 							if streams.len() == 1 {
 								*macro_call_site = Some(ident_span);
-								syntax_tokens.push((
-									SyntaxToken::ObjectMacro,
-									ident_span,
-								));
+								syntax_tokens.push(SyntaxToken {
+									ty: SyntaxType::ObjectMacro,
+									modifiers: SyntaxModifiers::empty(),
+									span: ident_span,
+								});
 							}
 
 							active_macros.insert(ident.clone());
@@ -1756,7 +1837,11 @@ impl Walker {
 					let token_span = *token_span;
 					if streams.len() == 1 {
 						// We only syntax highlight when we are not in a macro call.
-						syntax_tokens.push((SyntaxToken::Comment, token_span));
+						syntax_tokens.push(SyntaxToken {
+							ty: SyntaxType::Comment,
+							modifiers: SyntaxModifiers::empty(),
+							span: token_span,
+						});
 					}
 				}
 				Token::BlockComment { contains_eof, .. } => {
@@ -1768,7 +1853,11 @@ impl Walker {
 					let token_span = *token_span;
 					if streams.len() == 1 {
 						// We only syntax highlight when we are not in a macro call.
-						syntax_tokens.push((SyntaxToken::Comment, token_span));
+						syntax_tokens.push(SyntaxToken {
+							ty: SyntaxType::Comment,
+							modifiers: SyntaxModifiers::empty(),
+							span: token_span,
+						});
 					}
 				}
 				_ => break,
@@ -1796,12 +1885,28 @@ impl Walker {
 	/// Un-registers a defined macro.
 	fn unregister_macro(&mut self, ident: &str, span: Span) {
 		match self.macros.remove(ident) {
-			Some(_) => self.push_colour(span, SyntaxToken::ObjectMacro),
+			Some((_, macro_)) => match macro_ {
+				Macro::Object(_) => self.push_colour_with_modifiers(
+					span,
+					SyntaxType::ObjectMacro,
+					SyntaxModifiers::UNDEFINE,
+				),
+				Macro::Function { params, body } => self
+					.push_colour_with_modifiers(
+						span,
+						SyntaxType::FunctionMacro,
+						SyntaxModifiers::UNDEFINE,
+					),
+			},
 			None => {
+				self.push_colour_with_modifiers(
+					span,
+					SyntaxType::UnresolvedIdent,
+					SyntaxModifiers::UNDEFINE,
+				);
 				self.push_semantic_diag(Semantic::UndefMacroNameUnresolved(
 					span,
 				));
-				self.push_colour(span, SyntaxToken::UnresolvedIdent);
 			}
 		}
 	}
@@ -1827,20 +1932,36 @@ impl Walker {
 	}
 
 	/// Pushes a syntax highlighting token over the given span.
-	fn push_colour(&mut self, span: Span, token: SyntaxToken) {
+	fn push_colour(&mut self, span: Span, token: SyntaxType) {
+		self.push_colour_with_modifiers(span, token, SyntaxModifiers::empty())
+	}
+
+	/// Pushes a syntax highlighting token with one or more modifiers over the given span.
+	fn push_colour_with_modifiers(
+		&mut self,
+		span: Span,
+		ty: SyntaxType,
+		modifiers: SyntaxModifiers,
+	) {
 		// When we are within a macro, we don't want to produce syntax tokens.
 		// Note: This functionality is duplicated in the `ShuntingYard::colour()` method.
 		if self.streams.len() != 1 {
 			return;
 		}
 
+		let token = SyntaxToken {
+			ty,
+			modifiers,
+			span,
+		};
+
 		if self.conditional_syntax_tokens.is_empty() {
-			self.syntax_tokens.push((token, span));
+			self.syntax_tokens.push(token);
 		} else {
 			let mut previous_span = self
 				.syntax_tokens
 				.get(0)
-				.map(|(_, s)| *s)
+				.map(|t| t.span)
 				.unwrap_or(Span::new(0, 0));
 			while let Some(bottom) = self.conditional_syntax_tokens.first() {
 				if bottom.0.is_before(&previous_span) {
@@ -1848,7 +1969,7 @@ impl Walker {
 					// current ones. This happens if error recovery consumes conditional directive symbols.
 					self.conditional_syntax_tokens.remove(0);
 					continue;
-				} else if bottom.0.is_before(&span) {
+				} else if bottom.0.is_before(&token.span) {
 					// The current conditional syntax tokens are before this new span, so we must add them
 					// beforehand.
 					let (_, mut tokens) =
@@ -1859,12 +1980,12 @@ impl Walker {
 					break;
 				}
 			}
-			self.syntax_tokens.push((token, span));
+			self.syntax_tokens.push(token);
 		}
 	}
 
 	/// Appends a collection of syntax highlighting tokens.
-	fn append_colours(&mut self, colours: &mut Vec<Spanned<SyntaxToken>>) {
+	fn append_colours(&mut self, colours: &mut Vec<SyntaxToken>) {
 		if self.conditional_syntax_tokens.is_empty() {
 			self.syntax_tokens.append(colours);
 		} else if !self.conditional_syntax_tokens.is_empty()
@@ -1873,10 +1994,10 @@ impl Walker {
 			let previous_span = self
 				.syntax_tokens
 				.last()
-				.map(|(_, s)| *s)
+				.map(|t| t.span)
 				.unwrap_or(Span::new(0, 0));
 			for colour in colours.into_iter() {
-				let span = &colour.1;
+				let span = &colour.span;
 				while let Some(bottom) = self.conditional_syntax_tokens.first()
 				{
 					if bottom.0.is_before(&previous_span) {
@@ -1897,6 +2018,7 @@ impl Walker {
 					}
 				}
 			}
+			self.syntax_tokens.append(colours);
 		} else {
 			// If we are not appending anything, we can't know whether we can append any conditional expression
 			// tokens, hence we do nothing.
@@ -1918,11 +2040,11 @@ fn seek_next_stmt(walker: &mut Walker) {
 				if token.can_start_statement() {
 					return;
 				} else if *token == Token::Semi {
-					walker.push_colour(span, SyntaxToken::Punctuation);
+					walker.push_colour(span, SyntaxType::Punctuation);
 					walker.advance();
 					return;
 				} else {
-					walker.push_colour(span, SyntaxToken::Invalid);
+					walker.push_colour(span, SyntaxType::Invalid);
 					walker.advance();
 					continue;
 				}
@@ -1958,7 +2080,7 @@ fn parse_stmt(walker: &mut Walker, nodes: &mut Vec<ast::Node>) {
 	match token {
 		Token::LBrace => {
 			invalidate_qualifiers(walker, qualifiers);
-			walker.push_colour(token_span, SyntaxToken::Punctuation);
+			walker.push_colour(token_span, SyntaxType::Punctuation);
 			walker.advance();
 			let block = parse_scope(walker, BRACE_SCOPE, token_span);
 			nodes.push(Node {
@@ -1968,7 +2090,7 @@ fn parse_stmt(walker: &mut Walker, nodes: &mut Vec<ast::Node>) {
 		}
 		Token::Semi => {
 			invalidate_qualifiers(walker, qualifiers);
-			walker.push_colour(token_span, SyntaxToken::Punctuation);
+			walker.push_colour(token_span, SyntaxType::Punctuation);
 			walker.advance();
 			nodes.push(Node {
 				span: token_span,
@@ -2024,25 +2146,25 @@ fn parse_stmt(walker: &mut Walker, nodes: &mut Vec<ast::Node>) {
 		}
 		Token::RBrace => {
 			invalidate_qualifiers(walker, qualifiers);
-			walker.push_colour(token_span, SyntaxToken::Punctuation);
+			walker.push_colour(token_span, SyntaxType::Punctuation);
 			walker.push_syntax_diag(Syntax::FoundUnmatchedRBrace(token_span));
 			walker.advance();
 		}
 		Token::Else => {
 			invalidate_qualifiers(walker, qualifiers);
-			walker.push_colour(token_span, SyntaxToken::Keyword);
+			walker.push_colour(token_span, SyntaxType::Keyword);
 			walker.push_syntax_diag(Syntax::FoundLonelyElseKw(token_span));
 			walker.advance();
 		}
 		Token::Case => {
 			invalidate_qualifiers(walker, qualifiers);
-			walker.push_colour(token_span, SyntaxToken::Keyword);
+			walker.push_colour(token_span, SyntaxType::Keyword);
 			walker.push_syntax_diag(Syntax::FoundLonelyCaseKw(token_span));
 			walker.advance();
 		}
 		Token::Default => {
 			invalidate_qualifiers(walker, qualifiers);
-			walker.push_colour(token_span, SyntaxToken::Keyword);
+			walker.push_colour(token_span, SyntaxType::Keyword);
 			walker.push_syntax_diag(Syntax::FoundLonelyDefaultKw(token_span));
 			walker.advance();
 		}
@@ -2052,13 +2174,13 @@ fn parse_stmt(walker: &mut Walker, nodes: &mut Vec<ast::Node>) {
 		}
 		Token::Reserved(str) => {
 			invalidate_qualifiers(walker, qualifiers);
-			walker.push_colour(token_span, SyntaxToken::Invalid);
+			walker.push_colour(token_span, SyntaxType::Invalid);
 			walker.push_syntax_diag(Syntax::FoundReservedKw(token_span, str));
 			walker.advance();
 		}
 		Token::Invalid(c) => {
 			invalidate_qualifiers(walker, qualifiers);
-			walker.push_colour(token_span, SyntaxToken::Invalid);
+			walker.push_colour(token_span, SyntaxType::Invalid);
 			walker.push_syntax_diag(Syntax::FoundIllegalChar(token_span, c));
 			walker.advance();
 		}
@@ -2102,7 +2224,7 @@ type ScopeEnd = fn(&mut Walker, Span) -> Option<Span>;
 const BRACE_SCOPE: ScopeEnd = |walker, l_brace_span| match walker.peek() {
 	Some((token, span)) => {
 		if *token == Token::RBrace {
-			walker.push_colour(span, SyntaxToken::Punctuation);
+			walker.push_colour(span, SyntaxType::Punctuation);
 			walker.advance();
 			Some(span)
 		} else {
@@ -2144,98 +2266,98 @@ fn try_parse_qualifiers(walker: &mut Walker) -> Vec<Qualifier> {
 
 		match token {
 			Token::Const => {
-				walker.push_colour(token_span, SyntaxToken::Keyword);
+				walker.push_colour(token_span, SyntaxType::Keyword);
 				qualifiers.push(Qualifier {
 					span: token_span,
 					ty: QualifierTy::Const,
 				});
 			}
 			Token::In => {
-				walker.push_colour(token_span, SyntaxToken::Keyword);
+				walker.push_colour(token_span, SyntaxType::Keyword);
 				qualifiers.push(Qualifier {
 					span: token_span,
 					ty: QualifierTy::In,
 				});
 			}
 			Token::Out => {
-				walker.push_colour(token_span, SyntaxToken::Keyword);
+				walker.push_colour(token_span, SyntaxType::Keyword);
 				qualifiers.push(Qualifier {
 					span: token_span,
 					ty: QualifierTy::Out,
 				});
 			}
 			Token::InOut => {
-				walker.push_colour(token_span, SyntaxToken::Keyword);
+				walker.push_colour(token_span, SyntaxType::Keyword);
 				qualifiers.push(Qualifier {
 					span: token_span,
 					ty: QualifierTy::InOut,
 				});
 			}
 			Token::Attribute => {
-				walker.push_colour(token_span, SyntaxToken::Keyword);
+				walker.push_colour(token_span, SyntaxType::Keyword);
 				qualifiers.push(Qualifier {
 					span: token_span,
 					ty: QualifierTy::Attribute,
 				});
 			}
 			Token::Uniform => {
-				walker.push_colour(token_span, SyntaxToken::Keyword);
+				walker.push_colour(token_span, SyntaxType::Keyword);
 				qualifiers.push(Qualifier {
 					span: token_span,
 					ty: QualifierTy::Uniform,
 				});
 			}
 			Token::Varying => {
-				walker.push_colour(token_span, SyntaxToken::Keyword);
+				walker.push_colour(token_span, SyntaxType::Keyword);
 				qualifiers.push(Qualifier {
 					span: token_span,
 					ty: QualifierTy::Varying,
 				});
 			}
 			Token::Buffer => {
-				walker.push_colour(token_span, SyntaxToken::Keyword);
+				walker.push_colour(token_span, SyntaxType::Keyword);
 				qualifiers.push(Qualifier {
 					span: token_span,
 					ty: QualifierTy::Buffer,
 				});
 			}
 			Token::Shared => {
-				walker.push_colour(token_span, SyntaxToken::Keyword);
+				walker.push_colour(token_span, SyntaxType::Keyword);
 				qualifiers.push(Qualifier {
 					span: token_span,
 					ty: QualifierTy::Shared,
 				});
 			}
 			Token::Centroid => {
-				walker.push_colour(token_span, SyntaxToken::Keyword);
+				walker.push_colour(token_span, SyntaxType::Keyword);
 				qualifiers.push(Qualifier {
 					span: token_span,
 					ty: QualifierTy::Centroid,
 				});
 			}
 			Token::Sample => {
-				walker.push_colour(token_span, SyntaxToken::Keyword);
+				walker.push_colour(token_span, SyntaxType::Keyword);
 				qualifiers.push(Qualifier {
 					span: token_span,
 					ty: QualifierTy::Sample,
 				});
 			}
 			Token::Patch => {
-				walker.push_colour(token_span, SyntaxToken::Keyword);
+				walker.push_colour(token_span, SyntaxType::Keyword);
 				qualifiers.push(Qualifier {
 					span: token_span,
 					ty: QualifierTy::Patch,
 				});
 			}
 			Token::Flat => {
-				walker.push_colour(token_span, SyntaxToken::Keyword);
+				walker.push_colour(token_span, SyntaxType::Keyword);
 				qualifiers.push(Qualifier {
 					span: token_span,
 					ty: QualifierTy::Flat,
 				});
 			}
 			Token::Smooth => {
-				walker.push_colour(token_span, SyntaxToken::Keyword);
+				walker.push_colour(token_span, SyntaxType::Keyword);
 				qualifiers.push(Qualifier {
 					span: token_span,
 					ty: QualifierTy::Smooth,
@@ -2248,70 +2370,70 @@ fn try_parse_qualifiers(walker: &mut Walker) -> Vec<Qualifier> {
 				});
 			}
 			Token::HighP => {
-				walker.push_colour(token_span, SyntaxToken::Keyword);
+				walker.push_colour(token_span, SyntaxType::Keyword);
 				qualifiers.push(Qualifier {
 					span: token_span,
 					ty: QualifierTy::HighP,
 				});
 			}
 			Token::MediumP => {
-				walker.push_colour(token_span, SyntaxToken::Keyword);
+				walker.push_colour(token_span, SyntaxType::Keyword);
 				qualifiers.push(Qualifier {
 					span: token_span,
 					ty: QualifierTy::MediumP,
 				});
 			}
 			Token::LowP => {
-				walker.push_colour(token_span, SyntaxToken::Keyword);
+				walker.push_colour(token_span, SyntaxType::Keyword);
 				qualifiers.push(Qualifier {
 					span: token_span,
 					ty: QualifierTy::LowP,
 				});
 			}
 			Token::Invariant => {
-				walker.push_colour(token_span, SyntaxToken::Keyword);
+				walker.push_colour(token_span, SyntaxType::Keyword);
 				qualifiers.push(Qualifier {
 					span: token_span,
 					ty: QualifierTy::Invariant,
 				});
 			}
 			Token::Precise => {
-				walker.push_colour(token_span, SyntaxToken::Keyword);
+				walker.push_colour(token_span, SyntaxType::Keyword);
 				qualifiers.push(Qualifier {
 					span: token_span,
 					ty: QualifierTy::Precise,
 				});
 			}
 			Token::Coherent => {
-				walker.push_colour(token_span, SyntaxToken::Keyword);
+				walker.push_colour(token_span, SyntaxType::Keyword);
 				qualifiers.push(Qualifier {
 					span: token_span,
 					ty: QualifierTy::Coherent,
 				});
 			}
 			Token::Volatile => {
-				walker.push_colour(token_span, SyntaxToken::Keyword);
+				walker.push_colour(token_span, SyntaxType::Keyword);
 				qualifiers.push(Qualifier {
 					span: token_span,
 					ty: QualifierTy::Volatile,
 				});
 			}
 			Token::Restrict => {
-				walker.push_colour(token_span, SyntaxToken::Keyword);
+				walker.push_colour(token_span, SyntaxType::Keyword);
 				qualifiers.push(Qualifier {
 					span: token_span,
 					ty: QualifierTy::Restrict,
 				});
 			}
 			Token::Readonly => {
-				walker.push_colour(token_span, SyntaxToken::Keyword);
+				walker.push_colour(token_span, SyntaxType::Keyword);
 				qualifiers.push(Qualifier {
 					span: token_span,
 					ty: QualifierTy::Readonly,
 				});
 			}
 			Token::Writeonly => {
-				walker.push_colour(token_span, SyntaxToken::Keyword);
+				walker.push_colour(token_span, SyntaxType::Keyword);
 				qualifiers.push(Qualifier {
 					span: token_span,
 					ty: QualifierTy::Writeonly,
@@ -2319,7 +2441,7 @@ fn try_parse_qualifiers(walker: &mut Walker) -> Vec<Qualifier> {
 			}
 			Token::Layout => {
 				let kw_span = token_span;
-				walker.push_colour(kw_span, SyntaxToken::Keyword);
+				walker.push_colour(kw_span, SyntaxType::Keyword);
 				walker.advance();
 
 				// Consume the `(`.
@@ -2340,7 +2462,7 @@ fn try_parse_qualifiers(walker: &mut Walker) -> Vec<Qualifier> {
 					}
 				};
 				let l_paren_span = if *token == Token::LParen {
-					walker.push_colour(token_span, SyntaxToken::Punctuation);
+					walker.push_colour(token_span, SyntaxType::Punctuation);
 					walker.advance();
 					token_span
 				} else {
@@ -2395,7 +2517,7 @@ fn try_parse_qualifiers(walker: &mut Walker) -> Vec<Qualifier> {
 						Token::Comma => {
 							walker.push_colour(
 								token_span,
-								SyntaxToken::Punctuation,
+								SyntaxType::Punctuation,
 							);
 							walker.advance();
 							if prev == Prev::Comma {
@@ -2419,7 +2541,7 @@ fn try_parse_qualifiers(walker: &mut Walker) -> Vec<Qualifier> {
 						Token::RParen => {
 							walker.push_colour(
 								token_span,
-								SyntaxToken::Punctuation,
+								SyntaxType::Punctuation,
 							);
 							walker.advance();
 							break token_span;
@@ -2525,7 +2647,7 @@ fn try_parse_qualifiers(walker: &mut Walker) -> Vec<Qualifier> {
 								// for the next layout.
 								walker.push_colour(
 									token_span,
-									SyntaxToken::UnresolvedIdent,
+									SyntaxType::UnresolvedIdent,
 								);
 								walker.push_syntax_diag(Syntax::Stmt(
 									StmtDiag::LayoutInvalidIdent(token_span),
@@ -2541,7 +2663,7 @@ fn try_parse_qualifiers(walker: &mut Walker) -> Vec<Qualifier> {
 					} else {
 						// We have a token that is not a valid layout. We ignore it and continue for the next
 						// layout.
-						walker.push_colour(token_span, SyntaxToken::Invalid);
+						walker.push_colour(token_span, SyntaxType::Invalid);
 						walker.push_syntax_diag(Syntax::Stmt(
 							StmtDiag::LayoutInvalidIdent(token_span),
 						));
@@ -2555,7 +2677,7 @@ fn try_parse_qualifiers(walker: &mut Walker) -> Vec<Qualifier> {
 						Either::Left(ty) => {
 							walker.push_colour(
 								token_span,
-								SyntaxToken::LayoutIdent,
+								SyntaxType::LayoutQualifier,
 							);
 							walker.advance();
 							layouts.push(Layout {
@@ -2569,7 +2691,7 @@ fn try_parse_qualifiers(walker: &mut Walker) -> Vec<Qualifier> {
 						Either::Right(constructor) => {
 							walker.push_colour(
 								token_span,
-								SyntaxToken::LayoutIdent,
+								SyntaxType::LayoutQualifier,
 							);
 							walker.advance();
 							(constructor, token_span)
@@ -2601,7 +2723,7 @@ fn try_parse_qualifiers(walker: &mut Walker) -> Vec<Qualifier> {
 						}
 					};
 					let eq_span = if let Token::Op(OpTy::Eq) = token {
-						walker.push_colour(token_span, SyntaxToken::Operator);
+						walker.push_colour(token_span, SyntaxType::Operator);
 						walker.advance();
 						token_span
 					} else {
@@ -2748,10 +2870,10 @@ fn try_parse_definition_declaration_expr(
 						};
 						walker.push_colour(
 							token_span,
-							SyntaxToken::UncheckedIdent,
+							SyntaxType::UncheckedIdent,
 						);
 						walker.advance();
-						walker.push_colour(next.1, SyntaxToken::Punctuation);
+						walker.push_colour(next.1, SyntaxType::Punctuation);
 						walker.advance();
 						parse_function(
 							walker,
@@ -2773,7 +2895,7 @@ fn try_parse_definition_declaration_expr(
 				walker.append_colours(&mut start_colours);
 				walker.append_syntax_diags(&mut start_syntax);
 				walker.append_semantic_diags(&mut start_semantic);
-				walker.push_colour(semi_span, SyntaxToken::Punctuation);
+				walker.push_colour(semi_span, SyntaxType::Punctuation);
 				walker.advance();
 				if parsing_last_for_stmt {
 					walker.push_syntax_diag(Syntax::Stmt(
@@ -2871,8 +2993,8 @@ fn try_parse_definition_declaration_expr(
 				span: start.span,
 				ty: NodeTy::Expr(start),
 			});
-			for (_, span) in ident_colours {
-				walker.push_colour(span, SyntaxToken::Invalid);
+			for SyntaxToken { span, .. } in ident_colours {
+				walker.push_colour(span, SyntaxType::Invalid);
 			}
 			seek_next_stmt(walker);
 			return;
@@ -2964,14 +3086,14 @@ fn try_parse_definition_declaration_expr(
 		if *token == Token::Semi {
 			// We have a variable definition without initialization.
 			let semi_span = token_span;
-			walker.push_colour(semi_span, SyntaxToken::Punctuation);
+			walker.push_colour(semi_span, SyntaxType::Punctuation);
 			walker.advance();
 			nodes.push(var_def(type_, ident_info, semi_span.end));
 			return;
 		} else if *token == Token::Op(crate::lexer::OpTy::Eq) {
 			// We have a variable definition with initialization.
 			let eq_span = token_span;
-			walker.push_colour(eq_span, SyntaxToken::Operator);
+			walker.push_colour(eq_span, SyntaxType::Operator);
 			walker.advance();
 
 			// Consume the value expression.
@@ -3021,7 +3143,7 @@ fn try_parse_definition_declaration_expr(
 			};
 			if *token == Token::Semi {
 				let semi_span = token_span;
-				walker.push_colour(semi_span, SyntaxToken::Punctuation);
+				walker.push_colour(semi_span, SyntaxType::Punctuation);
 				walker.advance();
 				nodes.push(var_def_init(
 					type_,
@@ -3072,7 +3194,7 @@ fn try_parse_definition_declaration_expr(
 	let semi_span = match walker.peek() {
 		Some((token, span)) => {
 			if *token == Token::Semi {
-				walker.push_colour(span, SyntaxToken::Punctuation);
+				walker.push_colour(span, SyntaxType::Punctuation);
 				walker.advance();
 				Some(span)
 			} else {
@@ -3147,7 +3269,7 @@ fn parse_function(
 
 		match token {
 			Token::Comma => {
-				walker.push_colour(token_span, SyntaxToken::Punctuation);
+				walker.push_colour(token_span, SyntaxType::Punctuation);
 				walker.advance();
 				if prev == Prev::Comma {
 					walker.push_syntax_diag(Syntax::Stmt(
@@ -3167,7 +3289,7 @@ fn parse_function(
 				continue;
 			}
 			Token::RParen => {
-				walker.push_colour(token_span, SyntaxToken::Punctuation);
+				walker.push_colour(token_span, SyntaxType::Punctuation);
 				walker.advance();
 				if prev == Prev::Comma {
 					walker.push_syntax_diag(Syntax::Stmt(
@@ -3179,7 +3301,7 @@ fn parse_function(
 				break token_span;
 			}
 			Token::Semi => {
-				walker.push_colour(token_span, SyntaxToken::Punctuation);
+				walker.push_colour(token_span, SyntaxType::Punctuation);
 				walker.advance();
 				// We have not yet finished parsing the parameter list but we've encountered a semi-colon. We treat
 				// this as a valid declaration since that's the closest match.
@@ -3199,7 +3321,7 @@ fn parse_function(
 				return;
 			}
 			Token::LBrace => {
-				walker.push_colour(token_span, SyntaxToken::Punctuation);
+				walker.push_colour(token_span, SyntaxType::Punctuation);
 				// We don't advance because the next check after this loop checks for a l-brace.
 
 				// We have not yet finished parsing the parameter list but we've encountered a l-brace. We treat
@@ -3239,8 +3361,8 @@ fn parse_function(
 				} else {
 					// We have an expression which cannot be parsed into a type. We ignore this and continue
 					// searching for the next parameter.
-					for (_, span) in colours {
-						walker.push_colour(span, SyntaxToken::Invalid);
+					for SyntaxToken { span, .. } in colours {
+						walker.push_colour(span, SyntaxType::Invalid);
 					}
 					walker.push_syntax_diag(Syntax::Stmt(
 						StmtDiag::ParamsInvalidTypeExpr(e.span),
@@ -3262,7 +3384,7 @@ fn parse_function(
 							{
 								break span;
 							} else {
-								walker.push_colour(span, SyntaxToken::Invalid);
+								walker.push_colour(span, SyntaxType::Invalid);
 								walker.advance();
 								continue;
 							}
@@ -3327,8 +3449,8 @@ fn parse_function(
 			walker.push_syntax_diag(Syntax::Stmt(
 				StmtDiag::ParamsInvalidIdentExpr(ident_expr.span),
 			));
-			for (_, span) in ident_colours {
-				walker.push_colour(span, SyntaxToken::Invalid);
+			for SyntaxToken { span, .. } in ident_colours {
+				walker.push_colour(span, SyntaxType::Invalid);
 			}
 			prev = Prev::Param;
 			prev_span = param_span;
@@ -3375,7 +3497,7 @@ fn parse_function(
 	};
 	if *token == Token::Semi {
 		// We have a declaration.
-		walker.push_colour(token_span, SyntaxToken::Punctuation);
+		walker.push_colour(token_span, SyntaxType::Punctuation);
 		walker.advance();
 		nodes.push(Node {
 			span: Span::new(return_type.span.start, param_end_span.end),
@@ -3388,7 +3510,7 @@ fn parse_function(
 	} else if *token == Token::LBrace {
 		// We have a definition.
 		let l_brace_span = token_span;
-		walker.push_colour(l_brace_span, SyntaxToken::Punctuation);
+		walker.push_colour(l_brace_span, SyntaxType::Punctuation);
 		walker.advance();
 		let body = parse_scope(walker, BRACE_SCOPE, l_brace_span);
 		nodes.push(Node {
@@ -3423,7 +3545,7 @@ fn parse_function(
 ///
 /// This function assumes that the `subroutine` keyword is not yet consumed.
 fn parse_subroutine(walker: &mut Walker, nodes: &mut Vec<Node>, kw_span: Span) {
-	walker.push_colour(kw_span, SyntaxToken::Keyword);
+	walker.push_colour(kw_span, SyntaxType::Keyword);
 	walker.advance();
 
 	let (token, token_span) = match walker.peek() {
@@ -3441,7 +3563,7 @@ fn parse_subroutine(walker: &mut Walker, nodes: &mut Vec<Node>, kw_span: Span) {
 	if *token == Token::Uniform {
 		// We have a subroutine uniform definition.
 		let uniform_kw_span = token_span;
-		walker.push_colour(uniform_kw_span, SyntaxToken::Keyword);
+		walker.push_colour(uniform_kw_span, SyntaxType::Keyword);
 		walker.advance();
 		let mut inner = Vec::new();
 		try_parse_definition_declaration_expr(
@@ -3480,7 +3602,7 @@ fn parse_subroutine(walker: &mut Walker, nodes: &mut Vec<Node>, kw_span: Span) {
 	} else if *token == Token::LParen {
 		// We have an associated function definition.
 		let l_paren_span = token_span;
-		walker.push_colour(l_paren_span, SyntaxToken::Punctuation);
+		walker.push_colour(l_paren_span, SyntaxType::Punctuation);
 		walker.advance();
 
 		// Look for any subroutine identifiers until we hit a closing `)` parenthesis.
@@ -3509,7 +3631,7 @@ fn parse_subroutine(walker: &mut Walker, nodes: &mut Vec<Node>, kw_span: Span) {
 
 			match token {
 				Token::Comma => {
-					walker.push_colour(token_span, SyntaxToken::Punctuation);
+					walker.push_colour(token_span, SyntaxType::Punctuation);
 					walker.advance();
 					if prev == Prev::Comma {
 						walker.push_syntax_diag(Syntax::Stmt(
@@ -3529,7 +3651,7 @@ fn parse_subroutine(walker: &mut Walker, nodes: &mut Vec<Node>, kw_span: Span) {
 					continue;
 				}
 				Token::RParen => {
-					walker.push_colour(token_span, SyntaxToken::Punctuation);
+					walker.push_colour(token_span, SyntaxType::Punctuation);
 					walker.advance();
 					if prev == Prev::Comma {
 						walker.push_syntax_diag(Syntax::Stmt(
@@ -3545,7 +3667,7 @@ fn parse_subroutine(walker: &mut Walker, nodes: &mut Vec<Node>, kw_span: Span) {
 						name: str.to_owned(),
 						span: token_span,
 					});
-					walker.push_colour(token_span, SyntaxToken::UncheckedIdent);
+					walker.push_colour(token_span, SyntaxType::UncheckedIdent);
 					walker.advance();
 					if prev == Prev::Ident {
 						walker.push_syntax_diag(Syntax::Stmt(StmtDiag::SubroutineAssociatedListExpectedCommaAfterIdent(
@@ -3557,7 +3679,7 @@ fn parse_subroutine(walker: &mut Walker, nodes: &mut Vec<Node>, kw_span: Span) {
 					continue;
 				}
 				_ => {
-					walker.push_colour(token_span, SyntaxToken::Invalid);
+					walker.push_colour(token_span, SyntaxType::Invalid);
 					walker.advance();
 					prev = Prev::Invalid;
 					prev_span = token_span;
@@ -3720,7 +3842,7 @@ fn parse_struct(
 	qualifiers: Vec<Qualifier>,
 	kw_span: Span,
 ) {
-	walker.push_colour(kw_span, SyntaxToken::Keyword);
+	walker.push_colour(kw_span, SyntaxType::Keyword);
 	walker.advance();
 
 	// Consume the identifier.
@@ -3774,13 +3896,13 @@ fn parse_struct(
 		}
 	};
 	let l_brace_span = if *token == Token::LBrace {
-		walker.push_colour(token_span, SyntaxToken::Punctuation);
+		walker.push_colour(token_span, SyntaxType::Punctuation);
 		walker.advance();
 		token_span
 	} else if *token == Token::Semi {
 		// We have a declaration, (which is illegal).
 		let span = Span::new(struct_span_start, token_span.end);
-		walker.push_colour(token_span, SyntaxToken::Punctuation);
+		walker.push_colour(token_span, SyntaxType::Punctuation);
 		walker.push_syntax_diag(Syntax::Stmt(StmtDiag::StructDeclIsIllegal(
 			span,
 		)));
@@ -3853,7 +3975,7 @@ fn parse_struct(
 	let semi_span = match walker.peek() {
 		Some((token, span)) => {
 			if *token == Token::Semi {
-				walker.push_colour(span, SyntaxToken::Punctuation);
+				walker.push_colour(span, SyntaxType::Punctuation);
 				walker.advance();
 				Some(span)
 			} else {
@@ -3939,7 +4061,7 @@ fn parse_if(walker: &mut Walker, nodes: &mut Vec<Node>, kw_span: Span) {
 			token_span
 		} else {
 			// Consume the `else` keyword.
-			walker.push_colour(token_span, SyntaxToken::Keyword);
+			walker.push_colour(token_span, SyntaxType::Keyword);
 			walker.advance();
 			token_span
 		};
@@ -3963,14 +4085,14 @@ fn parse_if(walker: &mut Walker, nodes: &mut Vec<Node>, kw_span: Span) {
 
 		if *token == Token::If {
 			let if_kw_span = token_span;
-			walker.push_colour(if_kw_span, SyntaxToken::Keyword);
+			walker.push_colour(if_kw_span, SyntaxType::Keyword);
 			walker.advance();
 
 			// Consume the `(`.
 			let l_paren_span = match walker.peek() {
 				Some((token, span)) => {
 					if *token == Token::LParen {
-						walker.push_colour(span, SyntaxToken::Punctuation);
+						walker.push_colour(span, SyntaxType::Punctuation);
 						walker.advance();
 						Some(span)
 					} else {
@@ -4043,7 +4165,7 @@ fn parse_if(walker: &mut Walker, nodes: &mut Vec<Node>, kw_span: Span) {
 			let r_paren_span = match walker.peek() {
 				Some((token, span)) => {
 					if *token == Token::RParen {
-						walker.push_colour(span, SyntaxToken::Punctuation);
+						walker.push_colour(span, SyntaxType::Punctuation);
 						walker.advance();
 						Some(span)
 					} else {
@@ -4107,8 +4229,7 @@ fn parse_if(walker: &mut Walker, nodes: &mut Vec<Node>, kw_span: Span) {
 				Some((token, token_span)) => {
 					if *token == Token::LBrace {
 						// We have a multi-line body.
-						walker
-							.push_colour(token_span, SyntaxToken::Punctuation);
+						walker.push_colour(token_span, SyntaxType::Punctuation);
 						walker.advance();
 						let body = parse_scope(walker, BRACE_SCOPE, token_span);
 						let span = Span::new(
@@ -4250,8 +4371,7 @@ fn parse_if(walker: &mut Walker, nodes: &mut Vec<Node>, kw_span: Span) {
 				Some((token, token_span)) => {
 					if *token == Token::LBrace {
 						// We have a multi-line body.
-						walker
-							.push_colour(token_span, SyntaxToken::Punctuation);
+						walker.push_colour(token_span, SyntaxType::Punctuation);
 						walker.advance();
 						let body = parse_scope(walker, BRACE_SCOPE, token_span);
 						branches.push(IfBranch {
@@ -4295,14 +4415,14 @@ fn parse_if(walker: &mut Walker, nodes: &mut Vec<Node>, kw_span: Span) {
 ///
 /// This function assumes that the keyword is not yet consumed.
 fn parse_switch(walker: &mut Walker, nodes: &mut Vec<Node>, kw_span: Span) {
-	walker.push_colour(kw_span, SyntaxToken::Keyword);
+	walker.push_colour(kw_span, SyntaxType::Keyword);
 	walker.advance();
 
 	// Consume the `(`.
 	let l_paren_span = match walker.peek() {
 		Some((token, span)) => {
 			if *token == Token::LParen {
-				walker.push_colour(span, SyntaxToken::Punctuation);
+				walker.push_colour(span, SyntaxType::Punctuation);
 				walker.advance();
 				Some(span)
 			} else {
@@ -4352,7 +4472,7 @@ fn parse_switch(walker: &mut Walker, nodes: &mut Vec<Node>, kw_span: Span) {
 	let r_paren_span = match walker.peek() {
 		Some((token, span)) => {
 			if *token == Token::RParen {
-				walker.push_colour(span, SyntaxToken::Punctuation);
+				walker.push_colour(span, SyntaxType::Punctuation);
 				walker.advance();
 				Some(span)
 			} else {
@@ -4382,7 +4502,7 @@ fn parse_switch(walker: &mut Walker, nodes: &mut Vec<Node>, kw_span: Span) {
 	let l_brace_span = match walker.peek() {
 		Some((token, span)) => {
 			if *token == Token::LBrace {
-				walker.push_colour(span, SyntaxToken::Punctuation);
+				walker.push_colour(span, SyntaxType::Punctuation);
 				walker.advance();
 				span
 			} else {
@@ -4497,7 +4617,7 @@ fn parse_switch(walker: &mut Walker, nodes: &mut Vec<Node>, kw_span: Span) {
 		match token {
 			Token::Case => {
 				let case_kw_span = token_span;
-				walker.push_colour(case_kw_span, SyntaxToken::Keyword);
+				walker.push_colour(case_kw_span, SyntaxType::Keyword);
 				walker.advance();
 
 				// Consume the expression.
@@ -4525,7 +4645,7 @@ fn parse_switch(walker: &mut Walker, nodes: &mut Vec<Node>, kw_span: Span) {
 						if *token == Token::Colon {
 							walker.push_colour(
 								token_span,
-								SyntaxToken::Punctuation,
+								SyntaxType::Punctuation,
 							);
 							walker.advance();
 							Some(token_span)
@@ -4589,7 +4709,7 @@ fn parse_switch(walker: &mut Walker, nodes: &mut Vec<Node>, kw_span: Span) {
 			}
 			Token::Default => {
 				let default_kw_span = token_span;
-				walker.push_colour(default_kw_span, SyntaxToken::Keyword);
+				walker.push_colour(default_kw_span, SyntaxType::Keyword);
 				walker.advance();
 
 				// Consume the `:`.
@@ -4598,7 +4718,7 @@ fn parse_switch(walker: &mut Walker, nodes: &mut Vec<Node>, kw_span: Span) {
 						if *token == Token::Colon {
 							walker.push_colour(
 								token_span,
-								SyntaxToken::Punctuation,
+								SyntaxType::Punctuation,
 							);
 							walker.advance();
 							Some(token_span)
@@ -4669,7 +4789,7 @@ fn parse_switch(walker: &mut Walker, nodes: &mut Vec<Node>, kw_span: Span) {
 				//
 				// The `}` will close the body of the default case but it won't be consumed, and hence it will be
 				// consumed by this branch.
-				walker.push_colour(token_span, SyntaxToken::Punctuation);
+				walker.push_colour(token_span, SyntaxType::Punctuation);
 				walker.advance();
 				nodes.push(Node {
 					span: Span::new(kw_span.start, token_span.end),
@@ -4740,14 +4860,14 @@ fn parse_switch(walker: &mut Walker, nodes: &mut Vec<Node>, kw_span: Span) {
 ///
 /// This function assumes that the keyword is not yet consumed.
 fn parse_for_loop(walker: &mut Walker, nodes: &mut Vec<Node>, kw_span: Span) {
-	walker.push_colour(kw_span, SyntaxToken::Keyword);
+	walker.push_colour(kw_span, SyntaxType::Keyword);
 	walker.advance();
 
 	// Consume the `(`.
 	let l_paren_span = match walker.peek() {
 		Some((token, span)) => {
 			if *token == Token::LParen {
-				walker.push_colour(span, SyntaxToken::Punctuation);
+				walker.push_colour(span, SyntaxType::Punctuation);
 				walker.advance();
 				Some(span)
 			} else {
@@ -4828,7 +4948,7 @@ fn parse_for_loop(walker: &mut Walker, nodes: &mut Vec<Node>, kw_span: Span) {
 						),
 					));
 				}
-				walker.push_colour(token_span, SyntaxToken::Punctuation);
+				walker.push_colour(token_span, SyntaxType::Punctuation);
 				walker.advance();
 				break token_span;
 			}
@@ -4840,7 +4960,7 @@ fn parse_for_loop(walker: &mut Walker, nodes: &mut Vec<Node>, kw_span: Span) {
 						),
 					));
 
-					walker.push_colour(token_span, SyntaxToken::Invalid);
+					walker.push_colour(token_span, SyntaxType::Invalid);
 					walker.advance();
 
 					loop {
@@ -4849,15 +4969,13 @@ fn parse_for_loop(walker: &mut Walker, nodes: &mut Vec<Node>, kw_span: Span) {
 								if *token == Token::RParen {
 									walker.push_colour(
 										span,
-										SyntaxToken::Punctuation,
+										SyntaxType::Punctuation,
 									);
 									walker.advance();
 									break 'outer span;
 								} else {
-									walker.push_colour(
-										span,
-										SyntaxToken::Invalid,
-									);
+									walker
+										.push_colour(span, SyntaxType::Invalid);
 									walker.advance();
 								}
 							}
@@ -4907,7 +5025,7 @@ fn parse_for_loop(walker: &mut Walker, nodes: &mut Vec<Node>, kw_span: Span) {
 	let l_brace_span = match walker.peek() {
 		Some((token, span)) => {
 			if *token == Token::LBrace {
-				walker.push_colour(span, SyntaxToken::Punctuation);
+				walker.push_colour(span, SyntaxType::Punctuation);
 				walker.advance();
 				span
 			} else {
@@ -4964,14 +5082,14 @@ fn parse_for_loop(walker: &mut Walker, nodes: &mut Vec<Node>, kw_span: Span) {
 ///
 /// This function assumes that the keyword is not yet consumed.
 fn parse_while_loop(walker: &mut Walker, nodes: &mut Vec<Node>, kw_span: Span) {
-	walker.push_colour(kw_span, SyntaxToken::Keyword);
+	walker.push_colour(kw_span, SyntaxType::Keyword);
 	walker.advance();
 
 	// Consume the `(`.
 	let l_paren_span = match walker.peek() {
 		Some((token, span)) => {
 			if *token == Token::LParen {
-				walker.push_colour(span, SyntaxToken::Punctuation);
+				walker.push_colour(span, SyntaxType::Punctuation);
 				walker.advance();
 				Some(span)
 			} else {
@@ -5021,7 +5139,7 @@ fn parse_while_loop(walker: &mut Walker, nodes: &mut Vec<Node>, kw_span: Span) {
 	let r_paren_span = match walker.peek() {
 		Some((token, span)) => {
 			if *token == Token::RParen {
-				walker.push_colour(span, SyntaxToken::Punctuation);
+				walker.push_colour(span, SyntaxType::Punctuation);
 				walker.advance();
 				Some(span)
 			} else {
@@ -5051,7 +5169,7 @@ fn parse_while_loop(walker: &mut Walker, nodes: &mut Vec<Node>, kw_span: Span) {
 	let l_brace_span = match walker.peek() {
 		Some((token, span)) => {
 			if *token == Token::LBrace {
-				walker.push_colour(span, SyntaxToken::Punctuation);
+				walker.push_colour(span, SyntaxType::Punctuation);
 				walker.advance();
 				span
 			} else {
@@ -5096,14 +5214,14 @@ fn parse_do_while_loop(
 	nodes: &mut Vec<Node>,
 	kw_span: Span,
 ) {
-	walker.push_colour(kw_span, SyntaxToken::Keyword);
+	walker.push_colour(kw_span, SyntaxType::Keyword);
 	walker.advance();
 
 	// Consume the `{`.
 	let l_brace_span = match walker.peek() {
 		Some((token, span)) => {
 			if *token == Token::LBrace {
-				walker.push_colour(span, SyntaxToken::Punctuation);
+				walker.push_colour(span, SyntaxType::Punctuation);
 				walker.advance();
 				span
 			} else {
@@ -5132,7 +5250,7 @@ fn parse_do_while_loop(
 	let while_kw_span = match walker.peek() {
 		Some((token, span)) => {
 			if *token == Token::While {
-				walker.push_colour(span, SyntaxToken::Keyword);
+				walker.push_colour(span, SyntaxType::Keyword);
 				walker.advance();
 				span
 			} else {
@@ -5166,7 +5284,7 @@ fn parse_do_while_loop(
 	let l_paren_span = match walker.peek() {
 		Some((token, span)) => {
 			if *token == Token::LParen {
-				walker.push_colour(span, SyntaxToken::Punctuation);
+				walker.push_colour(span, SyntaxType::Punctuation);
 				walker.advance();
 				Some(span)
 			} else {
@@ -5220,7 +5338,7 @@ fn parse_do_while_loop(
 	let r_paren_span = match walker.peek() {
 		Some((token, span)) => {
 			if *token == Token::RParen {
-				walker.push_colour(span, SyntaxToken::Punctuation);
+				walker.push_colour(span, SyntaxType::Punctuation);
 				walker.advance();
 				Some(span)
 			} else {
@@ -5257,7 +5375,7 @@ fn parse_do_while_loop(
 	let semi_span = match walker.peek() {
 		Some((token, span)) => {
 			if *token == Token::Semi {
-				walker.push_colour(span, SyntaxToken::Punctuation);
+				walker.push_colour(span, SyntaxType::Punctuation);
 				walker.advance();
 				span
 			} else {
@@ -5330,14 +5448,14 @@ fn parse_break_continue_discard(
 	ty: impl FnOnce() -> NodeTy,
 	error: impl FnOnce(Span) -> Syntax,
 ) {
-	walker.push_colour(kw_span, SyntaxToken::Keyword);
+	walker.push_colour(kw_span, SyntaxType::Keyword);
 	walker.advance();
 
 	// Consume the `;` to end the statement.
 	let semi_span = match walker.peek() {
 		Some((token, span)) => {
 			if *token == Token::Semi {
-				walker.push_colour(span, SyntaxToken::Punctuation);
+				walker.push_colour(span, SyntaxType::Punctuation);
 				walker.advance();
 				Some(span)
 			} else {
@@ -5367,7 +5485,7 @@ fn parse_break_continue_discard(
 ///
 /// This function assumes that the keyword is not yet consumed.
 fn parse_return(walker: &mut Walker, nodes: &mut Vec<Node>, kw_span: Span) {
-	walker.push_colour(kw_span, SyntaxToken::Keyword);
+	walker.push_colour(kw_span, SyntaxType::Keyword);
 	walker.advance();
 
 	// Look for the optional return value expression.
@@ -5385,7 +5503,7 @@ fn parse_return(walker: &mut Walker, nodes: &mut Vec<Node>, kw_span: Span) {
 	let semi_span = match walker.peek() {
 		Some((token, span)) => {
 			if *token == Token::Semi {
-				walker.push_colour(span, SyntaxToken::Punctuation);
+				walker.push_colour(span, SyntaxType::Punctuation);
 				walker.advance();
 				Some(span)
 			} else {
@@ -5436,22 +5554,29 @@ fn parse_directive(
 
 	match stream {
 		PreprocStream::Empty => {
-			walker.push_colour(dir_span, SyntaxToken::Directive);
+			walker.push_colour(dir_span, SyntaxType::DirectiveHash);
 			walker.push_semantic_diag(Semantic::EmptyDirective(dir_span));
 			nodes.push(Node {
 				span: dir_span,
 				ty: NodeTy::EmptyDirective,
 			});
 		}
-		PreprocStream::Custom { kw, .. } => {
-			walker.push_colour(dir_span, SyntaxToken::Directive);
+		PreprocStream::Custom { kw, content } => {
+			walker
+				.push_colour(dir_span.first_char(), SyntaxType::DirectiveHash);
+			walker.push_colour(kw.1, SyntaxType::DirectiveName);
+			if let Some(content) = content {
+				walker.push_colour(content.1, SyntaxType::Directive);
+			}
 			walker.push_syntax_diag(Syntax::FoundIllegalPreproc(
 				dir_span,
 				Some(kw),
 			));
 		}
-		PreprocStream::Invalid { .. } => {
-			walker.push_colour(dir_span, SyntaxToken::Directive);
+		PreprocStream::Invalid { content } => {
+			walker
+				.push_colour(dir_span.first_char(), SyntaxType::DirectiveHash);
+			walker.push_colour(content.1, SyntaxType::Directive);
 			walker
 				.push_syntax_diag(Syntax::FoundIllegalPreproc(dir_span, None));
 		}
@@ -5469,8 +5594,9 @@ fn parse_directive(
 			mut ident_tokens,
 			body_tokens,
 		} => {
-			walker.push_colour(dir_span.first_char(), SyntaxToken::Directive);
-			walker.push_colour(kw_span, SyntaxToken::Directive);
+			walker
+				.push_colour(dir_span.first_char(), SyntaxType::DirectiveHash);
+			walker.push_colour(kw_span, SyntaxType::DirectiveName);
 
 			if ident_tokens.is_empty() {
 				// We have a macro that's missing a name.
@@ -5480,15 +5606,23 @@ fn parse_directive(
 						kw_span.next_single_width(),
 					),
 				));
-				body_tokens.iter().for_each(|(_, s)| {
-					walker.push_colour(*s, SyntaxToken::Invalid)
+				body_tokens.iter().for_each(|(t, s)| {
+					walker.push_colour_with_modifiers(
+						*s,
+						t.non_semantic_colour(),
+						SyntaxModifiers::MACRO_BODY,
+					)
 				});
 			} else if ident_tokens.len() == 1 {
 				// We have an object-like macro.
 
 				let ident = match ident_tokens.remove(0) {
 					(DefineToken::Ident(s), span) => {
-						walker.push_colour(span, SyntaxToken::ObjectMacro);
+						walker.push_colour_with_modifiers(
+							span,
+							SyntaxType::ObjectMacro,
+							SyntaxModifiers::MACRO_DEFINITION,
+						);
 						(s, span)
 					}
 					_ => unreachable!(),
@@ -5500,7 +5634,11 @@ fn parse_directive(
 					preprocessor::concat_macro_body(body_tokens);
 				walker.append_syntax_diags(&mut diags);
 				body_tokens.iter().for_each(|(t, s)| {
-					walker.push_colour(*s, t.non_semantic_colour())
+					walker.push_colour_with_modifiers(
+						*s,
+						t.non_semantic_colour(),
+						SyntaxModifiers::MACRO_BODY,
+					)
 				});
 
 				walker.register_macro(
@@ -5525,7 +5663,11 @@ fn parse_directive(
 
 				let ident = match ident_tokens.remove(0) {
 					(DefineToken::Ident(s), span) => {
-						walker.push_colour(span, SyntaxToken::FunctionMacro);
+						walker.push_colour_with_modifiers(
+							span,
+							SyntaxType::FunctionMacro,
+							SyntaxModifiers::MACRO_DEFINITION,
+						);
 						(s, span)
 					}
 					_ => unreachable!(),
@@ -5534,7 +5676,11 @@ fn parse_directive(
 				// Consume the `(`.
 				let l_paren_span = match ident_tokens.remove(0) {
 					(DefineToken::LParen, span) => {
-						walker.push_colour(span, SyntaxToken::Punctuation);
+						walker.push_colour_with_modifiers(
+							span,
+							SyntaxType::Punctuation,
+							SyntaxModifiers::MACRO_DEFINITION,
+						);
 						span
 					}
 					_ => unreachable!(),
@@ -5578,9 +5724,10 @@ fn parse_directive(
 
 					match token {
 						DefineToken::Comma => {
-							walker.push_colour(
+							walker.push_colour_with_modifiers(
 								token_span,
-								SyntaxToken::Punctuation,
+								SyntaxType::Punctuation,
+								SyntaxModifiers::MACRO_DEFINITION,
 							);
 							if prev == Prev::Comma {
 								walker.push_syntax_diag(Syntax::PreprocDefine(
@@ -5599,7 +5746,11 @@ fn parse_directive(
 							prev_span = token_span;
 						}
 						DefineToken::Ident(str) => {
-							walker.push_colour(token_span, SyntaxToken::Ident);
+							walker.push_colour_with_modifiers(
+								token_span,
+								SyntaxType::Parameter,
+								SyntaxModifiers::MACRO_DEFINITION,
+							);
 							params.push(Ident {
 								name: str,
 								span: token_span,
@@ -5613,9 +5764,10 @@ fn parse_directive(
 							prev_span = token_span;
 						}
 						DefineToken::RParen => {
-							walker.push_colour(
+							walker.push_colour_with_modifiers(
 								token_span,
-								SyntaxToken::Punctuation,
+								SyntaxType::Punctuation,
+								SyntaxModifiers::MACRO_DEFINITION,
 							);
 							if prev == Prev::Comma {
 								walker.push_syntax_diag(Syntax::PreprocDefine(
@@ -5627,8 +5779,11 @@ fn parse_directive(
 							break token_span;
 						}
 						DefineToken::Invalid(_) | _ => {
-							walker
-								.push_colour(token_span, SyntaxToken::Invalid);
+							walker.push_colour_with_modifiers(
+								token_span,
+								SyntaxType::Invalid,
+								SyntaxModifiers::MACRO_DEFINITION,
+							);
 							walker.push_syntax_diag(Syntax::PreprocDefine(
 								PreprocDefineDiag::ParamsExpectedParam(
 									token_span,
@@ -5640,8 +5795,30 @@ fn parse_directive(
 					}
 				};
 
-				body_tokens.iter().for_each(|(t, s)| {
-					walker.push_colour(*s, t.non_semantic_colour())
+				// Syntax highlight the body. If any identifier matches a parameter, we correctly highlight that.
+				body_tokens.iter().for_each(|(t, s)| match t {
+					Token::Ident(str) => {
+						if let Some(_) =
+							params.iter().find(|ident| &ident.name == str)
+						{
+							walker.push_colour_with_modifiers(
+								*s,
+								SyntaxType::Parameter,
+								SyntaxModifiers::MACRO_BODY,
+							)
+						} else {
+							walker.push_colour_with_modifiers(
+								*s,
+								t.non_semantic_colour(),
+								SyntaxModifiers::MACRO_BODY,
+							)
+						}
+					}
+					_ => walker.push_colour_with_modifiers(
+						*s,
+						t.non_semantic_colour(),
+						SyntaxModifiers::MACRO_BODY,
+					),
 				});
 
 				walker.register_macro(
@@ -5671,8 +5848,9 @@ fn parse_directive(
 			kw: kw_span,
 			mut tokens,
 		} => {
-			walker.push_colour(dir_span.first_char(), SyntaxToken::Directive);
-			walker.push_colour(kw_span, SyntaxToken::Directive);
+			walker
+				.push_colour(dir_span.first_char(), SyntaxType::DirectiveHash);
+			walker.push_colour(kw_span, SyntaxType::DirectiveName);
 
 			let ident = if tokens.is_empty() {
 				walker.push_syntax_diag(Syntax::PreprocDefine(
@@ -5683,7 +5861,6 @@ fn parse_directive(
 				Omittable::None
 			} else {
 				let (token, token_span) = tokens.remove(0);
-
 				let ident = match token {
 					UndefToken::Ident(s) => {
 						walker.unregister_macro(&s, token_span);
@@ -5705,6 +5882,11 @@ fn parse_directive(
 				if !tokens.is_empty() {
 					let (_, first) = tokens.first().unwrap();
 					let (_, last) = tokens.last().unwrap();
+					walker.push_colour_with_modifiers(
+						Span::new(first.start, last.end),
+						SyntaxType::Invalid,
+						SyntaxModifiers::UNDEFINE,
+					);
 					walker.push_syntax_diag(Syntax::PreprocTrailingTokens(
 						Span::new(first.start, last.end),
 					));
@@ -5743,8 +5925,8 @@ fn parse_version_directive(
 	kw_span: Span,
 	tokens: Vec<(VersionToken, Span)>,
 ) {
-	walker.push_colour(dir_span.first_char(), SyntaxToken::Directive);
-	walker.push_colour(kw_span, SyntaxToken::Directive);
+	walker.push_colour(dir_span.first_char(), SyntaxType::DirectiveHash);
+	walker.push_colour(kw_span, SyntaxType::DirectiveName);
 
 	if tokens.is_empty() {
 		walker.push_syntax_diag(Syntax::PreprocVersion(
@@ -5769,8 +5951,8 @@ fn parse_version_directive(
 			walker.push_colour(
 				token_span,
 				match token {
-					VersionToken::Invalid(_) => SyntaxToken::Invalid,
-					_ => SyntaxToken::Directive,
+					VersionToken::Invalid(_) => SyntaxType::Invalid,
+					_ => SyntaxType::Directive,
 				},
 			);
 			span_end = token_span.end;
@@ -5814,22 +5996,22 @@ fn parse_version_directive(
 	) -> Option<ProfileTy> {
 		match str {
 			"core" => {
-				walker.push_colour(span, SyntaxToken::Directive);
+				walker.push_colour(span, SyntaxType::DirectiveProfile);
 				Some(ProfileTy::Core)
 			}
 			"compatability" => {
-				walker.push_colour(span, SyntaxToken::Directive);
+				walker.push_colour(span, SyntaxType::DirectiveProfile);
 				Some(ProfileTy::Compatability)
 			}
 			"es" => {
-				walker.push_colour(span, SyntaxToken::Directive);
+				walker.push_colour(span, SyntaxType::DirectiveProfile);
 				Some(ProfileTy::Es)
 			}
 			_ => {
 				let str = str.to_lowercase();
 				match str.as_ref() {
 					"core" => {
-						walker.push_colour(span, SyntaxToken::Directive);
+						walker.push_colour(span, SyntaxType::DirectiveProfile);
 						walker.push_syntax_diag(Syntax::PreprocVersion(
 							PreprocVersionDiag::InvalidProfileCasing(
 								span, "core",
@@ -5838,7 +6020,7 @@ fn parse_version_directive(
 						Some(ProfileTy::Core)
 					}
 					"compatability" => {
-						walker.push_colour(span, SyntaxToken::Directive);
+						walker.push_colour(span, SyntaxType::DirectiveProfile);
 						walker.push_syntax_diag(Syntax::PreprocVersion(
 							PreprocVersionDiag::InvalidProfileCasing(
 								span,
@@ -5848,7 +6030,7 @@ fn parse_version_directive(
 						Some(ProfileTy::Compatability)
 					}
 					"es" => {
-						walker.push_colour(span, SyntaxToken::Directive);
+						walker.push_colour(span, SyntaxType::DirectiveProfile);
 						walker.push_syntax_diag(Syntax::PreprocVersion(
 							PreprocVersionDiag::InvalidProfileCasing(
 								span, "es",
@@ -5869,18 +6051,21 @@ fn parse_version_directive(
 			VersionToken::Num(n) => {
 				match parse_version(walker, n, token_span) {
 					Some(n) => {
-						walker.push_colour(token_span, SyntaxToken::Directive);
+						walker.push_colour(
+							token_span,
+							SyntaxType::DirectiveVersion,
+						);
 						(n, token_span)
 					}
 					None => {
-						walker.push_colour(token_span, SyntaxToken::Directive);
+						walker.push_colour(token_span, SyntaxType::Directive);
 						seek_end(walker, tokens, false);
 						return;
 					}
 				}
 			}
 			VersionToken::InvalidNum(_) => {
-				walker.push_colour(token_span, SyntaxToken::Directive);
+				walker.push_colour(token_span, SyntaxType::Invalid);
 				walker.push_syntax_diag(Syntax::PreprocVersion(
 					PreprocVersionDiag::InvalidNumber(token_span),
 				));
@@ -5888,7 +6073,7 @@ fn parse_version_directive(
 				return;
 			}
 			VersionToken::Invalid(_) => {
-				walker.push_colour(token_span, SyntaxToken::Invalid);
+				walker.push_colour(token_span, SyntaxType::Invalid);
 				walker.push_syntax_diag(Syntax::PreprocVersion(
 					PreprocVersionDiag::ExpectedNumber(token_span),
 				));
@@ -5913,7 +6098,7 @@ fn parse_version_directive(
 						return;
 					}
 					None => {
-						walker.push_colour(token_span, SyntaxToken::Directive);
+						walker.push_colour(token_span, SyntaxType::Directive);
 						walker.push_syntax_diag(Syntax::PreprocVersion(
 							PreprocVersionDiag::ExpectedNumber(token_span),
 						));
@@ -5990,8 +6175,8 @@ fn parse_extension_directive(
 	kw_span: Span,
 	tokens: Vec<(ExtensionToken, Span)>,
 ) {
-	walker.push_colour(dir_span.first_char(), SyntaxToken::Directive);
-	walker.push_colour(kw_span, SyntaxToken::Directive);
+	walker.push_colour(dir_span.first_char(), SyntaxType::DirectiveHash);
+	walker.push_colour(kw_span, SyntaxType::DirectiveName);
 
 	if tokens.is_empty() {
 		walker.push_syntax_diag(Syntax::PreprocExt(
@@ -6016,8 +6201,8 @@ fn parse_extension_directive(
 			walker.push_colour(
 				token_span,
 				match token {
-					ExtensionToken::Invalid(_) => SyntaxToken::Invalid,
-					_ => SyntaxToken::Directive,
+					ExtensionToken::Invalid(_) => SyntaxType::Invalid,
+					_ => SyntaxType::Directive,
 				},
 			);
 			span_end = token_span.end;
@@ -6087,7 +6272,10 @@ fn parse_extension_directive(
 			ExtensionToken::Word(str) => {
 				match parse_behaviour(&str, token_span) {
 					Some((behaviour, _)) => {
-						walker.push_colour(token_span, SyntaxToken::Directive);
+						walker.push_colour(
+							token_span,
+							SyntaxType::DirectiveExtBehaviour,
+						);
 						walker.push_syntax_diag(Syntax::PreprocExt(
 							PreprocExtDiag::MissingNameBetweenKwAndBehaviour(
 								Span::new_between(kw_span, token_span),
@@ -6103,11 +6291,17 @@ fn parse_extension_directive(
 						});
 						return;
 					}
-					None => (str, token_span),
+					None => {
+						walker.push_colour(
+							token_span,
+							SyntaxType::DirectiveExtName,
+						);
+						(str, token_span)
+					}
 				}
 			}
 			ExtensionToken::Colon => {
-				walker.push_colour(token_span, SyntaxToken::Directive);
+				walker.push_colour(token_span, SyntaxType::Directive);
 				walker.push_syntax_diag(Syntax::PreprocExt(
 					PreprocExtDiag::MissingNameBetweenKwAndColon(
 						Span::new_between(kw_span, token_span),
@@ -6124,7 +6318,7 @@ fn parse_extension_directive(
 				return;
 			}
 			ExtensionToken::Invalid(_) => {
-				walker.push_colour(token_span, SyntaxToken::Invalid);
+				walker.push_colour(token_span, SyntaxType::Invalid);
 				walker.push_syntax_diag(Syntax::PreprocExt(
 					PreprocExtDiag::ExpectedName(token_span),
 				));
@@ -6138,13 +6332,16 @@ fn parse_extension_directive(
 	let colon_span = match tokens.next() {
 		Some((token, token_span)) => match token {
 			ExtensionToken::Colon => {
-				walker.push_colour(token_span, SyntaxToken::Directive);
+				walker.push_colour(token_span, SyntaxType::Directive);
 				token_span
 			}
 			ExtensionToken::Word(str) => {
 				match parse_behaviour(&str, token_span) {
 					Some((behaviour, _)) => {
-						walker.push_colour(token_span, SyntaxToken::Directive);
+						walker.push_colour(
+							token_span,
+							SyntaxType::DirectiveExtBehaviour,
+						);
 						walker.push_syntax_diag(Syntax::PreprocExt(
 							PreprocExtDiag::MissingColonBetweenNameAndBehaviour(
 								Span::new_between(name.1, token_span),
@@ -6161,7 +6358,7 @@ fn parse_extension_directive(
 						return;
 					}
 					None => {
-						walker.push_colour(token_span, SyntaxToken::Invalid);
+						walker.push_colour(token_span, SyntaxType::Directive);
 						walker.push_syntax_diag(Syntax::PreprocExt(
 							PreprocExtDiag::ExpectedColon(token_span),
 						));
@@ -6178,7 +6375,7 @@ fn parse_extension_directive(
 				}
 			}
 			ExtensionToken::Invalid(_) => {
-				walker.push_colour(token_span, SyntaxToken::Invalid);
+				walker.push_colour(token_span, SyntaxType::Invalid);
 				walker.push_syntax_diag(Syntax::PreprocExt(
 					PreprocExtDiag::ExpectedColon(token_span),
 				));
@@ -6214,14 +6411,17 @@ fn parse_extension_directive(
 			ExtensionToken::Word(str) => {
 				match parse_behaviour(&str, token_span) {
 					Some((behaviour, diag)) => {
-						walker.push_colour(token_span, SyntaxToken::Directive);
+						walker.push_colour(
+							token_span,
+							SyntaxType::DirectiveExtBehaviour,
+						);
 						if let Some(diag) = diag {
 							walker.push_syntax_diag(diag);
 						}
 						(behaviour, token_span)
 					}
 					None => {
-						walker.push_colour(token_span, SyntaxToken::Invalid);
+						walker.push_colour(token_span, SyntaxType::Directive);
 						walker.push_syntax_diag(Syntax::PreprocExt(
 							PreprocExtDiag::InvalidBehaviour(token_span),
 						));
@@ -6237,8 +6437,23 @@ fn parse_extension_directive(
 					}
 				}
 			}
-			ExtensionToken::Colon | ExtensionToken::Invalid(_) => {
-				walker.push_colour(token_span, SyntaxToken::Invalid);
+			ExtensionToken::Colon => {
+				walker.push_colour(token_span, SyntaxType::Directive);
+				walker.push_syntax_diag(Syntax::PreprocExt(
+					PreprocExtDiag::ExpectedBehaviour(token_span),
+				));
+				seek_end(walker, tokens, false);
+				nodes.push(Node {
+					span: Span::new(dir_span.start, colon_span.end),
+					ty: NodeTy::ExtensionDirective {
+						name: Some(name),
+						behaviour: None,
+					},
+				});
+				return;
+			}
+			ExtensionToken::Invalid(_) => {
+				walker.push_colour(token_span, SyntaxType::Invalid);
 				walker.push_syntax_diag(Syntax::PreprocExt(
 					PreprocExtDiag::ExpectedBehaviour(token_span),
 				));
@@ -6286,8 +6501,8 @@ fn parse_line_directive(
 	kw_span: Span,
 	tokens: Vec<(LineToken, Span)>,
 ) {
-	walker.push_colour(dir_span.first_char(), SyntaxToken::Directive);
-	walker.push_colour(kw_span, SyntaxToken::Directive);
+	walker.push_colour(dir_span.first_char(), SyntaxType::DirectiveHash);
+	walker.push_colour(kw_span, SyntaxType::DirectiveName);
 
 	if tokens.is_empty() {
 		walker.push_syntax_diag(Syntax::PreprocLine(
@@ -6312,8 +6527,8 @@ fn parse_line_directive(
 			walker.push_colour(
 				token_span,
 				match token {
-					LineToken::Invalid(_) => SyntaxToken::Invalid,
-					_ => SyntaxToken::Directive,
+					LineToken::Invalid(_) => SyntaxType::Invalid,
+					_ => SyntaxType::Directive,
 				},
 			);
 			span_end = token_span.end;
@@ -6329,11 +6544,11 @@ fn parse_line_directive(
 		let (token, token_span) = tokens.next().unwrap();
 		match token {
 			LineToken::Num(n) => {
-				walker.push_colour(token_span, SyntaxToken::Directive);
+				walker.push_colour(token_span, SyntaxType::DirectiveLineNumber);
 				Some((n, token_span))
 			}
 			LineToken::InvalidNum(_) => {
-				walker.push_colour(token_span, SyntaxToken::Invalid);
+				walker.push_colour(token_span, SyntaxType::Invalid);
 				walker.push_syntax_diag(Syntax::PreprocLine(
 					PreprocLineDiag::InvalidNumber(token_span),
 				));
@@ -6444,7 +6659,7 @@ fn parse_line_directive(
 				}
 			}
 			LineToken::Invalid(_) => {
-				walker.push_colour(token_span, SyntaxToken::Invalid);
+				walker.push_colour(token_span, SyntaxType::Invalid);
 				walker.push_syntax_diag(Syntax::PreprocLine(
 					PreprocLineDiag::ExpectedNumber(token_span),
 				));
@@ -6464,11 +6679,11 @@ fn parse_line_directive(
 	let src_str_num = match tokens.next() {
 		Some((token, token_span)) => match token {
 			LineToken::Num(n) => {
-				walker.push_colour(token_span, SyntaxToken::Directive);
+				walker.push_colour(token_span, SyntaxType::DirectiveLineNumber);
 				Omittable::Some((n, token_span))
 			}
 			LineToken::InvalidNum(_) => {
-				walker.push_colour(token_span, SyntaxToken::Invalid);
+				walker.push_colour(token_span, SyntaxType::Invalid);
 				walker.push_syntax_diag(Syntax::PreprocLine(
 					PreprocLineDiag::InvalidNumber(token_span),
 				));
@@ -6566,7 +6781,7 @@ fn parse_line_directive(
 				src_str_num
 			}
 			LineToken::Invalid(_) => {
-				walker.push_colour(token_span, SyntaxToken::Invalid);
+				walker.push_colour(token_span, SyntaxType::Invalid);
 				walker.push_syntax_diag(Syntax::PreprocLine(
 					PreprocLineDiag::ExpectedNumber(token_span),
 				));
@@ -6615,10 +6830,10 @@ fn parse_error_directive(
 	kw_span: Span,
 	message: Option<Spanned<String>>,
 ) {
-	walker.push_colour(dir_span.first_char(), SyntaxToken::Directive);
-	walker.push_colour(kw_span, SyntaxToken::Directive);
+	walker.push_colour(dir_span.first_char(), SyntaxType::DirectiveHash);
+	walker.push_colour(kw_span, SyntaxType::DirectiveName);
 	if let Some(ref message) = message {
-		walker.push_colour(message.1, SyntaxToken::Directive);
+		walker.push_colour(message.1, SyntaxType::DirectiveError);
 	}
 	nodes.push(Node {
 		span: Span::new(
@@ -6643,10 +6858,10 @@ fn parse_pragma_directive(
 	kw_span: Span,
 	options: Option<Spanned<String>>,
 ) {
-	walker.push_colour(dir_span.first_char(), SyntaxToken::Directive);
-	walker.push_colour(kw_span, SyntaxToken::Directive);
+	walker.push_colour(dir_span.first_char(), SyntaxType::DirectiveHash);
+	walker.push_colour(kw_span, SyntaxType::DirectiveName);
 	if let Some(ref options) = options {
-		walker.push_colour(options.1, SyntaxToken::Directive);
+		walker.push_colour(options.1, SyntaxType::Directive);
 	}
 	nodes.push(Node {
 		span: Span::new(

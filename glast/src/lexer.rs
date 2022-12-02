@@ -332,18 +332,18 @@ pub enum OpTy {
 impl Token {
 	/// Produces a syntax token corresponding to the type of this lexer token. This performs simple,
 	/// non-semantically-aware colouring.
-	pub fn non_semantic_colour(&self) -> crate::parser::SyntaxToken {
-		use crate::parser::SyntaxToken;
+	pub fn non_semantic_colour(&self) -> crate::parser::SyntaxType {
+		use crate::parser::SyntaxType;
 		match self {
-			Token::Num { .. } => SyntaxToken::Number,
-			Token::Bool(_) => SyntaxToken::Boolean,
-			Token::Ident(_) => SyntaxToken::Ident,
-			Token::Directive(_) => SyntaxToken::Directive,
-			Token::MacroConcat => SyntaxToken::MacroConcat,
+			Token::Num { .. } => SyntaxType::Number,
+			Token::Bool(_) => SyntaxType::Boolean,
+			Token::Ident(_) => SyntaxType::Ident,
+			Token::Directive(_) => SyntaxType::Directive,
+			Token::MacroConcat => SyntaxType::DirectiveConcat,
 			Token::LineComment(_) | Token::BlockComment { .. } => {
-				SyntaxToken::Comment
+				SyntaxType::Comment
 			}
-			Token::Invalid(_) => SyntaxToken::Invalid,
+			Token::Invalid(_) => SyntaxType::Invalid,
 			Token::If
 			| Token::Else
 			| Token::For
@@ -384,8 +384,8 @@ impl Token {
 			| Token::Volatile
 			| Token::Restrict
 			| Token::Readonly
-			| Token::Writeonly => SyntaxToken::Keyword,
-			Token::Op(_) => SyntaxToken::Operator,
+			| Token::Writeonly => SyntaxType::Keyword,
+			Token::Op(_) => SyntaxType::Operator,
 			Token::Comma
 			| Token::Dot
 			| Token::Semi
@@ -396,7 +396,7 @@ impl Token {
 			| Token::LBracket
 			| Token::RBracket
 			| Token::LBrace
-			| Token::RBrace => SyntaxToken::Punctuation,
+			| Token::RBrace => SyntaxType::Punctuation,
 		}
 	}
 

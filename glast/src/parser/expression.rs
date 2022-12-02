@@ -5,12 +5,12 @@ use super::{
 		BinOp, BinOpTy, Expr, ExprTy, Ident, Lit, PostOp, PostOpTy, PreOp,
 		PreOpTy,
 	},
-	SyntaxToken, Walker,
+	SyntaxModifiers, SyntaxToken, SyntaxType, Walker,
 };
 use crate::{
 	diag::{ExprDiag, Semantic, Syntax},
 	lexer::{self, Token},
-	Either, Span, Spanned,
+	Either, Span,
 };
 use std::collections::VecDeque;
 
@@ -40,12 +40,7 @@ pub(super) fn expr_parser(
 	walker: &mut Walker,
 	mode: Mode,
 	end_tokens: impl AsRef<[Token]>,
-) -> (
-	Option<Expr>,
-	Vec<Syntax>,
-	Vec<Semantic>,
-	Vec<Spanned<SyntaxToken>>,
-) {
+) -> (Option<Expr>, Vec<Syntax>, Vec<Semantic>, Vec<SyntaxToken>) {
 	let start_position = match walker.peek() {
 		Some((_, span)) => span.start,
 		// If we are at the end of the token stream, we can return early with nothing.
@@ -425,7 +420,7 @@ struct ShuntingYard {
 	semantic_diags: Vec<Semantic>,
 
 	/// Syntax highlighting tokens created during the parser execution.
-	syntax_tokens: Vec<Spanned<SyntaxToken>>,
+	syntax_tokens: Vec<SyntaxToken>,
 }
 
 impl ShuntingYard {
@@ -1290,10 +1285,14 @@ impl ShuntingYard {
 	}
 
 	/// Pushes a syntax highlighting token over the given span.
-	fn colour(&mut self, walker: &Walker, span: Span, token: SyntaxToken) {
+	fn colour(&mut self, walker: &Walker, span: Span, token: SyntaxType) {
 		// When we are within a macro, we don't want to produce syntax tokens.
 		if walker.streams.len() == 1 {
-			self.syntax_tokens.push((token, span));
+			self.syntax_tokens.push(SyntaxToken {
+				ty: token,
+				modifiers: SyntaxModifiers::empty(),
+				span,
+			});
 		}
 	}
 
@@ -1428,8 +1427,8 @@ impl ShuntingYard {
 						walker,
 						span,
 						match token {
-							Token::Num { .. } => SyntaxToken::Number,
-							Token::Bool(_) => SyntaxToken::Boolean,
+							Token::Num { .. } => SyntaxType::Number,
+							Token::Bool(_) => SyntaxType::Boolean,
 							_ => unreachable!(),
 						},
 					);
@@ -1483,8 +1482,8 @@ impl ShuntingYard {
 						walker,
 						span,
 						match token {
-							Token::Num { .. } => SyntaxToken::Number,
-							Token::Bool(_) => SyntaxToken::Boolean,
+							Token::Num { .. } => SyntaxType::Number,
+							Token::Bool(_) => SyntaxType::Boolean,
 							_ => unreachable!(),
 						},
 					);
@@ -1522,7 +1521,7 @@ impl ShuntingYard {
 
 					self.set_op_rhs_toggle();
 
-					self.colour(walker, span, SyntaxToken::UncheckedIdent);
+					self.colour(walker, span, SyntaxType::UncheckedIdent);
 				}
 				Token::Ident(s) if state == State::AfterOperand => {
 					if self.mode == Mode::TakeOneUnit {
@@ -1562,7 +1561,7 @@ impl ShuntingYard {
 					// After an identifier, we may start a function call.
 					can_start = Start::FnOrArr;
 
-					self.colour(walker, span, SyntaxToken::UncheckedIdent);
+					self.colour(walker, span, SyntaxType::UncheckedIdent);
 
 					// We don't change state since even though we found an operand instead of an operator, after
 					// this operand we will still be expecting an operator.
@@ -1635,7 +1634,7 @@ impl ShuntingYard {
 
 					can_start = Start::None;
 
-					self.colour(walker, span, SyntaxToken::Operator);
+					self.colour(walker, span, SyntaxType::Operator);
 				}
 				Token::Op(op) if state == State::AfterOperand => {
 					if (self.mode == Mode::BreakAtEq
@@ -1679,7 +1678,7 @@ impl ShuntingYard {
 
 					can_start = Start::None;
 
-					self.colour(walker, span, SyntaxToken::Operator);
+					self.colour(walker, span, SyntaxType::Operator);
 				}
 				Token::LParen if state == State::Operand => {
 					// If we previously had a token which can end an argument of an arity group, and we are in a
@@ -1704,7 +1703,7 @@ impl ShuntingYard {
 
 					can_start = Start::None;
 
-					self.colour(walker, span, SyntaxToken::Punctuation);
+					self.colour(walker, span, SyntaxType::Punctuation);
 
 					// We don't switch state since after a `(`, we are expecting an operand, i.e.
 					// `..+ ( 1 *` rather than `..+ ( *`.
@@ -1780,7 +1779,7 @@ impl ShuntingYard {
 					}
 					arity_state = Arity::Operator;
 
-					self.colour(walker, span, SyntaxToken::Punctuation);
+					self.colour(walker, span, SyntaxType::Punctuation);
 				}
 				Token::RParen if state == State::AfterOperand => {
 					if !self.just_started_fn_arr_init()
@@ -1799,7 +1798,7 @@ impl ShuntingYard {
 
 					can_start = Start::None;
 
-					self.colour(walker, span, SyntaxToken::Punctuation);
+					self.colour(walker, span, SyntaxType::Punctuation);
 
 					// We don't switch state since after a `)`, we are expecting an operator, i.e.
 					// `..) + 5` rather than `..) 5`.
@@ -1845,7 +1844,7 @@ impl ShuntingYard {
 
 					can_start = Start::None;
 
-					self.colour(walker, span, SyntaxToken::Punctuation);
+					self.colour(walker, span, SyntaxType::Punctuation);
 				}
 				Token::LBracket if state == State::AfterOperand => {
 					// We switch state since after a `[`, we are expecting an operand, i.e.
@@ -1862,7 +1861,7 @@ impl ShuntingYard {
 
 					can_start = Start::EmptyIndex;
 
-					self.colour(walker, span, SyntaxToken::Punctuation);
+					self.colour(walker, span, SyntaxType::Punctuation);
 				}
 				Token::LBracket if state == State::Operand => {
 					if self.mode != Mode::TakeOneUnit {
@@ -1890,7 +1889,7 @@ impl ShuntingYard {
 
 					arity_state = Arity::PotentialEnd;
 
-					self.colour(walker, span, SyntaxToken::Punctuation);
+					self.colour(walker, span, SyntaxType::Punctuation);
 				}
 				Token::RBracket if state == State::Operand => {
 					if can_start == Start::EmptyIndex {
@@ -1923,7 +1922,7 @@ impl ShuntingYard {
 
 					arity_state = Arity::PotentialEnd;
 
-					self.colour(walker, span, SyntaxToken::Punctuation);
+					self.colour(walker, span, SyntaxType::Punctuation);
 				}
 				Token::LBrace if state == State::Operand => {
 					// If we previously had a token which can end an argument of an arity group, and we are in a
@@ -1950,7 +1949,7 @@ impl ShuntingYard {
 
 					just_started_arity_group = true;
 
-					self.colour(walker, span, SyntaxToken::Punctuation);
+					self.colour(walker, span, SyntaxType::Punctuation);
 
 					// We don't switch state since after a `{`, we are expecting an operand, i.e.
 					// `..+ {1,` rather than `..+ {,`.
@@ -1992,7 +1991,7 @@ impl ShuntingYard {
 
 					just_started_arity_group = true;
 
-					self.colour(walker, span, SyntaxToken::Punctuation);
+					self.colour(walker, span, SyntaxType::Punctuation);
 				}
 				Token::RBrace if state == State::AfterOperand => {
 					if self.is_in_variable_arg_group() {
@@ -2009,7 +2008,7 @@ impl ShuntingYard {
 
 					can_start = Start::None;
 
-					self.colour(walker, span, SyntaxToken::Punctuation);
+					self.colour(walker, span, SyntaxType::Punctuation);
 
 					// We don't switch state since after a `}`, we are expecting an operator, i.e.
 					// `..}, {..` rather than `..} {..`.
@@ -2049,7 +2048,7 @@ impl ShuntingYard {
 
 					can_start = Start::None;
 
-					self.colour(walker, span, SyntaxToken::Punctuation);
+					self.colour(walker, span, SyntaxType::Punctuation);
 				}
 				Token::Comma if state == State::AfterOperand => {
 					if (self.mode == Mode::DisallowTopLevelList
@@ -2076,7 +2075,7 @@ impl ShuntingYard {
 
 					can_start = Start::None;
 
-					self.colour(walker, span, SyntaxToken::Punctuation);
+					self.colour(walker, span, SyntaxType::Punctuation);
 				}
 				Token::Comma if state == State::Operand => {
 					if (self.mode == Mode::DisallowTopLevelList
@@ -2139,7 +2138,7 @@ impl ShuntingYard {
 
 					can_start = Start::None;
 
-					self.colour(walker, span, SyntaxToken::Punctuation);
+					self.colour(walker, span, SyntaxType::Punctuation);
 				}
 				Token::Dot if state == State::AfterOperand => {
 					// We don't need to consider arity because a dot after an operand will always be a valid object
@@ -2156,7 +2155,7 @@ impl ShuntingYard {
 
 					can_start = Start::None;
 
-					self.colour(walker, span, SyntaxToken::Operator);
+					self.colour(walker, span, SyntaxType::Operator);
 				}
 				Token::Dot if state == State::Operand => {
 					// We have encountered something like: `foo + . ` or `foo.bar(). . `.
@@ -2199,7 +2198,7 @@ impl ShuntingYard {
 
 					arity_state = Arity::Operator;
 
-					self.colour(walker, span, SyntaxToken::Operator);
+					self.colour(walker, span, SyntaxType::Operator);
 				}
 				Token::Colon => {
 					if !self.is_in_ternary() {
@@ -2229,7 +2228,7 @@ impl ShuntingYard {
 
 					arity_state = Arity::Operator;
 
-					self.colour(walker, span, SyntaxToken::Operator);
+					self.colour(walker, span, SyntaxType::Operator);
 				}
 				_ => {
 					// We have encountered an unexpected token that's not allowed to be part of an expression.

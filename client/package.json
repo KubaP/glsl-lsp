@@ -60,7 +60,7 @@
 		"commands": [
 			{
 				"command": "glsl.showAst",
-				"category": "GLSL (extension debug)",
+				"category": "GLSL (debug command)",
 				"title": "Show AST"
 			}
 		],
@@ -88,7 +88,126 @@
 					"description": "Traces the communication between VS Code and the language server."
 				}
 			}
-		}
+		},
+		"semanticTokenTypes": [
+			{
+				"id": "builtInType",
+				"superType": "keyword",
+				"description": "Style for built-in types"
+			},
+			{
+				"id": "punctuation",
+				"superType": "operator",
+				"description": "Style for punctuation symbols that are not operators"
+			},
+			{
+				"id": "layout",
+				"superType": "variable",
+				"description": "Style for a valid layout qualifier identifier"
+			},
+			{
+				"id": "boolean",
+				"superType": "keyword",
+				"description": "Style for boolean literals"
+			},
+			{
+				"id": "lineContinuator",
+				"superType": "escapeSequence",
+				"description": "Style for escape sequence characters"
+			},
+			{
+				"id": "escapeSequence",
+				"superType": "string",
+				"description": "Style for escape sequence characters"
+			},
+			{
+				"id": "unresolvedReference",
+				"description": "Style for unresolved identifiers"
+			},
+			{
+				"id": "invalid",
+				"description": "Style for invalid tokens",
+				"superType": "unresolvedReference"
+			},
+			{
+				"id": "objectMacro",
+				"superType": "macro",
+				"description": "Style for object-like macro identifiers"
+			},
+			{
+				"id": "functionMacro",
+				"superType": "macro",
+				"description": "Style for function-like macro identifiers"
+			},
+			{
+				"id": "directive",
+				"superType": "keyword",
+				"description": "General style for all preprocessor directive text"
+			},
+			{
+				"id": "directiveConcat",
+				"superType": "directive",
+				"description": "Style for the token concatenator `##`"
+			},
+			{
+				"id": "directiveHash",
+				"superType": "directive",
+				"description": "Style for the `#` symbol in a preprocessor directive"
+			},
+			{
+				"id": "directiveName",
+				"superType": "directive",
+				"description": "Style for the name of the preprocessor directive, e.g. `version`"
+			},
+			{
+				"id": "directiveVersion",
+				"superType": "number",
+				"description": "Style for the GLSL version in a #version directive"
+			},
+			{
+				"id": "directiveProfile",
+				"superType": "directive",
+				"description": "Style for the GLSL profile in a #version directive"
+			},
+			{
+				"id": "directiveExtName",
+				"superType": "variable",
+				"description": "Style for the extension name in a #extension directive"
+			},
+			{
+				"id": "directiveExtBehaviour",
+				"superType": "directive",
+				"description": "Style for the extension behaviour in a #extension directive"
+			},
+			{
+				"id": "directiveLineNumber",
+				"superType": "number",
+				"description": "Style for the numbers in a #line directive"
+			},
+			{
+				"id": "directiveError",
+				"superType": "directive",
+				"description": "Style for the message in an #error directive"
+			}
+		],
+		"semanticTokenModifiers": [
+			{
+				"id": "macroDefinition",
+				"description": "Normal tokens within a macro definition"
+			},
+			{
+				"id": "macroBody",
+				"description": "Normal tokens within a macro body"
+			},
+			{
+				"id": "undefine",
+				"description": "Normal tokens within a `#undef` directive"
+			},
+			{
+				"id": "conditional",
+				"description": "Normal tokens within a conditional directive"
+			}
+		]
 	},
 	"scripts": {
 		"vscode:prepublish": "npm run build",

@@ -74,7 +74,10 @@ impl LanguageServer for MyServer {
 									.into_iter()
 									.map(|s| SemanticTokenType::new(s))
 									.collect::<Vec<_>>(),
-								token_modifiers: vec![],
+								token_modifiers: syntax::TOKEN_MODIFIERS
+									.into_iter()
+									.map(|s| SemanticTokenModifier::new(s))
+									.collect::<Vec<_>>(),
 							},
 							range: None,
 							full: Some(SemanticTokensFullOptions::Bool(true)),

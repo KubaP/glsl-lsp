@@ -1,17 +1,21 @@
-#![allow(unused)]
-use glast::{parser::SyntaxToken, Spanned};
+use glast::parser::{SyntaxToken, SyntaxType};
 use tower_lsp::lsp_types::{Position, SemanticToken};
 
 /// Converts [`SyntaxToken`]s to LSP semantic tokens.
 pub fn convert(
-	syntax_tokens: Vec<Spanned<SyntaxToken>>,
+	syntax_tokens: Vec<SyntaxToken>,
 	file: &crate::File,
 	supports_multiline: bool,
 ) -> Vec<SemanticToken> {
 	let mut tokens = Vec::new();
 	let mut prev_line = 0;
 	let mut prev_start_char = 0;
-	for (token, span) in syntax_tokens {
+	for SyntaxToken {
+		ty,
+		modifiers,
+		span,
+	} in syntax_tokens
+	{
 		let range = file.span_to_lsp(span);
 		if range.start.line != range.end.line && !supports_multiline {
 			// We have a multi-line token but the client doesn't support that, so we must split it per-line. What
@@ -65,8 +69,8 @@ pub fn convert(
 						delta_line,
 						delta_start,
 						length,
-						token_type: convert_to_lsp_token(token.clone()),
-						token_modifiers_bitset: 0,
+						token_type: convert_to_lsp_ty(ty),
+						token_modifiers_bitset: modifiers.bits(),
 					});
 
 					is_first = false;
@@ -76,8 +80,8 @@ pub fn convert(
 						delta_line: 1,
 						delta_start: 0,
 						length: (b - a) as u32,
-						token_type: convert_to_lsp_token(token.clone()),
-						token_modifiers_bitset: 0,
+						token_type: convert_to_lsp_ty(ty),
+						token_modifiers_bitset: modifiers.bits(),
 					});
 					let Position { line, character } = file.position_to_lsp(a);
 					prev_line = line;
@@ -97,8 +101,8 @@ pub fn convert(
 				delta_line,
 				delta_start,
 				length,
-				token_type: convert_to_lsp_token(token),
-				token_modifiers_bitset: 0,
+				token_type: convert_to_lsp_ty(ty),
+				token_modifiers_bitset: modifiers.bits(),
 			});
 
 			prev_line = line;
@@ -111,56 +115,100 @@ pub fn convert(
 
 /* WARNING: Ensure that the array and constant numbers match */
 
-pub const TOKEN_TYPES: [&str; 15] = [
+pub const TOKEN_TYPES: [&str; 28] = [
 	"keyword",
-	"builtInType",
-	"punctuation",
+	"builtInType", // nonstandard - inherits from `keyword`
+	"struct",
+	"punctuation", // nonstandard - inherits from `operator`
 	"operator",
 	"function",
-	"macro",
-	"struct",
 	"variable",
 	"parameter",
+	"layout", // custom - inherits from `variable`
 	"number",
-	"boolean",
+	"boolean", // nonstandard - inherits from `keyword`
+	"string",
 	"comment",
-	"espaceSequence",
-	"unresolvedReference",
-	"invalid",
+	"lineContinuator", // custom - inherits from nonstandard `escapeSequence`, which inherits from `string`
+	"unresolvedReference", // nonstandard
+	"invalid",         // custom - inherits from nonstandard `unresolvedReference`
+	"objectMacro",     // custom - inherits from `macro`
+	"functionMacro",   // custom - inherits from `macro`
+	"directive",       // custom - inherits from `keyword`
+	"directiveConcat", // custom - inherits from custom `directive`
+	"directiveHash",   // custom - inherits from custom `directive`
+	"directiveName",   // custom - inherits from custom `directive`
+	"directiveVersion", // custom - inherits from `number`
+	"directiveProfile", // custom - inherits from custom `directive`
+	"directiveExtName", // custom - inherits from `variable`
+	"directiveExtBehaviour", // custom - inherits from custom `directive`
+	"directiveLineNumber", // custom - inherits from `number`
+	"directiveError",  // custom - inherits from custom `directive`
 ];
 
 const KEYWORD: u32 = 0;
-const PRIMITIVE: u32 = 1;
-const PUNCTUATION: u32 = 2;
-const OPERATOR: u32 = 3;
-const FUNCTION: u32 = 4;
-const MACRO: u32 = 5;
-const STRUCT: u32 = 6;
-const VARIABLE: u32 = 7;
-const PARAMETER: u32 = 8;
+const _PRIMITIVE: u32 = 1;
+const _STRUCT: u32 = 2;
+const PUNCTUATION: u32 = 3;
+const OPERATOR: u32 = 4;
+const _FUNCTION: u32 = 5;
+const VARIABLE: u32 = 6;
+const PARAMETER: u32 = 7;
+const LAYOUT: u32 = 8;
 const NUMBER: u32 = 9;
 const BOOLEAN: u32 = 10;
 const COMMENT: u32 = 11;
-const LINE_CONTINUATOR: u32 = 12;
-const UNRESOLVED: u32 = 13;
-const INVALID: u32 = 14;
+const _STRING: u32 = 12;
+const _LINE_CONTINUATOR: u32 = 13;
+const UNRESOLVED: u32 = 14;
+const INVALID: u32 = 15;
+const OBJECT_MACRO: u32 = 16;
+const FUNCTION_MACRO: u32 = 17;
+const DIRECTIVE: u32 = 18;
+const DIRECTIVE_CONCAT: u32 = 19;
+const DIRECTIVE_HASH: u32 = 20;
+const DIRECTIVE_NAME: u32 = 21;
+const DIRECTIVE_VERSION: u32 = 22;
+const DIRECTIVE_PROFILE: u32 = 23;
+const DIRECTIVE_EXT_NAME: u32 = 24;
+const DIRECTIVE_EXT_BEHAVIOUR: u32 = 25;
+const DIRECTIVE_LINE_NUMBER: u32 = 26;
+const DIRECTIVE_ERROR: u32 = 27;
 
-fn convert_to_lsp_token(token: SyntaxToken) -> u32 {
-	match token {
-		SyntaxToken::Number => NUMBER,
-		SyntaxToken::Boolean => BOOLEAN,
-		SyntaxToken::UncheckedIdent => VARIABLE,
-		SyntaxToken::LayoutIdent => VARIABLE,
-		SyntaxToken::UnresolvedIdent => UNRESOLVED,
-		SyntaxToken::Keyword => KEYWORD,
-		SyntaxToken::Punctuation => PUNCTUATION,
-		SyntaxToken::Operator => OPERATOR,
-		SyntaxToken::Comment => COMMENT,
-		SyntaxToken::Invalid => INVALID,
-		SyntaxToken::Directive => MACRO,
-		SyntaxToken::ObjectMacro => MACRO,
-		SyntaxToken::FunctionMacro => MACRO,
-		SyntaxToken::Ident => VARIABLE,
-		SyntaxToken::MacroConcat => MACRO,
+fn convert_to_lsp_ty(ty: SyntaxType) -> u32 {
+	match ty {
+		SyntaxType::Keyword => KEYWORD,
+		SyntaxType::Punctuation => PUNCTUATION,
+		SyntaxType::Operator => OPERATOR,
+		SyntaxType::Parameter => PARAMETER,
+		SyntaxType::LayoutQualifier => LAYOUT,
+		SyntaxType::Number => NUMBER,
+		SyntaxType::Boolean => BOOLEAN,
+		SyntaxType::Comment => COMMENT,
+		SyntaxType::UncheckedIdent => VARIABLE,
+		SyntaxType::UnresolvedIdent => UNRESOLVED,
+		SyntaxType::Invalid => INVALID,
+		SyntaxType::ObjectMacro => OBJECT_MACRO,
+		SyntaxType::FunctionMacro => FUNCTION_MACRO,
+		SyntaxType::Directive => DIRECTIVE,
+		SyntaxType::DirectiveConcat => DIRECTIVE_CONCAT,
+		SyntaxType::DirectiveHash => DIRECTIVE_HASH,
+		SyntaxType::DirectiveName => DIRECTIVE_NAME,
+		SyntaxType::DirectiveVersion => DIRECTIVE_VERSION,
+		SyntaxType::DirectiveProfile => DIRECTIVE_PROFILE,
+		SyntaxType::DirectiveExtName => DIRECTIVE_EXT_NAME,
+		SyntaxType::DirectiveExtBehaviour => DIRECTIVE_EXT_BEHAVIOUR,
+		SyntaxType::DirectiveLineNumber => DIRECTIVE_LINE_NUMBER,
+		SyntaxType::DirectiveError => DIRECTIVE_ERROR,
+		SyntaxType::Ident => VARIABLE,
 	}
 }
+
+/* WARNING: Ensure that this array and order of declaration of `glast::parser::SyntaxModifiers` match */
+
+pub const TOKEN_MODIFIERS: [&str; 4] = [
+	"macroDefinition", // nonstandard
+	"macroBody",       // nonstandard
+	"undefine",        // nonstandard
+	"conditional",     // nonstandard
+];

@@ -139,7 +139,9 @@ impl State {
 		};
 
 		let (_, syntax, semantic, _) =
-			glast::parser::parse_from_str(&file.contents).root();
+			glast::parser::parse_from_str(&file.contents)
+				.unwrap()
+				.root(false);
 		let mut diags = Vec::new();
 		crate::diag::convert(
 			syntax,
@@ -167,8 +169,9 @@ impl State {
 			unreachable!("[State::provide_semantic_tokens] Received a file `uri: {uri}` that has not been opened yet");
 		};
 
-		let (_, _, _, tokens) =
-			glast::parser::parse_from_str(&file.contents).root();
+		let (_, _, _, tokens) = glast::parser::parse_from_str(&file.contents)
+			.unwrap()
+			.root(true);
 		crate::syntax::convert(
 			tokens,
 			file,
@@ -182,8 +185,9 @@ impl State {
 			unreachable!("[State::provide_ast] Received a file `uri: {uri}` that has not been opened yet");	
 		};
 
-		let (ast, _, _, _) =
-			glast::parser::parse_from_str(&file.contents).root();
+		let (ast, _, _, _) = glast::parser::parse_from_str(&file.contents)
+			.unwrap()
+			.root(false);
 		glast::parser::print_ast(ast)
 	}
 }

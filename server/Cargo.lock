@@ -151,6 +151,9 @@ dependencies = [
 [[package]]
 name = "glast"
 version = "0.0.1"
+dependencies = [
+ "bitflags",
+]
 
 [[package]]
 name = "hashbrown"

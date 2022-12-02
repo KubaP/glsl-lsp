@@ -160,6 +160,11 @@ fn convert_semantic(
 			span,
 			Some((format!("Macro defined here"), definition))
 		),
+		Semantic::TokenConcatUnnecessary(span) => (
+			format!("Unnecessary token concatenation operator `##`"),
+			span,
+			None
+		),
 		Semantic::UndefMacroNameUnresolved(span) => (
 			format!("Unnecessary `#undef` directive; macro name could not be resolved"),
 			span,

@@ -328,11 +328,19 @@ pub enum ExprDiag {
 	UnclosedArrayConstructor(Span, Span),
 
 	/* DEFINED OPERATOR - ONLY PRESENT WITHIN EXPRESSIONS IN CONDITIONAL DIRECTIVES */
-	/// ERROR - Did not find anything after the `defined` keyword.
+	/// ERROR - Did not find an identifier or an opening parenthesis after the `defined` keyword.
+	///
+	/// - `0` - The position where the ident or opening parenthesis is expected.
+	ExpectedIdentOrLParenAfterDefinedOp(Span),
+	/// ERROR - Did not find an identifier after the opening parenthesis after the `defined` keyword.
 	///
 	/// - `0` - The position where the ident is expected.
-	ExpectedIdentAfterDefinedOp(Span),
-	/// ERROR - Found an unclosed `define` operator. E.g. `defined(foobar`.
+	ExpectedIdentAfterDefineOpLParen(Span),
+	/// ERROR - Did not find a closing parenthesis after the identifier in a `define` operator.
+	///
+	/// - `0` - The position where the closing parenthesis is expected.
+	ExpectedRParenAfterDefineOpIdent(Span),
+	/// ERROR - Found an unclosed `defined` operator. E.g. `defined(foobar`.
 	///
 	/// - `0` - The span of the opening `(`.
 	/// - `1` - The zero-width span at the end of the expression.

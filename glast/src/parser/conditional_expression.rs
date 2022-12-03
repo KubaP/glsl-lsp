@@ -454,9 +454,17 @@ impl ShuntingYard {
 		}
 		let mut state = State::Operand;
 
-		// This is set to `true` when a `defined` token is encountered, and it is reset to `false` upon the next
-		// iteration.
-		let mut previously_started_defined = false;
+		#[derive(PartialEq)]
+		enum DefinedState {
+			None,
+			// We have previously consumed the `defined` keyword.
+			ConsumedKeyword,
+			/// We have previously consumed the opening parenthesis.
+			ConsumedLParen,
+			/// We have previously consumed the identifier.
+			ConsumedIdent,
+		}
+		let mut defined_state = DefinedState::None;
 
 		// If this is set to `true`, that means that the parser has exited early because of a syntax error and we
 		// want to invalidate the rest of the tokens, (if there are any).
@@ -468,6 +476,56 @@ impl ShuntingYard {
 				// Return if we reach the end of the token list.
 				None => break 'main,
 			};
+
+			// Since a defined operator takes multiple tokens (but we treat it as one "thing"), we want to ensure
+			// that the next token is valid given the current state of parsing the defined operator. If it's not,
+			// we want to break out and report an appropriate syntactical error.
+			if defined_state == DefinedState::ConsumedKeyword {
+				match token {
+					ConditionToken::Ident(_) | ConditionToken::LParen => {}
+					_ => {
+						self.syntax_diags.push(Syntax::Expr(
+							ExprDiag::ExpectedIdentOrLParenAfterDefinedOp(
+								self.get_previous_span()
+									.unwrap()
+									.next_single_width(),
+							),
+						));
+						invalidate_rest = true;
+						break 'main;
+					}
+				}
+			} else if defined_state == DefinedState::ConsumedLParen {
+				match token {
+					ConditionToken::Ident(_) => {}
+					_ => {
+						self.syntax_diags.push(Syntax::Expr(
+							ExprDiag::ExpectedIdentAfterDefineOpLParen(
+								self.get_previous_span()
+									.unwrap()
+									.next_single_width(),
+							),
+						));
+						invalidate_rest = true;
+						break 'main;
+					}
+				}
+			} else if defined_state == DefinedState::ConsumedIdent {
+				match token {
+					ConditionToken::RParen => {}
+					_ => {
+						self.syntax_diags.push(Syntax::Expr(
+							ExprDiag::ExpectedRParenAfterDefineOpIdent(
+								self.get_previous_span()
+									.unwrap()
+									.next_single_width(),
+							),
+						));
+						invalidate_rest = true;
+						break 'main;
+					}
+				}
+			}
 
 			match token {
 				ConditionToken::Num(num) if state == State::Operand => {
@@ -516,9 +574,11 @@ impl ShuntingYard {
 					// If we are parsing a `defined` but we are not in a group (which means we have no
 					// parenthesis), we want to reset the flag back to false. If we are in a defined parenthesis
 					// group, the closing parenthesis will take care of resetting the flag.
-					if previously_started_defined {
-						previously_started_defined = false;
+					if defined_state == DefinedState::ConsumedKeyword {
 						self.end_defined(span);
+						defined_state = DefinedState::None;
+					} else if defined_state == DefinedState::ConsumedLParen {
+						defined_state = DefinedState::ConsumedIdent;
 					}
 
 					self.colour(span, SyntaxType::UncheckedIdent);
@@ -576,9 +636,10 @@ impl ShuntingYard {
 					break 'main;
 				}
 				ConditionToken::LParen if state == State::Operand => {
-					if previously_started_defined {
-						let Some(Group::Defined(_, _, l_paren_span)) = self.groups.last_mut()  else {unreachable!();};
+					if defined_state == DefinedState::ConsumedKeyword {
+						let Some(Group::Defined(_, _, l_paren_span)) = self.groups.last_mut()  else { unreachable!(); };
 						*l_paren_span = Some(span);
+						defined_state = DefinedState::ConsumedLParen;
 					} else {
 						self.set_op_rhs_toggle();
 						self.operators.push_back(Op {
@@ -610,6 +671,10 @@ impl ShuntingYard {
 					}
 
 					self.colour(span, SyntaxType::Punctuation);
+
+					if defined_state == DefinedState::ConsumedIdent {
+						defined_state = DefinedState::None;
+					}
 
 					// We don't switch state since after a `)`, we are expecting an operator, i.e.
 					// `..) + 5` rather than `..) 5`
@@ -651,7 +716,7 @@ impl ShuntingYard {
 						ty: OpTy::DefinedStart,
 					});
 					self.groups.push(Group::Defined(false, span, None));
-					previously_started_defined = true;
+					defined_state = DefinedState::ConsumedKeyword;
 
 					self.colour(span, SyntaxType::Keyword);
 				}
@@ -685,13 +750,6 @@ impl ShuntingYard {
 				_ => unreachable!(),
 			}
 
-			// Reset the flag. We do this here to avoid having to sprinkle every branch other than the `Defined`
-			// branch with a reset, as that would be needlessly verbose.
-			match token {
-				ConditionToken::Defined => {}
-				_ => previously_started_defined = false,
-			}
-
 			walker.advance();
 		}
 
@@ -722,14 +780,18 @@ impl ShuntingYard {
 					}
 					Group::Defined(_, kw, l_paren) => {
 						if let Some(l_paren) = l_paren {
+							// We have a `defined(...`, and since we are here (i.e. the group is not closed), that
+							// means we never encountered a closing parenthesis.
 							self.syntax_diags.push(Syntax::Expr(
 								ExprDiag::UnclosedDefinedOp(
 									*l_paren, group_end,
 								),
 							));
 						} else {
+							// We have a `defined`, and since we are here (i.e. the group is not closed), that
+							// means we never encountered an identifier.
 							self.syntax_diags.push(Syntax::Expr(
-								ExprDiag::ExpectedIdentAfterDefinedOp(
+								ExprDiag::ExpectedIdentOrLParenAfterDefinedOp(
 									kw.next_single_width(),
 								),
 							));
@@ -857,17 +919,19 @@ impl ShuntingYard {
 						});
 					}
 					OpTy::Defined(has_inner, _l_paren, end) => {
-						let expr = if has_inner {
-							Some(pop_back(&mut stack))
+						let ident = if has_inner {
+							let ident = match pop_back(&mut stack).ty {
+								ExprTy::Ident(ident) => ident,
+								_ => unreachable!("Parser behaviour guarantees that the node after a defined operator is an identifier")
+							};
+							Some(ident)
 						} else {
 							None
 						};
 
 						stack.push_back(Expr {
 							span: Span::new(op.span.start, end.end),
-							ty: ExprTy::Defined {
-								expr: expr.map(|e| Box::from(e)),
-							},
+							ty: ExprTy::Defined { ident },
 						});
 					}
 					OpTy::Add(has_rhs)

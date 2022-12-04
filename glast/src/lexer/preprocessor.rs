@@ -332,7 +332,8 @@ pub enum UndefToken {
 /// - integer literals,
 /// - identifiers,
 /// - `defined` keyword,
-/// - specified punctuation symbols.
+/// - specified punctuation symbols,
+/// - comments.
 // TODO: Improve the documentation for this.
 #[derive(Debug, Clone, PartialEq)]
 pub enum ConditionToken {
@@ -340,6 +341,14 @@ pub enum ConditionToken {
 	Num(usize),
 	/// An identifier.
 	Ident(String),
+	/// A line comment, e.g. `// comment`.
+	LineComment(String),
+	/// A block comment, e.g. `/* comment */`.
+	BlockComment {
+		str: String,
+		/// Only `true` if this comment is missing the closing delimiter.
+		contains_eof: bool,
+	},
 	/// An invalid number.
 	InvalidNum(String),
 	/// An invalid character.
@@ -394,6 +403,8 @@ pub enum ConditionToken {
 	LParen,
 	/// A closing parenthesis `)`.
 	RParen,
+	/// A comma `,`.
+	Comma,
 }
 
 /// Constructs a directive with no tokens, just the keyword.
@@ -1393,24 +1404,122 @@ pub(super) fn parse_condition(
 				}
 			}
 		} else if is_conditional_punctuation_start(&current) {
-			match match_conditional_punctuation(lexer) {
-				Some(t) => tokens.push((
-					t,
-					Span {
-						start: buffer_start,
-						end: lexer.position(),
-					},
-				)),
-				None => {
-					// We could have a single `=`, which isn't a valid operator, (unlike in the main lexer).
-					lexer.advance();
-					tokens.push((
-						ConditionToken::Invalid(current),
+			if lexer.take_pat("//") {
+				// If we have a `//`, that means this is a comment until the EOL.
+				'line_comment: loop {
+					// Peek the current character.
+					current = match lexer.peek() {
+						Some(c) => c,
+						None => {
+							// We have reached the end of the source string, and therefore the end of the comment.
+							tokens.push((
+								ConditionToken::LineComment(std::mem::take(
+									&mut buffer,
+								)),
+								Span {
+									start: buffer_start,
+									end: lexer.position(),
+								},
+							));
+							break 'line_comment;
+						}
+					};
+
+					if current == '\r' || current == '\n' {
+						// We have an EOL without a line-continuator, so therefore this is the end of the directive.
+						tokens.push((
+							ConditionToken::LineComment(std::mem::take(
+								&mut buffer,
+							)),
+							Span {
+								start: buffer_start,
+								end: lexer.position(),
+							},
+						));
+						break 'line_comment;
+					} else {
+						// Any other character is just added to the comment buffer.
+						buffer.push(current);
+						lexer.advance();
+					}
+				}
+			} else if lexer.take_pat("/*") {
+				// If we have a `/*`, that means this is a comment until the first `*/`
+				'comment: loop {
+					// Test if the end delimiter is here.
+					if lexer.take_pat("*/") {
+						tokens.push((
+							ConditionToken::BlockComment {
+								str: std::mem::take(&mut buffer),
+								contains_eof: false,
+							},
+							Span {
+								start: buffer_start,
+								end: lexer.position(),
+							},
+						));
+						break 'comment;
+					}
+
+					match lexer.peek() {
+						Some(current) => {
+							if current == '\r' || current == '\n' {
+								// We have reached the end of the line, and hence the end of the conditional
+								// directive, and therefore the end of the comment. This comment however therefore
+								// contains the EOF and hence is not valid.
+								tokens.push((
+									ConditionToken::BlockComment {
+										str: std::mem::take(&mut buffer),
+										contains_eof: true,
+									},
+									Span {
+										start: buffer_start,
+										end: lexer.position(),
+									},
+								));
+								break 'comment;
+							} else {
+								buffer.push(current);
+								lexer.advance();
+							}
+						}
+						None => {
+							// We have reached the end of the source string, and therefore the end of the comment.
+							// This comment however therefore contains the EOF and hence is not valid.
+							tokens.push((
+								ConditionToken::BlockComment {
+									str: std::mem::take(&mut buffer),
+									contains_eof: true,
+								},
+								Span {
+									start: buffer_start,
+									end: lexer.position(),
+								},
+							));
+							break 'comment;
+						}
+					}
+				}
+			} else {
+				match match_conditional_punctuation(lexer) {
+					Some(t) => tokens.push((
+						t,
 						Span {
 							start: buffer_start,
 							end: lexer.position(),
 						},
-					));
+					)),
+					None => {
+						// We could have a single `=`, which isn't a valid operator, (unlike in the main lexer).
+						lexer.advance();
+						tokens.push((
+							ConditionToken::Invalid(current),
+							Span {
+								start: buffer_start,
+								end: lexer.position(),
+							},
+						));
+					}
 				}
 			}
 		} else if current.is_whitespace() {
@@ -1462,7 +1571,7 @@ pub(super) fn parse_condition(
 fn is_conditional_punctuation_start(c: &char) -> bool {
 	match c {
 		'=' | '+' | '-' | '*' | '/' | '%' | '>' | '<' | '!' | '~' | '&'
-		| '|' | '^' | '(' | ')' => true,
+		| '|' | '^' | '(' | ')' | ',' => true,
 		_ => false,
 	}
 }
@@ -1500,6 +1609,7 @@ fn match_conditional_punctuation(lexer: &mut Lexer) -> Option<ConditionToken> {
 	match_op!(lexer, "&", ConditionToken::And);
 	match_op!(lexer, "|", ConditionToken::Or);
 	match_op!(lexer, "^", ConditionToken::Xor);
+	match_op!(lexer, ",", ConditionToken::Comma);
 	None
 }
 

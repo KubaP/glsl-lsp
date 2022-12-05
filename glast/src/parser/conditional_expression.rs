@@ -3,14 +3,17 @@
 use super::{
 	ast::conditional::{BinOp, BinOpTy, Expr, ExprTy, PreOp, PreOpTy},
 	ast::Ident,
-	SyntaxModifiers, SyntaxToken, SyntaxType,
+	Macro, SyntaxModifiers, SyntaxToken, SyntaxType,
 };
 use crate::{
-	diag::{ExprDiag, Syntax},
+	diag::{ExprDiag, PreprocDefineDiag, Semantic, Syntax},
 	lexer::preprocessor::ConditionToken,
 	Either, Span, Spanned,
 };
-use std::collections::VecDeque;
+use std::{
+	collections::{HashMap, HashSet, VecDeque},
+	fmt::Write,
+};
 
 /*
 The functionality of this parser is largely copied from the expression parser. The decision to copy the relevant
@@ -18,6 +21,11 @@ parts of the code over was done in order to prevent the complexity of the expres
 larger. There are already a *lot* of conditions and checks and feature-gates; adding more would make it even
 less maintainable. Furthermore, this parser uses an entirely different token type so the amount of direct code
 reuse would be limited anyway.
+
+The functionality of this walker is largely copied from the main walker. It's slightly simplified since there is
+only one source token stream, but all of the macro-expansion related functionality has been copied verbatim. The
+only change is that the conditional tokens must get converted to/from normal tokens as macro bodies are defined
+in normal tokens, and that if the macro has no body but is defined, the token `1` is returned.
 */
 
 /// Tries to parse a conditional directive expression.
@@ -26,47 +34,494 @@ reuse would be limited anyway.
 /// will invalidate the rest of the tokens.
 pub(super) fn cond_parser(
 	tokens: Vec<Spanned<ConditionToken>>,
+	macros: &HashMap<String, (Span, Macro)>,
 ) -> (Option<Expr>, Vec<Syntax>, Vec<SyntaxToken>) {
-	let mut walker = Walker { tokens, cursor: 0 };
+	let mut walker = Walker::new(tokens, macros);
 
 	let mut parser = ShuntingYard {
 		stack: VecDeque::new(),
 		operators: VecDeque::new(),
 		groups: Vec::new(),
-		syntax_diags: Vec::new(),
-		syntax_tokens: Vec::new(),
 	};
 	parser.parse(&mut walker);
 
 	(
 		parser.create_ast(),
-		parser.syntax_diags,
-		parser.syntax_tokens,
+		walker.syntax_diags,
+		walker.syntax_tokens,
 	)
 }
 
-/// Allows for stepping through a conditional token stream.
-struct Walker {
-	/// The conditional expression token stream.
-	tokens: Vec<Spanned<ConditionToken>>,
-	/// The index of the current token.
-	cursor: usize,
+/// Allows for stepping through a token stream. Takes care of dealing with irrelevant details from the perspective
+/// of the parser, such as comments and macro expansion.
+struct Walker<'a> {
+	/// The active token streams.
+	///
+	/// - `0` - The macro identifier, (for the root source stream this is just `""`).
+	/// - `1` - The token stream.
+	/// - `2` - The cursor.
+	streams: Vec<(String, Vec<Spanned<ConditionToken>>, usize)>,
+
+	/// The currently defined macros.
+	///
+	/// Key: The macro identifier.
+	///
+	/// Value:
+	/// - `0` - The span of the macro signature.
+	/// - `1` - Macro information.
+	macros: &'a HashMap<String, (Span, Macro)>,
+	/// The span of an initial macro call site. Only the first macro call site is registered here.
+	macro_call_site: Option<Span>,
+	/// The actively-called macro identifiers.
+	active_macros: HashSet<String>,
+	/// Whether macro expansion upon encountering an identifier is disabled.
+	disable_macro_expansion: bool,
+
+	/// Any syntax diagnostics created from the tokens parsed so-far.
+	syntax_diags: Vec<Syntax>,
+	/// Any semantic diagnostics created from the tokens parsed so-far.
+	semantic_diags: Vec<Semantic>,
+
+	/// The syntax highlighting tokens created from the tokens parsed so-far.
+	syntax_tokens: Vec<SyntaxToken>,
 }
 
-impl Walker {
+impl<'a> Walker<'a> {
+	/// Constructs a new walker.
+	fn new(
+		tokens: Vec<Spanned<ConditionToken>>,
+		macros: &'a HashMap<String, (Span, Macro)>,
+	) -> Self {
+		let streams = if !tokens.is_empty() {
+			vec![("".into(), tokens, 0)]
+		} else {
+			vec![]
+		};
+
+		let mut active_macros = HashSet::new();
+		// Invariant: A macro cannot have no name (an empty identifier), so this won't cause any hashing clashes
+		// with valid macros. By using "" we can avoid having a special case for the root source stream.
+		active_macros.insert("".into());
+
+		Self {
+			streams,
+			macros,
+			macro_call_site: None,
+			active_macros,
+			disable_macro_expansion: false,
+			syntax_diags: Vec::new(),
+			semantic_diags: Vec::new(),
+			syntax_tokens: Vec::new(),
+		}
+	}
+
 	/// Returns a reference to the current token under the cursor, without advancing the cursor.
 	fn peek(&self) -> Option<Spanned<&ConditionToken>> {
-		self.tokens.get(self.cursor).map(|(t, s)| (t, *s))
+		if self.streams.is_empty() {
+			None
+		} else if self.streams.len() == 1 {
+			let (_, stream, cursor) = self.streams.last().unwrap();
+			stream.get(*cursor).map(|(t, s)| (t, *s))
+		} else {
+			let (_, stream, cursor) = self.streams.last().unwrap();
+			stream
+				.get(*cursor)
+				.map(|(t, _)| (t, self.macro_call_site.unwrap()))
+		}
 	}
 
 	/// Advances the cursor by one.
+	///
+	/// This method correctly steps into/out-of macros and consumes any comments.
 	fn advance(&mut self) {
-		self.cursor += 1;
+		let mut dont_increment = false;
+		'outer: while let Some((identifier, stream, cursor)) =
+			self.streams.last_mut()
+		{
+			if !dont_increment {
+				*cursor += 1;
+			}
+			dont_increment = false;
+
+			if *cursor == stream.len() {
+				// We have reached the end of this stream. We close it and re-run the loop on the next stream (if
+				// there is one).
+
+				let ident = identifier.clone();
+				// Panic: Anytime a stream is added the identifier is inserted into the set.
+				self.active_macros.remove(&ident);
+				self.streams.remove(self.streams.len() - 1);
+				continue;
+			}
+
+			let (token, token_span) = stream.get(*cursor).unwrap();
+
+			match token {
+				// We check if the new token is a macro call site.
+				ConditionToken::Ident(s) if !self.disable_macro_expansion => {
+					if let Some((signature_span, macro_)) = self.macros.get(s) {
+						if self.active_macros.contains(s) {
+							// We have already visited a macro with this identifier. Recursion is not supported so
+							// we don't continue.
+							break;
+						}
+
+						let ident_span = *token_span;
+
+						if let Macro::Function { params, body } = macro_ {
+							// We have an identifier which matches a function-like macro, so we are expecting a
+							// parameter list in the current token stream before we do any switching.
+
+							// We don't need to worry about having to switch source streams because that would
+							// imply that a conditional compilation directive is in the middle of a function-like
+							// macro call site, which isn't valid. A function-like macro call cannot have
+							// preprocessor directives within, which means that the source stream won't be split up
+							// by a conditional, which means the entire invocation of the macro will be within this
+							// stream.
+
+							let mut tmp_cursor = *cursor + 1;
+							let mut syntax_spans = vec![SyntaxToken {
+								ty: SyntaxType::FunctionMacro,
+								modifiers: SyntaxModifiers::empty(),
+								span: ident_span,
+							}];
+							loop {
+								match stream.get(tmp_cursor) {
+									Some((token, token_span)) => match token {
+										ConditionToken::LineComment(_)
+										| ConditionToken::BlockComment {
+											..
+										} => {
+											syntax_spans.push(SyntaxToken {
+												ty: SyntaxType::Comment,
+												modifiers:
+													SyntaxModifiers::empty(),
+												span: *token_span,
+											});
+											tmp_cursor += 1;
+										}
+										_ => break,
+									},
+									None => break 'outer,
+								}
+							}
+
+							// Consume the opening `(` parenthesis.
+							let l_paren_span = match stream.get(tmp_cursor) {
+								Some((token, token_span)) => match token {
+									ConditionToken::LParen => {
+										syntax_spans.push(SyntaxToken {
+											ty: SyntaxType::Punctuation,
+											modifiers: SyntaxModifiers::empty(),
+											span: *token_span,
+										});
+										*cursor = tmp_cursor + 1;
+										*token_span
+									}
+									_ => {
+										// We did not immediately encounter a parenthesis, which means that this is
+										// not a call to a function-like macro even if the names match.
+										break;
+									}
+								},
+								None => break,
+							};
+
+							// Look for any arguments until we hit a closing `)` parenthesis. The preprocessor
+							// immediately switches to the next argument when a `,` is encountered, unless we are
+							// within a parenthesis group.
+							#[derive(PartialEq)]
+							enum Prev {
+								None,
+								Param,
+								Comma,
+								Invalid,
+							}
+							let mut prev = Prev::None;
+							let mut prev_span = l_paren_span;
+							let mut paren_groups = 0;
+							let mut args = Vec::new();
+							let mut arg = Vec::new();
+							let r_paren_span = loop {
+								let (token, token_span) = match stream
+									.get(*cursor)
+								{
+									Some(t) => t,
+									None => {
+										self.syntax_diags.push(Syntax::PreprocDefine(PreprocDefineDiag::ParamsExpectedRParen(
+											prev_span.next_single_width()
+										)));
+										break 'outer;
+									}
+								};
+
+								match token {
+									ConditionToken::Comma => {
+										syntax_spans.push(SyntaxToken {
+											ty: SyntaxType::Punctuation,
+											modifiers: SyntaxModifiers::empty(),
+											span: *token_span,
+										});
+										if paren_groups == 0 {
+											let arg = std::mem::take(&mut arg);
+											args.push(arg);
+											prev = Prev::Comma;
+										}
+										prev_span = *token_span;
+										*cursor += 1;
+										continue;
+									}
+									ConditionToken::LParen => {
+										paren_groups += 1;
+									}
+									ConditionToken::RParen => {
+										if paren_groups == 0 {
+											// We have reached the end of this function-like macro call site.
+											syntax_spans.push(SyntaxToken {
+												ty: SyntaxType::Punctuation,
+												modifiers:
+													SyntaxModifiers::empty(),
+												span: *token_span,
+											});
+											let arg = std::mem::take(&mut arg);
+											args.push(arg);
+											// It is important that we don't increment the cursor to the next token
+											// after the macro call site. This is because once this macro is
+											// finished, and we return to the previous stream, we will
+											// automatically increment the cursor onto the next token which will be
+											// the first token after the macro call site. The object-like macro
+											// branch also doesn't perform this increment.
+											// *cursor += 1;
+											break *token_span;
+										}
+										paren_groups -= 1;
+									}
+									_ => {}
+								}
+								syntax_spans.push(SyntaxToken {
+									ty: token.non_semantic_colour(),
+									modifiers: SyntaxModifiers::empty(),
+									span: *token_span,
+								});
+								arg.push((token.clone(), *token_span));
+								*cursor += 1;
+							};
+							let call_site_span =
+								Span::new(ident_span.start, r_paren_span.end);
+
+							// We have a set of arguments now.
+							if params.len() != args.len() {
+								// If there is a mismatch in the argument/parameter count, we ignore this macro
+								// call and move onto the next token after the call site.
+								self.semantic_diags.push(
+									Semantic::FunctionMacroMismatchedArgCount(
+										call_site_span,
+										*signature_span,
+									),
+								);
+								continue;
+							}
+							let mut param_map = HashMap::new();
+							params.iter().zip(args.into_iter()).for_each(
+								|(ident, tokens)| {
+									param_map.insert(&ident.name, tokens);
+								},
+							);
+
+							// We now go through the replacement token list and replace any identifiers which match
+							// a parameter name with the relevant argument's tokens.
+							let mut new_body = Vec::with_capacity(body.len());
+							for (token, token_span) in body {
+								match &token {
+									crate::lexer::Token::Ident(str) => {
+										if let Some(arg) = param_map.get(&str) {
+											for token in arg {
+												new_body.push(ConditionToken::to_normal_token(token.clone()));
+											}
+											continue;
+										}
+									}
+									_ => {}
+								}
+								new_body.push((token.clone(), *token_span));
+							}
+
+							// Then, we perform token concatenation.
+							let (new_body, mut syntax, mut semantic) =
+								crate::lexer::preprocessor::concat_macro_body(
+									new_body,
+								);
+							self.syntax_diags.append(&mut syntax);
+							self.semantic_diags.append(&mut semantic);
+
+							if body.is_empty() {
+								let ident = s.to_owned();
+
+								if self.streams.len() == 1 {
+									// We only syntax highlight when it is the first macro call.
+									self.macro_call_site = Some(ident_span);
+									self.syntax_tokens
+										.append(&mut syntax_spans);
+								}
+
+								self.active_macros.insert(ident.clone());
+								self.streams.push((
+									ident,
+									vec![(
+										ConditionToken::Num(1),
+										signature_span.end_zero_width(),
+									)],
+									0,
+								));
+
+								// The first token in a new stream could be another macro call, so we re-run the
+								// loop on this new stream in case.
+								dont_increment = true;
+								continue;
+							}
+
+							let ident = s.to_owned();
+
+							// We only syntax highlight and note the macro call site when it is the first macro
+							// call.
+							if self.streams.len() == 1 {
+								self.macro_call_site = Some(call_site_span);
+								self.syntax_tokens.append(&mut syntax_spans);
+							}
+
+							self.active_macros.insert(ident.clone());
+
+							// Since macro bodies are parsed with the normal GLSL lexer, but we are working with
+							// conditional directive tokens, we must convert them to the valid subset. The easiest
+							// way which will also 100% guarantee correct behaviour is to write out the macro body
+							// as a string, and then parse the string as a condition body. This ensures any weird
+							// edge cases are correctly handled.
+							let mut s = String::with_capacity(50);
+							for (token, _) in new_body {
+								write!(s, "{token}").unwrap();
+							}
+							let mut lexer = crate::lexer::Lexer::new(&s);
+							let new_tokens = crate::lexer::preprocessor::parse_condition_tokens(&mut lexer);
+							self.streams.push((ident, new_tokens, 0));
+
+							// The first token in the new stream could be another macro call, so we re-run the loop
+							// on this new stream in case.
+							dont_increment = true;
+							continue;
+						} else if let Macro::Object(stream) = macro_ {
+							if stream.is_empty() {
+								let ident = s.to_owned();
+
+								if self.streams.len() == 1 {
+									// We only syntax highlight when it is the first macro call.
+									self.macro_call_site = Some(ident_span);
+									self.syntax_tokens.push(SyntaxToken {
+										ty: SyntaxType::ObjectMacro,
+										modifiers: SyntaxModifiers::CONDITIONAL,
+										span: ident_span,
+									});
+								}
+
+								self.active_macros.insert(ident.clone());
+								self.streams.push((
+									ident,
+									vec![(
+										ConditionToken::Num(1),
+										signature_span.end_zero_width(),
+									)],
+									0,
+								));
+
+								// The first token in a new stream could be another macro call, so we re-run the
+								// loop on this new stream in case.
+								dont_increment = true;
+								continue;
+							}
+
+							let ident = s.to_owned();
+
+							// We only syntax highlight and note the macro call site when it is the first macro
+							// call.
+							if self.streams.len() == 1 {
+								self.macro_call_site = Some(ident_span);
+								self.syntax_tokens.push(SyntaxToken {
+									ty: SyntaxType::ObjectMacro,
+									modifiers: SyntaxModifiers::CONDITIONAL,
+									span: ident_span,
+								});
+							}
+
+							self.active_macros.insert(ident.clone());
+
+							// Since macro bodies are parsed with the normal GLSL lexer, but we are working with
+							// conditional directive tokens, we must convert them to the valid subset. The easiest
+							// way which will also 100% guarantee correct behaviour is to write out the macro body
+							// as a string, and then parse the string as a condition body. This ensures any weird
+							// edge cases are correctly handled.
+							let mut s = String::with_capacity(50);
+							for (token, _) in stream {
+								write!(s, "{token}").unwrap();
+							}
+							let mut lexer = crate::lexer::Lexer::new(&s);
+							let new_tokens = crate::lexer::preprocessor::parse_condition_tokens(&mut lexer);
+							self.streams.push((ident, new_tokens, 0));
+
+							// The first token in a new stream could be another macro call, so we re-run the loop
+							// on this new stream in case.
+							dont_increment = true;
+							continue;
+						}
+					}
+				}
+				// We want to consume any comments since they are semantically ignored.
+				ConditionToken::LineComment(_) => {
+					let token_span = *token_span;
+					if self.streams.len() == 1 {
+						// We only syntax highlight when we are not in a macro call.
+						self.syntax_tokens.push(SyntaxToken {
+							ty: SyntaxType::Comment,
+							modifiers: SyntaxModifiers::empty(),
+							span: token_span,
+						});
+					}
+				}
+				ConditionToken::BlockComment { contains_eof, .. } => {
+					if *contains_eof {
+						self.syntax_diags.push(Syntax::BlockCommentMissingEnd(
+							token_span.end_zero_width(),
+						));
+					}
+					let token_span = *token_span;
+					if self.streams.len() == 1 {
+						// We only syntax highlight when we are not in a macro call.
+						self.syntax_tokens.push(SyntaxToken {
+							ty: SyntaxType::Comment,
+							modifiers: SyntaxModifiers::empty(),
+							span: token_span,
+						});
+					}
+				}
+				_ => break,
+			}
+		}
+
+		if self.streams.len() <= 1 {
+			self.macro_call_site = None;
+		}
 	}
 
 	/// Returns whether the walker has reached the end of the token stream.
 	fn is_done(&self) -> bool {
-		self.cursor == self.tokens.len()
+		self.streams.is_empty()
+	}
+
+	/// Pushes a syntax highlighting token over the given span.
+	fn push_colour(&mut self, span: Span, token: SyntaxType) {
+		self.syntax_tokens.push(SyntaxToken {
+			ty: token,
+			modifiers: SyntaxModifiers::CONDITIONAL,
+			span,
+		});
 	}
 }
 
@@ -80,7 +535,7 @@ struct Node {
 #[derive(Debug, Clone, PartialEq)]
 enum NodeTy {
 	Num(usize),
-	Ident(Ident),
+	Defined(Ident),
 }
 
 /// A node operator; used in the parser stack.
@@ -108,7 +563,6 @@ enum OpTy {
 	NotEq(bool),
 	AndAnd(bool),
 	OrOr(bool),
-	XorXor(bool),
 	Gt(bool),
 	Lt(bool),
 	Ge(bool),
@@ -126,16 +580,6 @@ enum OpTy {
 	/// - `2` - The span of the closing parenthesis. If this is zero-width, that means there is no `)` token
 	///   present.
 	Paren(bool, Span, Span),
-	/// The `defined` token.
-	DefinedStart,
-	/// A defined operator group. This operator spans from the keyword to either the closing parenthesis (if there
-	/// is an opening one), or to the end of the first identifier after the keyword.
-	///
-	/// - `0` - Whether to consume a node for the inner expression.
-	/// - `1` - The optional span of the opening parenthesis.
-	/// - `2` - The span of the closing parenthesis if there is an opening parenthesis, or the span of the first
-	///   identifier after the `defined` keyword. If this is zero-width, that means neither tokens are present.
-	Defined(bool, Option<Span>, Span),
 }
 
 impl Op {
@@ -158,7 +602,6 @@ impl Op {
 				ConditionToken::NotEq => OpTy::NotEq(false),
 				ConditionToken::AndAnd => OpTy::AndAnd(false),
 				ConditionToken::OrOr => OpTy::OrOr(false),
-				ConditionToken::XorXor => OpTy::XorXor(false),
 				ConditionToken::Gt => OpTy::Gt(false),
 				ConditionToken::Lt => OpTy::Lt(false),
 				ConditionToken::Ge => OpTy::Ge(false),
@@ -187,8 +630,7 @@ impl Op {
 			OpTy::Xor(_) => 15,
 			OpTy::Or(_) => 13,
 			OpTy::AndAnd(_) => 11,
-			OpTy::XorXor(_) => 9,
-			OpTy::OrOr(_) => 7,
+			OpTy::OrOr(_) => 9,
 			// These are never directly checked for precedence, but rather have special branches.
 			_ => unreachable!("The conditional expression operator {self:?} does not have a precedence value because it should never be passed into this function. Something has gone wrong!"),
 		}
@@ -210,7 +652,6 @@ impl Op {
 				OpTy::NotEq(_) => BinOpTy::NotEq,
 				OpTy::AndAnd(_) => BinOpTy::AndAnd,
 				OpTy::OrOr(_) => BinOpTy::OrOr,
-				OpTy::XorXor(_) => BinOpTy::XorXor,
 				OpTy::Gt(_) => BinOpTy::Gt,
 				OpTy::Lt(_) => BinOpTy::Lt,
 				OpTy::Ge(_) => BinOpTy::Ge,
@@ -232,12 +673,6 @@ enum Group {
 	/// - `0` - Whether this group has an inner expression within the parenthesis.
 	/// - `1` - The span of the opening parenthesis.
 	Paren(bool, Span),
-	/// A defined operator group.
-	///
-	/// - `0` - Whether this group has an inner expression within the parenthesis.
-	/// - `1` - The span of the `defined` keyword.
-	/// - `2` - The optional span of the opening parenthesis.
-	Defined(bool, Span, Option<Span>),
 }
 
 /// The implementation of a shunting yard-based parser.
@@ -248,12 +683,6 @@ struct ShuntingYard {
 	operators: VecDeque<Op>,
 	/// Temporary stack to hold item groups. The last entry is the group being currently parsed.
 	groups: Vec<Group>,
-
-	/// Syntax diagnostics encountered during the parser execution.
-	syntax_diags: Vec<Syntax>,
-
-	/// Syntax highlighting tokens created during the parser execution.
-	syntax_tokens: Vec<SyntaxToken>,
 }
 
 impl ShuntingYard {
@@ -266,7 +695,7 @@ impl ShuntingYard {
 			match back.ty {
 				// Group delimiter start operators always have the highest precedence, so we don't need to check
 				// further.
-				OpTy::ParenStart | OpTy::DefinedStart => break,
+				OpTy::ParenStart => break,
 				_ => {}
 			}
 
@@ -282,9 +711,8 @@ impl ShuntingYard {
 		self.operators.push_back(op);
 	}
 
-	/// Registers the end of a parenthesis or defined operator group, popping any operators until the start of the
-	/// group is reached.
-	fn end_paren_defined(&mut self, end_span: Span) -> Result<(), ()> {
+	/// Registers the end of a parenthesis group, popping any operators until the start of the group is reached.
+	fn end_paren(&mut self, end_span: Span) -> Result<(), ()> {
 		let group = if !self.groups.is_empty() {
 			self.groups.remove(self.groups.len() - 1)
 		} else {
@@ -309,59 +737,9 @@ impl ShuntingYard {
 					}
 				}
 			}
-			Group::Defined(has_inner, defined, l_paren) => {
-				while self.operators.back().is_some() {
-					let op = self.operators.pop_back().unwrap();
-
-					if let OpTy::DefinedStart = op.ty {
-						self.stack.push_back(Either::Right(Op {
-							span: Span::new(defined.start, end_span.end),
-							ty: OpTy::Defined(has_inner, l_paren, end_span),
-						}));
-						break;
-					} else {
-						// Any other operators get moved, since we are moving everything until we hit the start
-						// delimiter.
-						self.stack.push_back(Either::Right(op));
-					}
-				}
-			}
 		}
 
 		Ok(())
-	}
-
-	/// Registers the end of a defined operator group, popping any operators until the start of the group is
-	/// reached.
-	fn end_defined(&mut self, end_span: Span) {
-		let group = if !self.groups.is_empty() {
-			self.groups.remove(self.groups.len() - 1)
-		} else {
-			unreachable!()
-		};
-
-		match group {
-			Group::Paren(_, _) => {
-				unreachable!()
-			}
-			Group::Defined(has_inner, defined, l_paren) => {
-				while self.operators.back().is_some() {
-					let op = self.operators.pop_back().unwrap();
-
-					if let OpTy::DefinedStart = op.ty {
-						self.stack.push_back(Either::Right(Op {
-							span: Span::new(defined.start, end_span.end),
-							ty: OpTy::Defined(has_inner, l_paren, end_span),
-						}));
-						break;
-					} else {
-						// Any other operators get moved, since we are moving everything until we hit the start
-						// delimiter.
-						self.stack.push_back(Either::Right(op));
-					}
-				}
-			}
-		}
 	}
 
 	/// Sets the toggle on the last operator that it has a right-hand side operand, (if applicable).
@@ -382,7 +760,6 @@ impl ShuntingYard {
 				| OpTy::NotEq(b)
 				| OpTy::AndAnd(b)
 				| OpTy::OrOr(b)
-				| OpTy::XorXor(b)
 				| OpTy::Gt(b)
 				| OpTy::Lt(b)
 				| OpTy::Ge(b)
@@ -393,9 +770,7 @@ impl ShuntingYard {
 				_ => {}
 			}
 		}
-		if let Some(Group::Paren(b, _) | Group::Defined(b, _, _)) =
-			self.groups.last_mut()
-		{
+		if let Some(Group::Paren(b, _)) = self.groups.last_mut() {
 			*b = true;
 		}
 	}
@@ -431,15 +806,6 @@ impl ShuntingYard {
 		}
 	}
 
-	/// Pushes a syntax highlighting token over the given span.
-	fn colour(&mut self, span: Span, token: SyntaxType) {
-		self.syntax_tokens.push(SyntaxToken {
-			ty: token,
-			modifiers: SyntaxModifiers::CONDITIONAL,
-			span,
-		});
-	}
-
 	/// Parses a list of tokens. Populates the internal `stack` with a RPN output.
 	fn parse(&mut self, walker: &mut Walker) {
 		#[derive(PartialEq)]
@@ -454,18 +820,6 @@ impl ShuntingYard {
 		}
 		let mut state = State::Operand;
 
-		#[derive(PartialEq)]
-		enum DefinedState {
-			None,
-			// We have previously consumed the `defined` keyword.
-			ConsumedKeyword,
-			/// We have previously consumed the opening parenthesis.
-			ConsumedLParen,
-			/// We have previously consumed the identifier.
-			ConsumedIdent,
-		}
-		let mut defined_state = DefinedState::None;
-
 		// If this is set to `true`, that means that the parser has exited early because of a syntax error and we
 		// want to invalidate the rest of the tokens, (if there are any).
 		let mut invalidate_rest = false;
@@ -476,56 +830,6 @@ impl ShuntingYard {
 				// Return if we reach the end of the token list.
 				None => break 'main,
 			};
-
-			// Since a defined operator takes multiple tokens (but we treat it as one "thing"), we want to ensure
-			// that the next token is valid given the current state of parsing the defined operator. If it's not,
-			// we want to break out and report an appropriate syntactical error.
-			if defined_state == DefinedState::ConsumedKeyword {
-				match token {
-					ConditionToken::Ident(_) | ConditionToken::LParen => {}
-					_ => {
-						self.syntax_diags.push(Syntax::Expr(
-							ExprDiag::ExpectedIdentOrLParenAfterDefinedOp(
-								self.get_previous_span()
-									.unwrap()
-									.next_single_width(),
-							),
-						));
-						invalidate_rest = true;
-						break 'main;
-					}
-				}
-			} else if defined_state == DefinedState::ConsumedLParen {
-				match token {
-					ConditionToken::Ident(_) => {}
-					_ => {
-						self.syntax_diags.push(Syntax::Expr(
-							ExprDiag::ExpectedIdentAfterDefineOpLParen(
-								self.get_previous_span()
-									.unwrap()
-									.next_single_width(),
-							),
-						));
-						invalidate_rest = true;
-						break 'main;
-					}
-				}
-			} else if defined_state == DefinedState::ConsumedIdent {
-				match token {
-					ConditionToken::RParen => {}
-					_ => {
-						self.syntax_diags.push(Syntax::Expr(
-							ExprDiag::ExpectedRParenAfterDefineOpIdent(
-								self.get_previous_span()
-									.unwrap()
-									.next_single_width(),
-							),
-						));
-						invalidate_rest = true;
-						break 'main;
-					}
-				}
-			}
 
 			match token {
 				ConditionToken::Num(num) if state == State::Operand => {
@@ -539,7 +843,7 @@ impl ShuntingYard {
 					state = State::AfterOperand;
 					self.set_op_rhs_toggle();
 
-					self.colour(span, SyntaxType::Number);
+					walker.push_colour(span, SyntaxType::Number);
 				}
 				ConditionToken::Num(num) if state == State::AfterOperand => {
 					self.stack.push_back(Either::Left(Node {
@@ -547,7 +851,7 @@ impl ShuntingYard {
 						span,
 					}));
 
-					self.syntax_diags.push(Syntax::Expr(
+					walker.syntax_diags.push(Syntax::Expr(
 						ExprDiag::FoundOperandAfterOperand(
 							self.get_previous_span().unwrap(),
 							span,
@@ -558,11 +862,10 @@ impl ShuntingYard {
 					break 'main;
 				}
 				ConditionToken::Ident(s) if state == State::Operand => {
+					// Since we are in this branch, that means that the identifier does not match an existing macro
+					// name, and since it doesn't match we assume a value of `0`.
 					self.stack.push_back(Either::Left(Node {
-						ty: NodeTy::Ident(Ident {
-							name: s.clone(),
-							span,
-						}),
+						ty: NodeTy::Num(0),
 						span,
 					}));
 
@@ -571,28 +874,17 @@ impl ShuntingYard {
 					state = State::AfterOperand;
 					self.set_op_rhs_toggle();
 
-					// If we are parsing a `defined` but we are not in a group (which means we have no
-					// parenthesis), we want to reset the flag back to false. If we are in a defined parenthesis
-					// group, the closing parenthesis will take care of resetting the flag.
-					if defined_state == DefinedState::ConsumedKeyword {
-						self.end_defined(span);
-						defined_state = DefinedState::None;
-					} else if defined_state == DefinedState::ConsumedLParen {
-						defined_state = DefinedState::ConsumedIdent;
-					}
-
-					self.colour(span, SyntaxType::UncheckedIdent);
+					walker.push_colour(span, SyntaxType::UncheckedIdent);
 				}
 				ConditionToken::Ident(s) if state == State::AfterOperand => {
+					// Since we are in this branch, that means that the identifier does not match an existing macro
+					// name, and since it doesn't match we assume a value of `0`.
 					self.stack.push_back(Either::Left(Node {
-						ty: NodeTy::Ident(Ident {
-							name: s.clone(),
-							span,
-						}),
+						ty: NodeTy::Num(0),
 						span,
 					}));
 
-					self.syntax_diags.push(Syntax::Expr(
+					walker.syntax_diags.push(Syntax::Expr(
 						ExprDiag::FoundOperandAfterOperand(
 							self.get_previous_span().unwrap(),
 							span,
@@ -608,7 +900,7 @@ impl ShuntingYard {
 						ty: OpTy::Neg(false),
 					});
 
-					self.colour(span, SyntaxType::Operator);
+					walker.push_colour(span, SyntaxType::Operator);
 				}
 				ConditionToken::Not if state == State::Operand => {
 					self.push_operator(Op {
@@ -616,7 +908,7 @@ impl ShuntingYard {
 						ty: OpTy::Not(false),
 					});
 
-					self.colour(span, SyntaxType::Operator);
+					walker.push_colour(span, SyntaxType::Operator);
 				}
 				ConditionToken::Flip if state == State::Operand => {
 					self.push_operator(Op {
@@ -624,35 +916,29 @@ impl ShuntingYard {
 						ty: OpTy::Flip(false),
 					});
 
-					self.colour(span, SyntaxType::Operator);
+					walker.push_colour(span, SyntaxType::Operator);
 				}
 				ConditionToken::Not | ConditionToken::Flip
 					if state == State::AfterOperand =>
 				{
-					self.syntax_diags.push(Syntax::Expr(
+					walker.syntax_diags.push(Syntax::Expr(
 						ExprDiag::InvalidBinOrPostOperator(span),
 					));
 					invalidate_rest = true;
 					break 'main;
 				}
 				ConditionToken::LParen if state == State::Operand => {
-					if defined_state == DefinedState::ConsumedKeyword {
-						let Some(Group::Defined(_, _, l_paren_span)) = self.groups.last_mut()  else { unreachable!(); };
-						*l_paren_span = Some(span);
-						defined_state = DefinedState::ConsumedLParen;
-					} else {
-						self.set_op_rhs_toggle();
-						self.operators.push_back(Op {
-							span,
-							ty: OpTy::ParenStart,
-						});
-						self.groups.push(Group::Paren(false, span));
-					}
+					self.set_op_rhs_toggle();
+					self.operators.push_back(Op {
+						span,
+						ty: OpTy::ParenStart,
+					});
+					self.groups.push(Group::Paren(false, span));
 
-					self.colour(span, SyntaxType::Punctuation);
+					walker.push_colour(span, SyntaxType::Punctuation);
 				}
 				ConditionToken::LParen if state == State::AfterOperand => {
-					self.syntax_diags.push(Syntax::Expr(
+					walker.syntax_diags.push(Syntax::Expr(
 						ExprDiag::FoundOperandAfterOperand(
 							self.get_previous_span().unwrap(),
 							span,
@@ -662,7 +948,7 @@ impl ShuntingYard {
 					break 'main;
 				}
 				ConditionToken::RParen if state == State::AfterOperand => {
-					match self.end_paren_defined(span) {
+					match self.end_paren(span) {
 						Ok(_) => {}
 						Err(_) => {
 							invalidate_rest = true;
@@ -670,11 +956,7 @@ impl ShuntingYard {
 						}
 					}
 
-					self.colour(span, SyntaxType::Punctuation);
-
-					if defined_state == DefinedState::ConsumedIdent {
-						defined_state = DefinedState::None;
-					}
+					walker.push_colour(span, SyntaxType::Punctuation);
 
 					// We don't switch state since after a `)`, we are expecting an operator, i.e.
 					// `..) + 5` rather than `..) 5`
@@ -682,7 +964,7 @@ impl ShuntingYard {
 				ConditionToken::RParen if state == State::Operand => {
 					let prev_op_span = self.get_previous_span();
 					let just_started_paren = self.just_started_paren();
-					match self.end_paren_defined(span) {
+					match self.end_paren(span) {
 						Ok(_) => {}
 						Err(_) => {
 							invalidate_rest = true;
@@ -691,14 +973,14 @@ impl ShuntingYard {
 					}
 
 					if just_started_paren {
-						self.syntax_diags.push(Syntax::Expr(
+						walker.syntax_diags.push(Syntax::Expr(
 							ExprDiag::FoundEmptyParens(Span::new(
 								prev_op_span.unwrap().start,
 								span.end,
 							)),
 						));
 					} else {
-						self.syntax_diags.push(Syntax::Expr(
+						walker.syntax_diags.push(Syntax::Expr(
 							ExprDiag::FoundRParenInsteadOfOperand(
 								prev_op_span.unwrap(),
 								span,
@@ -708,20 +990,114 @@ impl ShuntingYard {
 
 					state = State::AfterOperand;
 
-					self.colour(span, SyntaxType::Punctuation);
+					walker.push_colour(span, SyntaxType::Punctuation);
 				}
 				ConditionToken::Defined if state == State::Operand => {
-					self.push_operator(Op {
-						span,
-						ty: OpTy::DefinedStart,
-					});
-					self.groups.push(Group::Defined(false, span, None));
-					defined_state = DefinedState::ConsumedKeyword;
+					walker.disable_macro_expansion = true;
+					let defined_kw_span = span;
+					walker.push_colour(defined_kw_span, SyntaxType::Keyword);
+					walker.advance();
 
-					self.colour(span, SyntaxType::Keyword);
+					// Consume either an identifier or an opening parenthesis `(`.
+					let (token, token_span) = match walker.peek() {
+						Some(t) => t,
+						None => {
+							walker.syntax_diags.push(Syntax::Expr(
+								ExprDiag::ExpectedIdentOrLParenAfterDefinedOp(
+									defined_kw_span.next_single_width(),
+								),
+							));
+							break 'main;
+						}
+					};
+					match token {
+						ConditionToken::Ident(str) => {
+							walker.push_colour(token_span, SyntaxType::Ident);
+							walker.advance();
+							self.stack.push_back(Either::Left(Node {
+								ty: NodeTy::Defined(Ident {
+									name: str.clone(),
+									span: token_span,
+								}),
+								span: Span::new(
+									defined_kw_span.start,
+									token_span.end,
+								),
+							}));
+							walker.disable_macro_expansion = false;
+							continue 'main;
+						}
+						ConditionToken::LParen => {
+							let l_paren_span = token_span;
+							walker.push_colour(
+								l_paren_span,
+								SyntaxType::Punctuation,
+							);
+							walker.advance();
+
+							// Consume the identifier.
+							let (token, token_span) = match walker.peek() {
+								Some(t) => t,
+								None => {
+									walker.syntax_diags.push(Syntax::Expr(ExprDiag::ExpectedIdentAfterDefineOpLParen(l_paren_span.next_single_width())));
+									break 'main;
+								}
+							};
+							let ident = match token {
+								ConditionToken::Ident(str) => {
+									walker.push_colour(
+										token_span,
+										SyntaxType::Ident,
+									);
+									Ident {
+										name: str.clone(),
+										span: token_span,
+									}
+								}
+								_ => {
+									walker.syntax_diags.push(Syntax::Expr(ExprDiag::ExpectedIdentAfterDefineOpLParen(l_paren_span.next_single_width())));
+									break 'main;
+								}
+							};
+
+							// Consume the closing parenthesis `)`.
+							let (token, token_span) = match walker.peek() {
+								Some(t) => t,
+								None => {
+									walker.syntax_diags.push(Syntax::Expr(ExprDiag::ExpectedRParenAfterDefineOpIdent(l_paren_span.next_single_width())));
+									break 'main;
+								}
+							};
+							match token {
+								ConditionToken::RParen => {}
+								_ => {
+									walker.syntax_diags.push(Syntax::Expr(ExprDiag::ExpectedRParenAfterDefineOpIdent(l_paren_span.next_single_width())));
+									break 'main;
+								}
+							}
+
+							self.stack.push_back(Either::Left(Node {
+								ty: NodeTy::Defined(ident),
+								span: Span::new(
+									defined_kw_span.start,
+									token_span.end,
+								),
+							}));
+							walker.disable_macro_expansion = false;
+							continue 'main;
+						}
+						_ => {
+							walker.syntax_diags.push(Syntax::Expr(
+								ExprDiag::ExpectedIdentOrLParenAfterDefinedOp(
+									defined_kw_span.next_single_width(),
+								),
+							));
+							break 'main;
+						}
+					}
 				}
 				ConditionToken::Defined if state == State::AfterOperand => {
-					self.syntax_diags.push(Syntax::Expr(
+					walker.syntax_diags.push(Syntax::Expr(
 						ExprDiag::FoundOperandAfterOperand(
 							self.get_previous_span().unwrap(),
 							span,
@@ -736,7 +1112,8 @@ impl ShuntingYard {
 				}
 				ConditionToken::Invalid(_) => {
 					// We have encountered an unexpected token that's not allowed to be part of an expression.
-					self.syntax_diags
+					walker
+						.syntax_diags
 						.push(Syntax::Expr(ExprDiag::FoundInvalidToken(span)));
 					invalidate_rest = true;
 					break 'main;
@@ -745,7 +1122,7 @@ impl ShuntingYard {
 					self.push_operator(Op::from_token(token.clone(), span));
 					state = State::Operand;
 
-					self.colour(span, SyntaxType::Operator);
+					walker.push_colour(span, SyntaxType::Operator);
 				}
 				_ => unreachable!(),
 			}
@@ -757,7 +1134,7 @@ impl ShuntingYard {
 		if invalidate_rest {
 			walker.advance();
 			while let Some((_, span)) = walker.peek() {
-				self.colour(span, SyntaxType::Invalid);
+				walker.push_colour(span, SyntaxType::Invalid);
 				walker.advance();
 			}
 		}
@@ -774,31 +1151,12 @@ impl ShuntingYard {
 			while let Some(group) = self.groups.last() {
 				match group {
 					Group::Paren(_, l_paren) => {
-						self.syntax_diags.push(Syntax::Expr(
+						walker.syntax_diags.push(Syntax::Expr(
 							ExprDiag::UnclosedParens(*l_paren, group_end),
 						));
 					}
-					Group::Defined(_, kw, l_paren) => {
-						if let Some(l_paren) = l_paren {
-							// We have a `defined(...`, and since we are here (i.e. the group is not closed), that
-							// means we never encountered a closing parenthesis.
-							self.syntax_diags.push(Syntax::Expr(
-								ExprDiag::UnclosedDefinedOp(
-									*l_paren, group_end,
-								),
-							));
-						} else {
-							// We have a `defined`, and since we are here (i.e. the group is not closed), that
-							// means we never encountered an identifier.
-							self.syntax_diags.push(Syntax::Expr(
-								ExprDiag::ExpectedIdentOrLParenAfterDefinedOp(
-									kw.next_single_width(),
-								),
-							));
-						}
-					}
 				}
-				let _ = self.end_paren_defined(group_end);
+				let _ = self.end_paren(group_end);
 			}
 		}
 
@@ -829,9 +1187,9 @@ impl ShuntingYard {
 						span: node.span,
 						ty: ExprTy::Num(num),
 					}),
-					NodeTy::Ident(ident) => stack.push_back(Expr {
+					NodeTy::Defined(ident) => stack.push_back(Expr {
 						span: node.span,
-						ty: ExprTy::Ident(ident),
+						ty: ExprTy::Defined { ident },
 					}),
 				},
 				Either::Right(op) => match op.ty {
@@ -918,22 +1276,6 @@ impl ShuntingYard {
 							},
 						});
 					}
-					OpTy::Defined(has_inner, _l_paren, end) => {
-						let ident = if has_inner {
-							let ident = match pop_back(&mut stack).ty {
-								ExprTy::Ident(ident) => ident,
-								_ => unreachable!("Parser behaviour guarantees that the node after a defined operator is an identifier")
-							};
-							Some(ident)
-						} else {
-							None
-						};
-
-						stack.push_back(Expr {
-							span: Span::new(op.span.start, end.end),
-							ty: ExprTy::Defined { ident },
-						});
-					}
 					OpTy::Add(has_rhs)
 					| OpTy::Sub(has_rhs)
 					| OpTy::Mul(has_rhs)
@@ -951,8 +1293,7 @@ impl ShuntingYard {
 					| OpTy::Ge(has_rhs)
 					| OpTy::Le(has_rhs)
 					| OpTy::AndAnd(has_rhs)
-					| OpTy::OrOr(has_rhs)
-					| OpTy::XorXor(has_rhs) => {
+					| OpTy::OrOr(has_rhs) => {
 						let last = pop_back(&mut stack);
 						let (left, right) = if has_rhs {
 							(pop_back(&mut stack), Some(last))

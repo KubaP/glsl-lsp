@@ -1199,6 +1199,7 @@ pub enum ConditionalTy {
 
 /// AST items for conditional directive expressions.
 pub mod conditional {
+	use super::Ident;
 	use crate::Span;
 
 	/// An expression node.
@@ -1212,8 +1213,6 @@ pub mod conditional {
 	pub enum ExprTy {
 		/// An integer literal.
 		Num(usize),
-		/// An identifier.
-		Ident(super::Ident),
 		/// A prefix operator.
 		Prefix { op: PreOp, expr: Option<Box<Expr>> },
 		/// A binary expression.
@@ -1225,7 +1224,7 @@ pub mod conditional {
 		/// A set of parenthesis.
 		Parens { expr: Option<Box<Expr>> },
 		/// The `defined` operator.
-		Defined { expr: Option<Box<Expr>> },
+		Defined { ident: Ident },
 	}
 
 	/// A binary operator.

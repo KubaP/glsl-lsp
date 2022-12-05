@@ -340,11 +340,6 @@ pub enum ExprDiag {
 	///
 	/// - `0` - The position where the closing parenthesis is expected.
 	ExpectedRParenAfterDefineOpIdent(Span),
-	/// ERROR - Found an unclosed `defined` operator. E.g. `defined(foobar`.
-	///
-	/// - `0` - The span of the opening `(`.
-	/// - `1` - The zero-width span at the end of the expression.
-	UnclosedDefinedOp(Span, Span),
 }
 
 /// Syntax diagnostics for statement.

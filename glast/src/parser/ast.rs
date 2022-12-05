@@ -1251,7 +1251,6 @@ pub mod conditional {
 		NotEq,
 		AndAnd,
 		OrOr,
-		XorXor,
 		Gt,
 		Lt,
 		Ge,

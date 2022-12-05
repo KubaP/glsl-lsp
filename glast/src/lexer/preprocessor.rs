@@ -397,8 +397,6 @@ pub enum ConditionToken {
 	AndAnd,
 	/// The `||` symbol.
 	OrOr,
-	/// The `^^` symbol.
-	XorXor,
 	/// An opening parenthesis `(`.
 	LParen,
 	/// A closing parenthesis `)`.
@@ -1592,7 +1590,6 @@ fn match_conditional_punctuation(lexer: &mut Lexer) -> Option<ConditionToken> {
 	match_op!(lexer, "<=", ConditionToken::Le);
 	match_op!(lexer, "&&", ConditionToken::AndAnd);
 	match_op!(lexer, "||", ConditionToken::OrOr);
-	match_op!(lexer, "^^", ConditionToken::XorXor);
 	match_op!(lexer, "<<", ConditionToken::LShift);
 	match_op!(lexer, ">>", ConditionToken::RShift);
 	match_op!(lexer, "(", ConditionToken::LParen);

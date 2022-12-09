@@ -103,7 +103,7 @@ impl<'a> Walker<'a> {
 		// with valid macros. By using "" we can avoid having a special case for the root source stream.
 		active_macros.insert("".into());
 
-		Self {
+		let mut walker = Self {
 			streams,
 			macros,
 			macro_call_site: None,
@@ -112,7 +112,9 @@ impl<'a> Walker<'a> {
 			syntax_diags: Vec::new(),
 			semantic_diags: Vec::new(),
 			syntax_tokens: Vec::new(),
-		}
+		};
+		walker._advance(true);
+		walker
 	}
 
 	/// Returns a reference to the current token under the cursor, without advancing the cursor.
@@ -134,7 +136,10 @@ impl<'a> Walker<'a> {
 	///
 	/// This method correctly steps into/out-of macros and consumes any comments.
 	fn advance(&mut self) {
-		let mut dont_increment = false;
+		self._advance(false);
+	}
+
+	fn _advance(&mut self, mut dont_increment: bool) {
 		'outer: while let Some((identifier, stream, cursor)) =
 			self.streams.last_mut()
 		{
@@ -242,6 +247,7 @@ impl<'a> Walker<'a> {
 							let mut paren_groups = 0;
 							let mut args = Vec::new();
 							let mut arg = Vec::new();
+							let mut first_token = true;
 							let r_paren_span = loop {
 								let (token, token_span) = match stream
 									.get(*cursor)
@@ -283,8 +289,11 @@ impl<'a> Walker<'a> {
 													SyntaxModifiers::empty(),
 												span: *token_span,
 											});
-											let arg = std::mem::take(&mut arg);
-											args.push(arg);
+											if !first_token {
+												let arg =
+													std::mem::take(&mut arg);
+												args.push(arg);
+											}
 											// It is important that we don't increment the cursor to the next token
 											// after the macro call site. This is because once this macro is
 											// finished, and we return to the previous stream, we will
@@ -305,6 +314,7 @@ impl<'a> Walker<'a> {
 								});
 								arg.push((token.clone(), *token_span));
 								*cursor += 1;
+								first_token = false;
 							};
 							let call_site_span =
 								Span::new(ident_span.start, r_paren_span.end);
@@ -471,6 +481,8 @@ impl<'a> Walker<'a> {
 							dont_increment = true;
 							continue;
 						}
+					} else {
+						break;
 					}
 				}
 				// We want to consume any comments since they are semantically ignored.
@@ -861,7 +873,7 @@ impl ShuntingYard {
 					invalidate_rest = true;
 					break 'main;
 				}
-				ConditionToken::Ident(s) if state == State::Operand => {
+				ConditionToken::Ident(_) if state == State::Operand => {
 					// Since we are in this branch, that means that the identifier does not match an existing macro
 					// name, and since it doesn't match we assume a value of `0`.
 					self.stack.push_back(Either::Left(Node {
@@ -874,9 +886,9 @@ impl ShuntingYard {
 					state = State::AfterOperand;
 					self.set_op_rhs_toggle();
 
-					walker.push_colour(span, SyntaxType::UncheckedIdent);
+					walker.push_colour(span, SyntaxType::Ident);
 				}
-				ConditionToken::Ident(s) if state == State::AfterOperand => {
+				ConditionToken::Ident(_) if state == State::AfterOperand => {
 					// Since we are in this branch, that means that the identifier does not match an existing macro
 					// name, and since it doesn't match we assume a value of `0`.
 					self.stack.push_back(Either::Left(Node {
@@ -1012,11 +1024,12 @@ impl ShuntingYard {
 					};
 					match token {
 						ConditionToken::Ident(str) => {
+							let ident = str.clone();
 							walker.push_colour(token_span, SyntaxType::Ident);
 							walker.advance();
 							self.stack.push_back(Either::Left(Node {
 								ty: NodeTy::Defined(Ident {
-									name: str.clone(),
+									name: ident,
 									span: token_span,
 								}),
 								span: Span::new(
@@ -1045,12 +1058,13 @@ impl ShuntingYard {
 							};
 							let ident = match token {
 								ConditionToken::Ident(str) => {
+									let ident = str.clone();
 									walker.push_colour(
 										token_span,
 										SyntaxType::Ident,
 									);
 									Ident {
-										name: str.clone(),
+										name: ident,
 										span: token_span,
 									}
 								}
@@ -1059,6 +1073,7 @@ impl ShuntingYard {
 									break 'main;
 								}
 							};
+							walker.advance();
 
 							// Consume the closing parenthesis `)`.
 							let (token, token_span) = match walker.peek() {
@@ -1075,6 +1090,7 @@ impl ShuntingYard {
 									break 'main;
 								}
 							}
+							walker.advance();
 
 							self.stack.push_back(Either::Left(Node {
 								ty: NodeTy::Defined(ident),

@@ -1353,3 +1353,446 @@ impl ShuntingYard {
 		Some(stack.pop_back().unwrap())
 	}
 }
+
+#[cfg(test)]
+mod tests {
+	use super::*;
+	use crate::{
+		lexer::{NumType, OpTy, Token},
+		parser::ast::conditional::*,
+		span,
+	};
+
+	macro_rules! assert_expr {
+		($macros:expr, $src:expr, $result:expr) => {
+			let mut lexer = crate::lexer::Lexer::new($src);
+			let tokens =
+				crate::lexer::preprocessor::parse_condition_tokens(&mut lexer);
+			assert_eq!(
+				super::cond_parser(tokens, &$macros).0.unwrap(),
+				$result
+			);
+		};
+		($src:expr, $result:expr) => {
+			let mut lexer = crate::lexer::Lexer::new($src);
+			let tokens =
+				crate::lexer::preprocessor::parse_condition_tokens(&mut lexer);
+			let macros = std::collections::HashMap::new();
+			assert_eq!(super::cond_parser(tokens, &macros).0.unwrap(), $result);
+		};
+	}
+
+	#[test]
+	fn single_value() {
+		assert_expr!(
+			"0",
+			Expr {
+				span: span(0, 1),
+				ty: ExprTy::Num(0),
+			}
+		);
+		assert_expr!(
+			"1",
+			Expr {
+				span: span(0, 1),
+				ty: ExprTy::Num(1),
+			}
+		);
+		assert_expr!(
+			"50",
+			Expr {
+				span: span(0, 2),
+				ty: ExprTy::Num(50),
+			}
+		);
+		assert_expr!(
+			"undefined",
+			Expr {
+				span: span(0, 9),
+				ty: ExprTy::Num(0),
+			}
+		);
+	}
+
+	#[test]
+	fn pre() {
+		assert_expr!(
+			"-100",
+			Expr {
+				ty: ExprTy::Prefix {
+					op: PreOp {
+						ty: PreOpTy::Neg,
+						span: span(0, 1),
+					},
+					expr: Some(Box::from(Expr {
+						ty: ExprTy::Num(100),
+						span: span(1, 4),
+					}))
+				},
+				span: span(0, 4),
+			}
+		);
+		assert_expr!(
+			"~1",
+			Expr {
+				ty: ExprTy::Prefix {
+					op: PreOp {
+						ty: PreOpTy::Flip,
+						span: span(0, 1),
+					},
+					expr: Some(Box::from(Expr {
+						ty: ExprTy::Num(1),
+						span: span(1, 2),
+					}))
+				},
+				span: span(0, 2),
+			}
+		);
+		assert_expr!(
+			"!90",
+			Expr {
+				ty: ExprTy::Prefix {
+					op: PreOp {
+						ty: PreOpTy::Not,
+						span: span(0, 1),
+					},
+					expr: Some(Box::from(Expr {
+						ty: ExprTy::Num(90),
+						span: span(1, 3),
+					}))
+				},
+				span: span(0, 3),
+			}
+		);
+	}
+
+	#[test]
+	fn defined() {
+		assert_expr!(
+			"defined bar",
+			Expr {
+				ty: ExprTy::Defined {
+					ident: Ident {
+						name: "bar".into(),
+						span: span(8, 11),
+					},
+				},
+				span: span(0, 11),
+			}
+		);
+		assert_expr!(
+			"defined ( bar)",
+			Expr {
+				ty: ExprTy::Defined {
+					ident: Ident {
+						name: "bar".into(),
+						span: span(10, 13),
+					},
+				},
+				span: span(0, 14),
+			}
+		);
+	}
+
+	#[test]
+	fn binary() {
+		assert_expr!(
+			"5 + 6",
+			Expr {
+				ty: ExprTy::Binary {
+					left: Box::from(Expr {
+						ty: ExprTy::Num(5),
+						span: span(0, 1),
+					}),
+					op: BinOp {
+						ty: BinOpTy::Add,
+						span: span(2, 3),
+					},
+					right: Some(Box::from(Expr {
+						ty: ExprTy::Num(6),
+						span: span(4, 5),
+					})),
+				},
+				span: span(0, 5),
+			}
+		);
+		assert_expr!(
+			"5 - 8",
+			Expr {
+				ty: ExprTy::Binary {
+					left: Box::from(Expr {
+						ty: ExprTy::Num(5),
+						span: span(0, 1),
+					}),
+					op: BinOp {
+						ty: BinOpTy::Sub,
+						span: span(2, 3),
+					},
+					right: Some(Box::from(Expr {
+						ty: ExprTy::Num(8),
+						span: span(4, 5),
+					})),
+				},
+				span: span(0, 5),
+			}
+		);
+		assert_expr!(
+			"5 * 1 - 25",
+			Expr {
+				ty: ExprTy::Binary {
+					left: Box::from(Expr {
+						ty: ExprTy::Binary {
+							left: Box::from(Expr {
+								ty: ExprTy::Num(5),
+								span: span(0, 1),
+							}),
+							op: BinOp {
+								ty: BinOpTy::Mul,
+								span: span(2, 3),
+							},
+							right: Some(Box::from(Expr {
+								ty: ExprTy::Num(1),
+								span: span(4, 5),
+							})),
+						},
+						span: span(0, 5),
+					}),
+					op: BinOp {
+						ty: BinOpTy::Sub,
+						span: span(6, 7),
+					},
+					right: Some(Box::from(Expr {
+						ty: ExprTy::Num(25),
+						span: span(8, 10),
+					})),
+				},
+				span: span(0, 10),
+			}
+		);
+		assert_expr!(
+			"16 / 7 - 4 + 3",
+			Expr {
+				ty: ExprTy::Binary {
+					left: Box::from(Expr {
+						ty: ExprTy::Binary {
+							left: Box::from(Expr {
+								ty: ExprTy::Num(16),
+								span: span(0, 2),
+							}),
+							op: BinOp {
+								ty: BinOpTy::Div,
+								span: span(3, 4),
+							},
+							right: Some(Box::from(Expr {
+								ty: ExprTy::Num(7),
+								span: span(5, 6),
+							})),
+						},
+						span: span(0, 6),
+					}),
+					op: BinOp {
+						ty: BinOpTy::Sub,
+						span: span(7, 8),
+					},
+					right: Some(Box::from(Expr {
+						ty: ExprTy::Binary {
+							left: Box::from(Expr {
+								ty: ExprTy::Num(4),
+								span: span(9, 10),
+							}),
+							op: BinOp {
+								ty: BinOpTy::Add,
+								span: span(11, 12),
+							},
+							right: Some(Box::from(Expr {
+								ty: ExprTy::Num(3),
+								span: span(13, 14),
+							})),
+						},
+						span: span(9, 14),
+					})),
+				},
+				span: span(0, 14),
+			}
+		);
+	}
+
+	#[test]
+	fn undefined_object_macro() {
+		assert_expr!(
+			"FOO",
+			Expr {
+				ty: ExprTy::Num(0),
+				span: span(0, 3),
+			}
+		);
+	}
+
+	#[test]
+	fn object_macro_expansion() {
+		let mut macros = HashMap::new();
+		// #define FOO 2
+		macros.insert(
+			"FOO".to_owned(),
+			(
+				span(0, 0),
+				Macro::Object(vec![(
+					Token::Num {
+						type_: NumType::Dec,
+						num: "2".into(),
+						suffix: None,
+					},
+					span(0, 1),
+				)]),
+			),
+		);
+		assert_expr!(
+			macros,
+			"FOO",
+			Expr {
+				ty: ExprTy::Num(2),
+				span: span(0, 3),
+			}
+		);
+
+		let mut macros = HashMap::new();
+		// #define FOO 50 - 5
+		macros.insert(
+			"FOO".to_owned(),
+			(
+				span(0, 0),
+				Macro::Object(vec![
+					(
+						Token::Num {
+							type_: NumType::Dec,
+							num: "50".into(),
+							suffix: None,
+						},
+						span(0, 2),
+					),
+					(Token::Op(OpTy::Sub), span(3, 4)),
+					(
+						Token::Num {
+							type_: NumType::Dec,
+							num: "5".into(),
+							suffix: None,
+						},
+						span(5, 6),
+					),
+				]),
+			),
+		);
+		assert_expr!(
+			macros,
+			"FOO",
+			Expr {
+				ty: ExprTy::Binary {
+					left: Box::from(Expr {
+						ty: ExprTy::Num(50),
+						span: span(0, 3),
+					}),
+					op: BinOp {
+						ty: BinOpTy::Sub,
+						span: span(0, 3),
+					},
+					right: Some(Box::from(Expr {
+						ty: ExprTy::Num(5),
+						span: span(0, 3),
+					})),
+				},
+				span: span(0, 3),
+			}
+		);
+	}
+
+	#[test]
+	fn undefined_function_macro() {
+		// FIXME: This should be an error upon encountering (
+		assert_expr!(
+			"FOO()",
+			Expr {
+				ty: ExprTy::Num(0),
+				span: span(0, 3),
+			}
+		);
+	}
+
+	#[test]
+	fn function_macro_expansion() {
+		let mut macros = HashMap::new();
+		// #define FOO() 2
+		macros.insert(
+			"FOO".to_owned(),
+			(
+				span(0, 0),
+				Macro::Function {
+					params: vec![],
+					body: vec![(
+						Token::Num {
+							type_: NumType::Dec,
+							num: "2".into(),
+							suffix: None,
+						},
+						span(0, 1),
+					)],
+				},
+			),
+		);
+		assert_expr!(
+			macros,
+			"FOO()",
+			Expr {
+				ty: ExprTy::Num(2),
+				span: span(0, 5),
+			}
+		);
+
+		let mut macros = HashMap::new();
+		// #define FOO(A) A - 2
+		macros.insert(
+			"FOO".to_owned(),
+			(
+				span(0, 0),
+				Macro::Function {
+					params: vec![Ident {
+						name: "A".into(),
+						span: span(0, 1),
+					}],
+					body: vec![
+						(Token::Ident("A".into()), span(0, 1)),
+						(Token::Op(OpTy::Sub), span(2, 3)),
+						(
+							Token::Num {
+								type_: NumType::Dec,
+								num: "2".into(),
+								suffix: None,
+							},
+							span(4, 5),
+						),
+					],
+				},
+			),
+		);
+		assert_expr!(
+			macros,
+			"FOO(3)",
+			Expr {
+				ty: ExprTy::Binary {
+					left: Box::from(Expr {
+						ty: ExprTy::Num(3),
+						span: span(0, 6),
+					}),
+					op: BinOp {
+						ty: BinOpTy::Sub,
+						span: span(0, 6),
+					},
+					right: Some(Box::from(Expr {
+						ty: ExprTy::Num(2),
+						span: span(0, 6),
+					})),
+				},
+				span: span(0, 6),
+			}
+		);
+	}
+}

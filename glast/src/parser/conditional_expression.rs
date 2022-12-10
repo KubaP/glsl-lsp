@@ -857,12 +857,7 @@ impl ShuntingYard {
 
 					walker.push_colour(span, SyntaxType::Number);
 				}
-				ConditionToken::Num(num) if state == State::AfterOperand => {
-					self.stack.push_back(Either::Left(Node {
-						ty: NodeTy::Num(*num),
-						span,
-					}));
-
+				ConditionToken::Num(_) if state == State::AfterOperand => {
 					walker.syntax_diags.push(Syntax::Expr(
 						ExprDiag::FoundOperandAfterOperand(
 							self.get_previous_span().unwrap(),
@@ -889,13 +884,6 @@ impl ShuntingYard {
 					walker.push_colour(span, SyntaxType::Ident);
 				}
 				ConditionToken::Ident(_) if state == State::AfterOperand => {
-					// Since we are in this branch, that means that the identifier does not match an existing macro
-					// name, and since it doesn't match we assume a value of `0`.
-					self.stack.push_back(Either::Left(Node {
-						ty: NodeTy::Num(0),
-						span,
-					}));
-
 					walker.syntax_diags.push(Syntax::Expr(
 						ExprDiag::FoundOperandAfterOperand(
 							self.get_previous_span().unwrap(),
@@ -907,6 +895,7 @@ impl ShuntingYard {
 					break 'main;
 				}
 				ConditionToken::Sub if state == State::Operand => {
+					self.set_op_rhs_toggle();
 					self.push_operator(Op {
 						span,
 						ty: OpTy::Neg(false),
@@ -915,6 +904,7 @@ impl ShuntingYard {
 					walker.push_colour(span, SyntaxType::Operator);
 				}
 				ConditionToken::Not if state == State::Operand => {
+					self.set_op_rhs_toggle();
 					self.push_operator(Op {
 						span,
 						ty: OpTy::Not(false),
@@ -923,6 +913,7 @@ impl ShuntingYard {
 					walker.push_colour(span, SyntaxType::Operator);
 				}
 				ConditionToken::Flip if state == State::Operand => {
+					self.set_op_rhs_toggle();
 					self.push_operator(Op {
 						span,
 						ty: OpTy::Flip(false),
@@ -1056,17 +1047,20 @@ impl ShuntingYard {
 									break 'main;
 								}
 							};
-							let ident = match token {
+							let (ident, ident_span) = match token {
 								ConditionToken::Ident(str) => {
 									let ident = str.clone();
 									walker.push_colour(
 										token_span,
 										SyntaxType::Ident,
 									);
-									Ident {
-										name: ident,
-										span: token_span,
-									}
+									(
+										Ident {
+											name: ident,
+											span: token_span,
+										},
+										token_span,
+									)
 								}
 								_ => {
 									walker.syntax_diags.push(Syntax::Expr(ExprDiag::ExpectedIdentAfterDefineOpLParen(l_paren_span.next_single_width())));
@@ -1079,14 +1073,14 @@ impl ShuntingYard {
 							let (token, token_span) = match walker.peek() {
 								Some(t) => t,
 								None => {
-									walker.syntax_diags.push(Syntax::Expr(ExprDiag::ExpectedRParenAfterDefineOpIdent(l_paren_span.next_single_width())));
+									walker.syntax_diags.push(Syntax::Expr(ExprDiag::ExpectedRParenAfterDefineOpIdent(ident_span.next_single_width())));
 									break 'main;
 								}
 							};
 							match token {
 								ConditionToken::RParen => {}
 								_ => {
-									walker.syntax_diags.push(Syntax::Expr(ExprDiag::ExpectedRParenAfterDefineOpIdent(l_paren_span.next_single_width())));
+									walker.syntax_diags.push(Syntax::Expr(ExprDiag::ExpectedRParenAfterDefineOpIdent(ident_span.next_single_width())));
 									break 'main;
 								}
 							}
@@ -1139,6 +1133,13 @@ impl ShuntingYard {
 					state = State::Operand;
 
 					walker.push_colour(span, SyntaxType::Operator);
+				}
+				_ if state == State::Operand => {
+					walker.syntax_diags.push(Syntax::Expr(
+						ExprDiag::InvalidPrefixOperator(span),
+					));
+					invalidate_rest = true;
+					break 'main;
 				}
 				_ => unreachable!(),
 			}
@@ -1340,11 +1341,6 @@ impl ShuntingYard {
 			}
 		}
 
-		if stack.len() > 1 {
-			let expr = pop_back(&mut stack);
-			stack.push_back(expr);
-		}
-
 		if stack.len() != 1 {
 			unreachable!("After processing the conditional expression shunting yard output stack, we are left with more than one expression. This should not happen.");
 		}
@@ -1356,13 +1352,18 @@ impl ShuntingYard {
 
 #[cfg(test)]
 mod tests {
+	//! Behaviour tests for the conditional expression parser, and also of the conditional expression lexer since
+	//! that is a prerequisite.
+
 	use super::*;
 	use crate::{
+		diag::{ExprDiag, Syntax},
 		lexer::{NumType, OpTy, Token},
 		parser::ast::conditional::*,
 		span,
 	};
 
+	/// Asserts that the given source string produces the specified expression.
 	macro_rules! assert_expr {
 		($macros:expr, $src:expr, $result:expr) => {
 			let mut lexer = crate::lexer::Lexer::new($src);
@@ -1382,35 +1383,113 @@ mod tests {
 		};
 	}
 
+	/// Asserts that the given source string produces the specified expression and syntax error(s).
+	macro_rules! assert_expr_err {
+		($macros:expr, $src:expr, $result:expr, $($error:expr),+) => {
+			let mut lexer = crate::lexer::Lexer::new($src);
+			let tokens =
+				crate::lexer::preprocessor::parse_condition_tokens(&mut lexer);
+			let (expr, syntax, _) = super::cond_parser(tokens, &$macros);
+			assert_eq!(expr.unwrap(), $result);
+			assert_eq!(
+				syntax,
+				vec![
+					$($error),*
+				]
+			);
+		};
+		($src:expr, $result:expr, $($error:expr),+) => {
+			let mut lexer = crate::lexer::Lexer::new($src);
+			let tokens =
+				crate::lexer::preprocessor::parse_condition_tokens(&mut lexer);
+			let macros = std::collections::HashMap::new();
+			let (expr, syntax, _) = super::cond_parser(tokens, &macros);
+			assert_eq!(expr.unwrap(), $result);
+			assert_eq!(
+				syntax,
+				vec![
+					$($error),*
+				]
+			);
+		};
+	}
+
+	/// Asserts that the given source string produces no expression and the specified syntax error(s).
+	macro_rules! assert_err {
+		($src:expr, $($error:expr),+) => {
+			let mut lexer = crate::lexer::Lexer::new($src);
+			let tokens =
+				crate::lexer::preprocessor::parse_condition_tokens(&mut lexer);
+			let macros = std::collections::HashMap::new();
+			let (expr, syntax, _) = super::cond_parser(tokens, &macros);
+			assert_eq!(expr, None);
+			assert_eq!(
+				syntax,
+				vec![
+					$($error),*
+				]
+			);
+		};
+	}
+
 	#[test]
 	fn single_value() {
 		assert_expr!(
 			"0",
 			Expr {
-				span: span(0, 1),
 				ty: ExprTy::Num(0),
+				span: span(0, 1),
 			}
 		);
 		assert_expr!(
 			"1",
 			Expr {
-				span: span(0, 1),
 				ty: ExprTy::Num(1),
+				span: span(0, 1),
 			}
 		);
 		assert_expr!(
 			"50",
 			Expr {
-				span: span(0, 2),
 				ty: ExprTy::Num(50),
+				span: span(0, 2),
 			}
 		);
 		assert_expr!(
 			"undefined",
 			Expr {
-				span: span(0, 9),
 				ty: ExprTy::Num(0),
+				span: span(0, 9),
 			}
+		);
+		assert_expr!(
+			"foo_bar_11245_",
+			Expr {
+				ty: ExprTy::Num(0),
+				span: span(0, 14),
+			}
+		);
+		assert_expr_err!(
+			"50 0",
+			Expr {
+				ty: ExprTy::Num(50),
+				span: span(0, 2),
+			},
+			Syntax::Expr(ExprDiag::FoundOperandAfterOperand(
+				span(0, 2),
+				span(3, 4),
+			))
+		);
+		assert_expr_err!(
+			"50 foo",
+			Expr {
+				ty: ExprTy::Num(50),
+				span: span(0, 2),
+			},
+			Syntax::Expr(ExprDiag::FoundOperandAfterOperand(
+				span(0, 2),
+				span(3, 6),
+			))
 		);
 	}
 
@@ -1427,7 +1506,7 @@ mod tests {
 					expr: Some(Box::from(Expr {
 						ty: ExprTy::Num(100),
 						span: span(1, 4),
-					}))
+					})),
 				},
 				span: span(0, 4),
 			}
@@ -1443,7 +1522,7 @@ mod tests {
 					expr: Some(Box::from(Expr {
 						ty: ExprTy::Num(1),
 						span: span(1, 2),
-					}))
+					})),
 				},
 				span: span(0, 2),
 			}
@@ -1459,10 +1538,115 @@ mod tests {
 					expr: Some(Box::from(Expr {
 						ty: ExprTy::Num(90),
 						span: span(1, 3),
-					}))
+					})),
 				},
 				span: span(0, 3),
 			}
+		);
+		assert_expr!(
+			"-undefined",
+			Expr {
+				ty: ExprTy::Prefix {
+					op: PreOp {
+						ty: PreOpTy::Neg,
+						span: span(0, 1),
+					},
+					expr: Some(Box::from(Expr {
+						ty: ExprTy::Num(0),
+						span: span(1, 10),
+					})),
+				},
+				span: span(0, 10),
+			}
+		);
+		assert_expr!(
+			"--3",
+			Expr {
+				ty: ExprTy::Prefix {
+					op: PreOp {
+						ty: PreOpTy::Neg,
+						span: span(0, 1),
+					},
+					expr: Some(Box::from(Expr {
+						ty: ExprTy::Prefix {
+							op: PreOp {
+								ty: PreOpTy::Neg,
+								span: span(1, 2),
+							},
+							expr: Some(Box::from(Expr {
+								ty: ExprTy::Num(3),
+								span: span(2, 3),
+							})),
+						},
+						span: span(1, 3),
+					})),
+				},
+				span: span(0, 3),
+			}
+		);
+		assert_expr!(
+			"!-3",
+			Expr {
+				ty: ExprTy::Prefix {
+					op: PreOp {
+						ty: PreOpTy::Not,
+						span: span(0, 1)
+					},
+					expr: Some(Box::from(Expr {
+						ty: ExprTy::Prefix {
+							op: PreOp {
+								ty: PreOpTy::Neg,
+								span: span(1, 2),
+							},
+							expr: Some(Box::from(Expr {
+								ty: ExprTy::Num(3),
+								span: span(2, 3),
+							})),
+						},
+						span: span(1, 3),
+					})),
+				},
+				span: span(0, 3),
+			}
+		);
+		assert_expr_err!(
+			"5!",
+			Expr {
+				ty: ExprTy::Num(5),
+				span: span(0, 1),
+			},
+			Syntax::Expr(ExprDiag::InvalidBinOrPostOperator(span(1, 2)))
+		);
+		assert_expr_err!(
+			"5~",
+			Expr {
+				ty: ExprTy::Num(5),
+				span: span(0, 1),
+			},
+			Syntax::Expr(ExprDiag::InvalidBinOrPostOperator(span(1, 2)))
+		);
+		assert_expr_err!(
+			"-- *",
+			Expr {
+				ty: ExprTy::Prefix {
+					op: PreOp {
+						ty: PreOpTy::Neg,
+						span: span(0, 1),
+					},
+					expr: Some(Box::from(Expr {
+						ty: ExprTy::Prefix {
+							op: PreOp {
+								ty: PreOpTy::Neg,
+								span: span(1, 2),
+							},
+							expr: None
+						},
+						span: span(1, 2),
+					}))
+				},
+				span: span(0, 2),
+			},
+			Syntax::Expr(ExprDiag::InvalidPrefixOperator(span(3, 4)))
 		);
 	}
 
@@ -1481,16 +1665,58 @@ mod tests {
 			}
 		);
 		assert_expr!(
-			"defined ( bar)",
+			"defined(foo)",
 			Expr {
 				ty: ExprTy::Defined {
 					ident: Ident {
-						name: "bar".into(),
-						span: span(10, 13),
+						name: "foo".into(),
+						span: span(8, 11),
 					},
 				},
-				span: span(0, 14),
+				span: span(0, 12),
 			}
+		);
+		assert_expr!(
+			"defined ( bar_2 )",
+			Expr {
+				ty: ExprTy::Defined {
+					ident: Ident {
+						name: "bar_2".into(),
+						span: span(10, 15),
+					},
+				},
+				span: span(0, 17),
+			}
+		);
+		assert_err!(
+			"defined",
+			Syntax::Expr(ExprDiag::ExpectedIdentOrLParenAfterDefinedOp(span(
+				7, 8
+			)))
+		);
+		assert_err!(
+			"defined  +",
+			Syntax::Expr(ExprDiag::ExpectedIdentOrLParenAfterDefinedOp(span(
+				7, 8
+			)))
+		);
+		assert_err!(
+			"defined (",
+			Syntax::Expr(ExprDiag::ExpectedIdentAfterDefineOpLParen(span(
+				9, 10
+			)))
+		);
+		assert_err!(
+			"defined ( foo",
+			Syntax::Expr(ExprDiag::ExpectedRParenAfterDefineOpIdent(span(
+				13, 14
+			)))
+		);
+		assert_err!(
+			"defined (   +",
+			Syntax::Expr(ExprDiag::ExpectedIdentAfterDefineOpLParen(span(
+				9, 10
+			)))
 		);
 	}
 
@@ -1615,6 +1841,74 @@ mod tests {
 				span: span(0, 14),
 			}
 		);
+		assert_expr!(
+			"0 - !1",
+			Expr {
+				ty: ExprTy::Binary {
+					left: Box::from(Expr {
+						ty: ExprTy::Num(0),
+						span: span(0, 1),
+					}),
+					op: BinOp {
+						ty: BinOpTy::Sub,
+						span: span(2, 3),
+					},
+					right: Some(Box::from(Expr {
+						ty: ExprTy::Prefix {
+							op: PreOp {
+								ty: PreOpTy::Not,
+								span: span(4, 5),
+							},
+							expr: Some(Box::from(Expr {
+								ty: ExprTy::Num(1),
+								span: span(5, 6),
+							}))
+						},
+						span: span(4, 6),
+					}))
+				},
+				span: span(0, 6),
+			}
+		);
+		assert_expr_err!(
+			"0 - 5 ! 4",
+			Expr {
+				ty: ExprTy::Binary {
+					left: Box::from(Expr {
+						ty: ExprTy::Num(0),
+						span: span(0, 1),
+					}),
+					op: BinOp {
+						ty: BinOpTy::Sub,
+						span: span(2, 3),
+					},
+					right: Some(Box::from(Expr {
+						ty: ExprTy::Num(5),
+						span: span(4, 5),
+					}))
+				},
+				span: span(0, 5),
+			},
+			Syntax::Expr(ExprDiag::InvalidBinOrPostOperator(span(6, 7)))
+		);
+		assert_expr_err!(
+			"0 - * 5",
+			Expr {
+				ty: ExprTy::Binary {
+					left: Box::from(Expr {
+						ty: ExprTy::Num(0),
+						span: span(0, 1),
+					}),
+					op: BinOp {
+						ty: BinOpTy::Sub,
+						span: span(2, 3),
+					},
+					right: None,
+				},
+				span: span(0, 3),
+			},
+			Syntax::Expr(ExprDiag::InvalidPrefixOperator(span(4, 5)))
+		);
 	}
 
 	#[test]
@@ -1625,6 +1919,24 @@ mod tests {
 				ty: ExprTy::Num(0),
 				span: span(0, 3),
 			}
+		);
+		assert_expr!(
+			"FOO_BAR_22",
+			Expr {
+				ty: ExprTy::Num(0),
+				span: span(0, 10),
+			}
+		);
+		assert_expr_err!(
+			"FOO BAR",
+			Expr {
+				ty: ExprTy::Num(0),
+				span: span(0, 3),
+			},
+			Syntax::Expr(ExprDiag::FoundOperandAfterOperand(
+				span(0, 3),
+				span(4, 7)
+			))
 		);
 	}
 
@@ -1707,13 +2019,16 @@ mod tests {
 
 	#[test]
 	fn undefined_function_macro() {
-		// FIXME: This should be an error upon encountering (
-		assert_expr!(
+		assert_expr_err!(
 			"FOO()",
 			Expr {
 				ty: ExprTy::Num(0),
-				span: span(0, 3),
-			}
+				span: span(0, 3)
+			},
+			Syntax::Expr(ExprDiag::FoundOperandAfterOperand(
+				span(0, 3),
+				span(3, 4)
+			))
 		);
 	}
 
@@ -1793,6 +2108,72 @@ mod tests {
 				},
 				span: span(0, 6),
 			}
+		);
+
+		let mut macros = HashMap::new();
+		// #define FOO(A) A - 2
+		macros.insert(
+			"FOO".to_owned(),
+			(
+				span(0, 0),
+				Macro::Function {
+					params: vec![Ident {
+						name: "A".into(),
+						span: span(0, 1),
+					}],
+					body: vec![
+						(Token::Ident("A".into()), span(0, 1)),
+						(Token::Op(OpTy::Sub), span(2, 3)),
+						(
+							Token::Num {
+								type_: NumType::Dec,
+								num: "2".into(),
+								suffix: None,
+							},
+							span(4, 5),
+						),
+					],
+				},
+			),
+		);
+		// #define BAR(B) B
+		macros.insert(
+			"BAR".to_owned(),
+			(
+				span(0, 0),
+				Macro::Function {
+					params: vec![Ident {
+						name: "b".into(),
+						span: span(0, 1),
+					}],
+					body: vec![(Token::Ident("B".into()), span(0, 1))],
+				},
+			),
+		);
+		assert_expr_err!(
+			macros,
+			"FOO(3) BAR(2)",
+			Expr {
+				ty: ExprTy::Binary {
+					left: Box::from(Expr {
+						ty: ExprTy::Num(3),
+						span: span(0, 6),
+					}),
+					op: BinOp {
+						ty: BinOpTy::Sub,
+						span: span(0, 6),
+					},
+					right: Some(Box::from(Expr {
+						ty: ExprTy::Num(2),
+						span: span(0, 6),
+					})),
+				},
+				span: span(0, 6),
+			},
+			Syntax::Expr(ExprDiag::FoundOperandAfterOperand(
+				span(0, 6),
+				span(7, 13)
+			))
 		);
 	}
 }

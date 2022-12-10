@@ -75,6 +75,14 @@ pub enum Either<L, R> {
 	Right(R),
 }
 
+/// Holds one of 3 possible values.
+#[derive(Debug, Clone, Copy, PartialEq)]
+enum Either3<A, B, C> {
+	A(A),
+	B(B),
+	C(C),
+}
+
 /// Describes the GLSL version.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum GlslVersion {

@@ -6,6 +6,7 @@
 //! themselves. There is also the [`SyntaxToken`] type used to represent syntax highlighting spans.
 
 pub mod ast;
+pub mod conditional_eval;
 mod conditional_expression;
 mod expression;
 mod printing;

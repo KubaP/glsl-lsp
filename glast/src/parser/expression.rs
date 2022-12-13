@@ -36,8 +36,8 @@ https://matklad.github.io/2020/04/15/from-pratt-to-dijkstra.html
 ///
 /// - `end_tokens` - Any tokens which, when encountered, will immediately stop the parser without producing syntax
 ///   errors.
-pub(super) fn expr_parser(
-	walker: &mut Walker,
+pub(super) fn expr_parser<'a, P: super::TokenStreamProvider<'a>>(
+	walker: &mut Walker<'a, P>,
 	mode: Mode,
 	end_tokens: impl AsRef<[Token]>,
 ) -> (Option<Expr>, Vec<Syntax>, Vec<Semantic>, Vec<SyntaxToken>) {
@@ -1285,7 +1285,12 @@ impl ShuntingYard {
 	}
 
 	/// Pushes a syntax highlighting token over the given span.
-	fn colour(&mut self, walker: &Walker, span: Span, token: SyntaxType) {
+	fn colour<'a, P: super::TokenStreamProvider<'a>>(
+		&mut self,
+		walker: &Walker<'a, P>,
+		span: Span,
+		token: SyntaxType,
+	) {
 		// When we are within a macro, we don't want to produce syntax tokens.
 		if walker.streams.len() == 1 {
 			self.syntax_tokens.push(SyntaxToken {
@@ -1297,7 +1302,11 @@ impl ShuntingYard {
 	}
 
 	/// Parses a list of tokens. Populates the internal `stack` with a RPN output.
-	fn parse(&mut self, walker: &mut Walker, end_tokens: &[Token]) {
+	fn parse<'a, P: super::TokenStreamProvider<'a>>(
+		&mut self,
+		walker: &mut Walker<'a, P>,
+		end_tokens: &[Token],
+	) {
 		#[derive(PartialEq)]
 		enum State {
 			/// We are looking for either a) a prefix operator, b) an atom, c) bracket group start, d) function

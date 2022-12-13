@@ -405,6 +405,285 @@ pub enum ConditionToken {
 	Comma,
 }
 
+impl ConditionToken {
+	/// Produces a syntax token corresponding to the type of this conditional token. This performs simple,
+	/// non-semantically-aware colouring.
+	pub fn non_semantic_colour(&self) -> crate::parser::SyntaxType {
+		use crate::parser::SyntaxType;
+		match self {
+			ConditionToken::Num(_) => SyntaxType::Number,
+			ConditionToken::Ident(_) => SyntaxType::Ident,
+			ConditionToken::LineComment(_)
+			| ConditionToken::BlockComment { .. } => SyntaxType::Comment,
+			ConditionToken::InvalidNum(_) => SyntaxType::Invalid,
+			ConditionToken::Invalid(_) => SyntaxType::Invalid,
+			ConditionToken::Defined => SyntaxType::Keyword,
+			ConditionToken::Add
+			| ConditionToken::Sub
+			| ConditionToken::Mul
+			| ConditionToken::Div
+			| ConditionToken::Rem
+			| ConditionToken::And
+			| ConditionToken::Or
+			| ConditionToken::Xor
+			| ConditionToken::LShift
+			| ConditionToken::RShift
+			| ConditionToken::Flip
+			| ConditionToken::EqEq
+			| ConditionToken::NotEq
+			| ConditionToken::Not
+			| ConditionToken::Gt
+			| ConditionToken::Lt
+			| ConditionToken::Ge
+			| ConditionToken::Le
+			| ConditionToken::AndAnd
+			| ConditionToken::OrOr => SyntaxType::Operator,
+			ConditionToken::LParen => SyntaxType::Punctuation,
+			ConditionToken::RParen => SyntaxType::Punctuation,
+			ConditionToken::Comma => SyntaxType::Punctuation,
+		}
+	}
+
+	/* pub fn from_normal_token(
+		   (token, span): &Spanned<super::Token>,
+		   new_tokens: &mut Vec<Spanned<Self>>,
+	   ) {
+		   match token {
+			   super::Token::Num { type_, num, suffix } => todo!(),
+			   super::Token::Bool(b) => {
+				   new_tokens.push((Self::Ident(b.to_string()), *span))
+			   }
+			   super::Token::Ident(s) => match s.as_ref() {
+				   "defined" => new_tokens.push((Self::Defined, *span)),
+				   _ => new_tokens.push((Self::Ident(s.clone()), *span)),
+			   },
+			   super::Token::Directive(d) => unreachable!(),
+			   super::Token::MacroConcat => {
+				   new_tokens.push((Self::Invalid('#'), span.first_char()));
+				   new_tokens.push((Self::Invalid('#'), span.last_char()));
+			   }
+			   super::Token::LineComment(c) => {
+				   new_tokens.push((Self::LineComment(*c), *span))
+			   }
+			   super::Token::BlockComment { str, contains_eof } => {
+				   new_tokens.push((
+					   Self::BlockComment {
+						   str: *str,
+						   contains_eof: *contains_eof,
+					   },
+					   *span,
+				   ));
+			   }
+			   super::Token::Invalid(c) => {
+				   new_tokens.push((Self::Invalid(*c), *span))
+			   }
+			   super::Token::If
+			   | super::Token::Else
+			   | super::Token::For
+			   | super::Token::Do
+			   | super::Token::While
+			   | super::Token::Continue
+			   | super::Token::Switch
+			   | super::Token::Case
+			   | super::Token::Default
+			   | super::Token::Break
+			   | super::Token::Return
+			   | super::Token::Discard
+			   | super::Token::Struct
+			   | super::Token::Subroutine
+			   | super::Token::Reserved(_)
+			   | super::Token::Const
+			   | super::Token::In
+			   | super::Token::Out
+			   | super::Token::InOut
+			   | super::Token::Attribute
+			   | super::Token::Uniform
+			   | super::Token::Varying
+			   | super::Token::Buffer
+			   | super::Token::Shared
+			   | super::Token::Centroid
+			   | super::Token::Sample
+			   | super::Token::Patch
+			   | super::Token::Layout
+			   | super::Token::Flat
+			   | super::Token::Smooth
+			   | super::Token::NoPerspective
+			   | super::Token::HighP
+			   | super::Token::MediumP
+			   | super::Token::LowP
+			   | super::Token::Invariant
+			   | super::Token::Precise
+			   | super::Token::Coherent
+			   | super::Token::Volatile
+			   | super::Token::Restrict
+			   | super::Token::Readonly
+			   | super::Token::Writeonly => {
+				   new_tokens.push((Self::Ident(token.to_string()), *span))
+			   }
+			   super::Token::Op(op) => match op {
+				   super::OpTy::Add => new_tokens.push((Self::Add, *span)),
+				   super::OpTy::Sub => new_tokens.push((Self::Sub, *span)),
+				   super::OpTy::Mul => new_tokens.push((Self::Mul, *span)),
+				   super::OpTy::Div => new_tokens.push((Self::Div, *span)),
+				   super::OpTy::Rem => new_tokens.push((Self::Rem, *span)),
+				   super::OpTy::And => new_tokens.push((Self::And, *span)),
+				   super::OpTy::Or => new_tokens.push((Self::Or, *span)),
+				   super::OpTy::Xor => new_tokens.push((Self::Xor, *span)),
+				   super::OpTy::LShift => new_tokens.push((Self::LShift, *span)),
+				   super::OpTy::RShift => new_tokens.push((Self::RShift, *span)),
+				   super::OpTy::Flip => new_tokens.push((Self::Flip, *span)),
+				   super::OpTy::EqEq => new_tokens.push((Self::EqEq, *span)),
+				   super::OpTy::NotEq => new_tokens.push((Self::NotEq, *span)),
+				   super::OpTy::Not => new_tokens.push((Self::Not, *span)),
+				   super::OpTy::Gt => new_tokens.push((Self::Gt, *span)),
+				   super::OpTy::Lt => new_tokens.push((Self::Lt, *span)),
+				   super::OpTy::Ge => new_tokens.push((Self::Ge, *span)),
+				   super::OpTy::Le => new_tokens.push((Self::Le, *span)),
+				   super::OpTy::AndAnd => new_tokens.push((Self::AndAnd, *span)),
+				   super::OpTy::OrOr => new_tokens.push((Self::OrOr, *span)),
+				   super::OpTy::XorXor => new_tokens.push((Self::XorXor, *span)),
+				   super::OpTy::Eq => new_tokens.push((Self::Invalid('='), *span)),
+				   super::OpTy::AddAdd => {
+					   new_tokens.push((Self::Add, span.first_char()));
+					   new_tokens.push((Self::Add, span.last_char()));
+				   }
+				   super::OpTy::SubSub => {
+					   new_tokens.push((Self::Sub, span.first_char()));
+					   new_tokens.push((Self::Sub, span.last_char()));
+				   }
+				   super::OpTy::AddEq => {
+					   new_tokens.push((Self::Add, span.first_char()));
+					   new_tokens.push((Self::Invalid('='), span.last_char()));
+				   }
+				   super::OpTy::SubEq => {
+					   new_tokens.push((Self::Sub, span.first_char()));
+					   new_tokens.push((Self::Invalid('='), span.last_char()));
+				   }
+				   super::OpTy::MulEq => {
+					   new_tokens.push((Self::Mul, span.first_char()));
+					   new_tokens.push((Self::Invalid('='), span.last_char()));
+				   }
+				   super::OpTy::DivEq => {
+					   new_tokens.push((Self::Div, span.first_char()));
+					   new_tokens.push((Self::Invalid('='), span.last_char()));
+				   }
+				   super::OpTy::RemEq => {
+					   new_tokens.push((Self::Rem, span.first_char()));
+					   new_tokens.push((Self::Invalid('='), span.last_char()));
+				   }
+				   super::OpTy::AndEq => {
+					   new_tokens.push((Self::And, span.first_char()));
+					   new_tokens.push((Self::Invalid('='), span.last_char()));
+				   }
+				   super::OpTy::OrEq => {
+					   new_tokens.push((Self::Or, span.first_char()));
+					   new_tokens.push((Self::Invalid('='), span.last_char()));
+				   }
+				   super::OpTy::XorEq => {
+					   new_tokens.push((Self::Xor, span.first_char()));
+					   new_tokens.push((Self::Invalid('='), span.last_char()));
+				   }
+				   super::OpTy::LShiftEq => {
+					   new_tokens.push((Self::LShift, span.first_char()));
+					   new_tokens.push((Self::Invalid('='), span.last_char()));
+				   }
+				   super::OpTy::RShiftEq => {
+					   new_tokens.push((Self::RShift, span.first_char()));
+					   new_tokens.push((Self::Invalid('='), span.last_char()));
+				   }
+			   },
+			   super::Token::Comma => new_tokens.push((Self::Comma, *span)),
+			   super::Token::LParen => new_tokens.push((Self::LParen, *span)),
+			   super::Token::RParen => new_tokens.push((Self::RParen, *span)),
+			   super::Token::Dot => new_tokens.push((Self::Invalid('.'), *span)),
+			   super::Token::Semi => new_tokens.push((Self::Invalid(';'), *span)),
+			   super::Token::Colon => new_tokens.push((Self::Invalid(':'), *span)),
+			   super::Token::Question => {
+				   new_tokens.push((Self::Invalid('?'), *span))
+			   }
+			   super::Token::LBracket => {
+				   new_tokens.push((Self::Invalid('['), *span))
+			   }
+			   super::Token::RBracket => {
+				   new_tokens.push((Self::Invalid(']'), *span))
+			   }
+			   super::Token::LBrace => {
+				   new_tokens.push((Self::Invalid('{'), *span))
+			   }
+			   super::Token::RBrace => {
+				   new_tokens.push((Self::Invalid('}'), *span))
+			   }
+		   }
+	   }
+	*/
+
+	/// Converts this token to a standard lexer [`Token`](super::Token) type.
+	pub fn to_normal_token(
+		(token, span): Spanned<Self>,
+	) -> Spanned<super::Token> {
+		(
+			match token {
+				ConditionToken::Num(n) => super::Token::Num {
+					type_: super::NumType::Dec,
+					num: n.to_string(),
+					suffix: None,
+				},
+				ConditionToken::Ident(s) => super::Token::Ident(s),
+				ConditionToken::LineComment(s) => super::Token::LineComment(s),
+				ConditionToken::BlockComment { str, contains_eof } => {
+					super::Token::BlockComment { str, contains_eof }
+				}
+				ConditionToken::InvalidNum(s) => {
+					// Split the string into the first part that contains any numbers, and the second part that
+					// contains anything afterwards.
+					let mut num = String::new();
+					let mut chars = s.chars();
+					for char in chars.next() {
+						if char.is_ascii_digit() {
+							num.push(char);
+						} else {
+							break;
+						}
+					}
+					super::Token::Num {
+						type_: super::NumType::Dec,
+						num,
+						suffix: Some(chars.collect()),
+					}
+				}
+				ConditionToken::Invalid(c) => super::Token::Invalid(c),
+				ConditionToken::Defined => {
+					super::Token::Ident("defined".into())
+				}
+				ConditionToken::Add => super::Token::Op(super::OpTy::Add),
+				ConditionToken::Sub => super::Token::Op(super::OpTy::Sub),
+				ConditionToken::Mul => super::Token::Op(super::OpTy::Mul),
+				ConditionToken::Div => super::Token::Op(super::OpTy::Div),
+				ConditionToken::Rem => super::Token::Op(super::OpTy::Rem),
+				ConditionToken::And => super::Token::Op(super::OpTy::And),
+				ConditionToken::Or => super::Token::Op(super::OpTy::Or),
+				ConditionToken::Xor => super::Token::Op(super::OpTy::Xor),
+				ConditionToken::LShift => super::Token::Op(super::OpTy::LShift),
+				ConditionToken::RShift => super::Token::Op(super::OpTy::RShift),
+				ConditionToken::Flip => super::Token::Op(super::OpTy::Flip),
+				ConditionToken::EqEq => super::Token::Op(super::OpTy::EqEq),
+				ConditionToken::NotEq => super::Token::Op(super::OpTy::NotEq),
+				ConditionToken::Not => super::Token::Op(super::OpTy::Not),
+				ConditionToken::Gt => super::Token::Op(super::OpTy::Gt),
+				ConditionToken::Lt => super::Token::Op(super::OpTy::Lt),
+				ConditionToken::Ge => super::Token::Op(super::OpTy::Ge),
+				ConditionToken::Le => super::Token::Op(super::OpTy::Le),
+				ConditionToken::AndAnd => super::Token::Op(super::OpTy::AndAnd),
+				ConditionToken::OrOr => super::Token::Op(super::OpTy::OrOr),
+				ConditionToken::LParen => super::Token::LParen,
+				ConditionToken::RParen => super::Token::RParen,
+				ConditionToken::Comma => super::Token::Comma,
+			},
+			span,
+		)
+	}
+}
+
 /// Constructs a directive with no tokens, just the keyword.
 pub(super) fn construct_empty(
 	lexer: &mut Lexer,
@@ -1227,6 +1506,40 @@ pub(super) fn parse_condition(
 	directive_kw: &str,
 	directive_kw_span: Span,
 ) -> TokenStream {
+	let tokens = parse_condition_tokens(lexer);
+	match directive_kw {
+		"ifdef" => TokenStream::IfDef {
+			kw: directive_kw_span,
+			tokens,
+		},
+		"ifndef" => TokenStream::IfNotDef {
+			kw: directive_kw_span,
+			tokens,
+		},
+		"if" => TokenStream::If {
+			kw: directive_kw_span,
+			tokens,
+		},
+		"elif" => TokenStream::ElseIf {
+			kw: directive_kw_span,
+			tokens,
+		},
+		"else" => TokenStream::Else {
+			kw: directive_kw_span,
+			tokens,
+		},
+		"endif" => TokenStream::EndIf {
+			kw: directive_kw_span,
+			tokens,
+		},
+		_ => unreachable!("Only one of the above `&str` values should be passed into this function!"),
+	}
+}
+
+/// Parses conditional directive tokens.
+pub(crate) fn parse_condition_tokens(
+	lexer: &mut Lexer,
+) -> Vec<Spanned<ConditionToken>> {
 	let mut tokens = Vec::new();
 	let mut buffer = String::new();
 	// We continue off from where the lexer previously stopped.
@@ -1535,34 +1848,7 @@ pub(super) fn parse_condition(
 			));
 		}
 	}
-
-	match directive_kw {
-		"ifdef" => TokenStream::IfDef {
-			kw: directive_kw_span,
-			tokens,
-		},
-		"ifndef" => TokenStream::IfNotDef {
-			kw: directive_kw_span,
-			tokens,
-		},
-		"if" => TokenStream::If {
-			kw: directive_kw_span,
-			tokens,
-		},
-		"elif" => TokenStream::ElseIf {
-			kw: directive_kw_span,
-			tokens,
-		},
-		"else" => TokenStream::Else {
-			kw: directive_kw_span,
-			tokens,
-		},
-		"endif" => TokenStream::EndIf {
-			kw: directive_kw_span,
-			tokens,
-		},
-		_ => unreachable!("Only one of the above `&str` values should be passed into this function!"),
-	}
+	tokens
 }
 
 /// Returns whether the character is allowed to start a punctuation token within a conditional directive.

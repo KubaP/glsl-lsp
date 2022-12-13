@@ -11,8 +11,8 @@ mod conditional_expression;
 mod expression;
 mod printing;
 mod syntax;
-#[cfg(test)]
-mod walker_tests;
+//#[cfg(test)]
+//mod walker_tests;
 
 pub use syntax::*;
 
@@ -23,8 +23,8 @@ use crate::{
 	},
 	lexer::{
 		preprocessor::{
-			ExtensionToken, LineToken, TokenStream as PreprocStream,
-			VersionToken,
+			ConditionToken, ExtensionToken, LineToken,
+			TokenStream as PreprocStream, VersionToken,
 		},
 		OpTy, Token, TokenStream,
 	},
@@ -35,16 +35,23 @@ use ast::*;
 use expression::{expr_parser, Mode};
 use std::collections::{HashMap, HashSet};
 
-/// The result of a parsed GLSL source string.
-///
-/// - `0` - The abstract syntax tree. By nature of this tree being parsed after conditional compilation has been
-///   applied, it will not contain any conditional compilation preprocessor directives.
-/// - `1` - Any syntax diagnostics created during parsing.
-/// - `2` - Any semantic diagnostics created during parsing, (this will only contain semantic diagnostics related
-///   to macros and macro expansion).
-/// - `3` - Syntax highlighting tokens.
-pub type ParseResult =
-	(Vec<Node>, Vec<Syntax>, Vec<Semantic>, Vec<SyntaxToken>);
+/// The result of a parsed GLSL token tree.
+pub struct ParseResult {
+	/// The abstract syntax tree. By nature of this tree being parsed after the conditional compilation directives
+	/// having been applied, it will not contain any of these directives.
+	pub ast: Vec<Node>,
+	/// All syntax diagnostics.
+	pub syntax_diags: Vec<Syntax>,
+	/// All semantic diagnostics. Since the parser only creates an AST and doesn't perform any further analysis,
+	/// this vector will only contain semantic errors in relation to macros.
+	pub semantic_diags: Vec<Semantic>,
+	/// The syntax highlighting tokens. If this result is obtained by calling a parsing method without enabling
+	/// whole-file syntax highlighting, the tokens in this vector will only be for the abstract syntax tree. If
+	/// whole-file syntax highlighting was enabled, the tokens will be for the entire file.
+	pub syntax_tokens: Vec<SyntaxToken>,
+	/// Spans which cover any disabled code (because of conditional compilation).
+	pub disabled_code_spans: Vec<Span>,
+}
 
 /// An error type for the first step of the parsing operations.
 #[derive(Debug)]
@@ -70,7 +77,7 @@ pub enum TreeParseErr {
 /// compilation. Because conditional compilation is enabled through the preprocessor, there are no rules as to
 /// where the parser can branch - a conditional branch could be introduced in the middle of a variable declaration
 /// for instance. This makes it effectively impossible to represent all branches of a source string within a single
-/// AST without greatly overcomplicating the entire parser, multiple ASTs are needed to represent all the
+/// AST without greatly overcomplicating the entire parser, so multiple ASTs are needed to represent all the
 /// conditional permutations.
 ///
 /// The [`TokenTree`] struct allows you to pick which conditional compilation permutations to enable, and then
@@ -269,69 +276,40 @@ pub fn parse_from_token_stream(
 			break;
 		};
 
-		use crate::lexer::preprocessor::ConditionToken;
-
 		match token {
 			Token::Directive(d) => match d {
-				PreprocStream::IfDef { kw, mut tokens } => {
-					let mut syntax_tokens = vec![
-						SyntaxToken {
-							ty: SyntaxType::DirectiveHash,
-							modifiers: SyntaxModifiers::empty(),
-							span: token_span.first_char(),
-						},
-						SyntaxToken {
-							ty: SyntaxType::DirectiveName,
-							modifiers: SyntaxModifiers::empty(),
-							span: kw,
-						},
-					];
+				PreprocStream::IfDef {
+					kw: kw_span,
+					tokens,
+				} => {
+					let hash_syntax = SyntaxToken {
+						ty: SyntaxType::DirectiveHash,
+						modifiers: SyntaxModifiers::empty(),
+						span: token_span.first_char(),
+					};
+					let name_syntax = SyntaxToken {
+						ty: SyntaxType::DirectiveName,
+						modifiers: SyntaxModifiers::empty(),
+						span: kw_span,
+					};
 
 					// We are expecting an identifier as the first token.
-					let ident = if tokens.is_empty() {
+					let span = if tokens.is_empty() {
 						syntax_diags.push(Syntax::PreprocConditional(
 							PreprocConditionalDiag::ExpectedNameAfterIfDef(
-								kw.next_single_width(),
+								kw_span.next_single_width(),
 							),
 						));
-						None
+						kw_span.next_single_width()
 					} else {
-						let (token, span) = tokens.remove(0);
-						match token {
-							ConditionToken::Ident(str) => {
-								syntax_tokens.push(SyntaxToken {
-									ty: SyntaxType::Ident,
-									modifiers: SyntaxModifiers::CONDITIONAL,
-									span,
-								});
-								Some(Ident { name: str, span })
-							}
-							_ => {
-								syntax_diags.push(Syntax::PreprocConditional(
-									PreprocConditionalDiag::ExpectedNameAfterIfDef(
-										span.next_single_width(),
-									),
-								));
-								None
-							}
-						}
-					};
-
-					// Check for any trailing tokens.
-					if !tokens.is_empty() {
+						// Check for any trailing tokens.
 						let start = tokens.first().unwrap().1.start;
 						let end = tokens.last().unwrap().1.end;
 						syntax_diags.push(Syntax::PreprocTrailingTokens(
 							Span::new(start, end),
 						));
-						for (_, span) in tokens {
-							syntax_tokens.push(SyntaxToken {
-								ty: SyntaxType::Invalid,
-								modifiers: SyntaxModifiers::CONDITIONAL,
-								span,
-							});
-						}
-					}
+						Span::new(start, end)
+					};
 
 					// Finish the current token group.
 					let idx = arena.len();
@@ -351,12 +329,12 @@ pub fn parse_from_token_stream(
 					tree.get_mut(top(&stack)).unwrap().children.push(
 						Either::Right(ConditionBlock {
 							conditions: vec![(
-								Conditional {
-									span: token_span,
-									ty: ConditionalTy::IfDef { ident },
-								},
+								Conditional::IfDef,
+								tokens,
+								span,
 								idx,
-								syntax_tokens,
+								hash_syntax,
+								name_syntax,
 							)],
 							end: None,
 						}),
@@ -364,125 +342,37 @@ pub fn parse_from_token_stream(
 					order_by_appearance.push((idx, stack.clone()));
 					stack.push(idx);
 				}
-				PreprocStream::IfNotDef { kw, mut tokens } => {
-					let mut syntax_tokens = vec![
-						SyntaxToken {
-							ty: SyntaxType::DirectiveHash,
-							modifiers: SyntaxModifiers::empty(),
-							span: token_span.first_char(),
-						},
-						SyntaxToken {
-							ty: SyntaxType::DirectiveName,
-							modifiers: SyntaxModifiers::empty(),
-							span: kw,
-						},
-					];
+				PreprocStream::IfNotDef {
+					kw: kw_span,
+					tokens,
+				} => {
+					let hash_syntax = SyntaxToken {
+						ty: SyntaxType::DirectiveHash,
+						modifiers: SyntaxModifiers::empty(),
+						span: token_span.first_char(),
+					};
+					let name_syntax = SyntaxToken {
+						ty: SyntaxType::DirectiveName,
+						modifiers: SyntaxModifiers::empty(),
+						span: kw_span,
+					};
 
 					// We are expecting an identifier as the first token.
-					let ident = if tokens.is_empty() {
+					let span = if tokens.is_empty() {
 						syntax_diags.push(Syntax::PreprocConditional(
 							PreprocConditionalDiag::ExpectedNameAfterIfNotDef(
-								kw.next_single_width(),
+								kw_span.next_single_width(),
 							),
 						));
-						None
+						kw_span.next_single_width()
 					} else {
-						let (token, span) = tokens.remove(0);
-						match token {
-							ConditionToken::Ident(str) => {
-								syntax_tokens.push(SyntaxToken {
-									ty: SyntaxType::Ident,
-									modifiers: SyntaxModifiers::CONDITIONAL,
-									span,
-								});
-								Some(Ident { name: str, span })
-							}
-							_ => {
-								syntax_diags.push(Syntax::PreprocConditional(
-									PreprocConditionalDiag::ExpectedNameAfterIfNotDef(
-										span.next_single_width(),
-									),
-								));
-								None
-							}
-						}
-					};
-
-					// Check for any trailing tokens.
-					if !tokens.is_empty() {
+						// Check for any trailing tokens.
 						let start = tokens.first().unwrap().1.start;
 						let end = tokens.last().unwrap().1.end;
 						syntax_diags.push(Syntax::PreprocTrailingTokens(
 							Span::new(start, end),
 						));
-						for (_, span) in tokens {
-							syntax_tokens.push(SyntaxToken {
-								ty: SyntaxType::Invalid,
-								modifiers: SyntaxModifiers::CONDITIONAL,
-								span,
-							});
-						}
-					}
-
-					// Finish the current token group.
-					let idx = arena.len();
-					arena.push(std::mem::take(&mut current_tokens));
-					tree.get_mut(top(&stack))
-						.unwrap()
-						.children
-						.push(Either::Left(idx));
-
-					// Create a new condition block, and a new node for the `ifdef` condition.
-					let idx = tree.len();
-					tree.push(TreeNode {
-						parent: Some(top(&stack)),
-						children: Vec::new(),
-						span: token_span,
-					});
-					tree.get_mut(top(&stack)).unwrap().children.push(
-						Either::Right(ConditionBlock {
-							conditions: vec![(
-								Conditional {
-									span: token_span,
-									ty: ConditionalTy::IfNotDef { ident },
-								},
-								idx,
-								syntax_tokens,
-							)],
-							end: None,
-						}),
-					);
-					order_by_appearance.push((idx, stack.clone()));
-					stack.push(idx);
-				}
-				PreprocStream::If { kw, tokens } => {
-					let mut syntax_tokens = vec![
-						SyntaxToken {
-							ty: SyntaxType::DirectiveHash,
-							modifiers: SyntaxModifiers::empty(),
-							span: token_span.first_char(),
-						},
-						SyntaxToken {
-							ty: SyntaxType::DirectiveName,
-							modifiers: SyntaxModifiers::empty(),
-							span: kw,
-						},
-					];
-
-					// We are expecting an identifier as the first token.
-					let expr = if tokens.is_empty() {
-						syntax_diags.push(Syntax::PreprocConditional(
-							PreprocConditionalDiag::ExpectedExprAfterIf(
-								kw.next_single_width(),
-							),
-						));
-						None
-					} else {
-						let (expr, mut syntax, mut colours) =
-							cond_parser(tokens);
-						syntax_diags.append(&mut syntax);
-						syntax_tokens.append(&mut colours);
-						expr
+						Span::new(start, end)
 					};
 
 					// Finish the current token group.
@@ -503,12 +393,12 @@ pub fn parse_from_token_stream(
 					tree.get_mut(top(&stack)).unwrap().children.push(
 						Either::Right(ConditionBlock {
 							conditions: vec![(
-								Conditional {
-									span: token_span,
-									ty: ConditionalTy::If { expr },
-								},
+								Conditional::IfNotDef,
+								tokens,
+								span,
 								idx,
-								syntax_tokens,
+								hash_syntax,
+								name_syntax,
 							)],
 							end: None,
 						}),
@@ -516,34 +406,93 @@ pub fn parse_from_token_stream(
 					order_by_appearance.push((idx, stack.clone()));
 					stack.push(idx);
 				}
-				PreprocStream::ElseIf { kw, tokens } => {
-					let mut syntax_tokens = vec![
-						SyntaxToken {
-							ty: SyntaxType::DirectiveHash,
-							modifiers: SyntaxModifiers::empty(),
-							span: token_span.first_char(),
-						},
-						SyntaxToken {
-							ty: SyntaxType::DirectiveName,
-							modifiers: SyntaxModifiers::empty(),
-							span: kw,
-						},
-					];
+				PreprocStream::If {
+					kw: kw_span,
+					tokens,
+				} => {
+					let hash_syntax = SyntaxToken {
+						ty: SyntaxType::DirectiveHash,
+						modifiers: SyntaxModifiers::empty(),
+						span: token_span.first_char(),
+					};
+					let name_syntax = SyntaxToken {
+						ty: SyntaxType::DirectiveName,
+						modifiers: SyntaxModifiers::empty(),
+						span: kw_span,
+					};
 
-					// We are expecting an identifier as the first token.
-					let expr = if tokens.is_empty() {
+					let span = if tokens.is_empty() {
 						syntax_diags.push(Syntax::PreprocConditional(
 							PreprocConditionalDiag::ExpectedExprAfterIf(
-								kw.next_single_width(),
+								kw_span.next_single_width(),
 							),
 						));
-						None
+						kw_span.next_single_width()
 					} else {
-						let (expr, mut syntax, mut colours) =
-							cond_parser(tokens);
-						syntax_diags.append(&mut syntax);
-						syntax_tokens.append(&mut colours);
-						expr
+						Span::new(
+							tokens.first().unwrap().1.start,
+							tokens.last().unwrap().1.end,
+						)
+					};
+
+					// Finish the current token group.
+					let idx = arena.len();
+					arena.push(std::mem::take(&mut current_tokens));
+					tree.get_mut(top(&stack))
+						.unwrap()
+						.children
+						.push(Either::Left(idx));
+
+					// Create a new condition block, and a new node for the `if` condition.
+					let idx = tree.len();
+					tree.push(TreeNode {
+						parent: Some(top(&stack)),
+						children: Vec::new(),
+						span: token_span,
+					});
+					tree.get_mut(top(&stack)).unwrap().children.push(
+						Either::Right(ConditionBlock {
+							conditions: vec![(
+								Conditional::If,
+								tokens,
+								span,
+								idx,
+								hash_syntax,
+								name_syntax,
+							)],
+							end: None,
+						}),
+					);
+					order_by_appearance.push((idx, stack.clone()));
+					stack.push(idx);
+				}
+				PreprocStream::ElseIf {
+					kw: kw_span,
+					tokens,
+				} => {
+					let hash_syntax = SyntaxToken {
+						ty: SyntaxType::DirectiveHash,
+						modifiers: SyntaxModifiers::empty(),
+						span: token_span.first_char(),
+					};
+					let name_syntax = SyntaxToken {
+						ty: SyntaxType::DirectiveName,
+						modifiers: SyntaxModifiers::empty(),
+						span: kw_span,
+					};
+
+					let span = if tokens.is_empty() {
+						syntax_diags.push(Syntax::PreprocConditional(
+							PreprocConditionalDiag::ExpectedExprAfterIf(
+								kw_span.next_single_width(),
+							),
+						));
+						kw_span.next_single_width()
+					} else {
+						Span::new(
+							tokens.first().unwrap().1.start,
+							tokens.last().unwrap().1.end,
+						)
 					};
 
 					if stack.len() > 1 {
@@ -570,12 +519,12 @@ pub fn parse_from_token_stream(
 						node.span.end = token_span.end;
 						let Either::Right(cond_block) = node.children.last_mut().unwrap() else { unreachable!() };
 						cond_block.conditions.push((
-							Conditional {
-								span: token_span,
-								ty: ConditionalTy::ElseIf { expr },
-							},
+							Conditional::ElseIf,
+							tokens,
+							span,
 							idx,
-							syntax_tokens,
+							hash_syntax,
+							name_syntax,
 						));
 						order_by_appearance.push((idx, stack.clone()));
 						stack.push(idx);
@@ -585,33 +534,32 @@ pub fn parse_from_token_stream(
 						));
 					}
 				}
-				PreprocStream::Else { kw, tokens } => {
-					let mut syntax_tokens = vec![
-						SyntaxToken {
-							ty: SyntaxType::DirectiveHash,
-							modifiers: SyntaxModifiers::empty(),
-							span: token_span.first_char(),
-						},
-						SyntaxToken {
-							ty: SyntaxType::DirectiveName,
-							modifiers: SyntaxModifiers::empty(),
-							span: kw,
-						},
-					];
+				PreprocStream::Else {
+					kw: kw_span,
+					tokens,
+				} => {
+					let hash_syntax = SyntaxToken {
+						ty: SyntaxType::DirectiveHash,
+						modifiers: SyntaxModifiers::empty(),
+						span: token_span.first_char(),
+					};
+					let name_syntax = SyntaxToken {
+						ty: SyntaxType::DirectiveName,
+						modifiers: SyntaxModifiers::empty(),
+						span: kw_span,
+					};
 
 					// We are not expecting anything after `#else`.
-					if !tokens.is_empty() {
+					let span = if tokens.is_empty() {
+						kw_span.next_single_width()
+					} else {
 						let span = Span::new(
 							tokens.first().unwrap().1.start,
 							tokens.last().unwrap().1.end,
 						);
 						syntax_diags.push(Syntax::PreprocTrailingTokens(span));
-						syntax_tokens.push(SyntaxToken {
-							ty: SyntaxType::Invalid,
-							modifiers: SyntaxModifiers::CONDITIONAL,
-							span,
-						});
-					}
+						span
+					};
 
 					if stack.len() > 1 {
 						// Finish the current token group for the previous conditional node.
@@ -637,12 +585,12 @@ pub fn parse_from_token_stream(
 						node.span.end = token_span.end;
 						let Either::Right(cond_block) = node.children.last_mut().unwrap() else { unreachable!() };
 						cond_block.conditions.push((
-							Conditional {
-								span: token_span,
-								ty: ConditionalTy::Else,
-							},
+							Conditional::Else,
+							tokens,
+							span,
 							idx,
-							syntax_tokens,
+							hash_syntax,
+							name_syntax,
 						));
 						order_by_appearance.push((idx, stack.clone()));
 						stack.push(idx);
@@ -652,33 +600,32 @@ pub fn parse_from_token_stream(
 						));
 					}
 				}
-				PreprocStream::EndIf { kw, tokens } => {
-					let mut syntax_tokens = vec![
-						SyntaxToken {
-							ty: SyntaxType::DirectiveHash,
-							modifiers: SyntaxModifiers::empty(),
-							span: token_span.first_char(),
-						},
-						SyntaxToken {
-							ty: SyntaxType::DirectiveName,
-							modifiers: SyntaxModifiers::empty(),
-							span: kw,
-						},
-					];
+				PreprocStream::EndIf {
+					kw: kw_span,
+					tokens,
+				} => {
+					let hash_syntax = SyntaxToken {
+						ty: SyntaxType::DirectiveHash,
+						modifiers: SyntaxModifiers::empty(),
+						span: token_span.first_char(),
+					};
+					let name_syntax = SyntaxToken {
+						ty: SyntaxType::DirectiveName,
+						modifiers: SyntaxModifiers::empty(),
+						span: kw_span,
+					};
 
 					// We are not expecting anything after `#endif`.
-					if !tokens.is_empty() {
+					let span = if tokens.is_empty() {
+						kw_span.next_single_width()
+					} else {
 						let span = Span::new(
 							tokens.first().unwrap().1.start,
 							tokens.last().unwrap().1.end,
 						);
 						syntax_diags.push(Syntax::PreprocTrailingTokens(span));
-						syntax_tokens.push(SyntaxToken {
-							ty: SyntaxType::Invalid,
-							modifiers: SyntaxModifiers::CONDITIONAL,
-							span,
-						});
-					}
+						span
+					};
 
 					if stack.len() > 1 {
 						let node = tree.get_mut(top(&stack)).unwrap();
@@ -700,11 +647,11 @@ pub fn parse_from_token_stream(
 						node.span.end = token_span.end;
 						let Either::Right(cond_block) = node.children.last_mut().unwrap() else { unreachable!() };
 						cond_block.end = Some((
-							Conditional {
-								span: token_span,
-								ty: ConditionalTy::End,
-							},
-							syntax_tokens,
+							Conditional::End,
+							tokens,
+							span,
+							hash_syntax,
+							name_syntax,
 						));
 					} else {
 						syntax_diags.push(Syntax::PreprocConditional(
@@ -742,10 +689,9 @@ pub fn parse_from_token_stream(
 		let node = tree.get_mut(top(&stack)).unwrap();
 		node.span.end = token_stream_end;
 		let Either::Right(cond) = node.children.last_mut().unwrap() else { unreachable!(); };
-		let if_span = cond.conditions[0].0.span;
 		syntax_diags.push(Syntax::PreprocConditional(
 			PreprocConditionalDiag::UnclosedBlock(
-				if_span,
+				cond.conditions[0].2,
 				Span::new(token_stream_end, token_stream_end),
 			),
 		));
@@ -827,8 +773,8 @@ pub fn print_ast(ast: Vec<Node>) -> String {
 /// 11│ }
 /// ```
 /// In the example above, if `TOGGLE` is not defined, we have a function `foo` who's scope ends on line `11` and
-/// includes two variable definitions `i` and `p`. However, if `TOGGLE` is defined, the function `foo` ends on
-/// line `6` instead and only contains the variable `i`, and we have a completely new function `bar` which has the
+/// includes two variable definitions `i` and `p`. However, if `TOGGLE` is defined, the function `foo` ends on line
+/// `6` instead and only contains the variable `i`, and we have a completely new function `bar` which has the
 /// variable `p`.
 ///
 /// This technically can be representable in the AST, it's just that it would look something like this:
@@ -883,8 +829,8 @@ pub fn print_ast(ast: Vec<Node>) -> String {
 /// such as the name, the starting position, the parameters, etc. If we would encounter the conditional branching
 /// within this parsing function, we would somehow need to be able to return up the call stack to split the parser,
 /// whilst also somehow not loosing the temporary state. This should be technically possible, but it would greatly
-/// complicate the parser and make writing the parsing logic itself an absolutely awful experience, and that is not
-/// a trade-off I'm willing to take.
+/// complicate the parser and make writing the parsing logic itself an absolutely awful mess, and that is not a
+/// trade-off I'm willing to take.
 ///
 /// This complication occurs because the preprocessor is a separate pass ran before the main compiler and does not
 /// follow the GLSL grammar rules, which means that preprocessor directives and macros can be included literally
@@ -894,6 +840,9 @@ pub fn print_ast(ast: Vec<Node>) -> String {
 /// conditional branch splits a function mid-way through parsing. GLSL unfortunately uses the C preprocessor, which
 /// results in this sort of stuff (the approach taken by this crate) being necessary to achieve 100%
 /// specification-defined behaviour.
+///
+/// Note that macros can actually be correctly expanded within the same pass as the parser without introduce too
+/// much complexity, it's just that conditional compilation can't.
 pub struct TokenTree {
 	/// The arena of token streams.
 	///
@@ -935,6 +884,9 @@ pub struct TokenTree {
 }
 
 impl TokenTree {
+	/// Node id of the root node.
+	const ROOT_NODE_ID: usize = 0;
+
 	/// Parses the root token stream.
 	///
 	/// Whilst this is guaranteed to succeed, if the entire source string is wrapped within a conditional block
@@ -959,15 +911,14 @@ impl TokenTree {
 	pub fn root(&self, syntax_highlight_entire_file: bool) -> ParseResult {
 		// Get the relevant streams for the root branch.
 		let streams = if !self.contains_conditional_compilation {
-			vec![self.arena.get(0).unwrap().clone()]
+			self.arena.clone()
 		} else {
 			let mut streams = Vec::new();
-			let node = self.tree.get(0).unwrap();
+			let node = &self.tree[Self::ROOT_NODE_ID];
 			for child in &node.children {
+				// Ignore any conditional blocks under the root node.
 				match child {
-					Either::Left(idx) => {
-						streams.push(self.arena.get(*idx).unwrap().clone())
-					}
+					Either::Left(idx) => streams.push(self.arena[*idx].clone()),
 					Either::Right(_) => {}
 				}
 			}
@@ -975,16 +926,23 @@ impl TokenTree {
 		};
 
 		// Parse the root branch.
-		let mut walker = Walker::new(streams, vec![]);
+		let mut walker = Walker::new(RootTokenStreamProvider::new(streams));
 		let mut nodes = Vec::new();
 		while !walker.is_done() {
 			parse_stmt(&mut walker, &mut nodes);
 		}
+		let (nodes, syntax_diags, semantic_diags, syntax_tokens) = (
+			nodes,
+			walker.syntax_diags,
+			walker.semantic_diags,
+			walker.syntax_tokens,
+		);
 
 		if syntax_highlight_entire_file && self.contains_conditional_compilation
 		{
-			let mut root_tokens = std::mem::take(&mut walker.syntax_tokens);
-			let mut tokens = Vec::with_capacity(walker.syntax_tokens.len());
+			let mut tokens = Vec::with_capacity(syntax_tokens.len());
+			let mut root_tokens = syntax_tokens;
+			let mut conditional_spans = Vec::new();
 
 			// Each key points to the nodes which contain the tokens of the conditional branch. If we want
 			// information about the conditional directive itself, we have to look at the parent.
@@ -1011,9 +969,12 @@ impl TokenTree {
 			// scopes, (if any).
 			for (i, key) in keys.iter().enumerate() {
 				let node = self.tree.get(key[0]).unwrap();
+				conditional_spans.push(node.span);
 
-				let (_, _, _, mut new_tokens) =
-					self.parse_node_ids_chronologically(key);
+				let ParseResult {
+					syntax_tokens: mut new_tokens,
+					..
+				} = self.parse_node_ids_chronologically(key);
 				loop {
 					let SyntaxToken { span: s, .. } = match new_tokens.get(0) {
 						Some(t) => t,
@@ -1058,14 +1019,50 @@ impl TokenTree {
 			// Append any remaining root tokens.
 			tokens.append(&mut root_tokens);
 
-			(nodes, walker.syntax_diags, walker.semantic_diags, tokens)
+			ParseResult {
+				ast: nodes,
+				syntax_diags,
+				semantic_diags,
+				syntax_tokens: tokens,
+				disabled_code_spans: conditional_spans,
+			}
 		} else {
-			(
-				nodes,
-				walker.syntax_diags,
-				walker.semantic_diags,
-				walker.syntax_tokens,
-			)
+			let keys = self
+				.minimal_no_of_permutations_for_complete_syntax_highlighting();
+			let mut conditional_spans = Vec::new();
+
+			for key in keys.iter() {
+				let node = self.tree.get(key[0]).unwrap();
+				conditional_spans.push(node.span);
+			}
+
+			ParseResult {
+				ast: nodes,
+				syntax_diags,
+				semantic_diags,
+				syntax_tokens,
+				disabled_code_spans: conditional_spans,
+			}
+		}
+	}
+
+	/// Parses the token tree by enabling conditional branches if they evaluate to true.
+	pub fn evaluate(&self, _syntax_highlight_entire_file: bool) -> ParseResult {
+		let mut walker = Walker::new(DynamicTokenStreamProvider::new(
+			&self.arena,
+			&self.tree,
+		));
+		let mut nodes = Vec::new();
+		while !walker.is_done() {
+			parse_stmt(&mut walker, &mut nodes);
+		}
+
+		ParseResult {
+			ast: nodes,
+			syntax_diags: walker.syntax_diags,
+			semantic_diags: walker.semantic_diags,
+			syntax_tokens: walker.syntax_tokens,
+			disabled_code_spans: vec![],
 		}
 	}
 
@@ -1081,6 +1078,7 @@ impl TokenTree {
 	pub fn parse_by_order_of_appearance(
 		&self,
 		key: impl AsRef<[usize]>,
+		_syntax_highlight_entire_file: bool,
 	) -> Result<ParseResult, TreeParseErr> {
 		let key = key.as_ref();
 
@@ -1152,13 +1150,33 @@ impl TokenTree {
 					}
 					Either::Right(ConditionBlock { conditions, end }) => {
 						// Check if any of the conditional branches match the current key number.
-						for (_, node_id, tokens) in conditions {
+						for (_, tokens, _, node_id, _, _) in conditions {
 							if *node_id == nodes[nodes_idx] {
-								conditional_syntax_tokens.push(tokens.clone());
+								conditional_syntax_tokens.push(
+									tokens
+										.iter()
+										.map(|(t, s)| SyntaxToken {
+											ty: t.non_semantic_colour(),
+											modifiers:
+												SyntaxModifiers::CONDITIONAL,
+											span: *s,
+										})
+										.collect::<Vec<_>>(),
+								);
 								node_stack.push((*node_id, 0));
 								nodes_idx += 1;
-								if let Some((_, tokens)) = end {
-									end_tokens_stack.push(tokens.clone());
+								if let Some((_, tokens, _, _, _)) = end {
+									end_tokens_stack.push(
+										tokens
+											.iter()
+											.map(|(t, s)| SyntaxToken {
+												ty: t.non_semantic_colour(),
+												modifiers:
+													SyntaxModifiers::CONDITIONAL,
+												span: *s,
+											})
+											.collect::<Vec<_>>(),
+									);
 								}
 								continue 'outer;
 							}
@@ -1171,24 +1189,31 @@ impl TokenTree {
 			// with the parent node, (if there is one).
 			if node_stack.len() > 1 {
 				node_stack.pop();
-				conditional_syntax_tokens.push(end_tokens_stack.pop().unwrap());
+				if let Some(e) = end_tokens_stack.pop() {
+					// We may not have an ending token if the conditional block lacks a `#endif`, hence this check.
+					conditional_syntax_tokens.push(e);
+				}
 			} else {
 				break 'outer;
 			}
 		}
 
-		let mut walker = Walker::new(streams, conditional_syntax_tokens);
+		let mut walker = Walker::new(PreselectedTokenStreamProvider::new(
+			streams,
+			conditional_syntax_tokens,
+		));
 		let mut nodes = Vec::new();
 		while !walker.is_done() {
 			parse_stmt(&mut walker, &mut nodes);
 		}
 
-		(
-			nodes,
-			walker.syntax_diags,
-			walker.semantic_diags,
-			walker.syntax_tokens,
-		)
+		ParseResult {
+			ast: nodes,
+			syntax_diags: walker.syntax_diags,
+			semantic_diags: walker.semantic_diags,
+			syntax_tokens: walker.syntax_tokens,
+			disabled_code_spans: vec![], // FIXME:
+		}
 	}
 
 	/// Returns all of the (by-order-of-appearance) keys (**of node IDs, not order-of-appearance numbers**)
@@ -1242,28 +1267,63 @@ struct TreeNode {
 	/// The children/contents of this node. Each entry either points to a token stream (in the arena), or is a
 	/// condition block which points to child nodes.
 	children: Vec<Either<ArenaId, ConditionBlock>>,
+	/// The span of the entire node.
 	span: Span,
 }
 
 #[derive(Debug)]
 struct ConditionBlock {
-	/// The individual condition blocks.
+	/// The individual conditional directives & blocks.
 	///
+	/// - `0` - The type of conditional directive.
+	/// - `1` - The tokens.
+	/// - `2` - The span of the tokens.
+	/// - `3` - The ID of the node that contains the contents of the branch.
+	/// - `4` - The syntax highlighting token for the `#` symbol.
+	/// - `5` - The syntax highlighting token for the name of the directive.
 	/// # Invariants
-	/// The entry at `[0]` will be a `ConditionalTy::IfDef/IfNotDef/If` variant.
+	/// There will always be an entry at `[0]` and it will be a `Conditional::IfDef/IfNotDef/If` variant.
 	///
-	/// A `ConditionalTy::End` will never be present.
-	conditions: Vec<(Conditional, NodeId, Vec<SyntaxToken>)>,
+	/// This will never contain a `Conditional::End`.
+	conditions: Vec<(
+		Conditional,
+		Vec<Spanned<ConditionToken>>,
+		Span,
+		NodeId,
+		SyntaxToken,
+		SyntaxToken,
+	)>,
 	/// The `#endif` directive.
 	///
 	/// This is separate because the `#endif` doesn't contain any children, (since it ends the condition block),
 	/// hence a `NodeId` would be incorrect.
 	///
+	/// - `0` - The type of conditional directive.
+	/// - `1` - The tokens.
+	/// - `2` - The span of the tokens.
+	/// - `3` - The syntax highlighting token for the `#` symbol.
+	/// - `4` - The syntax highlighting token for the name of the directive.
+	///
 	/// # Invariants
-	/// This will be a `ConditionalTy::End` variant.
-	end: Option<(Conditional, Vec<SyntaxToken>)>,
+	/// This will be a `Conditional::End` variant.
+	end: Option<(
+		Conditional,
+		Vec<Spanned<ConditionToken>>,
+		Span,
+		SyntaxToken,
+		SyntaxToken,
+	)>,
 }
 
+#[derive(Debug)]
+enum Conditional {
+	IfDef,
+	IfNotDef,
+	If,
+	ElseIf,
+	Else,
+	End,
+}
 /// Information necessary to expand a macro.
 #[derive(Debug, Clone)]
 enum Macro {
@@ -1274,11 +1334,295 @@ enum Macro {
 	},
 }
 
+/// A token stream provider.
+trait TokenStreamProvider<'a>: Clone {
+	/// Returns the next token stream. If the end of the source string has been reached, `None` will be returned.
+	fn get_next_stream(
+		&mut self,
+		macros: &HashMap<String, (Span, Macro)>,
+		syntax_diags: &mut Vec<Syntax>,
+		syntax_tokens: &mut Vec<SyntaxToken>,
+	) -> Option<TokenStream>;
+
+	/// Returns the span of the last relevant token in the source string.
+	fn get_last_span(&self) -> Span;
+}
+
+/// A root token stream provider.
+#[derive(Debug, Clone)]
+struct RootTokenStreamProvider<'a> {
+	/// The source streams in the correct order.
+	streams: Vec<TokenStream>,
+	/// Cursor position.
+	cursor: usize,
+	/// The pre-calculated last span.
+	last_span: Span,
+	_phantom: std::marker::PhantomData<&'a ()>,
+}
+
+impl<'a> RootTokenStreamProvider<'a> {
+	/// Constructs a new pre-selected token stream provider.
+	fn new(streams: Vec<TokenStream>) -> Self {
+		let last_span = if let Some(stream) = streams.last() {
+			if let Some((_, span)) = stream.last() {
+				*span
+			} else {
+				Span::new(0, 0)
+			}
+		} else {
+			Span::new(0, 0)
+		};
+
+		Self {
+			streams,
+			cursor: 0,
+			last_span,
+			_phantom: std::marker::PhantomData::default(),
+		}
+	}
+}
+
+impl<'a> TokenStreamProvider<'a> for RootTokenStreamProvider<'a> {
+	fn get_next_stream(
+		&mut self,
+		_macros: &HashMap<String, (Span, Macro)>,
+		_syntax_diags: &mut Vec<Syntax>,
+		_syntax_tokens: &mut Vec<SyntaxToken>,
+	) -> Option<TokenStream> {
+		let v = self.streams.get(self.cursor).map(|v| v.clone());
+		self.cursor += 1;
+		v
+	}
+
+	fn get_last_span(&self) -> Span {
+		self.last_span
+	}
+}
+
+/// A pre-selected token stream provider.
+#[derive(Debug, Clone)]
+struct PreselectedTokenStreamProvider<'a> {
+	/// The source streams in the correct order.
+	streams: Vec<TokenStream>,
+	/// Cursor position.
+	cursor: usize,
+	/// The pre-calculated last span.
+	last_span: Span,
+	/// Syntax tokens for each conditional directive that is part of the pre-selected evaluation, in order of
+	/// appearance.
+	conditional_syntax_tokens: Vec<Vec<SyntaxToken>>,
+	_phantom: std::marker::PhantomData<&'a ()>,
+}
+
+impl<'a> PreselectedTokenStreamProvider<'a> {
+	/// Constructs a new pre-selected token stream provider.
+	fn new(
+		streams: Vec<TokenStream>,
+		conditional_syntax_tokens: Vec<Vec<SyntaxToken>>,
+	) -> Self {
+		let last_span = if let Some(stream) = streams.last() {
+			if let Some((_, span)) = stream.last() {
+				*span
+			} else {
+				Span::new(0, 0)
+			}
+		} else {
+			Span::new(0, 0)
+		};
+
+		Self {
+			streams,
+			cursor: 0,
+			last_span,
+			conditional_syntax_tokens,
+			_phantom: std::marker::PhantomData::default(),
+		}
+	}
+}
+
+impl<'a> TokenStreamProvider<'a> for PreselectedTokenStreamProvider<'a> {
+	fn get_next_stream(
+		&mut self,
+		_macros: &HashMap<String, (Span, Macro)>,
+		_syntax_diags: &mut Vec<Syntax>,
+		syntax_tokens: &mut Vec<SyntaxToken>,
+	) -> Option<TokenStream> {
+		match self.streams.get(self.cursor) {
+			Some(v) => {
+				if let Some(f) = self.conditional_syntax_tokens.first() {
+					if let Some(SyntaxToken { span, .. }) = f.first() {
+						if let Some((_, s)) = v.first() {
+							if span.is_before(s) {
+								syntax_tokens.append(
+									&mut self
+										.conditional_syntax_tokens
+										.remove(0),
+								);
+							}
+						}
+					}
+				}
+				self.cursor += 1;
+				return Some(v.clone());
+			}
+			None => {
+				while !self.conditional_syntax_tokens.is_empty() {
+					syntax_tokens
+						.append(&mut self.conditional_syntax_tokens.remove(0));
+				}
+				return None;
+			}
+		}
+	}
+
+	fn get_last_span(&self) -> Span {
+		self.last_span
+	}
+}
+
+/// A dynamic token stream provider. This evaluates conditional directives on-the-fly.
+#[derive(Debug, Clone)]
+struct DynamicTokenStreamProvider<'a> {
+	/// The arena of token streams.
+	arena: &'a [TokenStream],
+	/// The tree.
+	tree: &'a [TreeNode],
+	/// The current call stack.
+	///
+	/// - `0` - The node ID.
+	/// - `1` - The index into the node's `children`.
+	ptrs: Vec<(usize, usize)>,
+	/// The span of the currently-last token. This is updated everytime a new stream is pushed.
+	last_span: Span,
+}
+
+impl<'a> DynamicTokenStreamProvider<'a> {
+	/// Constructs a new dynamic token stream provider.
+	fn new(arena: &'a [TokenStream], tree: &'a [TreeNode]) -> Self {
+		Self {
+			arena,
+			tree,
+			ptrs: vec![(TokenTree::ROOT_NODE_ID, 0)],
+			last_span: Span::new(0, 0),
+		}
+	}
+}
+
+impl<'a> TokenStreamProvider<'a> for DynamicTokenStreamProvider<'a> {
+	fn get_next_stream(
+		&mut self,
+		macros: &HashMap<String, (Span, Macro)>,
+		syntax_diags: &mut Vec<Syntax>,
+		syntax_tokens: &mut Vec<SyntaxToken>,
+	) -> Option<TokenStream> {
+		loop {
+			let Some((node_ptr, child_idx)) = self.ptrs.last_mut() else { return None; };
+			let node = self.tree.get(*node_ptr).unwrap();
+			let Some(child) = node.children.get(*child_idx) else { return None; };
+
+			match child {
+				Either::Left(arena_id) => {
+					*child_idx += 1;
+					if *child_idx == node.children.len() {
+						// We have gone through all of the children of this node, so we want to pop it from the
+						// stack.
+						self.ptrs.pop();
+					}
+					let stream = self.arena[*arena_id].clone();
+					if let Some((_, span)) = stream.last() {
+						self.last_span = *span;
+					}
+					return Some(stream);
+				}
+				Either::Right(cond_block) => {
+					*child_idx += 1;
+					if *child_idx == node.children.len() {
+						// We have gone through all of the children of this node, so we want to pop it from the
+						// stack.
+						self.ptrs.pop();
+					}
+					let mut matched_condition_node_id = None;
+					for (condition_ty, tokens, _, node_id, _, _) in
+						&cond_block.conditions
+					{
+						match condition_ty {
+							Conditional::IfDef | Conditional::IfNotDef => {
+								if !tokens.is_empty() {
+									let (token, token_span) = &tokens[0];
+									match token {
+										ConditionToken::Ident(str) => {
+											let result =
+												conditional_eval::evaluate_def(
+													Ident {
+														name: str.clone(),
+														span: *token_span,
+													},
+													macros,
+												);
+											if result {
+												matched_condition_node_id =
+													Some(*node_id);
+												break;
+											}
+										}
+										_ => {}
+									}
+								}
+							}
+							Conditional::If | Conditional::ElseIf => {
+								let (expr, mut syntax, mut colours) =
+									cond_parser(tokens.clone(), macros);
+								syntax_diags.append(&mut syntax);
+								syntax_tokens.append(&mut colours);
+								if let Some(expr) = expr {
+									let result =
+										conditional_eval::evaluate_expr(
+											expr, macros,
+										);
+									if result {
+										matched_condition_node_id =
+											Some(*node_id);
+										// FIXME: Deal with syntax tokens for other branches after the next
+										// stream is exhausted.
+										break;
+									}
+								}
+							}
+							Conditional::Else => {
+								// An `else` branch is always unconditionally chosen.
+								matched_condition_node_id = Some(*node_id);
+								break;
+							}
+							Conditional::End => unreachable!(),
+						}
+					}
+					match matched_condition_node_id {
+						Some(node_id) => {
+							self.ptrs.push((node_id, 0));
+							continue;
+						}
+						None => {
+							// We didn't match any conditional branches, so we want to continue with the next
+							// node/child.
+							continue;
+						}
+					}
+				}
+			}
+		}
+	}
+
+	fn get_last_span(&self) -> Span {
+		self.last_span
+	}
+}
+
 /// Allows for stepping through a token stream. Takes care of dealing with irrelevant details from the perspective
 /// of the parser, such as comments and macro expansion.
-pub(crate) struct Walker {
-	/// The token streams of the source string with the preselected conditional branches.
-	source_streams: Vec<TokenStream>,
+struct Walker<'a, Provider: TokenStreamProvider<'a>> {
+	/// The token stream provider.
+	token_provider: Provider,
+	_phantom: std::marker::PhantomData<&'a ()>,
 	/// The active token streams.
 	///
 	/// - `0` - The macro identifier, (for the root source stream this is just `""`).
@@ -1306,45 +1650,24 @@ pub(crate) struct Walker {
 
 	/// The syntax highlighting tokens created from the tokens parsed so-far.
 	syntax_tokens: Vec<SyntaxToken>,
-	/// The syntax highlighting tokens for any conditional directives.
-	///
-	/// - `0` - The span of the entire directive.
-	/// - `1` - The syntax tokens.
-	conditional_syntax_tokens: Vec<(Span, Vec<SyntaxToken>)>,
-
-	/// The last span in the source string.
-	last_span: Span,
 }
 
 #[allow(unused)]
-impl Walker {
+impl<'a, Provider: TokenStreamProvider<'a>> Walker<'a, Provider> {
 	/// Constructs a new walker.
-	fn new(
-		mut token_streams: Vec<TokenStream>,
-		conditional_syntax_tokens: Vec<Vec<SyntaxToken>>,
-	) -> Self {
-		let mut last_span = Span::new(0, 0);
-		for stream in token_streams.iter().rev() {
-			match stream.last() {
-				Some((_, span)) => {
-					last_span = *span;
-					break;
-				}
-				None => continue,
-			}
-		}
+	fn new(mut token_provider: Provider) -> Self {
+		let macros = HashMap::new();
+		let mut syntax_diags = Vec::new();
+		let mut syntax_tokens = Vec::new();
 
-		// Deal with the possibility of having one or more streams that are all completely empty.
-		// Note: We don't have to deal with the possibility of the first token being a macro call site because a
-		// macro needs to be defined before it can be expanded.
-		let mut token_streams: Vec<_> = token_streams
-			.into_iter()
-			.filter(|s| !s.is_empty())
-			.collect();
-		let streams = if !token_streams.is_empty() {
-			vec![("".into(), token_streams.remove(0), 0)]
-		} else {
-			vec![]
+		// Get the first stream.
+		let streams = match token_provider.get_next_stream(
+			&macros,
+			&mut syntax_diags,
+			&mut syntax_tokens,
+		) {
+			Some(stream) => vec![("".into(), stream, 0)],
+			None => vec![],
 		};
 
 		let mut active_macros = HashSet::new();
@@ -1353,31 +1676,15 @@ impl Walker {
 		active_macros.insert("".into());
 
 		Self {
-			source_streams: token_streams,
+			token_provider,
+			_phantom: Default::default(),
 			streams,
-			macros: HashMap::new(),
+			macros,
 			macro_call_site: None,
 			active_macros,
-			syntax_diags: Vec::new(),
+			syntax_diags,
 			semantic_diags: Vec::new(),
-			syntax_tokens: Vec::new(),
-			conditional_syntax_tokens: conditional_syntax_tokens
-				.into_iter()
-				.filter_map(|v| {
-					if !v.is_empty() {
-						Some((
-							Span::new(
-								v.first().unwrap().span.start,
-								v.last().unwrap().span.end,
-							),
-							v,
-						))
-					} else {
-						None
-					}
-				})
-				.collect(),
-			last_span,
+			syntax_tokens,
 		}
 	}
 
@@ -1429,7 +1736,7 @@ impl Walker {
 	/// This method correctly steps into/out-of macros, jumps between conditional compilation branches, and
 	/// consumes any comments.
 	fn lookahead_1(&self) -> Option<Spanned<Token>> {
-		let mut source_streams = self.source_streams.clone();
+		let mut token_provider = self.token_provider.clone();
 		let mut streams = self.streams.clone();
 		let mut macros = self.macros.clone();
 		let mut active_macros = self.active_macros.clone();
@@ -1438,8 +1745,8 @@ impl Walker {
 		let mut semantic_diags = Vec::new();
 		let mut syntax_tokens = Vec::new();
 		// PERF: Optimize for certain cases to prevent having to clone everything everytime.
-		Self::move_cursor(
-			&mut source_streams,
+		Self::_move_cursor(
+			&mut token_provider,
 			&mut streams,
 			&mut macros,
 			&mut active_macros,
@@ -1473,8 +1780,8 @@ impl Walker {
 	/// This method correctly steps into/out-of macros, jumps between conditional compilation branches, and
 	/// consumes any comments.
 	fn advance(&mut self) {
-		Self::move_cursor(
-			&mut self.source_streams,
+		Self::_move_cursor(
+			&mut self.token_provider,
 			&mut self.streams,
 			&mut self.macros,
 			&mut self.active_macros,
@@ -1496,8 +1803,8 @@ impl Walker {
 		semantic_diags: &mut Vec<Semantic>,
 		syntax_tokens: &mut Vec<SyntaxToken>,
 	) {
-		Self::move_cursor(
-			&mut self.source_streams,
+		Self::_move_cursor(
+			&mut self.token_provider,
 			&mut self.streams,
 			&mut self.macros,
 			&mut self.active_macros,
@@ -1515,13 +1822,13 @@ impl Walker {
 
 	/// Returns the span of the last token in the token stream.
 	fn get_last_span(&self) -> Span {
-		self.last_span
+		self.token_provider.get_last_span()
 	}
 
 	/// Moves the cursor to the next token. This function takes all the necessary data by parameter so that the
 	/// functionality can be re-used between the `Self::advance()` and `Self::lookahead_1()` methods.
-	fn move_cursor(
-		source_streams: &mut Vec<TokenStream>,
+	fn _move_cursor(
+		token_provider: &mut Provider,
 		streams: &mut Vec<(String, TokenStream, usize)>,
 		macros: &mut HashMap<String, (Span, Macro)>,
 		active_macros: &mut HashSet<String>,
@@ -1540,24 +1847,30 @@ impl Walker {
 			dont_increment = false;
 
 			if *cursor == stream.len() {
-				// We have reached the end of this stream. We close it and re-run the loop on the next stream (if
+				// We have reached the end of this stream. We close it and re-run the loop on the next stream, (if
 				// there is one).
 
 				let ident = identifier.clone();
 				if streams.len() == 1 {
-					// If we aren't in a macro, that means we've finished the current source stream but there may
-					// be another one, (since they can be split up due to conditional compilation).
-					if source_streams.is_empty() {
-						// We have reached the final end.
-						streams.remove(0);
-						break;
-					} else {
-						let mut next_source = source_streams.remove(0);
-						let (_, s, c) = streams.get_mut(0).unwrap();
-						std::mem::swap(s, &mut next_source);
-						*c = 0;
-						dont_increment = true;
-						continue;
+					// If we aren't in a macro, that means we've finished the current source stream. There may
+					// however be another stream, for which we need to query the provider for.
+					match token_provider.get_next_stream(
+						macros,
+						syntax_diags,
+						syntax_tokens,
+					) {
+						Some(mut next_stream) => {
+							let (_, s, c) = &mut streams[0];
+							std::mem::swap(s, &mut next_stream);
+							*c = 0;
+							dont_increment = true;
+							continue;
+						}
+						None => {
+							// The provider didn't return anything, so that means we have reached the final end.
+							streams.remove(0);
+							break;
+						}
 					}
 				} else {
 					// Panic: Anytime a stream is added the identifier is inserted into the set.
@@ -1947,84 +2260,18 @@ impl Walker {
 	) {
 		// When we are within a macro, we don't want to produce syntax tokens.
 		// Note: This functionality is duplicated in the `ShuntingYard::colour()` method.
-		if self.streams.len() != 1 {
-			return;
-		}
-
-		let token = SyntaxToken {
-			ty,
-			modifiers,
-			span,
-		};
-
-		if self.conditional_syntax_tokens.is_empty() {
-			self.syntax_tokens.push(token);
-		} else {
-			let mut previous_span = self
-				.syntax_tokens
-				.get(0)
-				.map(|t| t.span)
-				.unwrap_or(Span::new(0, 0));
-			while let Some(bottom) = self.conditional_syntax_tokens.first() {
-				if bottom.0.is_before(&previous_span) {
-					// We have already consumes syntax tokens for the conditional directive so we want to discard
-					// current ones. This happens if error recovery consumes conditional directive symbols.
-					self.conditional_syntax_tokens.remove(0);
-					continue;
-				} else if bottom.0.is_before(&token.span) {
-					// The current conditional syntax tokens are before this new span, so we must add them
-					// beforehand.
-					let (_, mut tokens) =
-						self.conditional_syntax_tokens.remove(0);
-					self.syntax_tokens.append(&mut tokens);
-					continue;
-				} else {
-					break;
-				}
-			}
-			self.syntax_tokens.push(token);
+		if self.streams.len() == 1 {
+			self.syntax_tokens.push(SyntaxToken {
+				ty,
+				modifiers,
+				span,
+			});
 		}
 	}
 
 	/// Appends a collection of syntax highlighting tokens.
 	fn append_colours(&mut self, colours: &mut Vec<SyntaxToken>) {
-		if self.conditional_syntax_tokens.is_empty() {
-			self.syntax_tokens.append(colours);
-		} else if !self.conditional_syntax_tokens.is_empty()
-			&& !colours.is_empty()
-		{
-			let previous_span = self
-				.syntax_tokens
-				.last()
-				.map(|t| t.span)
-				.unwrap_or(Span::new(0, 0));
-			for colour in colours.into_iter() {
-				let span = &colour.span;
-				while let Some(bottom) = self.conditional_syntax_tokens.first()
-				{
-					if bottom.0.is_before(&previous_span) {
-						// We have already consumes syntax tokens for the conditional directive so we want to
-						// discard current ones. This happens if error recovery consumes conditional directive
-						// symbols.
-						self.conditional_syntax_tokens.remove(0);
-						continue;
-					} else if bottom.0.is_before(&span) {
-						// The current conditional syntax tokens are before this new span, so we must add them
-						// beforehand.
-						let (_, mut tokens) =
-							self.conditional_syntax_tokens.remove(0);
-						self.syntax_tokens.append(&mut tokens);
-						continue;
-					} else {
-						break;
-					}
-				}
-			}
-			self.syntax_tokens.append(colours);
-		} else {
-			// If we are not appending anything, we can't know whether we can append any conditional expression
-			// tokens, hence we do nothing.
-		}
+		self.syntax_tokens.append(colours);
 	}
 }
 
@@ -2035,7 +2282,7 @@ impl Walker {
 /// This function consumes tokens until a keyword which can begin a statement is found, or until a semi-colon is
 /// reached (which is consumed). This is used for some instances of error recovery, where no more specific
 /// strategies can be employed.
-fn seek_next_stmt(walker: &mut Walker) {
+fn seek_next_stmt<'a, P: TokenStreamProvider<'a>>(walker: &mut Walker<'a, P>) {
 	loop {
 		match walker.peek() {
 			Some((token, span)) => {
@@ -2060,7 +2307,10 @@ fn seek_next_stmt(walker: &mut Walker) {
 ///
 /// This function is used to emit a diagnostic about the use of qualifiers before a statement which doesn't support
 /// qualifiers.
-fn invalidate_qualifiers(walker: &mut Walker, qualifiers: Vec<Qualifier>) {
+fn invalidate_qualifiers<'a, P: TokenStreamProvider<'a>>(
+	walker: &mut Walker<'a, P>,
+	qualifiers: Vec<Qualifier>,
+) {
 	if let Some(q) = qualifiers.last() {
 		walker.push_syntax_diag(Syntax::Stmt(
 			StmtDiag::FoundQualifiersBeforeStmt(Span::new(
@@ -2072,7 +2322,10 @@ fn invalidate_qualifiers(walker: &mut Walker, qualifiers: Vec<Qualifier>) {
 }
 
 /// Parses an individual statement at the current position.
-fn parse_stmt(walker: &mut Walker, nodes: &mut Vec<ast::Node>) {
+fn parse_stmt<'a, P: TokenStreamProvider<'a>>(
+	walker: &mut Walker<'a, P>,
+	nodes: &mut Vec<ast::Node>,
+) {
 	let qualifiers = try_parse_qualifiers(walker);
 
 	let Some((token, token_span)) = walker.get() else {
@@ -2084,7 +2337,7 @@ fn parse_stmt(walker: &mut Walker, nodes: &mut Vec<ast::Node>) {
 			invalidate_qualifiers(walker, qualifiers);
 			walker.push_colour(token_span, SyntaxType::Punctuation);
 			walker.advance();
-			let block = parse_scope(walker, BRACE_SCOPE, token_span);
+			let block = parse_scope(walker, brace_scope, token_span);
 			nodes.push(Node {
 				span: block.span,
 				ty: NodeTy::Block(block),
@@ -2195,9 +2448,9 @@ fn parse_stmt(walker: &mut Walker, nodes: &mut Vec<ast::Node>) {
 /// Parses a scope of statements.
 ///
 /// This function assumes that the opening delimiter is already consumed.
-fn parse_scope(
-	walker: &mut Walker,
-	exit_condition: ScopeEnd,
+fn parse_scope<'a, P: TokenStreamProvider<'a>>(
+	walker: &mut Walker<'a, P>,
+	exit_condition: ScopeEnd<'a, P>,
 	opening_span: Span,
 ) -> Scope {
 	let mut nodes = Vec::new();
@@ -2221,44 +2474,59 @@ fn parse_scope(
 ///
 /// This also takes a span of the opening delimiter which allows for the creation of a syntax error if the function
 /// never encounters the desired ending delimiter.
-type ScopeEnd = fn(&mut Walker, Span) -> Option<Span>;
+type ScopeEnd<'a, P> = fn(&mut Walker<'a, P>, Span) -> Option<Span>;
 
-const BRACE_SCOPE: ScopeEnd = |walker, l_brace_span| match walker.peek() {
-	Some((token, span)) => {
-		if *token == Token::RBrace {
-			walker.push_colour(span, SyntaxType::Punctuation);
-			walker.advance();
-			Some(span)
-		} else {
-			None
+fn brace_scope<'a, P: TokenStreamProvider<'a>>(
+	walker: &mut Walker<'a, P>,
+	l_brace_span: Span,
+) -> Option<Span> {
+	match walker.peek() {
+		Some((token, span)) => {
+			if *token == Token::RBrace {
+				walker.push_colour(span, SyntaxType::Punctuation);
+				walker.advance();
+				Some(span)
+			} else {
+				None
+			}
+		}
+		None => {
+			walker.push_syntax_diag(Syntax::Stmt(
+				StmtDiag::ScopeMissingRBrace(
+					l_brace_span,
+					walker.get_last_span().next_single_width(),
+				),
+			));
+			Some(walker.get_last_span().end_zero_width())
 		}
 	}
-	None => {
-		walker.push_syntax_diag(Syntax::Stmt(StmtDiag::ScopeMissingRBrace(
-			l_brace_span,
-			walker.get_last_span().next_single_width(),
-		)));
-		Some(walker.get_last_span().end_zero_width())
+}
+fn switch_case_scope<'a, P: TokenStreamProvider<'a>>(
+	walker: &mut Walker<'a, P>,
+	_start_span: Span,
+) -> Option<Span> {
+	match walker.peek() {
+		Some((token, span)) => match token {
+			Token::Case | Token::Default | Token::RBrace => Some(span),
+			_ => None,
+		},
+		None => {
+			walker.push_syntax_diag(Syntax::Stmt(
+				StmtDiag::SwitchExpectedRBrace(
+					walker.get_last_span().next_single_width(),
+				),
+			));
+			Some(walker.get_last_span().end_zero_width())
+		}
 	}
-};
-
-const SWITCH_CASE_SCOPE: ScopeEnd = |walker, _start_span| match walker.peek() {
-	Some((token, span)) => match token {
-		Token::Case | Token::Default | Token::RBrace => Some(span),
-		_ => None,
-	},
-	None => {
-		walker.push_syntax_diag(Syntax::Stmt(StmtDiag::SwitchExpectedRBrace(
-			walker.get_last_span().next_single_width(),
-		)));
-		Some(walker.get_last_span().end_zero_width())
-	}
-};
+}
 
 /// Tries to parse one or more qualifiers.
 ///
 /// This function makes no assumptions as to what the current token is.
-fn try_parse_qualifiers(walker: &mut Walker) -> Vec<Qualifier> {
+fn try_parse_qualifiers<'a, P: TokenStreamProvider<'a>>(
+	walker: &mut Walker<'a, P>,
+) -> Vec<Qualifier> {
 	let mut qualifiers = Vec::new();
 	'outer: loop {
 		let (token, token_span) = match walker.peek() {
@@ -2799,8 +3067,8 @@ fn try_parse_qualifiers(walker: &mut Walker) -> Vec<Qualifier> {
 ///
 /// - `parsing_last_for_stmt` - Set to `true` if this function is attempting to parse the increment statement in a
 ///   for loop header.
-fn try_parse_definition_declaration_expr(
-	walker: &mut Walker,
+fn try_parse_definition_declaration_expr<'a, P: TokenStreamProvider<'a>>(
+	walker: &mut Walker<'a, P>,
 	nodes: &mut Vec<Node>,
 	qualifiers: Vec<Qualifier>,
 	parsing_last_for_stmt: bool,
@@ -3227,8 +3495,8 @@ fn try_parse_definition_declaration_expr(
 /// Parses a function declaration/definition.
 ///
 /// This function assumes that the return type, ident, and opening parenthesis have been consumed.
-fn parse_function(
-	walker: &mut Walker,
+fn parse_function<'a, P: TokenStreamProvider<'a>>(
+	walker: &mut Walker<'a, P>,
 	nodes: &mut Vec<Node>,
 	return_type: Type,
 	ident: Ident,
@@ -3514,7 +3782,7 @@ fn parse_function(
 		let l_brace_span = token_span;
 		walker.push_colour(l_brace_span, SyntaxType::Punctuation);
 		walker.advance();
-		let body = parse_scope(walker, BRACE_SCOPE, l_brace_span);
+		let body = parse_scope(walker, brace_scope, l_brace_span);
 		nodes.push(Node {
 			span: Span::new(return_type.span.start, body.span.end),
 			ty: NodeTy::FnDef {
@@ -3546,7 +3814,11 @@ fn parse_function(
 /// Parses a subroutine type, associated function, or a subroutine uniform.
 ///
 /// This function assumes that the `subroutine` keyword is not yet consumed.
-fn parse_subroutine(walker: &mut Walker, nodes: &mut Vec<Node>, kw_span: Span) {
+fn parse_subroutine<'a, P: TokenStreamProvider<'a>>(
+	walker: &mut Walker<'a, P>,
+	nodes: &mut Vec<Node>,
+	kw_span: Span,
+) {
 	walker.push_colour(kw_span, SyntaxType::Keyword);
 	walker.advance();
 
@@ -3838,8 +4110,8 @@ fn parse_subroutine(walker: &mut Walker, nodes: &mut Vec<Node>, kw_span: Span) {
 /// Parses a struct declaration/definition.
 ///
 /// This function assumes that the keyword is not yet consumed.
-fn parse_struct(
-	walker: &mut Walker,
+fn parse_struct<'a, P: TokenStreamProvider<'a>>(
+	walker: &mut Walker<'a, P>,
 	nodes: &mut Vec<Node>,
 	qualifiers: Vec<Qualifier>,
 	kw_span: Span,
@@ -3925,7 +4197,7 @@ fn parse_struct(
 	};
 
 	// Parse the contents of the body.
-	let body = parse_scope(walker, BRACE_SCOPE, l_brace_span);
+	let body = parse_scope(walker, brace_scope, l_brace_span);
 	if body.contents.is_empty() {
 		walker.push_syntax_diag(Syntax::Stmt(
 			StmtDiag::StructExpectedAtLeastOneStmtInBody(body.span),
@@ -4027,7 +4299,11 @@ fn parse_struct(
 /// Parses an if statement.
 ///
 /// This function assumes that the keyword is not yet consumed.
-fn parse_if(walker: &mut Walker, nodes: &mut Vec<Node>, kw_span: Span) {
+fn parse_if<'a, P: TokenStreamProvider<'a>>(
+	walker: &mut Walker<'a, P>,
+	nodes: &mut Vec<Node>,
+	kw_span: Span,
+) {
 	let mut branches = Vec::new();
 	let mut first_iter = true;
 	// On the first iteration of this loop, the current token is guaranteed to be `Token::If`.
@@ -4074,7 +4350,7 @@ fn parse_if(walker: &mut Walker, nodes: &mut Vec<Node>, kw_span: Span) {
 				// We have an else keyword followed by nothing.
 				walker.push_syntax_diag(Syntax::Stmt(
 					StmtDiag::IfExpectedIfOrLBraceOrStmtAfterElseKw(
-						walker.last_span.next_single_width(),
+						walker.get_last_span().next_single_width(),
 					),
 				));
 				nodes.push(Node {
@@ -4233,7 +4509,7 @@ fn parse_if(walker: &mut Walker, nodes: &mut Vec<Node>, kw_span: Span) {
 						// We have a multi-line body.
 						walker.push_colour(token_span, SyntaxType::Punctuation);
 						walker.advance();
-						let body = parse_scope(walker, BRACE_SCOPE, token_span);
+						let body = parse_scope(walker, brace_scope, token_span);
 						let span = Span::new(
 							if first_iter {
 								if_kw_span.start
@@ -4375,7 +4651,7 @@ fn parse_if(walker: &mut Walker, nodes: &mut Vec<Node>, kw_span: Span) {
 						// We have a multi-line body.
 						walker.push_colour(token_span, SyntaxType::Punctuation);
 						walker.advance();
-						let body = parse_scope(walker, BRACE_SCOPE, token_span);
+						let body = parse_scope(walker, brace_scope, token_span);
 						branches.push(IfBranch {
 							span: Span::new(else_kw_span.start, body.span.end),
 							condition: (IfCondition::Else, else_kw_span),
@@ -4416,7 +4692,11 @@ fn parse_if(walker: &mut Walker, nodes: &mut Vec<Node>, kw_span: Span) {
 /// Parses a switch statement.
 ///
 /// This function assumes that the keyword is not yet consumed.
-fn parse_switch(walker: &mut Walker, nodes: &mut Vec<Node>, kw_span: Span) {
+fn parse_switch<'a, P: TokenStreamProvider<'a>>(
+	walker: &mut Walker<'a, P>,
+	nodes: &mut Vec<Node>,
+	kw_span: Span,
+) {
 	walker.push_colour(kw_span, SyntaxType::Keyword);
 	walker.advance();
 
@@ -4696,7 +4976,7 @@ fn parse_switch(walker: &mut Walker, nodes: &mut Vec<Node>, kw_span: Span) {
 				// Consume the body of the case.
 				let body = parse_scope(
 					walker,
-					SWITCH_CASE_SCOPE,
+					switch_case_scope,
 					colon_span.unwrap_or(if let Some(ref expr) = expr {
 						expr.span
 					} else {
@@ -4762,7 +5042,7 @@ fn parse_switch(walker: &mut Walker, nodes: &mut Vec<Node>, kw_span: Span) {
 				// Consume the body of the case.
 				let body = parse_scope(
 					walker,
-					SWITCH_CASE_SCOPE,
+					switch_case_scope,
 					colon_span.unwrap_or(default_kw_span.end_zero_width()),
 				);
 				cases.push(SwitchCase {
@@ -4861,7 +5141,11 @@ fn parse_switch(walker: &mut Walker, nodes: &mut Vec<Node>, kw_span: Span) {
 /// Parses a for loop statement.
 ///
 /// This function assumes that the keyword is not yet consumed.
-fn parse_for_loop(walker: &mut Walker, nodes: &mut Vec<Node>, kw_span: Span) {
+fn parse_for_loop<'a, P: TokenStreamProvider<'a>>(
+	walker: &mut Walker<'a, P>,
+	nodes: &mut Vec<Node>,
+	kw_span: Span,
+) {
 	walker.push_colour(kw_span, SyntaxType::Keyword);
 	walker.advance();
 
@@ -5068,7 +5352,7 @@ fn parse_for_loop(walker: &mut Walker, nodes: &mut Vec<Node>, kw_span: Span) {
 	};
 
 	// Consume the body.
-	let body = parse_scope(walker, BRACE_SCOPE, l_brace_span);
+	let body = parse_scope(walker, brace_scope, l_brace_span);
 	nodes.push(Node {
 		span: Span::new(kw_span.start, body.span.end),
 		ty: NodeTy::For {
@@ -5083,7 +5367,11 @@ fn parse_for_loop(walker: &mut Walker, nodes: &mut Vec<Node>, kw_span: Span) {
 /// Parses a while loop statement.
 ///
 /// This function assumes that the keyword is not yet consumed.
-fn parse_while_loop(walker: &mut Walker, nodes: &mut Vec<Node>, kw_span: Span) {
+fn parse_while_loop<'a, P: TokenStreamProvider<'a>>(
+	walker: &mut Walker<'a, P>,
+	nodes: &mut Vec<Node>,
+	kw_span: Span,
+) {
 	walker.push_colour(kw_span, SyntaxType::Keyword);
 	walker.advance();
 
@@ -5198,7 +5486,7 @@ fn parse_while_loop(walker: &mut Walker, nodes: &mut Vec<Node>, kw_span: Span) {
 	};
 
 	// Parse the body.
-	let body = parse_scope(walker, BRACE_SCOPE, l_brace_span);
+	let body = parse_scope(walker, brace_scope, l_brace_span);
 	nodes.push(Node {
 		span: Span::new(kw_span.start, body.span.end),
 		ty: NodeTy::While {
@@ -5211,8 +5499,8 @@ fn parse_while_loop(walker: &mut Walker, nodes: &mut Vec<Node>, kw_span: Span) {
 /// Parses a do-while loop statement.
 ///
 /// This function assumes that the keyword is not yet consumed.
-fn parse_do_while_loop(
-	walker: &mut Walker,
+fn parse_do_while_loop<'a, P: TokenStreamProvider<'a>>(
+	walker: &mut Walker<'a, P>,
 	nodes: &mut Vec<Node>,
 	kw_span: Span,
 ) {
@@ -5246,7 +5534,7 @@ fn parse_do_while_loop(
 	};
 
 	// Parse the body.
-	let body = parse_scope(walker, BRACE_SCOPE, l_brace_span);
+	let body = parse_scope(walker, brace_scope, l_brace_span);
 
 	// Consume the `while` keyword.
 	let while_kw_span = match walker.peek() {
@@ -5443,8 +5731,8 @@ fn parse_do_while_loop(
 /// Parses a break/continue/discard statement.
 ///
 /// This function assumes that the keyword is not yet consumed.
-fn parse_break_continue_discard(
-	walker: &mut Walker,
+fn parse_break_continue_discard<'a, P: TokenStreamProvider<'a>>(
+	walker: &mut Walker<'a, P>,
 	nodes: &mut Vec<Node>,
 	kw_span: Span,
 	ty: impl FnOnce() -> NodeTy,
@@ -5486,7 +5774,11 @@ fn parse_break_continue_discard(
 /// Parses a return statement.
 ///
 /// This function assumes that the keyword is not yet consumed.
-fn parse_return(walker: &mut Walker, nodes: &mut Vec<Node>, kw_span: Span) {
+fn parse_return<'a, P: TokenStreamProvider<'a>>(
+	walker: &mut Walker<'a, P>,
+	nodes: &mut Vec<Node>,
+	kw_span: Span,
+) {
 	walker.push_colour(kw_span, SyntaxType::Keyword);
 	walker.advance();
 
@@ -5546,8 +5838,8 @@ fn parse_return(walker: &mut Walker, nodes: &mut Vec<Node>, kw_span: Span) {
 /// Parses a preprocessor directive.
 ///
 /// This function assumes that the directive has not yet been consumed.
-fn parse_directive(
-	walker: &mut Walker,
+fn parse_directive<'a, P: TokenStreamProvider<'a>>(
+	walker: &mut Walker<'a, P>,
 	nodes: &mut Vec<Node>,
 	stream: PreprocStream,
 	dir_span: Span,
@@ -5929,8 +6221,8 @@ fn parse_directive(
 }
 
 /// Parses a `#version` directive.
-fn parse_version_directive(
-	walker: &mut Walker,
+fn parse_version_directive<'a, P: TokenStreamProvider<'a>>(
+	walker: &mut Walker<'a, P>,
 	nodes: &mut Vec<Node>,
 	dir_span: Span,
 	kw_span: Span,
@@ -5948,8 +6240,8 @@ fn parse_version_directive(
 	let mut tokens = tokens.into_iter();
 
 	/// Consumes the rest of the tokens.
-	fn seek_end(
-		walker: &mut Walker,
+	fn seek_end<'a, P: TokenStreamProvider<'a>>(
+		walker: &mut Walker<'a, P>,
 		mut tokens: impl Iterator<Item = (VersionToken, Span)>,
 		emit_diagnostic: bool,
 	) {
@@ -5976,8 +6268,8 @@ fn parse_version_directive(
 	}
 
 	/// Parses the version number.
-	fn parse_version(
-		walker: &mut Walker,
+	fn parse_version<'a, P: TokenStreamProvider<'a>>(
+		walker: &mut Walker<'a, P>,
 		number: usize,
 		span: Span,
 	) -> Option<usize> {
@@ -6000,8 +6292,8 @@ fn parse_version_directive(
 	}
 
 	/// Parses the profile.
-	fn parse_profile(
-		walker: &mut Walker,
+	fn parse_profile<'a, P: TokenStreamProvider<'a>>(
+		walker: &mut Walker<'a, P>,
 		str: &str,
 		span: Span,
 	) -> Option<ProfileTy> {
@@ -6179,8 +6471,8 @@ fn parse_version_directive(
 }
 
 /// Parses an `#extension` directive.
-fn parse_extension_directive(
-	walker: &mut Walker,
+fn parse_extension_directive<'a, P: TokenStreamProvider<'a>>(
+	walker: &mut Walker<'a, P>,
 	nodes: &mut Vec<Node>,
 	dir_span: Span,
 	kw_span: Span,
@@ -6198,8 +6490,8 @@ fn parse_extension_directive(
 	let mut tokens = tokens.into_iter();
 
 	/// Consumes the rest of the tokens.
-	fn seek_end(
-		walker: &mut Walker,
+	fn seek_end<'a, P: TokenStreamProvider<'a>>(
+		walker: &mut Walker<'a, P>,
 		mut tokens: impl Iterator<Item = (ExtensionToken, Span)>,
 		emit_diagnostic: bool,
 	) {
@@ -6505,8 +6797,8 @@ fn parse_extension_directive(
 }
 
 /// Parses a `#line` directive.
-fn parse_line_directive(
-	walker: &mut Walker,
+fn parse_line_directive<'a, P: TokenStreamProvider<'a>>(
+	walker: &mut Walker<'a, P>,
 	nodes: &mut Vec<Node>,
 	dir_span: Span,
 	kw_span: Span,
@@ -6524,8 +6816,8 @@ fn parse_line_directive(
 	let mut tokens = tokens.into_iter();
 
 	/// Consumes the rest of the tokens.
-	fn seek_end(
-		walker: &mut Walker,
+	fn seek_end<'a, P: TokenStreamProvider<'a>>(
+		walker: &mut Walker<'a, P>,
 		mut tokens: impl Iterator<Item = (LineToken, Span)>,
 		emit_diagnostic: bool,
 	) {
@@ -6834,8 +7126,8 @@ fn parse_line_directive(
 }
 
 /// Parses an `#error` directive.
-fn parse_error_directive(
-	walker: &mut Walker,
+fn parse_error_directive<'a, P: TokenStreamProvider<'a>>(
+	walker: &mut Walker<'a, P>,
 	nodes: &mut Vec<Node>,
 	dir_span: Span,
 	kw_span: Span,
@@ -6862,8 +7154,8 @@ fn parse_error_directive(
 }
 
 /// Parses a `#pragma` directive.
-fn parse_pragma_directive(
-	walker: &mut Walker,
+fn parse_pragma_directive<'a, P: TokenStreamProvider<'a>>(
+	walker: &mut Walker<'a, P>,
 	nodes: &mut Vec<Node>,
 	dir_span: Span,
 	kw_span: Span,

@@ -1174,29 +1174,6 @@ impl Lit {
 
 /* CONDITIONAL COMPILATION STUFF BELOW */
 
-/// A conditional directive.
-#[derive(Debug, Clone, PartialEq)]
-pub struct Conditional {
-	pub ty: ConditionalTy,
-	pub span: Span,
-}
-
-#[derive(Debug, Clone, PartialEq)]
-pub enum ConditionalTy {
-	/// An `#ifdef` directive.
-	IfDef { ident: Option<Ident> },
-	/// An `#ifndef` directive.
-	IfNotDef { ident: Option<Ident> },
-	/// An `#if` directive.
-	If { expr: Option<conditional::Expr> },
-	/// An `#elif` directive.
-	ElseIf { expr: Option<conditional::Expr> },
-	/// An `#else` directive.
-	Else,
-	/// An `#endif` directive.
-	End,
-}
-
 /// AST items for conditional directive expressions.
 pub mod conditional {
 	use super::Ident;

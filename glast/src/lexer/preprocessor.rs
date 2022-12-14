@@ -3,12 +3,11 @@
 //! This module contains the enums use to represent tokens in the different preprocessor directives.
 //!
 //! The preprocessor is a single-pass algorithm. This means that a `#define` macro cannot create another
-//! preprocessor directive as its output. The token concatenation operator (`##`) is only valid within the body of
-//! a `#define` directive.
+//! preprocessor directive as its output. The token concatenation operator (`##`) is only valid within the macro
+//! body of a `#define` directive.
 //!
 //! # Macro expansion
-//! Macro expansion within directives is limited; only the `#line` directive accepts a macro expansion instead of
-//! an expected token:
+//! Macros are expanded within the `#line`/`#if` and `#elif` directives only:
 //! ```c
 //! #define FOO 450
 //!
@@ -31,25 +30,12 @@
 //! As you can see, within the `BAR` macro, the `FOO` macro is evaluated but this takes the latest value of `FOO`
 //! whenever `BAR` is called. It does not, strictly speaking, expand the `FOO` macro when `BAR` is defined.
 //!
-//! The `#undef` and all of the conditional directives accept macro names, but they also do not expand them:
-//! ```c
-//! #define FOO -7
-//!
-//! // This is valid:
-//! #if 1 * FOO
-//! #endif
-//!
-//! // But this isn't:
-//! #if 1 FOO
-//! #endif
-//! ```
-//!
 //! # Differences from the C preprocessor
 //! The GLSL preprocessor is based off the C++98 preprocessor, but it:
 //! - Has no support for digraphs or trigraphs.
 //! - Has no support for string or character literals, and hence no support for the stringizing operator.
 //! - Has no support for universal character names (`\uXXXX` notation).
-//! - Has no support for any number literals other than integers (with no prefixes/suffixes).
+//! - Has no support for any number literals other than integers, (with no prefixes/suffixes).
 //! - Has the extra `version` and `extension` directives, and lacks the `include` directive.
 //! - Has a different `line` directive, since GLSL has no concept of filenames.
 //! - Has different pre-defined macros, (which depend on the exact GLSL version).

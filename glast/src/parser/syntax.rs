@@ -74,15 +74,19 @@ pub enum SyntaxType {
 bitflags! {
 	/// The syntax highlighting modifiers.
 	///
-	/// This is a `bitflag`.
+	/// This is a `bitflag`. It contains:
+	/// - `MACRO_DEFINITION`,
+	/// - `MACRO_BODY`,
+	/// - `UNDEFINE`,
+	/// - `CONDITIONAL`.
 	pub struct SyntaxModifiers: u32 {
 		/// Tokens within the macro definition, e.g. `BAR(A, B)`
 		const MACRO_DEFINITION = 0b00000001;
 		/// Tokens within the macro body (replacement token list).
 		const MACRO_BODY = 0b00000010;
-		/// Tokens within the `#undef` directive.
+		/// Tokens within the `#undef` directive; not applied to the `#undef` part.
 		const UNDEFINE = 0b00000100;
-		/// Tokens within a conditional directive.
+		/// Tokens within a conditional directive; not applied to the `#if`/`#elif`/etc. part.
 		const CONDITIONAL = 0b00001000;
 	}
 }

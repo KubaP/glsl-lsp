@@ -99,9 +99,14 @@ pub struct ParseResult {
 /// bar                     //  │                        
 ///                         //  ┴                        
 /// ```
+///
+/// ## No conditional compilation
 /// There is always a root token stream which has no conditional branches enabled. This can be accessed through the
-/// [`root()`](TokenTree::root) method. There are two ways of controlling which conditions are enabled, by order of
-/// appearance or by order of nesting.
+/// [`root()`](TokenTree::root) method, and always returns something.
+///
+/// ## Conditional directive evaluation
+/// The [`evaluate()`](TokenTree::evaluate) method evaluates conditional directives on-the-fly, and chooses
+/// conditional branches depending on if the evaluations succeed.
 ///
 /// ## Order by appearance
 /// Each encountered condition (an `ifdef`/`ifndef`/`if`/`elif`/`else` directive) is given an incrementing number.
@@ -143,8 +148,8 @@ pub struct ParseResult {
 /// ```
 ///
 /// # Further reading
-/// See the documentation of the [`TokenTree`] struct for a more in-depth explanation about why this seemingly
-/// roundabout method is necessary.
+/// See the documentation for the [`TokenTree`] struct for a more in-depth explanation about why this seemingly
+/// roundabout way of doing things is necessary.
 pub fn parse_from_str(source: &str) -> Result<TokenTree, lexer::ParseErr> {
 	let (token_stream, metadata) = lexer::parse_from_str(source)?;
 	parse_from_token_stream(token_stream, metadata)
@@ -152,7 +157,8 @@ pub fn parse_from_str(source: &str) -> Result<TokenTree, lexer::ParseErr> {
 
 /// Parses a token stream into a tree of tokens that can be then parsed into an abstract syntax tree.
 ///
-/// For an explanation of how this function works, see the documentation for the [`parse_from_str()`] function.
+/// # Examples
+/// See the documentation for the [`parse_from_str()`] function.
 pub fn parse_from_token_stream(
 	mut token_stream: TokenStream,
 	metadata: lexer::Metadata,
@@ -740,9 +746,9 @@ pub enum ParseErr {
 
 /// A tree of token streams generated from a GLSL source string.
 ///
-/// The tree represents all possible conditional compilation branches. Call the
-/// [`parse_by_order_of_appearance()`](Self::parse_by_order_of_appearance) or
-/// [`parse_by_order_of_nesting()`](Self::parse_by_order_of_nesting) methods to parse a tree with the selected
+/// The tree represents all possible conditional compilation branches. Call the [`evaluate()`](Self::evaluate),
+/// [`parse_by_order_of_appearance()`](Self::parse_by_order_of_appearance), or
+/// [`parse_by_order_of_nesting()`](Self::parse_by_order_of_nesting) method to parse a tree with the selected
 /// conditional branches into a [`ParseResult`].
 ///
 /// # Examples
@@ -815,16 +821,17 @@ pub enum ParseErr {
 ///
 /// It is arguable whether such a representation would be better than the current solution. On one hand all
 /// possibilities are within the single AST, but on the other hand such an AST would quickly become confusing to
-/// work with, manipulate, analyse, etc.
+/// work with, manipulate, and analyse in the scenario of complex conditional directives.
 ///
 /// The main reason this option wasn't chosen is because it would immensely complicate the parsing logic, and in
 /// turn the maintainability of this project. As with all recursive-descent parsers, the individual parsing
 /// functions hold onto any temporary state. In this example, the function for parsing functions holds information
 /// such as the name, the starting position, the parameters, etc. If we would encounter the conditional branching
-/// within this parsing function, we would somehow need to be able to return up the call stack to split the parser,
-/// whilst also somehow not loosing the temporary state. This should be technically possible, but it would greatly
-/// complicate the parser and make writing the parsing logic itself an absolutely awful mess, and that is not a
-/// trade-off I'm willing to take.
+/// within this parsing function, we would somehow need to know ahead-of-time whether this conditional branch will
+/// affect the function node, and if so, be able to return up the call stack to split the parser whilst also
+/// somehow not loosing the temporary state. This would require abandoning the recursive-descent approach, which
+/// would greatly complicate the parser and make writing the parsing logic itself an absolutely awful mess, and
+/// that is not a trade-off I'm willing to take.
 ///
 /// This complication occurs because the preprocessor is a separate pass ran before the main compiler and does not
 /// follow the GLSL grammar rules, which means that preprocessor directives and macros can be included literally
@@ -835,7 +842,7 @@ pub enum ParseErr {
 /// results in this sort of stuff (the approach taken by this crate) being necessary to achieve 100%
 /// specification-defined behaviour.
 ///
-/// Note that macros can actually be correctly expanded within the same pass as the parser without introduce too
+/// Note that macros can actually be correctly expanded within the same pass as the parser without introducing too
 /// much complexity, it's just that conditional compilation can't.
 pub struct TokenTree {
 	/// The arena of token streams.
@@ -1041,6 +1048,24 @@ impl TokenTree {
 	}
 
 	/// Parses the token tree by enabling conditional branches if they evaluate to true.
+	///
+	/// Whilst this is guaranteed to succeed, if the entire source string is wrapped within a conditional block
+	/// that fails evaluation this will return an empty AST.
+	///
+	/// # Syntax highlighting
+	/// The `syntax_highlight_entire_file` parameter controls whether to produce syntax tokens for the entire file,
+	/// not just for the root tokens. This involves parsing all conditional blocks in order to produce the syntax
+	/// highlighting information. Whilst this functionality uses the smallest possible number of permutations that
+	/// cover the entire file, if there are a lot of conditional blocks that can mean the source string gets parsed
+	/// many times, which may have performance implications.
+	///
+	/// The actual syntax highlighting results are based off the chosen permutations which cannot be controlled. If
+	/// you require more control, you must manually parse the relevant permutations and collect the tokens
+	/// yourself.
+	///
+	/// # Examples
+	/// For a fully detailed example on how to use this method to create an abstract syntax tree, see the
+	/// documentation for the [`parse_from_str()`] function.
 	pub fn evaluate(&self, _syntax_highlight_entire_file: bool) -> ParseResult {
 		let mut walker = Walker::new(DynamicTokenStreamProvider::new(
 			&self.arena,
@@ -1065,6 +1090,17 @@ impl TokenTree {
 	/// This method can return an `Err` in the following cases:
 	/// - The `key` has a number which doesn't map to a conditional compilation branch.
 	/// - The `key` has a number which depends on another number that is missing.
+	///
+	/// # Syntax highlighting
+	/// The `syntax_highlight_entire_file` parameter controls whether to produce syntax tokens for the entire file,
+	/// not just for the root tokens. This involves parsing all conditional blocks in order to produce the syntax
+	/// highlighting information. Whilst this functionality uses the smallest possible number of permutations that
+	/// cover the entire file, if there are a lot of conditional blocks that can mean the source string gets parsed
+	/// many times, which may have performance implications.
+	///
+	/// The actual syntax highlighting results are based off the chosen permutations which cannot be controlled. If
+	/// you require more control, you must manually parse the relevant permutations and collect the tokens
+	/// yourself.
 	///
 	/// # Examples
 	/// For a fully detailed example on how to use this method to create an abstract syntax tree, see the

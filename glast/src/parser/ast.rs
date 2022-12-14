@@ -21,6 +21,9 @@
 //!     /* Each variant contains any necessary fields that are relevant to it */
 //! }
 //! ```
+//!
+//! Since conditional compilation is resolved before the AST is generated, conditional compilation directives are
+//! not part of the AST.
 
 use crate::{
 	diag::Syntax,
@@ -31,10 +34,11 @@ use crate::{
 /// This type represents a value which can be omitted in accordance to the GLSL specification.
 ///
 /// This type is equivalent to [`Option`]. The reason for the two types is to differentiate when a node's field is
-/// empty because it can legally be omitted, and when a node's field is empty because the parser used an error
-/// recovery strategy due to a syntax error.
+/// empty because it can legally be omitted (this type), and when a node's field is empty because the parser used
+/// an error recovery strategy due to a syntax error (`Option`).
 ///
-/// This type implements the [`From`] trait for conversions between [`Option`].
+/// This type implements the [`From`] trait for conversions to/from [`Option`], as well as a handful of helper
+/// methods which match the equivalent `Option` signature.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum Omittable<T> {
 	/// Some value of type `T`.

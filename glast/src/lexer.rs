@@ -1,8 +1,10 @@
 //! Types and functionality related to the lexer.
 //!
 //! This module contains the structs and enums used to represent tokens, and the [`parse_from_str()`] function
-//! which returns a [`TokenStream`] and accompanied [`Metadata`]. The [`preprocessor`] submodule contains types
-//! used to represent tokens within preprocessor directives.
+//! which returns a result of [`TokenStream`] and [`Metadata`]. There is an alternative
+//! [`parse_from_str_with_version()`] function which allows assuming the GLSL version rather than detecting it
+//! on-the-fly. The [`preprocessor`] submodule contains types used to represent tokens within preprocessor
+//! directives.
 //!
 //! # Differences in behaviour
 //! Since this crate is part of a larger language extension effort, it is designed to handle syntax errors in a UX
@@ -18,7 +20,7 @@
 //!   compilers seem to produce a compile-time error.
 //! - The lexer treats any number that matches the following pattern `0[0-9]+` as an octal number. The
 //!   specification says that an octal number can only contain digits `0-7`. This change was done to produce better
-//!   errors; the entire span `009` would be highlighting as an invalid octal number token, rather than an error
+//!   errors; the entire span `009` would be highlighted as an invalid octal number token, rather than an error
 //!   about two consecutive number tokens (`00` and `9`) which would be more confusing.
 //! - The lexer treats any identifier immediately after a number (without separating whitespace) as a suffix. The
 //!   specification only defines the `u|U` suffix as valid for integers, and the `f|F` & `lf|LF` suffix as valid
@@ -26,11 +28,12 @@
 //!   `#define TEST +5 \n uint i = 5uTEST`. Currently, this crate doesn't work according to this behaviour, hence
 //!   for now the lexer will treat the suffix as `uTEST` instead.
 //!
-//! See the [`preprocessor`] module for behavioural differences for each individual directive.
+//! See the [`preprocessor`] module for an overview of the lexer's behaviour for each individual preprocessor
+//! directive.
 //!
-//! To be certain that the source is valid, these cases (apart from the define issue) must be checked afterwards by
-//! iterating over the [`TokenStream`]. The parsing functions provided in the `parser` module do this for you, but
-//! if you are performing your own manipulation you must perform these checks yourself.
+//! To be certain that the source is valid, these cases (apart from the macro issue) must be checked afterwards by
+//! iterating over the [`TokenStream`]. The parsing functions provided in this crate do this for you, but if you
+//! are performing your own manipulation you must perform these checks yourself.
 //!
 //! A potential idea for consideration would be to include the alternate behaviour behind a flag (i.e. stop parsing
 //! after encountering an error). This is currently not a priority, but if you would like such functionality please
@@ -147,7 +150,8 @@ pub enum Token {
 	Bool(bool),
 	/// An identifier, e.g. `foo_bar`, `_900_a`.
 	Ident(String),
-	/// A preprocessor directive, e.g. `#version 450 core`, `#define FOO 42`, `#ifdef TOGGLE`.
+	/// A preprocessor directive, e.g. `#version 450 core`, `#define FOO 42`, `#ifdef TOGGLE`. This token cannot
+	/// exist within the body of a macro.
 	Directive(preprocessor::TokenStream),
 	/// The `##` punctuation symbol. This token is only emitted when parsing the body of a `#define` preprocessor
 	/// directive.

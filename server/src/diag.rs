@@ -1,7 +1,7 @@
 use glast::{diag::*, Span};
 use tower_lsp::lsp_types::{
-	Diagnostic, DiagnosticRelatedInformation, DiagnosticSeverity, Location,
-	NumberOrString,
+	Diagnostic, DiagnosticRelatedInformation, DiagnosticSeverity,
+	DiagnosticTag, Location, NumberOrString,
 };
 
 /// Converts [`Syntax`] and [`Semantic`] diagnostics to LSP diagnostics.
@@ -129,6 +129,38 @@ pub fn convert(
 			}
 		}
 	}
+}
+
+/// Disables a block of code. This is used to grey-out code that is disabled because of conditional compilation.
+pub fn disable_code(
+	span: Span,
+	reason: DisabledReason,
+	diags: &mut Vec<Diagnostic>,
+	file: &crate::File,
+) {
+	diags.push(Diagnostic {
+		range: file.span_to_lsp(span),
+		severity: Some(DiagnosticSeverity::HINT),
+		code: None,
+		code_description: None,
+		source: Some("glsl".into()),
+		message: match reason {
+			DisabledReason::ConditionalCompilationDisabled => "Code inactive due to conditional directive: conditional compilation is disabled for this file",
+    		DisabledReason::ConditionalCompilationDisabledGlobally => "Code inactive due to conditional directive: conditional compilation is disabled globally",
+		}.into(),
+		related_information: None,
+		tags: Some(vec![DiagnosticTag::UNNECESSARY]),
+		data: None,
+	});
+}
+
+/// The reason for the disabling of a block of code.
+#[allow(unused)]
+pub enum DisabledReason {
+	/// Conditional compilation is disable for this file.
+	ConditionalCompilationDisabled,
+	/// Conditional compilation is disabled across all files.
+	ConditionalCompilationDisabledGlobally,
 }
 
 /* MUST FORMAT THE FOLLOWING FUNCTIONS MANUALLY, Something about them makes rustfmt give up */

@@ -129,7 +129,9 @@ impl LanguageServer for MyServer {
 		}
 
 		let mut state = self.state.lock().await;
-		state.open_file(uri.clone(), version, text);
+		state
+			.open_file(&self.client, uri.clone(), version, text)
+			.await;
 		state.publish_diagnostics(uri, &self.client).await;
 	}
 
@@ -167,6 +169,21 @@ impl LanguageServer for MyServer {
 				"Server received 'did_close' event.",
 			)
 			.await;
+	}
+
+	async fn did_change_configuration(
+		&self,
+		params: DidChangeConfigurationParams,
+	) {
+		self.client
+			.log_message(
+				MessageType::INFO,
+				"Server received 'workspace/didChangeConfiguration' event.",
+			)
+			.await;
+
+		let mut state = self.state.lock().await;
+		state.update_configuration(&self.client, params).await;
 	}
 
 	async fn semantic_tokens_full(

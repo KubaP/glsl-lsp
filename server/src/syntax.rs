@@ -4,7 +4,7 @@ use tower_lsp::lsp_types::{Position, SemanticToken};
 /// Converts [`SyntaxToken`]s to LSP semantic tokens.
 pub fn convert(
 	syntax_tokens: Vec<SyntaxToken>,
-	file: &crate::File,
+	file: &crate::file::File,
 	supports_multiline: bool,
 ) -> Vec<SemanticToken> {
 	let mut tokens = Vec::new();

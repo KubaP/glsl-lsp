@@ -9,7 +9,7 @@ pub fn convert(
 	syntax_diags: Vec<Syntax>,
 	semantic_diags: Vec<Semantic>,
 	diags: &mut Vec<Diagnostic>,
-	file: &crate::File,
+	file: &crate::file::File,
 	supports_related_info: bool,
 ) {
 	for diag in syntax_diags {
@@ -134,9 +134,9 @@ pub fn convert(
 /// Disables a block of code. This is used to grey-out code that is disabled because of conditional compilation.
 pub fn disable_code(
 	span: Span,
-	reason: DisabledReason,
+	reason: &crate::file::ConditionalState,
 	diags: &mut Vec<Diagnostic>,
-	file: &crate::File,
+	file: &crate::file::File,
 ) {
 	diags.push(Diagnostic {
 		range: file.span_to_lsp(span),
@@ -145,22 +145,14 @@ pub fn disable_code(
 		code_description: None,
 		source: Some("glsl".into()),
 		message: match reason {
-			DisabledReason::ConditionalCompilationDisabled => "Code inactive due to conditional directive: conditional compilation is disabled for this file",
-    		DisabledReason::ConditionalCompilationDisabledGlobally => "Code inactive due to conditional directive: conditional compilation is disabled globally",
+			crate::file::ConditionalState::Off => "Code inactive due to conditional directive: conditional compilation is disabled for this file",
+			crate::file::ConditionalState::Evaluate => "Code inactive due to conditional directive: expression evaluated to `false`",
+			crate::file::ConditionalState::Choice(_) => "Code inactive due to conditional directive: this branch is not part of the chosen evaluated permutation"
 		}.into(),
 		related_information: None,
 		tags: Some(vec![DiagnosticTag::UNNECESSARY]),
 		data: None,
 	});
-}
-
-/// The reason for the disabling of a block of code.
-#[allow(unused)]
-pub enum DisabledReason {
-	/// Conditional compilation is disable for this file.
-	ConditionalCompilationDisabled,
-	/// Conditional compilation is disabled across all files.
-	ConditionalCompilationDisabledGlobally,
 }
 
 /* MUST FORMAT THE FOLLOWING FUNCTIONS MANUALLY, Something about them makes rustfmt give up */

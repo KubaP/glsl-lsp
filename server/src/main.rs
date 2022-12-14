@@ -1,14 +1,14 @@
 mod diag;
 mod extensions;
+mod file;
 mod state;
 mod syntax;
 
 use crate::state::State;
-use glast::Span;
 use tokio::sync::Mutex;
-use tower_lsp::jsonrpc::Result;
-use tower_lsp::lsp_types::*;
-use tower_lsp::{Client, LanguageServer, LspService, Server};
+use tower_lsp::{
+	jsonrpc::Result, lsp_types::*, Client, LanguageServer, LspService, Server,
+};
 
 #[derive(Debug)]
 struct MyServer {
@@ -130,7 +130,7 @@ impl LanguageServer for MyServer {
 
 		let mut state = self.state.lock().await;
 		state
-			.open_file(&self.client, uri.clone(), version, text)
+			.handle_file_open(&self.client, uri.clone(), version, text)
 			.await;
 		state.publish_diagnostics(uri, &self.client).await;
 	}
@@ -146,7 +146,7 @@ impl LanguageServer for MyServer {
 			.await;
 
 		let mut state = self.state.lock().await;
-		state.change_file(
+		state.handle_file_change(
 			params.text_document.uri.clone(),
 			params.text_document.version,
 			params.content_changes.remove(0).text,
@@ -183,7 +183,9 @@ impl LanguageServer for MyServer {
 			.await;
 
 		let mut state = self.state.lock().await;
-		state.update_configuration(&self.client, params).await;
+		state
+			.handle_configuration_change(&self.client, params)
+			.await;
 	}
 
 	async fn semantic_tokens_full(
@@ -240,142 +242,4 @@ async fn main() {
 	.finish();
 
 	Server::new(stdin, stdout, socket).serve(service).await;
-}
-
-/// A source file.
-#[derive(Debug)]
-pub struct File {
-	/// The url of this file.
-	uri: Url,
-	/// The version number of this file.
-	version: i32,
-	/// Contents of this file.
-	contents: String,
-	/// A character-index to line conversion table.
-	///
-	/// - `0` - Line number, (same as vector index).
-	/// - `1` - Character index which starts at the line number.
-	lines: Vec<(usize, usize)>,
-}
-
-impl File {
-	/// Constructs a new file with it's contents.
-	pub fn new(uri: Url, version: i32, contents: String) -> Self {
-		Self {
-			uri,
-			version,
-			lines: Self::generate_line_table(&contents),
-			contents,
-		}
-	}
-
-	/// Updates the files with new content, and performs any necessary recalculations.
-	pub fn update(&mut self, version: i32, contents: String) {
-		self.version = version;
-		self.lines = Self::generate_line_table(&contents);
-		self.contents = contents;
-	}
-
-	/// Converts a [`Span`] to an LSP [`Range`] type.
-	pub fn span_to_lsp(&self, span: Span) -> Range {
-		let mut start = (0, 0);
-		let mut end = (0, 0);
-
-		for (a, b) in self.lines.iter().zip(self.lines.iter().skip(1)) {
-			if a.1 <= span.start && span.start < b.1 {
-				start = (a.0, span.start - a.1);
-			}
-			if a.1 <= span.end && span.end < b.1 {
-				end = (a.0, span.end - a.1);
-				break;
-			}
-		}
-
-		#[cfg(debug_assertions)]
-		assert!(
-			end.0 >= start.0,
-			"[File::span_to_range] The `end` is on a line number earlier than the `start`."
-		);
-
-		Range {
-			start: Position::new(start.0 as u32, start.1 as u32),
-			end: Position::new(end.0 as u32, end.1 as u32),
-		}
-	}
-
-	/// Converts a `Span`'s position to an LSP [`Position`] type.
-	pub fn position_to_lsp(&self, position: usize) -> Position {
-		let mut start = (0, 0);
-		for (a, b) in self.lines.iter().zip(self.lines.iter().skip(1)) {
-			if a.1 <= position && position < b.1 {
-				start = (a.0, position - a.1);
-			}
-		}
-
-		Position::new(start.0 as u32, start.1 as u32)
-	}
-
-	/// Converts an LSP [`Position`] to a `Span`'s position.
-	pub fn position_from_lsp(&self, position: Position) -> usize {
-		let (_, char_offset) = self.lines.get(position.line as usize).unwrap();
-
-		*char_offset + position.character as usize
-	}
-
-	fn generate_line_table(contents: &str) -> Vec<(usize, usize)> {
-		let mut lines = Vec::new();
-		lines.push((0, 0));
-
-		let mut line = 1;
-		let mut i = 0;
-		let mut chars = contents.chars();
-		loop {
-			let c = match chars.next() {
-				Some(c) => c,
-				None => break,
-			};
-
-			if c == '\n' {
-				// Push a new line at the position of the character after `\n`.
-				i += 1;
-				lines.push((line, i));
-				line += 1;
-			} else if c == '\r' {
-				i += 1;
-
-				let next = match chars.next() {
-					Some(c) => c,
-					None => {
-						// Push a line at the position of the character after `\r`.
-						lines.push((line, i));
-						line += 1;
-						break;
-					}
-				};
-
-				// Push a new line at the position of the character after `\r\n`.
-				if next == '\n' {
-					i += 1;
-					lines.push((line, i));
-					line += 1;
-				} else {
-					// Push a line at the position of the character after `\r`.
-					lines.push((line, i));
-					line += 1;
-				}
-			} else {
-				i += 1;
-			}
-		}
-		// Add a final zero-sized line at the very end. This effectively treats the previous line that was just
-		// added in the loop to extend from it's starting index to infinity.
-		//
-		// Note: We do this because in the `span_to_range()` method, we iterate over the lines in pairs, and
-		// without this "final" line, we wouldn't be able to correctly translate a span on the very last line. The
-		// reason why we iterate over in pairs is because that reduces copies; the alternative would be to keep
-		// `previous_*` counters outside of the loop and write to them, but that has unnecessary overhead.
-		lines.push((line, usize::MAX));
-
-		lines
-	}
 }

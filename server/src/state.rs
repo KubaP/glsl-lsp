@@ -1,4 +1,4 @@
-use crate::{diag::DisabledReason, File};
+use crate::file::{self, ConditionalState, File, FileConfig};
 use glast::parser::ParseResult;
 use std::collections::HashMap;
 use tower_lsp::{
@@ -9,6 +9,18 @@ use tower_lsp::{
 	},
 	Client,
 };
+
+/// The server state.
+#[derive(Debug)]
+pub struct State {
+	/// Currently open files, (or previously opened within this session).
+	files: HashMap<Url, (File, FileConfig)>,
+
+	/// The state of diagnostic-related functionality.
+	diag_state: DiagState,
+	/// The state of semantic highlighting.
+	highlighting_state: HighlightingState,
+}
 
 /// The state of support for diagnostic-related functionality, as reported by the client.
 #[derive(Debug, Default)]
@@ -23,7 +35,7 @@ pub struct DiagState {
 
 /// The state of support for semantic highlighting, as reported by the client.
 #[derive(Debug, Default)]
-pub struct SemanticsState {
+pub struct HighlightingState {
 	/// Whether the client supports the `textDocument/semanticTokens/full` request, i.e. semantic tokens for the
 	/// whole file.
 	pub enabled: bool,
@@ -31,37 +43,13 @@ pub struct SemanticsState {
 	pub supports_multiline: bool,
 }
 
-#[derive(Debug, PartialEq, Eq)]
-struct FileSettings {
-	conditional_compilation_state: ConditionalState,
-	syntax_highlight_entire_file: bool,
-}
-
-#[derive(Debug, PartialEq, Eq)]
-enum ConditionalState {
-	Off,
-	Evaluate,
-	Choice(Vec<usize>),
-}
-
-#[derive(Debug)]
-pub struct State {
-	/// The state of diagnostic-related functionality.
-	diag_state: DiagState,
-	/// The state of semantic highlighting.
-	semantic_state: SemanticsState,
-
-	/// Currently open files, (or previously opened within this session).
-	files: HashMap<Url, (File, FileSettings)>,
-}
-
 impl State {
-	/// Constructs a new server `State`. By default, all functionality is disabled until the client initiates
-	/// communication and sends over it's capabilities (to [`initialize()`](Self::initialize())).
+	/// Constructs a new server state. By default, all functionality is disabled until the client initiates
+	/// communication and sends over it's capabilities to [`initialize()`](Self::initialize()).
 	pub fn new() -> Self {
 		Self {
 			diag_state: Default::default(),
-			semantic_state: Default::default(),
+			highlighting_state: Default::default(),
 			files: HashMap::new(),
 		}
 	}
@@ -106,22 +94,22 @@ impl State {
 			{
 				if let Some(SemanticTokensFullOptions::Bool(b)) = requests.full
 				{
-					self.semantic_state.enabled = b;
+					self.highlighting_state.enabled = b;
 				} else if let Some(SemanticTokensFullOptions::Delta {
 					..
 				}) = requests.full
 				{
-					self.semantic_state.enabled = true;
+					self.highlighting_state.enabled = true;
 				}
 				if let Some(b) = multiline_token_support {
-					self.semantic_state.supports_multiline = b;
+					self.highlighting_state.supports_multiline = b;
 				}
 			}
 		}
 	}
 
-	/// Registers the opening of a new file.
-	pub async fn open_file(
+	/// Handles the `textDocument/didOpen` notification.
+	pub async fn handle_file_open(
 		&mut self,
 		client: &Client,
 		uri: Url,
@@ -136,24 +124,29 @@ impl State {
 			}
 		} else {
 			// We have not encountered this file before.
-			let file_settings =
-				Self::get_file_settings(client, uri.clone()).await;
+			let file_config = file::get_file_config(client, &uri).await;
 			self.files.insert(
 				uri.clone(),
-				(File::new(uri, version, contents), file_settings),
+				(File::new(uri, version, contents), file_config),
 			);
 		}
 	}
 
-	/// Registers the change to a file.
-	pub fn change_file(&mut self, uri: Url, version: i32, contents: String) {
+	/// Handles the `textDocument/didChange` notification.
+	pub fn handle_file_change(
+		&mut self,
+		uri: Url,
+		version: i32,
+		contents: String,
+	) {
 		match self.files.get_mut(&uri) {
 			Some((file, _)) => file.update(version, contents),
 			None => unreachable!("[State::change_file] Received a file `uri: {uri}` that has not been opened yet"),
 		}
 	}
 
-	pub async fn update_configuration(
+	/// Handles the `workspace/didChangeConfiguration` notification.
+	pub async fn handle_configuration_change(
 		&mut self,
 		client: &Client,
 		params: DidChangeConfigurationParams,
@@ -162,12 +155,12 @@ impl State {
 		let mut requires_updating = false;
 		match str {
 			"fileSettings" => {
-				for (uri, (_, settings)) in self.files.iter_mut() {
-					let new_settings = Self::get_file_settings(client, uri.clone()).await;
-					if new_settings != *settings {
+				for (uri, (_, file_config)) in self.files.iter_mut() {
+					let new_settings = file::get_file_config(client, uri).await;
+					if new_settings != *file_config {
 						requires_updating = true;
 					}
-					*settings = new_settings;
+					*file_config = new_settings;
 				}
 			}
 			_ => panic!("[State::update_configuration] Unexpected settings value: `{str}`")
@@ -178,62 +171,13 @@ impl State {
 		}
 	}
 
-	/// Returns the up-to-date file settings for a given uri. This takes into account fine-grained configuration
-	/// values on a per-user/per-workspace/per-folder basis.
-	async fn get_file_settings(client: &Client, uri: Url) -> FileSettings {
-		// Get the configuration settings that are relevant for the specified file uri.
-		use tower_lsp::lsp_types::{
-			request, ConfigurationItem, ConfigurationParams,
-		};
-		let result = client
-			.send_request::<request::WorkspaceConfiguration>(
-				ConfigurationParams {
-					items: vec![
-						ConfigurationItem {
-							scope_uri: Some(uri.clone()),
-							section: Some(
-								"glsl.conditionalCompilation.state".into(),
-							),
-						},
-						ConfigurationItem {
-							scope_uri: Some(uri),
-							section: Some(
-								"glsl.syntaxHighlighting.highlightEntireFile"
-									.into(),
-							),
-						},
-					],
-				},
-			)
-			.await;
-
-		// Panic: The client handler always returns a vector of the same length as the request.
-		// See `configurationRequest()` in `main.ts`.
-		let Ok(mut result) = result else { unreachable!(); };
-		// Even though the vscode client configuration sets a type for each configuration setting, the returned
-		// value can be of any type, so we need to deal with incorrect types through a default value.
-		let conditional_compilation_state =
-			match result.remove(0).as_str().unwrap_or("") {
-				"off" => ConditionalState::Off,
-				"evaluate" => ConditionalState::Evaluate,
-				_ => ConditionalState::Off,
-			};
-		let syntax_highlight_entire_file =
-			result.remove(0).as_bool().unwrap_or(false);
-
-		FileSettings {
-			conditional_compilation_state,
-			syntax_highlight_entire_file,
-		}
-	}
-
 	/// Sends the `textDocument/publishDiagnostics` notification.
 	pub async fn publish_diagnostics(&self, uri: Url, client: &Client) {
 		if !self.diag_state.enabled {
 			return;
 		}
 
-		let Some((file, file_settings)) = self.files.get(&uri) else {
+		let Some((file, file_config)) = self.files.get(&uri) else {
 			unreachable!("[State::publish_diagnostics] Received a file `uri: {uri}` that has not been opened yet");
 		};
 
@@ -243,7 +187,7 @@ impl State {
 			semantic_diags,
 			disabled_code_spans,
 			..
-		} = match file_settings.conditional_compilation_state {
+		} = match file_config.conditional_compilation_state {
 			ConditionalState::Off => tree.root(false),
 			ConditionalState::Evaluate => tree.evaluate(false),
 			ConditionalState::Choice(_) => todo!(),
@@ -259,7 +203,7 @@ impl State {
 		for span in disabled_code_spans {
 			crate::diag::disable_code(
 				span,
-				DisabledReason::ConditionalCompilationDisabled,
+				&file_config.conditional_compilation_state,
 				&mut diags,
 				file,
 			);
@@ -275,34 +219,34 @@ impl State {
 
 	/// Fulfils the `textDocument/semanticTokens/full` request.
 	pub fn provide_semantic_tokens(&self, uri: Url) -> Vec<SemanticToken> {
-		if !self.semantic_state.enabled {
+		if !self.highlighting_state.enabled {
 			return vec![];
 		}
 
-		let Some((file, file_settings)) = self.files.get(&uri) else {
+		let Some((file, file_config)) = self.files.get(&uri) else {
 			unreachable!("[State::provide_semantic_tokens] Received a file `uri: {uri}` that has not been opened yet");
 		};
 
 		let ParseResult { syntax_tokens, .. } =
 			glast::parser::parse_from_str(&file.contents)
 				.unwrap()
-				.root(file_settings.syntax_highlight_entire_file);
+				.root(file_config.syntax_highlight_entire_file);
 		crate::syntax::convert(
 			syntax_tokens,
 			file,
-			self.semantic_state.supports_multiline,
+			self.highlighting_state.supports_multiline,
 		)
 	}
 
 	/// Fulfils the `glsl/astContent` request.
 	pub fn provide_ast(&self, uri: Url) -> String {
-		let Some((file, file_settings)) = self.files.get(&uri)else{
+		let Some((file, file_config)) = self.files.get(&uri)else{
 			unreachable!("[State::provide_ast] Received a file `uri: {uri}` that has not been opened yet");	
 		};
 
 		let Ok(tree) = glast::parser::parse_from_str(&file.contents) else { return "<ERROR PARSING FILE>".into(); };
 		let ParseResult { ast, .. } =
-			match file_settings.conditional_compilation_state {
+			match file_config.conditional_compilation_state {
 				ConditionalState::Off => tree.root(false),
 				ConditionalState::Evaluate => tree.evaluate(false),
 				ConditionalState::Choice(_) => todo!(),

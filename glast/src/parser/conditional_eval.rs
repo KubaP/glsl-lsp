@@ -504,7 +504,11 @@ mod tests {
 	/// must consist of an `#if` or `#elif` conditional directive only.
 	macro_rules! assert_eval {
 		($macros:expr, $src:expr, $result:expr) => {
-			let mut tokens = crate::lexer::parse_from_str($src).0;
+			let mut tokens = crate::lexer::parse_from_str_with_version(
+				$src,
+				crate::GlslVersion::_450,
+			)
+			.0;
 			match tokens.remove(0) {
 				(crate::lexer::Token::Directive(d), _) => match d {
 					crate::lexer::preprocessor::TokenStream::If {

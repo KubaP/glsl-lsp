@@ -67,14 +67,47 @@ pub type TokenStream = Vec<Spanned<Token>>;
 /// ```rust
 /// # use glast::lexer::parse_from_str;
 /// let src = r#"
+/// ##version 450
 /// int i = 5.0 + 1;
 /// "#;
-/// let (token_stream, metadata) = parse_from_str(&src);
+/// let (token_stream, metadata) = parse_from_str(&src).unwrap();
 /// ```
-pub fn parse_from_str(source: &str) -> (TokenStream, Metadata) {
+pub fn parse_from_str(
+	source: &str,
+) -> Result<(TokenStream, Metadata), ParseErr> {
 	let mut lexer = Lexer::new(source);
-	let tokens = parse_tokens(&mut lexer, false);
+	let tokens = parse_tokens(&mut lexer, false, false);
+	match lexer.metadata.version {
+		GlslVersion::_450 => Ok((tokens, lexer.metadata)),
+		GlslVersion::Unsupported => {
+			Err(ParseErr::UnsupportedVersion(lexer.metadata.version))
+		}
+	}
+}
+
+/// Parses a GLSL source string into a token stream, assuming a specific version.
+///
+/// Unlike the [`parse_from_str()`] function which returns an error if an unsupported GLSL version was detected,
+/// this function assumes the specified version and will always return something, (though if the version is
+/// incorrectly specified the resulting token stream can be semantically incorrect).
+///
+/// # Examples
+/// See the documentation for the [`parse_from_str()`] function.
+pub fn parse_from_str_with_version(
+	source: &str,
+	version: GlslVersion,
+) -> (TokenStream, Metadata) {
+	let mut lexer = Lexer::new(source);
+	lexer.metadata.version = version;
+	let tokens = parse_tokens(&mut lexer, false, true);
 	(tokens, lexer.metadata)
+}
+
+/// The error type for lexer parsing operations.
+#[derive(Debug)]
+pub enum ParseErr {
+	/// The source string contains an unsupported GLSL version.
+	UnsupportedVersion(GlslVersion),
 }
 
 /// Metadata about the GLSL source string.
@@ -572,9 +605,15 @@ impl std::fmt::Display for Token {
 ///
 /// - `parsing_define_body` - Whether we are parsing the body of a `#define` preprocessor directive, which slightly
 ///   changes the behaviour of the lexer.
+/// - `hardcoded_version` - Whether the lexer has a hardcoded version. If `true`, this disables the dynamic
+///   on-the-fly version changing when an appropriate version directive is encountered.
 ///
 /// TODO: Track spans of line-continuators.
-fn parse_tokens(lexer: &mut Lexer, parsing_define_body: bool) -> TokenStream {
+fn parse_tokens(
+	lexer: &mut Lexer,
+	parsing_define_body: bool,
+	hardcoded_version: bool,
+) -> TokenStream {
 	let mut tokens = Vec::new();
 
 	// This is a flag as to whether we can start parsing a directive if we encounter a `#` symbol.
@@ -1308,7 +1347,7 @@ fn parse_tokens(lexer: &mut Lexer, parsing_define_body: bool) -> TokenStream {
 							end: lexer.position(),
 						},
 					));
-					if first_directive {
+					if first_directive && !hardcoded_version {
 						if let Some(version) = version {
 							if version == GlslVersion::Unsupported {
 								break 'outer;
@@ -1343,7 +1382,11 @@ fn parse_tokens(lexer: &mut Lexer, parsing_define_body: bool) -> TokenStream {
 						Token::Directive(preprocessor::TokenStream::Define {
 							kw: directive_kw_span,
 							ident_tokens: preprocessor::parse_define(lexer),
-							body_tokens: parse_tokens(lexer, true),
+							body_tokens: parse_tokens(
+								lexer,
+								true,
+								hardcoded_version,
+							),
 						}),
 						Span {
 							start: directive_start,
@@ -1543,7 +1586,7 @@ fn parse_tokens(lexer: &mut Lexer, parsing_define_body: bool) -> TokenStream {
 ///
 /// This includes a lot of helper methods to make it easier to match patterns and correctly deal with things such
 /// as line-continuators which a naive iteration would mess up.
-struct Lexer {
+pub(crate) struct Lexer {
 	/// The source string stored as a vector of characters.
 	chars: Vec<char>,
 	/// The index of the current character.
@@ -1554,7 +1597,7 @@ struct Lexer {
 
 impl Lexer {
 	/// Constructs a new lexer.
-	fn new(source: &str) -> Self {
+	pub(crate) fn new(source: &str) -> Self {
 		let mut lexer = Lexer {
 			// Iterating over individual characters is guaranteed to produce correct behaviour because GLSL source
 			// strings must use the UTF-8 encoding as per the specification.
@@ -1865,7 +1908,7 @@ use crate::span::span;
 #[cfg(test)]
 macro_rules! assert_tokens2 {
 	($src:expr, $($token:expr),*) => {
-		let (tokens, _metadata) = parse_from_str($src);
+		let (tokens, _metadata) = parse_from_str_with_version($src, crate::GlslVersion::_450);
 		assert_eq!(tokens, vec![
 			$(
 				$token,
@@ -2020,7 +2063,7 @@ fn spans() {
 #[cfg(test)]
 macro_rules! assert_tokens {
     ($src:expr, $($token:expr),*) => {
-		let output = parse_from_str($src).0.into_iter().map(|(t, _)| t).collect::<Vec<_>>();
+		let output = parse_from_str_with_version($src, crate::GlslVersion::_450).0.into_iter().map(|(t, _)| t).collect::<Vec<_>>();
         assert_eq!(output, vec![
             $(
                 $token,
@@ -2365,7 +2408,7 @@ fn illegal(){
 #[cfg(test)]
 mod preproc_tests {
 	use super::{
-		parse_from_str,
+		parse_from_str_with_version,
 		preprocessor::{
 			ConditionToken, DefineToken, ExtensionToken, LineToken,
 			TokenStream, UndefToken, VersionToken,

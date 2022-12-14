@@ -22,6 +22,7 @@ use crate::{
 		PreprocLineDiag, PreprocVersionDiag, Semantic, StmtDiag, Syntax,
 	},
 	lexer::{
+		self,
 		preprocessor::{
 			ConditionToken, ExtensionToken, LineToken,
 			TokenStream as PreprocStream, VersionToken,
@@ -51,24 +52,6 @@ pub struct ParseResult {
 	pub syntax_tokens: Vec<SyntaxToken>,
 	/// Spans which cover any disabled code (because of conditional compilation).
 	pub disabled_code_spans: Vec<Span>,
-}
-
-/// An error type for the first step of the parsing operations.
-#[derive(Debug)]
-pub enum ParseErr {
-	/// The token stream from the lexer is from an unsupported GLSL version.
-	UnsupportedVersion(GlslVersion),
-}
-
-/// An error type for the second step of the parsing operations, (after conditional compilation has been applied).
-#[derive(Debug)]
-pub enum TreeParseErr {
-	/// This number doesn't map to a conditional branch.
-	InvalidNum(usize),
-	/// This number has a dependent number that was not specified in the key.
-	InvalidChain(usize),
-	/// This tree contains no conditional compilation branches.
-	NoConditionalBranches,
 }
 
 /// Parses a GLSL source string into a tree of tokens that can be then parsed into an abstract syntax tree.
@@ -155,15 +138,15 @@ pub enum TreeParseErr {
 /// int i = 5.0 + 1;
 /// "#;
 /// let trees = parse_from_str(&src).unwrap();
-/// let (ast, _, _, _) = trees.root(false); // We don't care about extra
-///                                         // syntax highlighting information
+/// let ParseResult { ast, .. } = trees.root(false); // We don't care about extra
+///                                                  // syntax highlighting information
 /// ```
 ///
 /// # Further reading
 /// See the documentation of the [`TokenTree`] struct for a more in-depth explanation about why this seemingly
 /// roundabout method is necessary.
-pub fn parse_from_str(source: &str) -> Result<TokenTree, ParseErr> {
-	let (token_stream, metadata) = crate::lexer::parse_from_str(source);
+pub fn parse_from_str(source: &str) -> Result<TokenTree, lexer::ParseErr> {
+	let (token_stream, metadata) = lexer::parse_from_str(source)?;
 	parse_from_token_stream(token_stream, metadata)
 }
 
@@ -172,12 +155,12 @@ pub fn parse_from_str(source: &str) -> Result<TokenTree, ParseErr> {
 /// For an explanation of how this function works, see the documentation for the [`parse_from_str()`] function.
 pub fn parse_from_token_stream(
 	mut token_stream: TokenStream,
-	metadata: crate::lexer::Metadata,
-) -> Result<TokenTree, ParseErr> {
+	metadata: lexer::Metadata,
+) -> Result<TokenTree, lexer::ParseErr> {
 	// Check the GLSL version as detected by the lexer.
 	if metadata.version == GlslVersion::Unsupported && !token_stream.is_empty()
 	{
-		return Err(ParseErr::UnsupportedVersion(metadata.version));
+		return Err(lexer::ParseErr::UnsupportedVersion(metadata.version));
 	}
 
 	// Skip tree generation if there are no conditional compilation blocks, or if the token stream is empty.
@@ -194,7 +177,7 @@ pub fn parse_from_token_stream(
 			arena: vec![token_stream],
 			tree: vec![TreeNode {
 				parent: None,
-				children: vec![Either::Left(0)],
+				children: vec![Either::Left(TokenTree::ROOT_NODE_ID)],
 				span,
 			}],
 			order_by_appearance: vec![],
@@ -721,7 +704,7 @@ pub fn parse_from_token_stream(
 /// ##version 450 core
 /// int i = 5.0 + 1;
 /// "#;
-/// let (ast, _, _, _) = parse_from_str(&src).unwrap().root(false);
+/// let ParseResult { ast, .. } = parse_from_str(&src).unwrap().root(false);
 /// println!("{}", print_ast(ast));
 /// ```
 /// Would result in:
@@ -742,6 +725,17 @@ pub fn parse_from_token_stream(
 /// ```
 pub fn print_ast(ast: Vec<Node>) -> String {
 	printing::print_ast(ast)
+}
+
+/// The error type for parsing operations.
+#[derive(Debug)]
+pub enum ParseErr {
+	/// This number doesn't map to a conditional branch.
+	InvalidNum(usize),
+	/// This number has a dependent number that was not specified in the key.
+	InvalidChain(usize),
+	/// This tree contains no conditional compilation branches.
+	NoConditionalBranches,
 }
 
 /// A tree of token streams generated from a GLSL source string.
@@ -859,7 +853,7 @@ pub struct TokenTree {
 	/// ```ignore
 	/// vec![TreeNode {
 	///     parent: None,
-	///     children: vec![Either::Left(0)]
+	///     children: vec![Either::Left(Self::ROOT_NODE_ID)]
 	/// }]
 	/// ```
 	tree: Vec<TreeNode>,
@@ -1079,11 +1073,11 @@ impl TokenTree {
 		&self,
 		key: impl AsRef<[usize]>,
 		_syntax_highlight_entire_file: bool,
-	) -> Result<ParseResult, TreeParseErr> {
+	) -> Result<ParseResult, ParseErr> {
 		let key = key.as_ref();
 
 		if !self.contains_conditional_compilation {
-			return Err(TreeParseErr::NoConditionalBranches);
+			return Err(ParseErr::NoConditionalBranches);
 		}
 
 		let mut nodes = Vec::with_capacity(key.len());
@@ -1093,11 +1087,11 @@ impl TokenTree {
 			for num in key {
 				let (id, parent_id) = match self.order_by_appearance.get(*num) {
 					Some(t) => t,
-					None => return Err(TreeParseErr::InvalidNum(*num)),
+					None => return Err(ParseErr::InvalidNum(*num)),
 				};
 
 				if !visited_node_ids.contains(parent_id.first().unwrap()) {
-					return Err(TreeParseErr::InvalidChain(*num));
+					return Err(ParseErr::InvalidChain(*num));
 				}
 
 				visited_node_ids.push(*id);
@@ -2070,7 +2064,7 @@ impl<'a, Provider: TokenStreamProvider<'a>> Walker<'a, Provider> {
 							}
 							// Then, we perform token concatenation.
 							let (new_body, mut syntax, mut semantic) =
-								crate::lexer::preprocessor::concat_macro_body(
+								lexer::preprocessor::concat_macro_body(
 									new_body,
 								);
 							syntax_diags.append(&mut syntax);
@@ -3360,7 +3354,7 @@ fn try_parse_definition_declaration_expr<'a, P: TokenStreamProvider<'a>>(
 			walker.advance();
 			nodes.push(var_def(type_, ident_info, semi_span.end));
 			return;
-		} else if *token == Token::Op(crate::lexer::OpTy::Eq) {
+		} else if *token == Token::Op(lexer::OpTy::Eq) {
 			// We have a variable definition with initialization.
 			let eq_span = token_span;
 			walker.push_colour(eq_span, SyntaxType::Operator);

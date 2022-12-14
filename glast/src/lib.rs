@@ -68,25 +68,14 @@ mod span;
 
 pub use span::*;
 
-/// Holds either one or the other value.
-#[derive(Debug, Clone, Copy, PartialEq)]
-pub enum Either<L, R> {
-	Left(L),
-	Right(R),
-}
-
-/// Holds one of 3 possible values.
-#[derive(Debug, Clone, Copy, PartialEq)]
-enum Either3<A, B, C> {
-	A(A),
-	B(B),
-	C(C),
-}
-
 /// Describes the GLSL version.
-#[derive(Debug, Clone, Copy, PartialEq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
 pub enum GlslVersion {
+	/// GLSL 4.50
 	_450,
+	/// An GLSL version unsupported by the crate.
+	#[default]
+	// TODO: The default GLSL version in reality is 110, but we currently don't support that.
 	Unsupported,
 }
 
@@ -100,9 +89,17 @@ impl GlslVersion {
 	}
 }
 
-impl Default for GlslVersion {
-	fn default() -> Self {
-		// TODO: The default GLSL version in reality is 110, but we currently don't support that.
-		Self::Unsupported
-	}
+/// Holds either one or the other value.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum Either<L, R> {
+	Left(L),
+	Right(R),
+}
+
+/// Holds one of 3 possible values.
+#[derive(Debug, Clone, Copy, PartialEq)]
+enum Either3<A, B, C> {
+	A(A),
+	B(B),
+	C(C),
 }

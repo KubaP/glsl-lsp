@@ -1945,7 +1945,8 @@ pub(crate) fn concat_macro_body(
 						let mut new_string = prev.0.to_string();
 						new_string.push_str(&next.0.to_string());
 						let mut lexer = Lexer::new(&new_string);
-						let mut result = super::parse_tokens(&mut lexer, true);
+						let mut result =
+							super::parse_tokens(&mut lexer, true, false);
 						if result.len() == 1 {
 							// We have successfully concatenated. Since the lexer starts off at 0, we need to
 							// modify the span to be correct.

@@ -1355,13 +1355,16 @@ mod tests {
 	//! Behaviour tests for the conditional expression parser, and also of the conditional expression lexer since
 	//! that is a prerequisite.
 
-	use super::*;
 	use crate::{
 		diag::{ExprDiag, Syntax},
 		lexer::{NumType, OpTy, Token},
-		parser::ast::conditional::*,
+		parser::{
+			ast::{conditional::*, Ident},
+			Macro,
+		},
 		span,
 	};
+	use std::collections::HashMap;
 
 	/// Asserts that the given source string produces the specified expression.
 	macro_rules! assert_expr {

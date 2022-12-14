@@ -16,6 +16,9 @@ export class Context {
 		this.client = client;
 	}
 
+	/**
+	 * Initializes our custom global context.
+	 */
 	static async new(vscode_context: ExtensionContext, serverPath: string): Promise<Context> {
 		// Create a output channel for logging information from the client, and for LSP tracing if
 		// `glsl.trace.server` is set to `true`.
@@ -65,6 +68,9 @@ export class Context {
 		this.ctx.subscriptions.push(d);
 	}
 
+	/**
+	 * Registers a command.
+	 */
 	registerCommand(name: string, cmd_factory: (_: Context) => Cmd) {
 		const fullName = `glsl.${name}`;
 		const command = cmd_factory(this);

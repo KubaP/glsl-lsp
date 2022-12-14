@@ -85,7 +85,32 @@
 						"verbose"
 					],
 					"default": "off",
-					"description": "Traces the communication between VS Code and the language server."
+					"description": "Traces the communication between VS Code and the language server. This is a debug setting useful for working on the extension itself."
+				},
+				"glsl.conditionalCompilation.state": {
+					"scope": "resource",
+					"type": "string",
+					"enum": [
+						"off",
+						"evaluate"
+					],
+					"enumItemLabels": [
+						"Off",
+						"Evaluate"
+					],
+					"enumDescriptions": [
+						"Conditional compilation is disabled",
+						"Evaluates the conditional directives on-the-fly"
+					],
+					"default": "off",
+					"description": "The default state for conditional compilation evaluation when opening a new file. This setting can be overridden on a per-file basis using either an appropriate command or through the relevant codelenses."
+				},
+				"glsl.syntaxHighlighting.highlightEntireFile": {
+					"scope": "resource",
+					"type": "boolean",
+					"default": true,
+					"description": "Whether to syntax highlight the entire file, as opposed to just the chosen code depending on the `glsl.conditionalCompilation.state` setting. Because of how conditional compilation is designed, this setting will require a file to be parsed more than once to fully parse and color every bit of text. Under certain complex conditional branching, this setting set to `true` can cause performance issues.",
+					"markdownDescription": "Whether to syntax highlight the entire file, as opposed to just the chosen code depending on the `#glsl.conditionalCompilation.state#` setting. Because of how conditional compilation is designed, this setting will require a file to be parsed more than once to fully parse and color every bit of text. Under certain complex conditional branching, this setting set to `true` can cause performance issues."
 				}
 			}
 		},

@@ -1,10 +1,13 @@
 import * as path from "path";
+import * as vscode from "vscode";
 import { ExtensionContext } from "vscode";
+import { ConfigurationRequest } from "vscode-languageclient";
 
 import * as commands from "./commands";
 import { Context } from "./context";
+import { configurationRequest, onDidChangeConfiguration } from "./lsp";
 
-// Global variables
+// Global context variable.
 let ctx: Context | undefined;
 
 export async function activate(context: ExtensionContext) {
@@ -18,6 +21,10 @@ export async function activate(context: ExtensionContext) {
 
 	// Register commands.
 	ctx.registerCommand("showAst", commands.ast);
+
+	// Register LSP handlers.
+	ctx.client.onRequest(ConfigurationRequest.method, configurationRequest);
+	vscode.workspace.onDidChangeConfiguration((e) => onDidChangeConfiguration(e, ctx.client));
 
 	// Start the client.
 	ctx.client.start();

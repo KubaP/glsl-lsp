@@ -37,21 +37,24 @@ use expression::{expr_parser, Mode};
 use std::collections::{HashMap, HashSet};
 
 /// The result of a parsed GLSL token tree.
+#[derive(Debug)]
 pub struct ParseResult {
-	/// The abstract syntax tree. By nature of this tree being parsed after the conditional compilation directives
-	/// having been applied, it will not contain any of these directives.
+	/// The abstract syntax tree. By nature of this tree being parsed after having applied conditional compilation
+	/// directives, it will not contain any of those directives.
 	pub ast: Vec<Node>,
 	/// All syntax diagnostics.
 	pub syntax_diags: Vec<Syntax>,
-	/// All semantic diagnostics. Since the parser only creates an AST and doesn't perform any further analysis,
-	/// this vector will only contain semantic errors in relation to macros.
+	/// All semantic diagnostics. Since the parser only creates an AST and doesn't perform any further analysis
+	/// (such as name resolution), this vector will only contain semantic errors in relation to macros.
 	pub semantic_diags: Vec<Semantic>,
 	/// The syntax highlighting tokens. If this result is obtained by calling a parsing method without enabling
-	/// whole-file syntax highlighting, the tokens in this vector will only be for the abstract syntax tree. If
-	/// whole-file syntax highlighting was enabled, the tokens will be for the entire file.
+	/// entire-file syntax highlighting, the tokens in this vector will only be for the contents of the abstract
+	/// syntax tree. If entire-file syntax highlighting was enabled, the tokens will be for the entire file (and
+	/// correctly ordered).
 	pub syntax_tokens: Vec<SyntaxToken>,
-	/// Spans which cover any disabled code (because of conditional compilation).
-	pub disabled_code_spans: Vec<Span>,
+	/// Spans which cover any regions of disabled code (because of conditional compilation). This is populated only
+	/// if entire-file syntax highlighting was enabled, otherwise it will be empty.
+	pub disabled_code_regions: Vec<Span>,
 }
 
 /// Parses a GLSL source string into a tree of tokens that can be then parsed into an abstract syntax tree.
@@ -187,6 +190,7 @@ pub fn parse_from_token_stream(
 				span,
 			}],
 			order_by_appearance: vec![],
+			end_position: span.end,
 			syntax_diags: vec![],
 			contains_conditional_compilation: false,
 		});
@@ -319,6 +323,7 @@ pub fn parse_from_token_stream(
 						Either::Right(ConditionBlock {
 							conditions: vec![(
 								Conditional::IfDef,
+								token_span,
 								tokens,
 								span,
 								idx,
@@ -383,6 +388,7 @@ pub fn parse_from_token_stream(
 						Either::Right(ConditionBlock {
 							conditions: vec![(
 								Conditional::IfNotDef,
+								token_span,
 								tokens,
 								span,
 								idx,
@@ -443,6 +449,7 @@ pub fn parse_from_token_stream(
 						Either::Right(ConditionBlock {
 							conditions: vec![(
 								Conditional::If,
+								token_span,
 								tokens,
 								span,
 								idx,
@@ -509,6 +516,7 @@ pub fn parse_from_token_stream(
 						let Either::Right(cond_block) = node.children.last_mut().unwrap() else { unreachable!() };
 						cond_block.conditions.push((
 							Conditional::ElseIf,
+							token_span,
 							tokens,
 							span,
 							idx,
@@ -575,6 +583,7 @@ pub fn parse_from_token_stream(
 						let Either::Right(cond_block) = node.children.last_mut().unwrap() else { unreachable!() };
 						cond_block.conditions.push((
 							Conditional::Else,
+							token_span,
 							tokens,
 							span,
 							idx,
@@ -637,6 +646,7 @@ pub fn parse_from_token_stream(
 						let Either::Right(cond_block) = node.children.last_mut().unwrap() else { unreachable!() };
 						cond_block.end = Some((
 							Conditional::End,
+							token_span,
 							tokens,
 							span,
 							hash_syntax,
@@ -680,7 +690,7 @@ pub fn parse_from_token_stream(
 		let Either::Right(cond) = node.children.last_mut().unwrap() else { unreachable!(); };
 		syntax_diags.push(Syntax::PreprocConditional(
 			PreprocConditionalDiag::UnclosedBlock(
-				cond.conditions[0].2,
+				cond.conditions[0].1,
 				Span::new(token_stream_end, token_stream_end),
 			),
 		));
@@ -688,11 +698,12 @@ pub fn parse_from_token_stream(
 
 	//dbg!(&arena);
 	//dbg!(&tree);
-	//dbg!(&syntax_diags);
+
 	Ok(TokenTree {
 		arena,
 		tree,
 		order_by_appearance,
+		end_position: token_stream_end,
 		syntax_diags,
 		contains_conditional_compilation: true,
 	})
@@ -871,7 +882,11 @@ pub struct TokenTree {
 	///
 	/// # Invariants
 	/// If `contains_conditional_compilation` is `false`, this is empty.
+	///
+	/// If this contains entries, each `entry.1[0]` is guaranteed to exist and be of value `Self::ROOT_NODE_ID`.
 	order_by_appearance: Vec<(NodeId, Vec<NodeId>)>,
+	/// The ending position of the last token in the tree.
+	end_position: usize,
 
 	/// Syntax diagnostics related to conditional compilation directives.
 	///
@@ -917,9 +932,9 @@ impl TokenTree {
 			let mut streams = Vec::new();
 			let node = &self.tree[Self::ROOT_NODE_ID];
 			for child in &node.children {
-				// Ignore any conditional blocks under the root node.
 				match child {
 					Either::Left(idx) => streams.push(self.arena[*idx].clone()),
+					// Ignore any conditional blocks under the root node.
 					Either::Right(_) => {}
 				}
 			}
@@ -932,7 +947,7 @@ impl TokenTree {
 		while !walker.is_done() {
 			parse_stmt(&mut walker, &mut nodes);
 		}
-		let (nodes, syntax_diags, semantic_diags, syntax_tokens) = (
+		let (nodes, syntax_diags, semantic_diags, mut root_tokens) = (
 			nodes,
 			walker.syntax_diags,
 			walker.semantic_diags,
@@ -941,41 +956,42 @@ impl TokenTree {
 
 		if syntax_highlight_entire_file && self.contains_conditional_compilation
 		{
-			let mut tokens = Vec::with_capacity(syntax_tokens.len());
-			let mut root_tokens = syntax_tokens;
-			let mut conditional_spans = Vec::new();
+			let mut merged_syntax_tokens =
+				Vec::with_capacity(root_tokens.len());
+			let mut conditional_regions = Vec::new();
 
-			// Each key points to the nodes which contain the tokens of the conditional branch. If we want
-			// information about the conditional directive itself, we have to look at the parent.
 			let keys = self
 				.minimal_no_of_permutations_for_complete_syntax_highlighting();
 
-			// Move over the root tokens before any conditional scope.
-			let first_node = self.tree.get(keys[0][0]).unwrap();
+			// Move over any root tokens before any conditional blocks.
+			let first_node = &self.tree[keys[0][0]];
 			let span = Span::new(0, first_node.span.start);
 			loop {
-				let SyntaxToken { span: s, .. } = match root_tokens.get(0) {
-					Some(t) => t,
+				match root_tokens.get(0) {
+					Some(token) => {
+						if span.contains(token.span) {
+							merged_syntax_tokens.push(root_tokens.remove(0));
+						} else {
+							break;
+						}
+					}
 					None => break,
-				};
-
-				if span.contains(*s) {
-					tokens.push(root_tokens.remove(0));
-				} else {
-					break;
 				}
 			}
 
-			// Deal with all tokens produced from conditional scopes, as well as root tokens in-between conditional
-			// scopes, (if any).
+			// Deal with all tokens produced from conditional branches, as well as any root tokens in-between
+			// conditional branches, (if any).
 			for (i, key) in keys.iter().enumerate() {
 				let node = self.tree.get(key[0]).unwrap();
-				conditional_spans.push(node.span);
+				conditional_regions.push(node.span);
 
-				let ParseResult {
-					syntax_tokens: mut new_tokens,
-					..
-				} = self.parse_node_ids_chronologically(key);
+				let (
+					ParseResult {
+						syntax_tokens: mut new_tokens,
+						..
+					},
+					_,
+				) = self.parse_node_ids_chronologically(key);
 				loop {
 					let SyntaxToken { span: s, .. } = match new_tokens.get(0) {
 						Some(t) => t,
@@ -988,7 +1004,7 @@ impl TokenTree {
 					}
 
 					if node.span.contains(*s) {
-						tokens.push(new_tokens.remove(0));
+						merged_syntax_tokens.push(new_tokens.remove(0));
 					} else {
 						break;
 					}
@@ -1008,7 +1024,8 @@ impl TokenTree {
 								};
 
 							if span.contains(*s) {
-								tokens.push(root_tokens.remove(0));
+								merged_syntax_tokens
+									.push(root_tokens.remove(0));
 							} else {
 								break;
 							}
@@ -1018,31 +1035,22 @@ impl TokenTree {
 			}
 
 			// Append any remaining root tokens.
-			tokens.append(&mut root_tokens);
+			merged_syntax_tokens.append(&mut root_tokens);
 
 			ParseResult {
 				ast: nodes,
 				syntax_diags,
 				semantic_diags,
-				syntax_tokens: tokens,
-				disabled_code_spans: conditional_spans,
+				syntax_tokens: merged_syntax_tokens,
+				disabled_code_regions: conditional_regions,
 			}
 		} else {
-			let keys = self
-				.minimal_no_of_permutations_for_complete_syntax_highlighting();
-			let mut conditional_spans = Vec::new();
-
-			for key in keys.iter() {
-				let node = self.tree.get(key[0]).unwrap();
-				conditional_spans.push(node.span);
-			}
-
 			ParseResult {
 				ast: nodes,
 				syntax_diags,
 				semantic_diags,
-				syntax_tokens,
-				disabled_code_spans: conditional_spans,
+				syntax_tokens: root_tokens,
+				disabled_code_regions: Vec::new(),
 			}
 		}
 	}
@@ -1066,7 +1074,8 @@ impl TokenTree {
 	/// # Examples
 	/// For a fully detailed example on how to use this method to create an abstract syntax tree, see the
 	/// documentation for the [`parse_from_str()`] function.
-	pub fn evaluate(&self, _syntax_highlight_entire_file: bool) -> ParseResult {
+	pub fn evaluate(&self, syntax_highlight_entire_file: bool) -> ParseResult {
+		// Parse the evaluated branches.
 		let mut walker = Walker::new(DynamicTokenStreamProvider::new(
 			&self.arena,
 			&self.tree,
@@ -1075,13 +1084,161 @@ impl TokenTree {
 		while !walker.is_done() {
 			parse_stmt(&mut walker, &mut nodes);
 		}
+		let eval_key = walker.token_provider.chosen_key;
+		let eval_spans = walker.token_provider.chosen_spans;
 
-		ParseResult {
-			ast: nodes,
-			syntax_diags: walker.syntax_diags,
-			semantic_diags: walker.semantic_diags,
-			syntax_tokens: walker.syntax_tokens,
-			disabled_code_spans: vec![],
+		let (nodes, syntax_diags, semantic_diags, mut eval_tokens) = (
+			nodes,
+			walker.syntax_diags,
+			walker.semantic_diags,
+			walker.syntax_tokens,
+		);
+
+		//dbg!(&eval_key);
+		//dbg!(&eval_spans);
+
+		if syntax_highlight_entire_file && self.contains_conditional_compilation
+		{
+			let mut keys = self
+				.minimal_no_of_permutations_for_complete_syntax_highlighting();
+			// We want to exclude the key that we've parsed when evaluating the tree. If that leaves no keys left,
+			// we know we've covered the entire tree with this evaluation, so we can return early.
+			keys.retain(|k| k != &eval_key);
+			if keys.is_empty() {
+				return ParseResult {
+					ast: nodes,
+					syntax_diags,
+					semantic_diags,
+					syntax_tokens: eval_tokens,
+					disabled_code_regions: Vec::new(),
+				};
+			}
+
+			// Parse all of the keys and store relevant information.
+			// `(key, parse_result, spans_of_conditional_nodes)`
+			let mut keys = keys
+				.into_iter()
+				.map(|k| {
+					let (a, b) = self.parse_node_ids_chronologically(&k);
+					(k, a, b)
+				})
+				.collect::<Vec<_>>();
+
+			//dbg!(&keys);
+
+			let mut disabled_regions = Vec::new();
+			let mut chosen_spans_with_keys = Vec::new();
+			let mut span_to_next_eval_range =
+				Span::new(0, eval_spans.first().map(|s| s.start).unwrap_or(0));
+			let mut eval_span_idx = 0;
+			let mut consuming_eval = false;
+			loop {
+				if !consuming_eval {
+					let mut spans_that_can_fit = Vec::new();
+					for (key, _, spans) in keys.iter() {
+						for span in spans {
+							if span_to_next_eval_range.contains(*span) {
+								spans_that_can_fit.push((*span, key.clone()));
+							}
+						}
+					}
+
+					// We now have an exhaustive list of all spans from key permutations that can fit before the
+					// next eval range. We want to sort them chronologically and remove duplicates.
+					spans_that_can_fit.sort_by(|a, b| {
+						if a.0.is_before(&b.0) {
+							std::cmp::Ordering::Less
+						} else if a.0.is_after(&b.0) {
+							std::cmp::Ordering::Greater
+						} else {
+							std::cmp::Ordering::Equal
+						}
+					});
+					spans_that_can_fit.dedup_by(|a, b| a.0 == b.0);
+
+					spans_that_can_fit
+						.iter()
+						.for_each(|(span, _)| disabled_regions.push(*span));
+					chosen_spans_with_keys.append(&mut spans_that_can_fit);
+
+					if eval_span_idx == eval_spans.len() {
+						break;
+					}
+					consuming_eval = true;
+				} else {
+					chosen_spans_with_keys
+						.push((eval_spans[eval_span_idx], eval_key.clone()));
+					match eval_spans.get(eval_span_idx + 1) {
+						Some(next) => {
+							span_to_next_eval_range = Span::new(
+								eval_spans[eval_span_idx].end,
+								next.start,
+							)
+						}
+						None => {
+							span_to_next_eval_range = Span::new(
+								eval_spans[eval_span_idx].end,
+								self.end_position,
+							)
+						}
+					}
+					eval_span_idx += 1;
+					consuming_eval = false;
+				}
+			}
+
+			//dbg!(&chosen_spans_with_keys);
+
+			// We now have a vector of chronologically ordered spans (that cover the entire source string) along
+			// with the permutation key from which to take the tokens.
+			let mut merged_syntax_tokens =
+				Vec::with_capacity(eval_tokens.len());
+			for (span, key) in chosen_spans_with_keys {
+				let tokens = if key == eval_key {
+					&mut eval_tokens
+				} else {
+					&mut keys
+						.iter_mut()
+						.find(|(k, _, _)| k == &key)
+						.unwrap()
+						.1
+						.syntax_tokens
+				};
+
+				loop {
+					let token = match tokens.get(0) {
+						Some(t) => t,
+						None => break,
+					};
+
+					if token.span.is_before(&span) {
+						// Token is before the relevant span, so we can safely discard it.
+						tokens.remove(0);
+					} else if span.contains(token.span) {
+						merged_syntax_tokens.push(tokens.remove(0));
+					} else {
+						// Token is after the current span. We won't know if we need it until the next iteration of
+						// the for loop, so we don't continue further with this token stream.
+						break;
+					}
+				}
+			}
+
+			ParseResult {
+				ast: nodes,
+				syntax_diags,
+				semantic_diags,
+				syntax_tokens: merged_syntax_tokens,
+				disabled_code_regions: disabled_regions,
+			}
+		} else {
+			ParseResult {
+				ast: nodes,
+				syntax_diags,
+				semantic_diags,
+				syntax_tokens: eval_tokens,
+				disabled_code_regions: Vec::new(),
+			}
 		}
 	}
 
@@ -1118,24 +1275,25 @@ impl TokenTree {
 
 		let mut nodes = Vec::with_capacity(key.len());
 		// Check that the key is valid.
-		{
-			let mut visited_node_ids = vec![0];
-			for num in key {
-				let (id, parent_id) = match self.order_by_appearance.get(*num) {
-					Some(t) => t,
-					None => return Err(ParseErr::InvalidNum(*num)),
-				};
+		let mut visited_node_ids = vec![0];
+		for num in key {
+			let (id, required_ids) = match self.order_by_appearance.get(*num) {
+				Some(t) => t,
+				None => return Err(ParseErr::InvalidNum(*num)),
+			};
 
-				if !visited_node_ids.contains(parent_id.first().unwrap()) {
-					return Err(ParseErr::InvalidChain(*num));
-				}
-
-				visited_node_ids.push(*id);
-				nodes.push(*id);
+			// Panic: See `self.order_by_appearance` invariant.
+			if !visited_node_ids.contains(required_ids.last().unwrap()) {
+				return Err(ParseErr::InvalidChain(*num));
 			}
+
+			visited_node_ids.push(*id);
+			nodes.push(*id);
 		}
 
-		Ok(self.parse_node_ids_chronologically(&nodes))
+		// TODO: Implement entire-file syntax option
+
+		Ok(self.parse_node_ids_chronologically(&nodes).0)
 	}
 
 	/// TODO: Implement.
@@ -1149,29 +1307,36 @@ impl TokenTree {
 
 	/// Parses the specified nodes.
 	///
+	/// Returns a `ParseResult` along with a vector of spans of the chosen conditional nodes, (doesn't include the
+	/// root node).
+	///
 	/// # Invariants
-	/// At least one node needs to be specified.
+	/// At least one node ID needs to be specified.
 	///
-	/// The IDs of the nodes-to-parse should be in a chronological order.
+	/// The IDs of the nodes-to-parse need to be in chronological order.
 	///
-	/// The IDs should map to a valid permutation of conditional blocks.
-	fn parse_node_ids_chronologically(&self, nodes: &[NodeId]) -> ParseResult {
+	/// The IDs need to map to a valid permutation of conditional blocks.
+	fn parse_node_ids_chronologically(
+		&self,
+		nodes: &[NodeId],
+	) -> (ParseResult, Vec<Span>) {
 		if nodes.is_empty() {
-			panic!("Expected at least one node to evaluate");
+			panic!("Expected at least one node to parse");
 		}
 
-		let mut nodes_idx = 0;
 		let mut streams = Vec::new();
+		let mut chosen_spans = Vec::new();
 		let mut conditional_syntax_tokens = Vec::new();
-		let mut end_tokens_stack = Vec::new();
-		let mut node_stack = vec![(0, 0)];
-		// Invariant: We have at least one node, so at least one iteration of this loop can be performed without
+		let mut end_conditional_syntax_tokens_stack = Vec::new();
+		let mut nodes_idx = 0;
+		let mut call_stack = vec![(0, 0)];
+		// Panic: We have at least one node, so at least one iteration of this loop can be performed without
 		// any panics.
 		'outer: loop {
-			let (node_id, child_idx) = node_stack.last_mut().unwrap();
+			let (node_id, child_idx) = call_stack.last_mut().unwrap();
 			let node = &self.tree[*node_id];
 
-			// Consume the next content element in this node.
+			// Consume the next content child of this node.
 			while let Some(child) = node.children.get(*child_idx) {
 				*child_idx += 1;
 				match child {
@@ -1180,33 +1345,54 @@ impl TokenTree {
 					}
 					Either::Right(ConditionBlock { conditions, end }) => {
 						// Check if any of the conditional branches match the current key number.
-						for (_, tokens, _, node_id, _, _) in conditions {
-							if *node_id == nodes[nodes_idx] {
-								conditional_syntax_tokens.push(
-									tokens
-										.iter()
-										.map(|(t, s)| SyntaxToken {
-											ty: t.non_semantic_colour(),
+						for (
+							_,
+							_,
+							syntax_tokens,
+							_,
+							branch_node_id,
+							hash_token,
+							dir_token,
+						) in conditions
+						{
+							if *branch_node_id == nodes[nodes_idx] {
+								chosen_spans
+									.push(self.tree[*branch_node_id].span);
+
+								let mut tokens = vec![*hash_token, *dir_token];
+								for (token, span) in syntax_tokens.iter() {
+									tokens.push(SyntaxToken {
+										ty: token.non_semantic_colour(),
+										modifiers: SyntaxModifiers::CONDITIONAL,
+										span: *span,
+									});
+								}
+								conditional_syntax_tokens.push(tokens);
+
+								call_stack.push((*branch_node_id, 0));
+								nodes_idx += 1;
+
+								if let Some((
+									_,
+									_,
+									syntax_tokens,
+									_,
+									hash_token,
+									dir_token,
+								)) = end
+								{
+									let mut tokens =
+										vec![*hash_token, *dir_token];
+									for (token, span) in syntax_tokens.iter() {
+										tokens.push(SyntaxToken {
+											ty: token.non_semantic_colour(),
 											modifiers:
 												SyntaxModifiers::CONDITIONAL,
-											span: *s,
-										})
-										.collect::<Vec<_>>(),
-								);
-								node_stack.push((*node_id, 0));
-								nodes_idx += 1;
-								if let Some((_, tokens, _, _, _)) = end {
-									end_tokens_stack.push(
-										tokens
-											.iter()
-											.map(|(t, s)| SyntaxToken {
-												ty: t.non_semantic_colour(),
-												modifiers:
-													SyntaxModifiers::CONDITIONAL,
-												span: *s,
-											})
-											.collect::<Vec<_>>(),
-									);
+											span: *span,
+										});
+									}
+									end_conditional_syntax_tokens_stack
+										.push(tokens);
 								}
 								continue 'outer;
 							}
@@ -1217,9 +1403,9 @@ impl TokenTree {
 
 			// We have consumed all the content of this node which means we can pop it from the stack and continue
 			// with the parent node, (if there is one).
-			if node_stack.len() > 1 {
-				node_stack.pop();
-				if let Some(e) = end_tokens_stack.pop() {
+			if call_stack.len() > 1 {
+				call_stack.pop();
+				if let Some(e) = end_conditional_syntax_tokens_stack.pop() {
 					// We may not have an ending token if the conditional block lacks a `#endif`, hence this check.
 					conditional_syntax_tokens.push(e);
 				}
@@ -1228,6 +1414,7 @@ impl TokenTree {
 			}
 		}
 
+		// Parse the pre-selected branches.
 		let mut walker = Walker::new(PreselectedTokenStreamProvider::new(
 			streams,
 			conditional_syntax_tokens,
@@ -1237,20 +1424,50 @@ impl TokenTree {
 			parse_stmt(&mut walker, &mut nodes);
 		}
 
-		ParseResult {
-			ast: nodes,
-			syntax_diags: walker.syntax_diags,
-			semantic_diags: walker.semantic_diags,
-			syntax_tokens: walker.syntax_tokens,
-			disabled_code_spans: vec![], // FIXME:
+		// Work out the spans of the disabled code regions. Panic: Since at least one conditional node will have
+		// been parsed, `chosen_spans` will have at least one element.
+		let mut disabled_code_regions = Vec::new();
+		if chosen_spans[0].start != 0 {
+			disabled_code_regions.push(Span::new(0, chosen_spans[0].start));
 		}
+		for span in chosen_spans.windows(2) {
+			if span[0].end != span[1].start {
+				disabled_code_regions
+					.push(Span::new(span[0].end, span[1].start));
+			}
+		}
+		if chosen_spans.last().unwrap().end != self.end_position {
+			disabled_code_regions.push(Span::new(
+				chosen_spans.last().unwrap().end,
+				self.end_position,
+			));
+		}
+
+		(
+			ParseResult {
+				ast: nodes,
+				syntax_diags: walker.syntax_diags,
+				semantic_diags: walker.semantic_diags,
+				syntax_tokens: walker.syntax_tokens,
+				disabled_code_regions,
+			},
+			chosen_spans,
+		)
 	}
 
-	/// Returns all of the (by-order-of-appearance) keys (**of node IDs, not order-of-appearance numbers**)
-	/// required to fully syntax highlight the entire source string.
+	/// Returns all of the keys (**of node IDs, not order-of-appearance numbers**) required to fully syntax
+	/// highlight the entire tree.
+	///
+	/// Each key points to the nodes which contain the actual tokens of the conditional branch. To get information
+	/// about the conditional directive itself, you must look up the parent and find the node ID in one of the
+	/// child conditional blocks.
 	fn minimal_no_of_permutations_for_complete_syntax_highlighting(
 		&self,
 	) -> Vec<Vec<NodeId>> {
+		// TODO: Merge permutations which that have no collisions, such as the first condition from the first
+		// conditional block with the first condition from the second conditional block. It may make sense to
+		// replace the `order_by_appearance` traversal with a manual stack traversal of the tree.
+
 		let mut chains_of_nodes = Vec::new();
 		for (id, required_ids) in self.order_by_appearance.iter().skip(1) {
 			let mut new_chain = required_ids[1..].to_vec();
@@ -1292,31 +1509,37 @@ type ArenaId = usize;
 #[derive(Debug)]
 struct TreeNode {
 	/// The parent of this node.
-	#[allow(unused)]
 	parent: Option<NodeId>,
 	/// The children/contents of this node. Each entry either points to a token stream (in the arena), or is a
-	/// condition block which points to child nodes.
+	/// conditional block which points to child nodes for each conditional branch.
 	children: Vec<Either<ArenaId, ConditionBlock>>,
 	/// The span of the entire node.
+	///
+	/// If this is a conditional branch node, the span starts from the beginning of the conditional directive to
+	/// the beginning of the next `elif`/`else` conditional directive, or to the end of the `endif` directive.
 	span: Span,
 }
 
+/// A conditional block, part of a `TreeNode`.
 #[derive(Debug)]
 struct ConditionBlock {
-	/// The individual conditional directives & blocks.
+	/// The individual conditional branches.
 	///
-	/// - `0` - The type of conditional directive.
-	/// - `1` - The tokens.
-	/// - `2` - The span of the tokens.
-	/// - `3` - The ID of the node that contains the contents of the branch.
-	/// - `4` - The syntax highlighting token for the `#` symbol.
-	/// - `5` - The syntax highlighting token for the name of the directive.
+	/// - `0` - The type of condition.
+	/// - `1` - The span of the entire directive.
+	/// - `2` - The tokens in the directive.
+	/// - `3` - The span of the tokens **only**, this does not include the `#if` part.
+	/// - `4` - The ID of the node that contains the contents of the branch.
+	/// - `5` - The syntax highlighting token for the `#` symbol.
+	/// - `6` - The syntax highlighting token for the name of the directive.
+	///
 	/// # Invariants
 	/// There will always be an entry at `[0]` and it will be a `Conditional::IfDef/IfNotDef/If` variant.
 	///
-	/// This will never contain a `Conditional::End`.
+	/// This will never contain a `Conditional::End` variant.
 	conditions: Vec<(
 		Conditional,
+		Span,
 		Vec<Spanned<ConditionToken>>,
 		Span,
 		NodeId,
@@ -1329,15 +1552,17 @@ struct ConditionBlock {
 	/// hence a `NodeId` would be incorrect.
 	///
 	/// - `0` - The type of conditional directive.
-	/// - `1` - The tokens.
-	/// - `2` - The span of the tokens.
-	/// - `3` - The syntax highlighting token for the `#` symbol.
-	/// - `4` - The syntax highlighting token for the name of the directive.
+	/// - `1` - The span of the entire directive.
+	/// - `2` - The tokens in the directive.
+	/// - `3` - The span of the tokens **only**, this does not include the `#endif` part.
+	/// - `4` - The syntax highlighting token for the `#` symbol.
+	/// - `5` - The syntax highlighting token for the `endif` directive name.
 	///
 	/// # Invariants
 	/// This will be a `Conditional::End` variant.
 	end: Option<(
 		Conditional,
+		Span,
 		Vec<Spanned<ConditionToken>>,
 		Span,
 		SyntaxToken,
@@ -1345,8 +1570,8 @@ struct ConditionBlock {
 	)>,
 }
 
-#[derive(Debug)]
-enum Conditional {
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Conditional {
 	IfDef,
 	IfNotDef,
 	If,
@@ -1354,6 +1579,7 @@ enum Conditional {
 	Else,
 	End,
 }
+
 /// Information necessary to expand a macro.
 #[derive(Debug, Clone)]
 enum Macro {
@@ -1522,6 +1748,11 @@ struct DynamicTokenStreamProvider<'a> {
 	/// - `0` - The node ID.
 	/// - `1` - The index into the node's `children`.
 	ptrs: Vec<(usize, usize)>,
+	/// The key of node IDs that was chosen in the evaluation.
+	chosen_key: Vec<usize>,
+	/// The spans of the content of the chosen branches. This does not include spans of the chosen conditional
+	/// directives.
+	chosen_spans: Vec<Span>,
 	/// The span of the currently-last token. This is updated everytime a new stream is pushed.
 	last_span: Span,
 }
@@ -1533,6 +1764,8 @@ impl<'a> DynamicTokenStreamProvider<'a> {
 			arena,
 			tree,
 			ptrs: vec![(TokenTree::ROOT_NODE_ID, 0)],
+			chosen_key: Vec::new(),
+			chosen_spans: Vec::new(),
 			last_span: Span::new(0, 0),
 		}
 	}
@@ -1561,6 +1794,10 @@ impl<'a> TokenStreamProvider<'a> for DynamicTokenStreamProvider<'a> {
 					let stream = self.arena[*arena_id].clone();
 					if let Some((_, span)) = stream.last() {
 						self.last_span = *span;
+						self.chosen_spans.push(Span::new(
+							stream.first().unwrap().1.start,
+							span.end,
+						));
 					}
 					return Some(stream);
 				}
@@ -1572,8 +1809,15 @@ impl<'a> TokenStreamProvider<'a> for DynamicTokenStreamProvider<'a> {
 						self.ptrs.pop();
 					}
 					let mut matched_condition_node_id = None;
-					for (condition_ty, tokens, _, node_id, _, _) in
-						&cond_block.conditions
+					for (
+						condition_ty,
+						directive_span,
+						tokens,
+						_,
+						node_id,
+						_,
+						_,
+					) in &cond_block.conditions
 					{
 						match condition_ty {
 							Conditional::IfDef | Conditional::IfNotDef => {
@@ -1592,6 +1836,8 @@ impl<'a> TokenStreamProvider<'a> for DynamicTokenStreamProvider<'a> {
 											if result {
 												matched_condition_node_id =
 													Some(*node_id);
+												self.chosen_spans
+													.push(*directive_span);
 												break;
 											}
 										}
@@ -1614,6 +1860,7 @@ impl<'a> TokenStreamProvider<'a> for DynamicTokenStreamProvider<'a> {
 											Some(*node_id);
 										// FIXME: Deal with syntax tokens for other branches after the next
 										// stream is exhausted.
+										self.chosen_spans.push(*directive_span);
 										break;
 									}
 								}
@@ -1621,14 +1868,17 @@ impl<'a> TokenStreamProvider<'a> for DynamicTokenStreamProvider<'a> {
 							Conditional::Else => {
 								// An `else` branch is always unconditionally chosen.
 								matched_condition_node_id = Some(*node_id);
+								self.chosen_spans.push(*directive_span);
 								break;
 							}
 							Conditional::End => unreachable!(),
 						}
 					}
+					if let Some((_, _, _, _, _, _)) = &cond_block.end {}
 					match matched_condition_node_id {
 						Some(node_id) => {
 							self.ptrs.push((node_id, 0));
+							self.chosen_key.push(node_id);
 							continue;
 						}
 						None => {

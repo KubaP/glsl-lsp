@@ -2,8 +2,41 @@
 //!
 //! This module contains the structs and enums used to represent the AST, and the
 //! [`parse_from_str()`]/[`parse_from_token_stream()`] functions that return a [`TokenTree`], which can be used to
-//! parse the tokens into an abstract syntax tree ([`ParseResult`]). The [`ast`] submodule contains the AST types
-//! themselves. There is also the [`SyntaxToken`] type used to represent syntax highlighting spans.
+//! parse the token tree into an abstract syntax tree ([`ParseResult`]). The [`ast`] submodule contains the AST
+//! types themselves, and there is also the [`SyntaxToken`] type used to represent syntax highlighting spans.
+//!
+//! # Parser
+//! The parser is (aiming to be) 100% specification compliant; that is, all valid source strings are parsed
+//! correctly with no errors and all invalid source strings are parsed on a "best effort" basis with the correct
+//! errors reported.
+//!
+//! ## Macro expansion
+//! This parser correctly deals with all macro expansion, no matter how arbitrarily complex. Macros are expanded in
+//! all of the places that they are allowed to be expanded in. Because of the fact that macros can contain
+//! partially-valid grammar that only becomes fully valid at the call site with surrounding context, the parser
+//! discards information that a macro call site exists and just looks at the result of the expansion. Hence, the
+//! final AST has no information about macro call sites. Note that the syntax highlighting spans correctly colour
+//! macro call sites.
+//!
+//! ## Conditional compilation
+//! This parser supports all forms of conditional compilation. Because conditional compilation is a pre-pass (part
+//! of the preprocessor) before the main parser runs, conditional compilation must be resolved beforehand. This
+//! crate handles this through the [`TokenTree`] struct, which allows you to choose how to expand conditional
+//! compilation directives. Support includes ignoring all conditional directives, evaluating conditional directives
+//! on-the-fly, and choosing a specific permutation through a key. By default, syntax highlighting spans are only
+//! produced for the chosen branches. If you wish to nontheless highlight the entire file, the parsing functions
+//! include a `syntax_highlight_entire_file` boolean parameter.
+//!
+//! # Differences in behaviour
+//! The GLSL specification does not mention what the result should be if a syntactical/semantic error is
+//! encountered, apart from the fact that a compile-time error must be emitted. The [`ParseResult`] contains any
+//! detected compile-time diagnostics.
+//!
+//! Since this crate is part of a larger language extension effort, it is designed to handle errors in a UX
+//! friendly manner. Therefore, this parser tries its best to recover from syntax errors in a sensible manner and
+//! provide a "best effort" AST. The AST retains 100% semantic meaning of the token stream only if no syntax or
+//! semantic errors are produced. If any errors are produced, that means some information has been lost in the
+//! tokenstream-to-ast conversion.
 
 pub mod ast;
 pub mod conditional_eval;
@@ -64,12 +97,12 @@ pub struct ParseResult {
 /// where the parser can branch - a conditional branch could be introduced in the middle of a variable declaration
 /// for instance. This makes it effectively impossible to represent all branches of a source string within a single
 /// AST without greatly overcomplicating the entire parser, so multiple ASTs are needed to represent all the
-/// conditional permutations.
+/// conditional branch permutations.
 ///
-/// The [`TokenTree`] struct allows you to pick which conditional compilation permutations to enable, and then
-/// parse the source string with those conditions to produce a [`ParseResult`]. Each permutation of all possible
-/// ASTs can be accessed with a key that describes which of the conditional options is selected. The example below
-/// illustrates this:
+/// The [`TokenTree`] struct allows you to pick which conditional branches to enable, and then parse the source
+/// string with that permutation to produce a [`ParseResult`]. Each permutation of all possible ASTs can be
+/// accessed with a key that describes which of the conditional branches is selected. The example below illustrates
+/// this:
 /// ```c
 ///                         // Ordered by appearance    Ordered by nesting
 ///                         //  0 (root)
@@ -105,15 +138,15 @@ pub struct ParseResult {
 ///
 /// ## No conditional compilation
 /// There is always a root token stream which has no conditional branches enabled. This can be accessed through the
-/// [`root()`](TokenTree::root) method, and always returns something.
+/// [`root()`](TokenTree::root) method.
 ///
 /// ## Conditional directive evaluation
 /// The [`evaluate()`](TokenTree::evaluate) method evaluates conditional directives on-the-fly, and chooses
-/// conditional branches depending on if the evaluations succeed.
+/// conditional branches depending on if the evaluation succeeds.
 ///
 /// ## Order by appearance
 /// Each encountered condition (an `ifdef`/`ifndef`/`if`/`elif`/`else` directive) is given an incrementing number.
-/// You pass a slice of numbers that denote which conditions to enable into the
+/// You pass a slice of numbers that denote which conditional branches to enable into the
 /// [`parse_by_order_of_appearance()`](TokenTree::parse_by_order_of_appearance) method.
 ///
 /// Some examples to visualise:
@@ -124,8 +157,8 @@ pub struct ParseResult {
 ///
 /// ## Order by nesting (Not implemented yet)
 /// Each encountered group of conditions (an `ifdef`/`ifndef`/`if` - `elif`/`else` - `endif`) creates a newly
-/// nested group. Within each group the individual conditions are numbered by order of appearance from 0. You pass
-/// slices of numbers that denote which conditions to enable into the
+/// nested group. Within each group the individual conditional branches are numbered by order of appearance
+/// starting from `0`. You pass slices of numbers that denote which branches to enable into the
 /// [`parse_by_order_of_nesting()`](TokenTree::parse_by_order_of_nesting) method.
 ///
 /// Some examples to visualise:
@@ -135,7 +168,7 @@ pub struct ParseResult {
 /// - `[[0-0, 0-0], [1-0, 0-0]]` will produce: `foo AAA 50 BBB EEE 100 bar`.
 ///
 /// ## Invalid permutations
-/// If you pass a key which doesn't form a valid permutation, the parsing functions will return an error.
+/// If you pass a key which doesn't form a valid permutation, the parsing function will return an error.
 ///
 /// # Examples
 /// Parse a simple GLSL expression:
@@ -757,14 +790,14 @@ pub enum ParseErr {
 
 /// A tree of token streams generated from a GLSL source string.
 ///
-/// The tree represents all possible conditional compilation branches. Call the [`evaluate()`](Self::evaluate),
+/// The tree represents all conditional compilation branches. Call the [`evaluate()`](Self::evaluate),
 /// [`parse_by_order_of_appearance()`](Self::parse_by_order_of_appearance), or
-/// [`parse_by_order_of_nesting()`](Self::parse_by_order_of_nesting) method to parse a tree with the selected
-/// conditional branches into a [`ParseResult`].
+/// [`parse_by_order_of_nesting()`](Self::parse_by_order_of_nesting) method to parse an abstract syntax tree with
+/// the selected conditional branches into a [`ParseResult`].
 ///
 /// # Examples
-/// For a fully detailed example on how to use this struct to create an abstract syntax tree, see the documentation
-/// for the [`parse_from_str()`] function.
+/// For a fully detailed example on how to use this struct to create an AST, see the documentation for the
+/// [`parse_from_str()`] function.
 ///
 /// # Why is this necessary?
 /// Conditional compilation is implemented through the preprocessor, which sets no rules as to where conditional
@@ -826,13 +859,13 @@ pub enum ParseErr {
 /// ```
 /// Notice how this AST is effectively `Either(AST_with_condition_false, AST_with_condition_true)`. This is because
 /// the function `foo` could potentially be split in the middle, but an AST node cannot have multiple end points,
-/// which means that we can't include both permutations in the function node; we need separate function nodes
+/// which means that we can't include both permutations within the function node; we need separate function nodes
 /// instead. And since we have two separate possibilities for `foo`, we need to branch in the node above `foo`,
 /// which in this example is effectively the root node.
 ///
 /// It is arguable whether such a representation would be better than the current solution. On one hand all
 /// possibilities are within the single AST, but on the other hand such an AST would quickly become confusing to
-/// work with, manipulate, and analyse in the scenario of complex conditional directives.
+/// work with, manipulate, and analyse in the scenario of complex conditional branching.
 ///
 /// The main reason this option wasn't chosen is because it would immensely complicate the parsing logic, and in
 /// turn the maintainability of this project. As with all recursive-descent parsers, the individual parsing
@@ -840,7 +873,7 @@ pub enum ParseErr {
 /// such as the name, the starting position, the parameters, etc. If we would encounter the conditional branching
 /// within this parsing function, we would somehow need to know ahead-of-time whether this conditional branch will
 /// affect the function node, and if so, be able to return up the call stack to split the parser whilst also
-/// somehow not loosing the temporary state. This would require abandoning the recursive-descent approach, which
+/// somehow not losing the temporary state. This would require abandoning the recursive-descent approach, which
 /// would greatly complicate the parser and make writing the parsing logic itself an absolutely awful mess, and
 /// that is not a trade-off I'm willing to take.
 ///
@@ -853,8 +886,8 @@ pub enum ParseErr {
 /// results in this sort of stuff (the approach taken by this crate) being necessary to achieve 100%
 /// specification-defined behaviour.
 ///
-/// Note that macros can actually be correctly expanded within the same pass as the parser without introducing too
-/// much complexity, it's just that conditional compilation can't.
+/// Note that macros can actually be correctly expanded within the same pass as the main parser without introducing
+/// too much complexity, it's just that conditional compilation can't.
 pub struct TokenTree {
 	/// The arena of token streams.
 	///
@@ -910,16 +943,16 @@ impl TokenTree {
 	///
 	/// # Syntax highlighting
 	/// The `syntax_highlight_entire_file` parameter controls whether to produce syntax tokens for the entire file,
-	/// not just for the root tokens. This involves parsing all conditional blocks in order to produce the syntax
-	/// highlighting information. Whilst this functionality uses the smallest possible number of permutations that
-	/// cover the entire file, if there are a lot of conditional blocks that can mean the source string gets parsed
-	/// many times, which may have performance implications.
+	/// rather than just for the root tokens. This involves parsing all conditional branches in order to produce
+	/// all the syntax highlighting information. Whilst the implementation of this functionality uses the smallest
+	/// possible number of permutations that cover the entire file, if there are a lot of conditional branches that
+	/// can result in the source string being parsed many times, which may have performance implications.
 	///
 	/// The actual syntax highlighting results are based off the chosen permutations which cannot be controlled. If
 	/// you require more control, you must manually parse the relevant permutations and collect the tokens
 	/// yourself.
 	///
-	/// If there are no conditional blocks, this parameter does nothing.
+	/// If there are no conditional branches, this parameter does nothing.
 	///
 	/// # Examples
 	/// For a fully detailed example on how to use this method to create an abstract syntax tree, see the
@@ -1062,14 +1095,18 @@ impl TokenTree {
 	///
 	/// # Syntax highlighting
 	/// The `syntax_highlight_entire_file` parameter controls whether to produce syntax tokens for the entire file,
-	/// not just for the root tokens. This involves parsing all conditional blocks in order to produce the syntax
-	/// highlighting information. Whilst this functionality uses the smallest possible number of permutations that
-	/// cover the entire file, if there are a lot of conditional blocks that can mean the source string gets parsed
-	/// many times, which may have performance implications.
+	/// rather than just for the evaluated branches. This involves parsing all conditional branches in order to
+	/// produce all the syntax highlighting information. Whilst the implementation of this functionality uses the
+	/// smallest possible number of permutations that cover the entire file, if there are a lot of conditional
+	/// branches that can result in the source string being parsed many times, which may have performance
+	/// implications.
 	///
 	/// The actual syntax highlighting results are based off the chosen permutations which cannot be controlled. If
 	/// you require more control, you must manually parse the relevant permutations and collect the tokens
 	/// yourself.
+	///
+	/// If there are no conditional branches, or the only conditional branches that exist are also evaluated as
+	/// true in the running of the parser, this parameter does nothing.
 	///
 	/// # Examples
 	/// For a fully detailed example on how to use this method to create an abstract syntax tree, see the
@@ -1250,14 +1287,17 @@ impl TokenTree {
 	///
 	/// # Syntax highlighting
 	/// The `syntax_highlight_entire_file` parameter controls whether to produce syntax tokens for the entire file,
-	/// not just for the root tokens. This involves parsing all conditional blocks in order to produce the syntax
-	/// highlighting information. Whilst this functionality uses the smallest possible number of permutations that
-	/// cover the entire file, if there are a lot of conditional blocks that can mean the source string gets parsed
-	/// many times, which may have performance implications.
+	/// rather than just for the selected branches. This involves parsing all conditional branches in order to
+	/// produce all the syntax highlighting information. Whilst the implementation of this functionality uses the
+	/// smallest possible number of permutations that cover the entire file, if there are a lot of conditional
+	/// branches that can result in the source string being parsed many times, which may have performance
+	/// implications.
 	///
 	/// The actual syntax highlighting results are based off the chosen permutations which cannot be controlled. If
 	/// you require more control, you must manually parse the relevant permutations and collect the tokens
 	/// yourself.
+	///
+	/// If there are no conditional branches, this parameter does nothing.
 	///
 	/// # Examples
 	/// For a fully detailed example on how to use this method to create an abstract syntax tree, see the

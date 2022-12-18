@@ -1,15 +1,33 @@
 //! Types and functionality related to the lexer.
 //!
 //! This module contains the structs and enums used to represent tokens, and the [`parse_from_str()`] function
-//! which returns a result of [`TokenStream`] and [`Metadata`]. There is an alternative
+//! which returns a result of [`TokenStream`] and [`Metadata`]. In line with the specification, the lexer correctly
+//! detects the GLSL version and switches grammar accordingly. There is an alternative
 //! [`parse_from_str_with_version()`] function which allows assuming the GLSL version rather than detecting it
 //! on-the-fly. The [`preprocessor`] submodule contains types used to represent tokens within preprocessor
 //! directives.
 //!
+//! # Lexer
+//! This lexer uses the "Maximal munch" principle to greedily create tokens. This means the longest possible valid
+//! token is always produced. Some examples:
+//!
+//! ```text
+//! i---7      becomes (i) (--) (-) (7)
+//! i----7     becomes (i) (--) (--) (7)
+//! i-----7    becomes (i) (--) (--) (-) (7)
+//! i-- - --7  becomes (i) (--) (-) (--) (7)
+//! ```
+//! The longest possible tokens are produced even if they form an invalid expression. For example, `i----7`
+//! could've been a valid GLSL expression if it was parsed as `(i) (--) (-) (-) (7)`, but this behaviour is not
+//! exhibited as that would require knowing the context and the lexer is not context-aware.
+//!
+//! For a BNF notation of the official lexer grammar, see
+//! [this](https://github.com/KubaP/glsl-lsp/blob/release/glast/docs/lexer_grammar.bnf) file.
+//!
 //! # Differences in behaviour
-//! Since this crate is part of a larger language extension effort, it is designed to handle syntax errors in a UX
+//! Since this crate is part of a larger language extension effort, it is designed to handle errors in a UX
 //! friendly manner. This means that there are some minor differences between the behaviour of this lexer and of a
-//! lexer as specified by the official GLSL specification. The differences are listed below:
+//! lexer as specified by the GLSL specification. The differences are listed below:
 //!
 //! - When the lexer comes across a character which is not part of the allowed character set it emits the
 //!   [`Invalid`](Token::Invalid) token. The specification has no such token; it just mentions that a character
@@ -39,9 +57,6 @@
 //! after encountering an error). This is currently not a priority, but if you would like such functionality please
 //! file an issue on the github repository to show interest. An alternative would be to set a flag in the
 //! `Metadata` which signifies whether any errors were encountered.
-//!
-//! For a BNF notation of the official lexer grammar, see
-//! [this](https://github.com/KubaP/glsl-lsp/blob/release/glast/docs/lexer_grammar.bnf) file.
 
 pub mod preprocessor;
 
@@ -52,18 +67,9 @@ pub type TokenStream = Vec<Spanned<Token>>;
 
 /// Parses a GLSL source string into a token stream.
 ///
-/// This lexer uses the "Maximal munch" principle to greedily create tokens. This means the longest possible valid
-/// token is always produced. Some examples:
-///
-/// ```text
-/// i---7      becomes (i) (--) (-) (7)
-/// i----7     becomes (i) (--) (--) (7)
-/// i-----7    becomes (i) (--) (--) (-) (7)
-/// i-- - --7  becomes (i) (--) (-) (--) (7)
-/// ```
-/// The longest possible tokens are produced even if they form an invalid expression. For example, `i----7`
-/// could've been a valid GLSL expression if it was parsed as `(i) (--) (-) (-) (7)`, but this behaviour is not
-/// exhibited as that would require knowing the context and the lexer is not context-aware.
+/// This function detects the GLSL version and switches grammar in line with the specification. If this behaviour
+/// is undesirable, see the [`parse_from_str_with_version()`] function. Note that currently most GLSL versions are
+/// unsupported.
 ///
 /// # Examples
 /// Parse a simple GLSL expression:
@@ -88,7 +94,7 @@ pub fn parse_from_str(
 	}
 }
 
-/// Parses a GLSL source string into a token stream, assuming a specific version.
+/// Parses a GLSL source string into a token stream, assuming a specific GLSL version.
 ///
 /// Unlike the [`parse_from_str()`] function which returns an error if an unsupported GLSL version was detected,
 /// this function assumes the specified version and will always return something, (though if the version is

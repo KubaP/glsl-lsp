@@ -293,7 +293,7 @@ pub enum DefineToken {
 /// A token representing a unit of text in an `#undef` directive.
 ///
 /// # Description of behaviour
-/// The GLl specification defines the directive to be:
+/// The GLSL specification defines the directive to be:
 /// ```text
 /// #undef _name_
 /// ```

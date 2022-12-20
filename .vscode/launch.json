@@ -28,19 +28,6 @@
 		{
 			"type": "lldb",
 			"request": "launch",
-			"name": "Playground",
-			"program": "${workspaceFolder}/playground/target/debug/playground.exe",
-			"args": [],
-			"cwd": "${workspaceFolder}/playground",
-			"env": {
-				"RUST_BACKTRACE": "1"
-			},
-			"sourceLanguages": ["rust"],
-			"preLaunchTask": "Cargo build playground"
-		},
-		{
-			"type": "lldb",
-			"request": "launch",
 			"name": "Lib tests",
 			"cargo": {
 				"args": ["test", "--no-run", "--lib", "--package=glast"],

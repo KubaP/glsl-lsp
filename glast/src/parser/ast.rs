@@ -1179,7 +1179,7 @@ impl Lit {
 /* CONDITIONAL COMPILATION STUFF BELOW */
 
 /// AST items for conditional directive expressions.
-pub mod conditional {
+pub(crate) mod conditional {
 	use super::Ident;
 	use crate::Span;
 

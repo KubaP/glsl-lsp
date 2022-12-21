@@ -711,7 +711,12 @@ impl ShuntingYard {
 				_ => {}
 			}
 
-			if op.precedence() < back.precedence() {
+			if op.precedence() <= back.precedence() {
+				// By checking for `==`, we make operators of the same precedence right-associative. This is
+				// important so that the final constructed recursive expression tree is nested in such an order
+				// that allows it to be evaluated with the correct operator order. If this wasn't in place, an
+				// expression such as `2 - 1 - 1` would evaluate to `2`, because the `1 - 1` part would be
+				// evaluated first.
 				let moved = self.operators.pop_back().unwrap();
 				self.stack.push_back(Either::Right(moved));
 			} else {

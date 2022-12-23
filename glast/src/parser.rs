@@ -1366,6 +1366,7 @@ impl TokenTree {
 
 		let mut streams = Vec::new();
 		let mut chosen_spans = Vec::new();
+		let mut disabled_code_regions = Vec::new();
 		let mut conditional_syntax_tokens = Vec::new();
 		let mut end_conditional_syntax_tokens_stack = Vec::new();
 		let mut nodes_idx = 0;
@@ -1435,6 +1436,9 @@ impl TokenTree {
 										.push(tokens);
 								}
 								continue 'outer;
+							} else {
+								disabled_code_regions
+									.push(self.tree[*branch_node_id].span);
 							}
 						}
 					}
@@ -1462,25 +1466,6 @@ impl TokenTree {
 		let mut nodes = Vec::new();
 		while !walker.is_done() {
 			parse_stmt(&mut walker, &mut nodes);
-		}
-
-		// Work out the spans of the disabled code regions. Panic: Since at least one conditional node will have
-		// been parsed, `chosen_spans` will have at least one element.
-		let mut disabled_code_regions = Vec::new();
-		if chosen_spans[0].start != 0 {
-			disabled_code_regions.push(Span::new(0, chosen_spans[0].start));
-		}
-		for span in chosen_spans.windows(2) {
-			if span[0].end != span[1].start {
-				disabled_code_regions
-					.push(Span::new(span[0].end, span[1].start));
-			}
-		}
-		if chosen_spans.last().unwrap().end != self.end_position {
-			disabled_code_regions.push(Span::new(
-				chosen_spans.last().unwrap().end,
-				self.end_position,
-			));
 		}
 
 		(
@@ -1589,7 +1574,7 @@ struct ConditionBlock {
 	/// The `#endif` directive.
 	///
 	/// This is separate because the `#endif` doesn't contain any children, (since it ends the condition block),
-	/// hence a `NodeId` would be incorrect.
+	/// hence a `NodeId` for this would be semantically nonsensical.
 	///
 	/// - `0` - The type of conditional directive.
 	/// - `1` - The span of the entire directive.
@@ -1787,11 +1772,16 @@ struct DynamicTokenStreamProvider<'a> {
 	///
 	/// - `0` - The node ID.
 	/// - `1` - The index into the node's `children`.
-	ptrs: Vec<(usize, usize)>,
+	/// - `2` - The index into the current child's conditional branches if the child is a conditional block.
+	/// - `3` - The conditional branch that has been picked, if the child is a conditional block.
+	ptrs: Vec<(usize, usize, usize, isize)>,
 	/// The key of node IDs that was chosen in the evaluation.
 	chosen_key: Vec<usize>,
-	/// The spans of the content of the chosen branches. This does not include spans of the chosen conditional
-	/// directives.
+	/// The spans of the content of the chosen branches. This includes spans of the chosen conditional
+	/// directives themselves.
+	/// The spans of regions of relevant syntax tokens. This includes all tokens within conditional branches that
+	/// have been chosen, as well as all tokens for the directives themselves that have been looked at, but not
+	/// necessarily chosen; i.e. this would include a failed `#elif`/`#else` and the `#endif`.
 	chosen_spans: Vec<Span>,
 	/// The span of the currently-last token. This is updated everytime a new stream is pushed.
 	last_span: Span,
@@ -1803,7 +1793,7 @@ impl<'a> DynamicTokenStreamProvider<'a> {
 		Self {
 			arena,
 			tree,
-			ptrs: vec![(TokenTree::ROOT_NODE_ID, 0)],
+			ptrs: vec![(TokenTree::ROOT_NODE_ID, 0, 0, -1)],
 			chosen_key: Vec::new(),
 			chosen_spans: Vec::new(),
 			last_span: Span::new(0, 0),
@@ -1818,20 +1808,20 @@ impl<'a> TokenStreamProvider<'a> for DynamicTokenStreamProvider<'a> {
 		syntax_diags: &mut Vec<Syntax>,
 		syntax_tokens: &mut Vec<SyntaxToken>,
 	) -> Option<TokenStream> {
-		loop {
-			let Some((node_ptr, child_idx)) = self.ptrs.last_mut() else { return None; };
+		'outer: loop {
+			let Some((node_ptr, child_idx, cond_block_idx, evaluated_cond_block)) = self.ptrs.last_mut() else { 
+				// We have exhausted the token tree; there is nothing left.
+				return None; 
+			};
 			let node = self.tree.get(*node_ptr).unwrap();
 			let Some(child) = node.children.get(*child_idx) else { return None; };
 
 			match child {
 				Either::Left(arena_id) => {
-					*child_idx += 1;
-					if *child_idx == node.children.len() {
-						// We have gone through all of the children of this node, so we want to pop it from the
-						// stack.
-						self.ptrs.pop();
-					}
 					let stream = self.arena[*arena_id].clone();
+
+					// Update the last span value. This value can't be calculated ahead-of-time since we don't know
+					// what conditional compilation will evaluate to.
 					if let Some((_, span)) = stream.last() {
 						self.last_span = *span;
 						self.chosen_spans.push(Span::new(
@@ -1839,32 +1829,106 @@ impl<'a> TokenStreamProvider<'a> for DynamicTokenStreamProvider<'a> {
 							span.end,
 						));
 					}
-					return Some(stream);
-				}
-				Either::Right(cond_block) => {
+
 					*child_idx += 1;
 					if *child_idx == node.children.len() {
 						// We have gone through all of the children of this node, so we want to pop it from the
 						// stack.
 						self.ptrs.pop();
 					}
-					let mut matched_condition_node_id = None;
-					for (
-						condition_ty,
-						directive_span,
-						tokens,
-						_,
-						node_id,
-						_,
-						_,
-					) in &cond_block.conditions
-					{
+
+					return Some(stream);
+				}
+				Either::Right(cond_block) => {
+					let matched_condition_node_id;
+					loop {
+						if *cond_block_idx == cond_block.conditions.len() {
+							// We've gone through all of the conditional blocks. We can now push the syntax tokens
+							// for the `#endif` and move onto the next child of this node.
+							if let Some((
+								_,
+								directive_span,
+								tokens,
+								_,
+								hash_token,
+								dir_token,
+							)) = &cond_block.end
+							{
+								syntax_tokens.push(*hash_token);
+								syntax_tokens.push(*dir_token);
+								if !tokens.is_empty() {
+									syntax_tokens.push(SyntaxToken {
+										ty: SyntaxType::Invalid,
+										modifiers: SyntaxModifiers::CONDITIONAL,
+										span: Span::new(
+											tokens.first().unwrap().1.start,
+											tokens.last().unwrap().1.end,
+										),
+									});
+								}
+								if *evaluated_cond_block as usize == cond_block.conditions.len() {
+									// We have chosen the final conditional block, which means we are responsible
+									// for syntax highlighting the `#endif` directive. (This is only relevant if we
+									// are syntax highlighting the entire file). The reason we can't do this
+									// unconditionally is because if the final block wasn't picked, then an
+									// alternative permutation is responsible for syntax highlighting it, but the
+									// span of the syntax highlight region stretches to cover the `#endif` part. If
+									// we declared this as chosen, the other span region wouldn't fit and would
+									// therefore be discarded, and hence syntax highlighting would be missing for
+									// the final branch.
+									self.chosen_spans.push(*directive_span);
+								}
+							}
+
+							*cond_block_idx = 0;
+							*child_idx += 1;
+							*evaluated_cond_block = -1;
+							if *child_idx == node.children.len() {
+								// We have gone through all of the children of this node, so we want to pop it from
+								// the stack.
+								self.ptrs.pop();
+							}
+
+							continue 'outer;
+						}
+
+						let (
+							condition_ty,
+							directive_span,
+							tokens,
+							_,
+							node_id,
+							hash_token,
+							dir_token,
+						) = &cond_block.conditions[*cond_block_idx];
+
+						*cond_block_idx += 1;
+
 						match condition_ty {
 							Conditional::IfDef | Conditional::IfNotDef => {
+								syntax_tokens.push(*hash_token);
+								syntax_tokens.push(*dir_token);
+
 								if !tokens.is_empty() {
 									let (token, token_span) = &tokens[0];
 									match token {
 										ConditionToken::Ident(str) => {
+											syntax_tokens.push(SyntaxToken {
+												ty: SyntaxType::Ident,
+												modifiers:
+													SyntaxModifiers::CONDITIONAL,
+												span: *token_span,
+											});
+											if tokens.len() > 1 {
+												syntax_tokens.push(SyntaxToken {
+													ty: SyntaxType::Invalid,
+													modifiers:SyntaxModifiers::CONDITIONAL,
+													span: Span::new(
+														tokens[1].1.start,
+														tokens.last().unwrap().1.end
+													)
+												});
+											}
 											let result =
 												conditional_eval::evaluate_def(
 													Ident {
@@ -1873,60 +1937,77 @@ impl<'a> TokenStreamProvider<'a> for DynamicTokenStreamProvider<'a> {
 													},
 													macros,
 												);
-											if result {
-												matched_condition_node_id =
-													Some(*node_id);
-												self.chosen_spans
-													.push(*directive_span);
+											if result && *evaluated_cond_block == -1 {
+												matched_condition_node_id = *node_id;
+												*evaluated_cond_block = *cond_block_idx as isize;
+												self.chosen_spans.push(*directive_span);
 												break;
 											}
 										}
-										_ => {}
+										_ => {
+											syntax_tokens.push(SyntaxToken {
+												ty: SyntaxType::Invalid,
+												modifiers:SyntaxModifiers::CONDITIONAL,
+												span: Span::new(
+													token_span.start,
+													tokens.last().unwrap().1.end
+												)
+											});
+										}
 									}
 								}
 							}
 							Conditional::If | Conditional::ElseIf => {
+								syntax_tokens.push(*hash_token);
+								syntax_tokens.push(*dir_token);
+
 								let (expr, mut syntax, mut colours) =
 									cond_parser(tokens.clone(), macros);
 								syntax_diags.append(&mut syntax);
 								syntax_tokens.append(&mut colours);
+
 								if let Some(expr) = expr {
 									let result =
 										conditional_eval::evaluate_expr(
 											expr, macros,
 										);
-									if result {
-										matched_condition_node_id =
-											Some(*node_id);
-										// FIXME: Deal with syntax tokens for other branches after the next
-										// stream is exhausted.
+									if result && *evaluated_cond_block == -1 {
+										matched_condition_node_id = *node_id;
+										*evaluated_cond_block = *cond_block_idx as isize;
 										self.chosen_spans.push(*directive_span);
 										break;
 									}
 								}
 							}
 							Conditional::Else => {
-								// An `else` branch is always unconditionally chosen.
-								matched_condition_node_id = Some(*node_id);
-								self.chosen_spans.push(*directive_span);
-								break;
+								syntax_tokens.push(*hash_token);
+								syntax_tokens.push(*dir_token);
+								if !tokens.is_empty() {
+									syntax_tokens.push(SyntaxToken {
+										ty: SyntaxType::Invalid,
+										modifiers: SyntaxModifiers::CONDITIONAL,
+										span: Span::new(
+											tokens.first().unwrap().1.start,
+											tokens.last().unwrap().1.end,
+										),
+									});
+								}
+
+								if *evaluated_cond_block == -1 {
+									// An `else` branch is always unconditionally chosen.
+									matched_condition_node_id = *node_id;
+									*evaluated_cond_block = *cond_block_idx as isize;
+									self.chosen_spans.push(*directive_span);
+									break;
+								}
 							}
 							Conditional::End => unreachable!(),
 						}
 					}
-					if let Some((_, _, _, _, _, _)) = &cond_block.end {}
-					match matched_condition_node_id {
-						Some(node_id) => {
-							self.ptrs.push((node_id, 0));
-							self.chosen_key.push(node_id);
-							continue;
-						}
-						None => {
-							// We didn't match any conditional branches, so we want to continue with the next
-							// node/child.
-							continue;
-						}
-					}
+
+					self.ptrs.push((matched_condition_node_id, 0, 0, -1));
+					self.chosen_key.push(matched_condition_node_id);
+					continue;
 				}
 			}
 		}

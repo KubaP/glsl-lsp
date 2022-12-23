@@ -132,7 +132,7 @@ impl LanguageServer for MyServer {
 		state
 			.handle_file_open(&self.client, uri.clone(), version, text)
 			.await;
-		state.publish_diagnostics(uri, &self.client).await;
+		state.publish_diagnostics(&self.client, uri).await;
 	}
 
 	/// This event triggers even if the file is modified outside of vscode, so we don't need to actively watch
@@ -152,7 +152,7 @@ impl LanguageServer for MyServer {
 			params.content_changes.remove(0).text,
 		);
 		state
-			.publish_diagnostics(params.text_document.uri, &self.client)
+			.publish_diagnostics(&self.client, params.text_document.uri)
 			.await;
 	}
 
@@ -201,7 +201,9 @@ impl LanguageServer for MyServer {
 			.await;
 
 		let state = self.state.lock().await;
-		let result = state.provide_semantic_tokens(params.text_document.uri);
+		let result = state
+			.provide_semantic_tokens(&self.client, params.text_document.uri)
+			.await;
 
 		Ok(Some(SemanticTokensResult::Tokens(SemanticTokens {
 			result_id: None,

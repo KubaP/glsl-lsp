@@ -172,7 +172,7 @@ impl State {
 	}
 
 	/// Sends the `textDocument/publishDiagnostics` notification.
-	pub async fn publish_diagnostics(&self, uri: Url, client: &Client) {
+	pub async fn publish_diagnostics(&self, client: &Client, uri: Url) {
 		if !self.diag_state.enabled {
 			return;
 		}
@@ -185,11 +185,15 @@ impl State {
 		let ParseResult {
 			syntax_diags,
 			semantic_diags,
-			disabled_code_spans,
+			disabled_code_regions,
 			..
 		} = match file_config.conditional_compilation_state {
-			ConditionalState::Off => tree.root(false),
-			ConditionalState::Evaluate => tree.evaluate(false),
+			ConditionalState::Off => {
+				tree.root(file_config.syntax_highlight_entire_file)
+			}
+			ConditionalState::Evaluate => {
+				tree.evaluate(file_config.syntax_highlight_entire_file)
+			}
 			ConditionalState::Choice(_) => todo!(),
 		};
 		let mut diags = Vec::new();
@@ -200,7 +204,7 @@ impl State {
 			file,
 			self.diag_state.supports_related_information,
 		);
-		for span in disabled_code_spans {
+		for span in disabled_code_regions {
 			crate::diag::disable_code(
 				span,
 				&file_config.conditional_compilation_state,
@@ -218,7 +222,11 @@ impl State {
 	}
 
 	/// Fulfils the `textDocument/semanticTokens/full` request.
-	pub fn provide_semantic_tokens(&self, uri: Url) -> Vec<SemanticToken> {
+	pub async fn provide_semantic_tokens(
+		&self,
+		client: &Client,
+		uri: Url,
+	) -> Vec<SemanticToken> {
 		if !self.highlighting_state.enabled {
 			return vec![];
 		}
@@ -227,10 +235,18 @@ impl State {
 			unreachable!("[State::provide_semantic_tokens] Received a file `uri: {uri}` that has not been opened yet");
 		};
 
+		let Ok(tree) = glast::parser::parse_from_str(&file.contents) else { return vec![]; };
 		let ParseResult { syntax_tokens, .. } =
-			glast::parser::parse_from_str(&file.contents)
-				.unwrap()
-				.root(file_config.syntax_highlight_entire_file);
+			match file_config.conditional_compilation_state {
+				ConditionalState::Off => {
+					tree.root(file_config.syntax_highlight_entire_file)
+				}
+				ConditionalState::Evaluate => {
+					tree.evaluate(file_config.syntax_highlight_entire_file)
+				}
+				ConditionalState::Choice(_) => todo!(),
+			};
+		self.publish_diagnostics(client, uri).await;
 		crate::syntax::convert(
 			syntax_tokens,
 			file,

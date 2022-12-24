@@ -1,3 +1,5 @@
+//! Contains types for representing source files.
+
 use glast::Span;
 use tower_lsp::{
 	lsp_types::{Position, Range, Url},
@@ -7,13 +9,13 @@ use tower_lsp::{
 /// A GLSL source file.
 #[derive(Debug)]
 pub struct File {
-	/// The url of this file.
+	/// The uri of this file.
 	pub uri: Url,
-	/// The version number of this file.
+	/// The current version number of this file.
 	pub version: i32,
-	/// Contents of this file.
+	/// The contents of this file.
 	pub contents: String,
-	/// A character-index to line conversion table.
+	/// A character index-to-line conversion table.
 	///
 	/// - `0` - Line number, (same as vector index).
 	/// - `1` - Character index which starts at the line number.
@@ -65,7 +67,7 @@ impl File {
 		}
 	}
 
-	/// Converts a `Span`'s position to an LSP [`Position`] type.
+	/// Converts a [`Span`]'s position to an LSP [`Position`] type.
 	pub fn position_to_lsp(&self, position: usize) -> Position {
 		let mut start = (0, 0);
 		for (a, b) in self.lines.iter().zip(self.lines.iter().skip(1)) {
@@ -77,13 +79,14 @@ impl File {
 		Position::new(start.0 as u32, start.1 as u32)
 	}
 
-	/// Converts an LSP [`Position`] to a `Span`'s position.
+	/// Converts an LSP [`Position`] to a [`Span`]'s position.
 	pub fn position_from_lsp(&self, position: Position) -> usize {
 		let (_, char_offset) = self.lines.get(position.line as usize).unwrap();
 
 		*char_offset + position.character as usize
 	}
 
+	/// Generates a conversion table based of the contents string.
 	fn generate_line_table(contents: &str) -> Vec<(usize, usize)> {
 		let mut lines = Vec::new();
 		lines.push((0, 0));
@@ -143,29 +146,35 @@ impl File {
 }
 
 /// A file configuration.
+///
+/// This stores all per-directory/per-file settings that are relevant to a file.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct FileConfig {
-	pub conditional_compilation_state: ConditionalState,
+	pub conditional_compilation_state: ConditionalCompilationState,
 	pub syntax_highlight_entire_file: bool,
 }
 
-/// The state of conditional evaluation.
+/// The state of conditional compilation.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub enum ConditionalState {
+pub enum ConditionalCompilationState {
+	/// Conditional compilation is disabled.
 	Off,
+	/// Conditional compilation is evaluated.
 	Evaluate,
-	Choice(Vec<usize>),
+	/// Conditional compilation is enabled using the specified key.
+	Key(Vec<usize>),
 }
 
 /// Returns the up-to-date file configuration for a given uri. This takes into account fine-grained configuration
-/// values on a per-window/per-workspace/per-folder basis.
+/// values on a per-directory/per-file basis.
 pub async fn get_file_config(client: &Client, uri: &Url) -> FileConfig {
 	use tower_lsp::lsp_types::{
-		request, ConfigurationItem, ConfigurationParams,
+		request::WorkspaceConfiguration, ConfigurationItem, ConfigurationParams,
 	};
-	// Sends the `workspace/configuration` request.
+
+	// Send the `workspace/configuration` request and wait for a response.
 	let result = client
-		.send_request::<request::WorkspaceConfiguration>(ConfigurationParams {
+		.send_request::<WorkspaceConfiguration>(ConfigurationParams {
 			items: vec![
 				ConfigurationItem {
 					scope_uri: Some(uri.clone()),
@@ -184,13 +193,13 @@ pub async fn get_file_config(client: &Client, uri: &Url) -> FileConfig {
 	// Panic: The client handler always returns a vector of the same length as the request.
 	// See `configurationRequest()` in `main.ts`.
 	let Ok(mut result) = result else { unreachable!(); };
-	// Even though the vscode client configuration sets a type for each configuration setting, the returned
+	// Even though the vscode client package manifest sets a type for each configuration setting, the returned
 	// value can be of any type, so we need to deal with incorrect types through a default value.
 	let conditional_compilation_state =
 		match result.remove(0).as_str().unwrap_or("") {
-			"off" => ConditionalState::Off,
-			"evaluate" => ConditionalState::Evaluate,
-			_ => ConditionalState::Off,
+			"off" => ConditionalCompilationState::Off,
+			"evaluate" => ConditionalCompilationState::Evaluate,
+			_ => ConditionalCompilationState::Off,
 		};
 	let syntax_highlight_entire_file =
 		result.remove(0).as_bool().unwrap_or(false);

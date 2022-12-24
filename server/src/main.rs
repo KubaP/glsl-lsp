@@ -1,23 +1,30 @@
 mod diag;
-mod extensions;
 mod file;
-mod state;
-mod syntax;
+mod lsp_extensions;
+mod semantic;
+mod server;
 
-use crate::state::State;
+use crate::server::Server;
 use tokio::sync::Mutex;
 use tower_lsp::{
-	jsonrpc::Result, lsp_types::*, Client, LanguageServer, LspService, Server,
+	jsonrpc::Result, lsp_types::*, Client, LanguageServer, LspService,
 };
 
+const SERVER_NAME: &str = "glsl-lsp";
+const SERVER_VERSION: &str = "0.0.1";
+
+/// The language server.
 #[derive(Debug)]
-struct MyServer {
+struct Lsp {
+	/// Handle for communicating with the language client.
 	client: Client,
-	state: Mutex<State>,
+	/// The actual server state.
+	state: Mutex<Server>,
 }
 
 #[tower_lsp::async_trait]
-impl LanguageServer for MyServer {
+impl LanguageServer for Lsp {
+	// region: lifecycle events.
 	async fn initialize(
 		&self,
 		params: InitializeParams,
@@ -33,7 +40,10 @@ impl LanguageServer for MyServer {
 		state.initialize(params);
 
 		Ok(InitializeResult {
-			server_info: None,
+			server_info: Some(ServerInfo {
+				name: SERVER_NAME.into(),
+				version: Some(SERVER_VERSION.into()),
+			}),
 			capabilities: ServerCapabilities {
 				// Sync the full text contents upon any change.
 				text_document_sync: Some(TextDocumentSyncCapability::Kind(
@@ -50,7 +60,11 @@ impl LanguageServer for MyServer {
 				document_highlight_provider: None,
 				document_symbol_provider: None,
 				code_action_provider: None,
-				code_lens_provider: None,
+				code_lens_provider: Some(CodeLensOptions {
+					// This is only necessary if splitting the CodeLens request into two. We send the CodeLens with
+					// the command included so there's no need to resolve a CodeLens as a secondary step.
+					resolve_provider: Some(false),
+				}),
 				document_link_provider: None,
 				color_provider: None,
 				document_formatting_provider: None,
@@ -70,11 +84,11 @@ impl LanguageServer for MyServer {
 									work_done_progress: None,
 								},
 							legend: SemanticTokensLegend {
-								token_types: syntax::TOKEN_TYPES
+								token_types: semantic::TOKEN_TYPES
 									.into_iter()
 									.map(|s| SemanticTokenType::new(s))
 									.collect::<Vec<_>>(),
-								token_modifiers: syntax::TOKEN_MODIFIERS
+								token_modifiers: semantic::TOKEN_MODIFIERS
 									.into_iter()
 									.map(|s| SemanticTokenModifier::new(s))
 									.collect::<Vec<_>>(),
@@ -92,7 +106,7 @@ impl LanguageServer for MyServer {
 		})
 	}
 
-	async fn initialized(&self, _params: InitializedParams) {
+	async fn initialized(&self, _: InitializedParams) {
 		self.client
 			.log_message(
 				MessageType::INFO,
@@ -108,9 +122,12 @@ impl LanguageServer for MyServer {
 				"Server received 'shutdown' message.",
 			)
 			.await;
+
 		Ok(())
 	}
+	// endregion: lifecycle events.
 
+	// region: `textDocument/*` events.
 	async fn did_open(&self, params: DidOpenTextDocumentParams) {
 		self.client
 			.log_message(MessageType::INFO, "Server received 'did_open' event.")
@@ -135,8 +152,6 @@ impl LanguageServer for MyServer {
 		state.publish_diagnostics(&self.client, uri).await;
 	}
 
-	/// This event triggers even if the file is modified outside of vscode, so we don't need to actively watch
-	/// files whilst we are running.
 	async fn did_change(&self, mut params: DidChangeTextDocumentParams) {
 		self.client
 			.log_message(
@@ -171,23 +186,6 @@ impl LanguageServer for MyServer {
 			.await;
 	}
 
-	async fn did_change_configuration(
-		&self,
-		params: DidChangeConfigurationParams,
-	) {
-		self.client
-			.log_message(
-				MessageType::INFO,
-				"Server received 'workspace/didChangeConfiguration' event.",
-			)
-			.await;
-
-		let mut state = self.state.lock().await;
-		state
-			.handle_configuration_change(&self.client, params)
-			.await;
-	}
-
 	async fn semantic_tokens_full(
 		&self,
 		params: SemanticTokensParams,
@@ -210,13 +208,35 @@ impl LanguageServer for MyServer {
 			data: result,
 		})))
 	}
+
+
+	// region: `workspace/*` events.
+	async fn did_change_configuration(
+		&self,
+		params: DidChangeConfigurationParams,
+	) {
+		self.client
+			.log_message(
+				MessageType::INFO,
+				"Server received 'workspace/didChangeConfiguration' event.",
+			)
+			.await;
+
+		let mut state = self.state.lock().await;
+		state
+			.handle_configuration_change(&self.client, params)
+			.await;
+	}
+	// endregion: `workspace/*` events.
 }
 
-impl MyServer {
+// Custom events.
+impl Lsp {
+	/// Handles the `glsl/astContent` request.
 	async fn ast_content(
 		&self,
-		params: extensions::AstContentParams,
-	) -> Result<extensions::AstContentResult> {
+		params: lsp_extensions::AstContentParams,
+	) -> Result<lsp_extensions::AstContentResult> {
 		self.client
 			.log_message(
 				MessageType::INFO,
@@ -225,7 +245,8 @@ impl MyServer {
 			.await;
 
 		let state = self.state.lock().await;
-		Ok(extensions::AstContentResult {
+
+		Ok(lsp_extensions::AstContentResult {
 			ast: state.provide_ast(params.text_document_uri),
 		})
 	}
@@ -236,12 +257,14 @@ async fn main() {
 	let stdin = tokio::io::stdin();
 	let stdout = tokio::io::stdout();
 
-	let (service, socket) = LspService::build(|client| MyServer {
+	let (service, socket) = LspService::build(|client| Lsp {
 		client,
-		state: Mutex::new(State::new()),
+		state: Mutex::new(Server::new()),
 	})
-	.custom_method(extensions::AST_CONTENT, MyServer::ast_content)
+	.custom_method(lsp_extensions::AST_CONTENT, Lsp::ast_content)
 	.finish();
 
-	Server::new(stdin, stdout, socket).serve(service).await;
+	tower_lsp::Server::new(stdin, stdout, socket)
+		.serve(service)
+		.await;
 }

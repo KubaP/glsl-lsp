@@ -1,3 +1,5 @@
+//! Diagnostic functionality.
+
 use glast::{diag::*, Span};
 use tower_lsp::lsp_types::{
 	Diagnostic, DiagnosticRelatedInformation, DiagnosticSeverity,
@@ -131,10 +133,10 @@ pub fn convert(
 	}
 }
 
-/// Disables a block of code. This is used to grey-out code that is disabled because of conditional compilation.
-pub fn disable_code(
+/// Disables a region of code. This is used to grey-out code that is disabled because of conditional compilation.
+pub fn disable_region(
 	span: Span,
-	reason: &crate::file::ConditionalState,
+	reason: &crate::file::ConditionalCompilationState,
 	diags: &mut Vec<Diagnostic>,
 	file: &crate::file::File,
 ) {
@@ -145,9 +147,9 @@ pub fn disable_code(
 		code_description: None,
 		source: Some("glsl".into()),
 		message: match reason {
-			crate::file::ConditionalState::Off => "Code inactive due to conditional directive: conditional compilation is disabled for this file",
-			crate::file::ConditionalState::Evaluate => "Code inactive due to conditional directive: expression evaluated to `false`",
-			crate::file::ConditionalState::Choice(_) => "Code inactive due to conditional directive: this branch is not part of the chosen evaluated permutation"
+			crate::file::ConditionalCompilationState::Off => "Code inactive due to conditional directive: conditional compilation is disabled for this file",
+			crate::file::ConditionalCompilationState::Evaluate => "Code inactive due to conditional directive: expression evaluated to `false`",
+			crate::file::ConditionalCompilationState::Key(_) => "Code inactive due to conditional directive: this branch is not part of the chosen evaluated permutation"
 		}.into(),
 		related_information: None,
 		tags: Some(vec![DiagnosticTag::UNNECESSARY]),

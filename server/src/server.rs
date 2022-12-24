@@ -1,25 +1,30 @@
-use crate::file::{self, ConditionalState, File, FileConfig};
+//! The server logic/implementation.
+
+use crate::file::{
+	get_file_config, ConditionalCompilationState, File, FileConfig,
+};
 use glast::parser::ParseResult;
 use std::collections::HashMap;
 use tower_lsp::{
 	lsp_types::{
 		request::SemanticTokensRefresh, DidChangeConfigurationParams,
-		InitializeParams, PublishDiagnosticsClientCapabilities, SemanticToken,
-		SemanticTokensClientCapabilities, SemanticTokensFullOptions, Url,
+		InitializeParams, SemanticToken, Url,
 	},
 	Client,
 };
 
 /// The server state.
 #[derive(Debug)]
-pub struct State {
-	/// Currently open files, (or previously opened within this session).
+pub struct Server {
+	/// Currently open files, (and any files previously opened within this session).
 	files: HashMap<Url, (File, FileConfig)>,
 
 	/// The state of diagnostic-related functionality.
 	diag_state: DiagState,
 	/// The state of semantic highlighting.
-	highlighting_state: HighlightingState,
+	highlighting_state: SemanticHighlightState,
+	/// The state of document-related functionality.
+	document_state: DocumentState,
 }
 
 /// The state of support for diagnostic-related functionality, as reported by the client.
@@ -35,7 +40,7 @@ pub struct DiagState {
 
 /// The state of support for semantic highlighting, as reported by the client.
 #[derive(Debug, Default)]
-pub struct HighlightingState {
+pub struct SemanticHighlightState {
 	/// Whether the client supports the `textDocument/semanticTokens/full` request, i.e. semantic tokens for the
 	/// whole file.
 	pub enabled: bool,
@@ -43,19 +48,32 @@ pub struct HighlightingState {
 	pub supports_multiline: bool,
 }
 
-impl State {
+/// The state of support for document-related functionality, as reported by the client.
+#[derive(Debug, Default)]
+pub struct DocumentState {
+	/// Whether the client supports CodeLens.
+	pub supports_code_lens: bool,
+}
+
+impl Server {
 	/// Constructs a new server state. By default, all functionality is disabled until the client initiates
-	/// communication and sends over it's capabilities to [`initialize()`](Self::initialize()).
+	/// communication and sends over its capabilities to [`initialize()`](Self::initialize()).
 	pub fn new() -> Self {
 		Self {
+			files: HashMap::new(),
 			diag_state: Default::default(),
 			highlighting_state: Default::default(),
-			files: HashMap::new(),
+			document_state: Default::default(),
 		}
 	}
 
-	/// Initializes the server `State`, taking into account the reported capabilities from the client.
+	/// Initializes the server state, taking into account the reported capabilities from the client.
 	pub fn initialize(&mut self, params: InitializeParams) {
+		use tower_lsp::lsp_types::{
+			CodeLensClientCapabilities, PublishDiagnosticsClientCapabilities,
+			SemanticTokensClientCapabilities, SemanticTokensFullOptions,
+		};
+
 		if let Some(cap) = params.capabilities.text_document {
 			if let Some(PublishDiagnosticsClientCapabilities {
 				// Linking a diagnostic to a different character position.
@@ -64,7 +82,7 @@ impl State {
 				tag_support: _,
 				// Document versioning which is bumped on every change.
 				version_support,
-				// Url to external document explaining the error, e.g. compiler error index.
+				// Link to external document explaining the error, e.g. compiler error index.
 				code_description_support: _,
 				// Extra data payload.
 				data_support: _,
@@ -76,6 +94,7 @@ impl State {
 				self.diag_state.supports_versioning =
 					version_support.unwrap_or(false);
 			}
+
 			if let Some(SemanticTokensClientCapabilities {
 				dynamic_registration: _,
 				// Which request types the client supports (might send out).
@@ -105,9 +124,17 @@ impl State {
 					self.highlighting_state.supports_multiline = b;
 				}
 			}
+
+			if let Some(CodeLensClientCapabilities {
+				dynamic_registration: _,
+			}) = cap.code_lens
+			{
+				self.document_state.supports_code_lens = true;
+			}
 		}
 	}
 
+	// region: `textDocument/*` events.
 	/// Handles the `textDocument/didOpen` notification.
 	pub async fn handle_file_open(
 		&mut self,
@@ -124,7 +151,7 @@ impl State {
 			}
 		} else {
 			// We have not encountered this file before.
-			let file_config = file::get_file_config(client, &uri).await;
+			let file_config = get_file_config(client, &uri).await;
 			self.files.insert(
 				uri.clone(),
 				(File::new(uri, version, contents), file_config),
@@ -141,33 +168,7 @@ impl State {
 	) {
 		match self.files.get_mut(&uri) {
 			Some((file, _)) => file.update(version, contents),
-			None => unreachable!("[State::change_file] Received a file `uri: {uri}` that has not been opened yet"),
-		}
-	}
-
-	/// Handles the `workspace/didChangeConfiguration` notification.
-	pub async fn handle_configuration_change(
-		&mut self,
-		client: &Client,
-		params: DidChangeConfigurationParams,
-	) {
-		let Some(str) = params.settings.as_str() else { return; };
-		let mut requires_updating = false;
-		match str {
-			"fileSettings" => {
-				for (uri, (_, file_config)) in self.files.iter_mut() {
-					let new_settings = file::get_file_config(client, uri).await;
-					if new_settings != *file_config {
-						requires_updating = true;
-					}
-					*file_config = new_settings;
-				}
-			}
-			_ => panic!("[State::update_configuration] Unexpected settings value: `{str}`")
-		}
-
-		if requires_updating {
-			let _ = client.send_request::<SemanticTokensRefresh>(()).await;
+			None => unreachable!("[Server::handle_file_change] Received a file `uri: {uri}` that has not been opened yet"),
 		}
 	}
 
@@ -178,7 +179,7 @@ impl State {
 		}
 
 		let Some((file, file_config)) = self.files.get(&uri) else {
-			unreachable!("[State::publish_diagnostics] Received a file `uri: {uri}` that has not been opened yet");
+			unreachable!("[Server::publish_diagnostics] Received a file `uri: {uri}` that has not been opened yet");
 		};
 
 		let Ok(tree) = glast::parser::parse_from_str(&file.contents) else { return; };
@@ -187,14 +188,22 @@ impl State {
 			semantic_diags,
 			disabled_code_regions,
 			..
-		} = match file_config.conditional_compilation_state {
-			ConditionalState::Off => {
+		} = match &file_config.conditional_compilation_state {
+			ConditionalCompilationState::Off => {
 				tree.root(file_config.syntax_highlight_entire_file)
 			}
-			ConditionalState::Evaluate => {
+			ConditionalCompilationState::Evaluate => {
 				tree.evaluate(file_config.syntax_highlight_entire_file)
 			}
-			ConditionalState::Choice(_) => todo!(),
+			ConditionalCompilationState::Key(key) => {
+				match tree.parse_by_order_of_appearance(
+					key,
+					file_config.syntax_highlight_entire_file,
+				) {
+					Ok(p) => p,
+					Err(_) => return,
+				}
+			}
 		};
 		let mut diags = Vec::new();
 		crate::diag::convert(
@@ -205,7 +214,7 @@ impl State {
 			self.diag_state.supports_related_information,
 		);
 		for span in disabled_code_regions {
-			crate::diag::disable_code(
+			crate::diag::disable_region(
 				span,
 				&file_config.conditional_compilation_state,
 				&mut diags,
@@ -232,41 +241,85 @@ impl State {
 		}
 
 		let Some((file, file_config)) = self.files.get(&uri) else {
-			unreachable!("[State::provide_semantic_tokens] Received a file `uri: {uri}` that has not been opened yet");
+			unreachable!("[Server::provide_semantic_tokens] Received a file `uri: {uri}` that has not been opened yet");
 		};
 
 		let Ok(tree) = glast::parser::parse_from_str(&file.contents) else { return vec![]; };
 		let ParseResult { syntax_tokens, .. } =
-			match file_config.conditional_compilation_state {
-				ConditionalState::Off => {
+			match &file_config.conditional_compilation_state {
+				ConditionalCompilationState::Off => {
 					tree.root(file_config.syntax_highlight_entire_file)
 				}
-				ConditionalState::Evaluate => {
+				ConditionalCompilationState::Evaluate => {
 					tree.evaluate(file_config.syntax_highlight_entire_file)
 				}
-				ConditionalState::Choice(_) => todo!(),
+				ConditionalCompilationState::Key(key) => {
+					match tree.parse_by_order_of_appearance(
+						key,
+						file_config.syntax_highlight_entire_file,
+					) {
+						Ok(p) => p,
+						Err(_) => return vec![],
+					}
+				}
 			};
 		self.publish_diagnostics(client, uri).await;
-		crate::syntax::convert(
+		crate::semantic::convert(
 			syntax_tokens,
 			file,
 			self.highlighting_state.supports_multiline,
 		)
 	}
+	// endregion: `textDocument/*` events.
 
+	// region: `workspace/*` events.
+	/// Handles the `workspace/didChangeConfiguration` notification.
+	pub async fn handle_configuration_change(
+		&mut self,
+		client: &Client,
+		params: DidChangeConfigurationParams,
+	) {
+		let Some(str) = params.settings.as_str() else { return; };
+		let mut requires_updating = false;
+		match str {
+			"fileSettings" => {
+				for (uri, (_, file_config)) in self.files.iter_mut() {
+					let new_settings = get_file_config(client, uri).await;
+					if new_settings != *file_config {
+						requires_updating = true;
+					}
+					*file_config = new_settings;
+				}
+			}
+			_ => panic!("[Server::handle_configuration_change] Unexpected settings value: `{str}`")
+		}
+
+		if requires_updating {
+			let _ = client.send_request::<SemanticTokensRefresh>(()).await;
+		}
+	}
+	// endregion: `workspace/*` events.
+
+	// region: custom events.
 	/// Fulfils the `glsl/astContent` request.
 	pub fn provide_ast(&self, uri: Url) -> String {
 		let Some((file, file_config)) = self.files.get(&uri)else{
-			unreachable!("[State::provide_ast] Received a file `uri: {uri}` that has not been opened yet");	
+			unreachable!("[Server::provide_ast] Received a file `uri: {uri}` that has not been opened yet");	
 		};
 
 		let Ok(tree) = glast::parser::parse_from_str(&file.contents) else { return "<ERROR PARSING FILE>".into(); };
 		let ParseResult { ast, .. } =
-			match file_config.conditional_compilation_state {
-				ConditionalState::Off => tree.root(false),
-				ConditionalState::Evaluate => tree.evaluate(false),
-				ConditionalState::Choice(_) => todo!(),
+			match &file_config.conditional_compilation_state {
+				ConditionalCompilationState::Off => tree.root(false),
+				ConditionalCompilationState::Evaluate => tree.evaluate(false),
+				ConditionalCompilationState::Key(key) => {
+					match tree.parse_by_order_of_appearance(key, false) {
+						Ok(p) => p,
+						Err(_) => return "<ERROR PARSING FILE>".into(),
+					}
+				}
 			};
 		glast::parser::print_ast(ast)
 	}
+	// endregion: custom events.
 }

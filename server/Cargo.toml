@@ -1,6 +1,6 @@
 [package]
-name = "server"
-version = "0.1.0"
+name = "glsl-lsp"
+version = "0.0.1"
 edition = "2021"
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
@@ -10,3 +10,4 @@ glast = { path = "../glast" }
 tokio = { version = "1.17.0", features = ["full"] }
 tower-lsp = "0.17.0"
 serde = "1.0.139"
+serde_json = "1.0.89"

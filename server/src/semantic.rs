@@ -1,3 +1,5 @@
+//! Semantic token highlighting functionality.
+
 use glast::parser::{SyntaxToken, SyntaxType};
 use tower_lsp::lsp_types::{Position, SemanticToken};
 

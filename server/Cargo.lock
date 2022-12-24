@@ -156,6 +156,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "glsl-lsp"
+version = "0.0.1"
+dependencies = [
+ "glast",
+ "serde",
+ "serde_json",
+ "tokio",
+ "tower-lsp",
+]
+
+[[package]]
 name = "hashbrown"
 version = "0.12.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -410,9 +421,9 @@ dependencies = [
 
 [[package]]
 name = "serde_json"
-version = "1.0.85"
+version = "1.0.91"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "e55a28e3aaef9d5ce0506d0a14dbba8054ddc7e499ef522dd8b26859ec9d4a44"
+checksum = "877c235533714907a8c2464236f5c4b2a17262ef1bd71f38f35ea592c8da6883"
 dependencies = [
  "itoa",
  "ryu",
@@ -428,16 +439,6 @@ dependencies = [
  "proc-macro2",
  "quote",
  "syn",
-]
-
-[[package]]
-name = "server"
-version = "0.1.0"
-dependencies = [
- "glast",
- "serde",
- "tokio",
- "tower-lsp",
 ]
 
 [[package]]

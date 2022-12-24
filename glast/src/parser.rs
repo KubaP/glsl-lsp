@@ -277,9 +277,9 @@ pub fn parse_from_token_stream(
 		children: Vec::new(),
 		span: Span::new(0, 0),
 	}];
-	// A vector which creates a mapping between `order-of-appearance` -> `(node ID, parent IDs)`. The parent node
-	// IDs are tracked so that in the `parse_by_order_of_appearance()` method we can validate whether the key is
-	// valid.
+	// A vector which creates a mapping between `order-of-appearance` -> `(node ID, parent node IDs)`. The parent
+	// node IDs are tracked so that in the `parse_by_order_of_appearance()` method we can validate whether the key
+	// is valid.
 	let mut order_by_appearance = vec![(0, vec![0])];
 	let mut syntax_diags = Vec::new();
 
@@ -732,6 +732,27 @@ pub fn parse_from_token_stream(
 	//dbg!(&arena);
 	//dbg!(&tree);
 
+	// In order to make our job easier later down the line, for each conditional node ordered by appearance, we
+	// want to know it's node ID and the () for the parent nodes. The () consists of:
+	// - The parent's position within `order_by_appearance`. <- We don't have this information yet.
+	// - The parent's node ID.
+	let old_order = order_by_appearance;
+	let mut order_by_appearance = Vec::with_capacity(old_order.len());
+	for (node_id, parents) in old_order.iter() {
+		order_by_appearance.push((
+			*node_id,
+			parents
+				.iter()
+				.map(|node_id| {
+					(
+						old_order.iter().find(|(n, _)| node_id == n).unwrap().0,
+						*node_id,
+					)
+				})
+				.collect::<Vec<_>>(),
+		))
+	}
+
 	Ok(TokenTree {
 		arena,
 		tree,
@@ -908,16 +929,17 @@ pub struct TokenTree {
 	/// }]
 	/// ```
 	tree: Vec<TreeNode>,
-	/// IDs of the relevant nodes ordered by appearance.
+	/// IDs of the conditional nodes ordered by appearance.
 	///
 	/// - `0` - The ID of the `[n]`th conditional node.
-	/// - `1` - The IDs of the nodes which this conditional node depends on.
+	/// - `1` - The `(index into self, node ID)` of the parent nodes which this conditional node depends on.
 	///
 	/// # Invariants
 	/// If `contains_conditional_compilation` is `false`, this is empty.
 	///
-	/// If this contains entries, each `entry.1[0]` is guaranteed to exist and be of value `Self::ROOT_NODE_ID`.
-	order_by_appearance: Vec<(NodeId, Vec<NodeId>)>,
+	/// If this contains entries, each `self[n].1[0]` is guaranteed to exist and be of value `(0,
+	/// Self::ROOT_NODE_ID)`. Also, `self[0]` is guaranteed to exist, (and point to the root node).
+	order_by_appearance: Vec<(NodeId, Vec<(usize, NodeId)>)>,
 	/// The ending position of the last token in the tree.
 	end_position: usize,
 
@@ -1323,7 +1345,7 @@ impl TokenTree {
 			};
 
 			// Panic: See `self.order_by_appearance` invariant.
-			if !visited_node_ids.contains(required_ids.last().unwrap()) {
+			if !visited_node_ids.contains(&required_ids.last().unwrap().1) {
 				return Err(ParseErr::InvalidChain(*num));
 			}
 
@@ -1385,6 +1407,9 @@ impl TokenTree {
 						streams.push(self.arena[*arena_id].clone())
 					}
 					Either::Right(ConditionBlock { conditions, end }) => {
+						if nodes.len() == nodes_idx {
+							continue;
+						}
 						// Check if any of the conditional branches match the current key number.
 						for (
 							_,
@@ -1495,7 +1520,10 @@ impl TokenTree {
 
 		let mut chains_of_nodes = Vec::new();
 		for (id, required_ids) in self.order_by_appearance.iter().skip(1) {
-			let mut new_chain = required_ids[1..].to_vec();
+			let mut new_chain = required_ids[1..]
+				.iter()
+				.map(|(_, id)| *id)
+				.collect::<Vec<_>>();
 			new_chain.push(*id);
 
 			// We may have a chain of nodes which fully fits within this new chain. For example, we could have a
@@ -1519,6 +1547,108 @@ impl TokenTree {
 			chains_of_nodes.push(new_chain);
 		}
 		chains_of_nodes
+	}
+
+	/// Returns a vector of all conditional directives.
+	///
+	/// The return value consists of `(conditional_type, span_of_directive)`, in order of appearance. Note that an
+	/// offset of `+1` must be applied since the root node takes the index of `0`.
+	pub fn get_all_conditional_directives(&self) -> Vec<(Conditional, Span)> {
+		let mut directives = Vec::new();
+		for (_i, (node_id, _)) in
+			self.order_by_appearance.iter().enumerate().skip(1)
+		{
+			let parent_id = self.tree[*node_id].parent.unwrap();
+			for child in self.tree[parent_id].children.iter() {
+				match child {
+					Either::Left(_) => {}
+					Either::Right(block) => {
+						let Some((ty,_, _, span, _, _, _)) = block.conditions.iter().find(|(_,_, _, _, id, _, _)| node_id == id) else { continue; };
+						directives.push((*ty, *span));
+					}
+				}
+			}
+		}
+		directives
+	}
+
+	/// Creates a new key to access the specified conditional directive.
+	///
+	/// This method takes the index (of the chronological appearance) of the directive, and returns a key that
+	/// reaches that directive. The new key contains the minimal number of prerequisite directives necessary to
+	/// reach the chosen directive.
+	pub fn create_key(
+		&self,
+		chosen_conditional_directive: usize,
+	) -> Vec<usize> {
+		// There is no existing key, so we need to construct one from scratch. Each node within the vector has
+		// a list of all prerequisite parents, so we can just use that (removing the unneeded parent node IDs).
+		let Some((_new_selection_node_id, parent_info)) = self.order_by_appearance.get(chosen_conditional_directive) else {
+				return Vec::new();
+			};
+
+		parent_info.iter().skip(1).map(|(idx, _)| *idx).collect()
+	}
+
+	/// Modifies an existing key to access the specified conditional directive.
+	///
+	/// This method keeps all existing chosen branches as long as they don't conflict with the newly chosen branch.
+	pub fn modify_key(
+		&self,
+		original_key: &Vec<usize>,
+		chosen_conditional_directive: usize,
+	) -> Vec<usize> {
+		let mut new_key = Vec::with_capacity(original_key.len());
+
+		let mut call_stack = vec![(0, 0)];
+		let mut cond_counter = 0;
+		'outer: loop {
+			let (node_id, child_idx) = call_stack.last_mut().unwrap();
+			let node = &self.tree[*node_id];
+
+			// Consume the next content child of this node.
+			while let Some(child) = node.children.get(*child_idx) {
+				*child_idx += 1;
+				match child {
+					Either::Left(_) => {}
+					Either::Right(ConditionBlock { conditions, .. }) => {
+						let mut found_new_selection = false;
+						for (_, _, _, _, cond_node_id, _, _) in
+							conditions.iter()
+						{
+							cond_counter += 1;
+
+							if cond_counter == chosen_conditional_directive {
+								// This branch is newly selected.
+								new_key.push(cond_counter);
+								found_new_selection = true;
+							} else if !found_new_selection
+								&& original_key.contains(&cond_counter)
+							{
+								new_key.push(cond_counter);
+								call_stack.push((*cond_node_id, 0));
+								continue 'outer;
+							}
+							// If the new selection is part of this block and it has already been matched, we don't
+							// want to include any original selections from this block as that would result in more
+							// than one branch being chosen in a single block.
+						}
+					}
+				}
+
+				if node.children.len() == *child_idx {
+					// We have consumed all of the children of this node.
+					if call_stack.len() > 1 {
+						call_stack.pop();
+						continue 'outer;
+					} else {
+						break 'outer;
+					}
+				}
+			}
+		}
+
+		new_key
 	}
 
 	/// Returns whether the source string contains any conditional compilation branches.
@@ -1809,10 +1939,25 @@ impl<'a> TokenStreamProvider<'a> for DynamicTokenStreamProvider<'a> {
 		syntax_tokens: &mut Vec<SyntaxToken>,
 	) -> Option<TokenStream> {
 		'outer: loop {
-			let Some((node_ptr, child_idx, cond_block_idx, evaluated_cond_block)) = self.ptrs.last_mut() else { 
-				// We have exhausted the token tree; there is nothing left.
-				return None; 
-			};
+			let (node_ptr, child_idx, cond_block_idx, evaluated_cond_block) =
+				match self.ptrs.last_mut() {
+					// `let-else` breaks `rustfmt`.
+					Some((
+						node_ptr,
+						child_idx,
+						cond_block_idx,
+						evaluated_cond_block,
+					)) => (
+						node_ptr,
+						child_idx,
+						cond_block_idx,
+						evaluated_cond_block,
+					),
+					_ => {
+						// We have exhausted the token tree; there is nothing left.
+						return None;
+					}
+				};
 			let node = self.tree.get(*node_ptr).unwrap();
 			let Some(child) = node.children.get(*child_idx) else { return None; };
 
@@ -1866,7 +2011,9 @@ impl<'a> TokenStreamProvider<'a> for DynamicTokenStreamProvider<'a> {
 										),
 									});
 								}
-								if *evaluated_cond_block as usize == cond_block.conditions.len() {
+								if *evaluated_cond_block as usize
+									== cond_block.conditions.len()
+								{
 									// We have chosen the final conditional block, which means we are responsible
 									// for syntax highlighting the `#endif` directive. (This is only relevant if we
 									// are syntax highlighting the entire file). The reason we can't do this
@@ -1937,21 +2084,31 @@ impl<'a> TokenStreamProvider<'a> for DynamicTokenStreamProvider<'a> {
 													},
 													macros,
 												);
-											if result && *evaluated_cond_block == -1 {
-												matched_condition_node_id = *node_id;
-												*evaluated_cond_block = *cond_block_idx as isize;
-												self.chosen_spans.push(*directive_span);
+											if result
+												&& *evaluated_cond_block == -1
+											{
+												matched_condition_node_id =
+													*node_id;
+												*evaluated_cond_block =
+													*cond_block_idx as isize;
+												self.chosen_spans
+													.push(*directive_span);
 												break;
 											}
 										}
 										_ => {
 											syntax_tokens.push(SyntaxToken {
 												ty: SyntaxType::Invalid,
-												modifiers:SyntaxModifiers::CONDITIONAL,
+												modifiers:
+													SyntaxModifiers::CONDITIONAL,
 												span: Span::new(
 													token_span.start,
-													tokens.last().unwrap().1.end
-												)
+													tokens
+														.last()
+														.unwrap()
+														.1
+														.end,
+												),
 											});
 										}
 									}
@@ -1973,7 +2130,8 @@ impl<'a> TokenStreamProvider<'a> for DynamicTokenStreamProvider<'a> {
 										);
 									if result && *evaluated_cond_block == -1 {
 										matched_condition_node_id = *node_id;
-										*evaluated_cond_block = *cond_block_idx as isize;
+										*evaluated_cond_block =
+											*cond_block_idx as isize;
 										self.chosen_spans.push(*directive_span);
 										break;
 									}
@@ -1996,7 +2154,8 @@ impl<'a> TokenStreamProvider<'a> for DynamicTokenStreamProvider<'a> {
 								if *evaluated_cond_block == -1 {
 									// An `else` branch is always unconditionally chosen.
 									matched_condition_node_id = *node_id;
-									*evaluated_cond_block = *cond_block_idx as isize;
+									*evaluated_cond_block =
+										*cond_block_idx as isize;
 									self.chosen_spans.push(*directive_span);
 									break;
 								}

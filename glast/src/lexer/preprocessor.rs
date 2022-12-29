@@ -699,42 +699,42 @@ pub(super) fn construct_empty(
 			tokens: vec![],
 		},
 		"ifdef" => {
-			lexer.metadata.contains_conditional_compilation = true;
+			lexer.metadata.contains_conditional_directives = true;
 			TokenStream::IfDef {
 				kw: directive_kw_span,
 				tokens: vec![],
 			}
 		}
 		"ifndef" => {
-			lexer.metadata.contains_conditional_compilation = true;
+			lexer.metadata.contains_conditional_directives = true;
 			TokenStream::IfNotDef {
 				kw: directive_kw_span,
 				tokens: vec![],
 			}
 		}
 		"if" => {
-			lexer.metadata.contains_conditional_compilation = true;
+			lexer.metadata.contains_conditional_directives = true;
 			TokenStream::If {
 				kw: directive_kw_span,
 				tokens: vec![],
 			}
 		}
 		"elif" => {
-			lexer.metadata.contains_conditional_compilation = true;
+			lexer.metadata.contains_conditional_directives = true;
 			TokenStream::ElseIf {
 				kw: directive_kw_span,
 				tokens: vec![],
 			}
 		}
 		"else" => {
-			lexer.metadata.contains_conditional_compilation = true;
+			lexer.metadata.contains_conditional_directives = true;
 			TokenStream::Else {
 				kw: directive_kw_span,
 				tokens: vec![],
 			}
 		}
 		"endif" => {
-			lexer.metadata.contains_conditional_compilation = true;
+			lexer.metadata.contains_conditional_directives = true;
 			TokenStream::EndIf {
 				kw: directive_kw_span,
 				tokens: vec![],

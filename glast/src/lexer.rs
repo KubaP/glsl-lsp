@@ -137,7 +137,7 @@ pub struct Metadata {
 	/// whitespace).
 	pub version: GlslVersion,
 	/// Whether the GLSL source string contains any condition compilation directives.
-	pub contains_conditional_compilation: bool,
+	pub contains_conditional_directives: bool,
 }
 
 /// A token representing a unit of text in the GLSL source string.
@@ -1415,7 +1415,7 @@ fn parse_tokens(
 					},
 				)),
 				"ifdef" | "ifndef" | "if" | "elif" | "else" | "endif" => {
-					lexer.metadata.contains_conditional_compilation = true;
+					lexer.metadata.contains_conditional_directives = true;
 					tokens.push((
 						Token::Directive(preprocessor::parse_condition(
 							lexer,
@@ -1615,7 +1615,7 @@ impl Lexer {
 			cursor: 0,
 			metadata: Metadata {
 				version: Default::default(),
-				contains_conditional_compilation: false,
+				contains_conditional_directives: false,
 			},
 		};
 

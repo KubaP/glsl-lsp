@@ -6,9 +6,9 @@
 //! types themselves, and there is also the [`SyntaxToken`] type used to represent syntax highlighting spans.
 //!
 //! # Parser
-//! The parser is (aiming to be) 100% specification compliant; that is, all valid source strings are parsed
-//! correctly with no errors and all invalid source strings are parsed on a "best effort" basis with the correct
-//! errors reported.
+//! The parser is (aiming to be) 100% specification compliant; that is, all valid source strings are parsed to
+//! produce correct results with no compile-time errors, and all invalid source strings are parsed on a "best
+//! effort" basis to produce some results and the correct compile-time errors.
 //!
 //! ## Macro expansion
 //! This parser correctly deals with all macro expansion, no matter how arbitrarily complex. Macros are expanded in
@@ -19,17 +19,20 @@
 //! macro call sites.
 //!
 //! ## Conditional compilation
-//! This parser supports all forms of conditional compilation. Because conditional compilation is a pre-pass (part
-//! of the preprocessor) before the main parser runs, conditional compilation must be resolved beforehand. This
-//! crate handles this through the [`TokenTree`] struct, which allows you to choose how to expand conditional
-//! compilation directives. Support includes ignoring all conditional directives, evaluating conditional directives
-//! on-the-fly, and choosing a specific permutation through a key. By default, syntax highlighting spans are only
-//! produced for the chosen branches. If you wish to nontheless highlight the entire file, the parsing functions
-//! include a `syntax_highlight_entire_file` boolean parameter.
+//! This parser fully supports conditional compilation. Because conditional compilation is a pre-pass (part of the
+//! preprocessor) that runs before the main parser, conditional compilation must be applied beforehand. This crate
+//! handles this process through the [`TokenTree`] struct, which allows you to choose how to apply conditional
+//! compilation. The following options are available:
+//! - Conditional compilation is disabled - no branches are included.
+//! - Conditional compilation is evaluated - branches are included according to the evaluation rules.
+//! - Conditional compilation is enabled using a key - branches are included if they are part of a key.
+//!
+//! By default, syntax highlighting spans are only produced for the chosen branches. If you wish to highlight the
+//! entire source string, all parsing functions have a `syntax_highlight_entire_file` boolean parameter.
 //!
 //! # Differences in behaviour
 //! The GLSL specification does not mention what the result should be if a syntactical/semantic error is
-//! encountered, apart from the fact that a compile-time error must be emitted. The [`ParseResult`] contains any
+//! encountered, apart from the fact that a compile-time error must be emitted. The [`ParseResult`] contains all
 //! detected compile-time diagnostics.
 //!
 //! Since this crate is part of a larger language extension effort, it is designed to handle errors in a UX
@@ -72,8 +75,8 @@ use std::collections::{HashMap, HashSet};
 /// The result of a parsed GLSL token tree.
 #[derive(Debug)]
 pub struct ParseResult {
-	/// The abstract syntax tree. By nature of this tree being parsed after having applied conditional compilation
-	/// directives, it will not contain any of those directives.
+	/// The abstract syntax tree. By nature of this tree being parsed after having applied conditional compilation,
+	/// it will not contain any conditional compilation directives.
 	pub ast: Vec<Node>,
 	/// All syntax diagnostics.
 	pub syntax_diags: Vec<Syntax>,
@@ -82,72 +85,77 @@ pub struct ParseResult {
 	pub semantic_diags: Vec<Semantic>,
 	/// The syntax highlighting tokens. If this result is obtained by calling a parsing method without enabling
 	/// entire-file syntax highlighting, the tokens in this vector will only be for the contents of the abstract
-	/// syntax tree. If entire-file syntax highlighting was enabled, the tokens will be for the entire file (and
-	/// correctly ordered).
+	/// syntax tree. If entire-file syntax highlighting was enabled, the tokens will be for the entire token tree,
+	/// (and will be correctly ordered).
 	pub syntax_tokens: Vec<SyntaxToken>,
-	/// Spans which cover any regions of disabled code (because of conditional compilation). This is populated only
-	/// if entire-file syntax highlighting was enabled, otherwise it will be empty.
+	/// Spans which cover any regions of disabled code. These regions map to conditional branches that have not
+	/// been included. This vector is populated only if entire-file syntax highlighting was enabled, otherwise it
+	/// will be empty.
 	pub disabled_code_regions: Vec<Span>,
 }
 
 /// Parses a GLSL source string into a tree of tokens that can be then parsed into an abstract syntax tree.
 ///
 /// This parser returns a [`TokenTree`] rather than the AST itself; this is required to support conditional
-/// compilation. Because conditional compilation is enabled through the preprocessor, there are no rules as to
+/// compilation. Because conditional compilation is applied through the preprocessor, there are no rules as to
 /// where the parser can branch - a conditional branch could be introduced in the middle of a variable declaration
 /// for instance. This makes it effectively impossible to represent all branches of a source string within a single
 /// AST without greatly overcomplicating the entire parser, so multiple ASTs are needed to represent all the
 /// conditional branch permutations.
 ///
-/// The [`TokenTree`] struct allows you to pick which conditional branches to enable, and then parse the source
+/// The [`TokenTree`] struct allows you to pick which conditional branches to include, and then parse the source
 /// string with that permutation to produce a [`ParseResult`]. Each permutation of all possible ASTs can be
-/// accessed with a key that describes which of the conditional branches is selected. The example below illustrates
+/// accessed with a key that describes which of the conditional branches to include. The example below illustrates
 /// this:
 /// ```c
-///                         // Ordered by appearance    Ordered by nesting
+///                         // Order by appearance
 ///                         //  0 (root)
-/// foo                     //  │                        
-///                         //  │                        
-/// #ifdef ...              //  │  1                     0-0
-///     AAA                 //  │  │                     │
-///                         //  │  │                     │
-///         #ifdef ...      //  │  │  2                  │    0-0
-///             50          //  │  │  │                  │    │
-///         #else           //  │  │  3                  │    0-1
-///             60          //  │  │  │                  │    │
-///         #endif          //  │  │  ┴                  │    ┴
-///                         //  │  │                     │
-///     BBB                 //  │  │                     │
-/// #elif ...               //  │  4                     0-1
-///     CCC                 //  │  │                     │
-/// #else                   //  │  5                     0-2
-///     DDD                 //  │  │                     │
-/// #endif                  //  │  ┴                     ┴
-///                         //  │                        
-/// #ifdef ...              //  │  6                     1-0
-///     EEE                 //  │  │                     │
-///                         //  │  │                     │
-///         #ifdef ...      //  │  │  7                  │    0-0
-///             100         //  │  │  │                  │    │
-///         #endif          //  │  │  ┴                  │    ┴
-/// #endif                  //  │  ┴                     ┴
-///                         //  │                        
-/// bar                     //  │                        
-///                         //  ┴                        
+/// foo                     //  │                   
+///                         //  │                   
+/// #ifdef ...              //  │  1                
+///     AAA                 //  │  │                
+///                         //  │  │                
+///         #ifdef ...      //  │  │  2             
+///             50          //  │  │  │             
+///         #else           //  │  │  3             
+///             60          //  │  │  │             
+///         #endif          //  │  │  ┴             
+///                         //  │  │                
+///     BBB                 //  │  │                
+/// #elif ...               //  │  4                
+///     CCC                 //  │  │                
+/// #else                   //  │  5                
+///     DDD                 //  │  │                
+/// #endif                  //  │  ┴                
+///                         //  │                   
+/// #ifdef ...              //  │  6                
+///     EEE                 //  │  │                
+///                         //  │  │                
+///         #ifdef ...      //  │  │  7             
+///             100         //  │  │  │             
+///         #endif          //  │  │  ┴             
+/// #endif                  //  │  ┴                
+///                         //  │                   
+/// bar                     //  │                   
+///                         //  ┴                   
 /// ```
 ///
-/// ## No conditional compilation
-/// There is always a root token stream which has no conditional branches enabled. This can be accessed through the
-/// [`root()`](TokenTree::root) method.
+/// ## Conditional compilation is disabled
+/// There is always a root token stream which has no conditional branches included. This can be accessed through
+/// the [`root()`](TokenTree::root) method.
 ///
-/// ## Conditional directive evaluation
-/// The [`evaluate()`](TokenTree::evaluate) method evaluates conditional directives on-the-fly, and chooses
-/// conditional branches depending on if the evaluation succeeds.
+/// ## Conditional compilation is evaluated
+/// Conditional branches are included if they evaluate to true according to the evaluation rules. This can be
+/// accessed through the [`evaluate()`](TokenTree::evaluate) method.
 ///
-/// ## Order by appearance
-/// Each encountered condition (an `ifdef`/`ifndef`/`if`/`elif`/`else` directive) is given an incrementing number.
-/// You pass a slice of numbers that denote which conditional branches to enable into the
-/// [`parse_by_order_of_appearance()`](TokenTree::parse_by_order_of_appearance) method.
+/// ## Conditional compilation is enabled using a key
+/// Conditional branches are included only if they are part of a key. This can be accessed through the
+/// [`with_key`()](TokenTree::with_key) method.
+///
+/// A key is a list of integers which describes a set of conditional branches. Each encountered controlling
+/// conditional directive (`#ifdef`/`#ifndef`/`#if`/`#elif`/`#else`) in the token stream is given an incrementing
+/// number starting at `1`. If a key contains a given number `n`, that is equivalent to including the conditional
+/// branch under the `n`th directive.
 ///
 /// Some examples to visualise:
 /// - `[1, 3]` will produce: `foo AAA 60 BBB bar`.
@@ -155,20 +163,8 @@ pub struct ParseResult {
 /// - `[6, 7]` will produce: `foo EEE 100 bar`.
 /// - `[1, 2, 6, 7]` will produce: `foo AAA 50 BBB EEE 100 bar`.
 ///
-/// ## Order by nesting (Not implemented yet)
-/// Each encountered group of conditions (an `ifdef`/`ifndef`/`if` - `elif`/`else` - `endif`) creates a newly
-/// nested group. Within each group the individual conditional branches are numbered by order of appearance
-/// starting from `0`. You pass slices of numbers that denote which branches to enable into the
-/// [`parse_by_order_of_nesting()`](TokenTree::parse_by_order_of_nesting) method.
-///
-/// Some examples to visualise:
-/// - `[[0-0, 0-1]]` will produce: `foo AAA 60 BBB bar`.
-/// - `[[0-1]]` will produce: `foo CCC bar`.
-/// - `[[1-0, 0-0]]` will produce: `foo EEE 100 bar`.
-/// - `[[0-0, 0-0], [1-0, 0-0]]` will produce: `foo AAA 50 BBB EEE 100 bar`.
-///
-/// ## Invalid permutations
-/// If you pass a key which doesn't form a valid permutation, the parsing function will return an error.
+/// If you pass a key which doesn't form a valid permutation, the method will return an error. If you pass a key
+/// which includes more than one conditional branch from the same block, the method will return an error.
 ///
 /// # Examples
 /// Parse a simple GLSL expression:
@@ -205,8 +201,8 @@ pub fn parse_from_token_stream(
 		return Err(lexer::ParseErr::UnsupportedVersion(metadata.version));
 	}
 
-	// Skip tree generation if there are no conditional compilation blocks, or if the token stream is empty.
-	if !metadata.contains_conditional_compilation || token_stream.is_empty() {
+	// Skip tree generation if there are no conditional compilation directives, or if the token stream is empty.
+	if !metadata.contains_conditional_directives || token_stream.is_empty() {
 		let span = if !token_stream.is_empty() {
 			Span::new(
 				token_stream.first().unwrap().1.start,
@@ -225,7 +221,7 @@ pub fn parse_from_token_stream(
 			order_by_appearance: vec![],
 			end_position: span.end,
 			syntax_diags: vec![],
-			contains_conditional_compilation: false,
+			contains_conditional_directives: false,
 		});
 	}
 
@@ -278,8 +274,7 @@ pub fn parse_from_token_stream(
 		span: Span::new(0, 0),
 	}];
 	// A vector which creates a mapping between `order-of-appearance` -> `(node ID, parent node IDs)`. The parent
-	// node IDs are tracked so that in the `parse_by_order_of_appearance()` method we can validate whether the key
-	// is valid.
+	// node IDs are tracked so that in the `with_key()` method we can check whether the key is valid.
 	let mut order_by_appearance = vec![(0, vec![0])];
 	let mut syntax_diags = Vec::new();
 
@@ -353,7 +348,7 @@ pub fn parse_from_token_stream(
 						span: token_span,
 					});
 					tree.get_mut(top(&stack)).unwrap().children.push(
-						Either::Right(ConditionBlock {
+						Either::Right(ConditionalBlock {
 							conditions: vec![(
 								Conditional::IfDef,
 								token_span,
@@ -418,7 +413,7 @@ pub fn parse_from_token_stream(
 						span: token_span,
 					});
 					tree.get_mut(top(&stack)).unwrap().children.push(
-						Either::Right(ConditionBlock {
+						Either::Right(ConditionalBlock {
 							conditions: vec![(
 								Conditional::IfNotDef,
 								token_span,
@@ -479,7 +474,7 @@ pub fn parse_from_token_stream(
 						span: token_span,
 					});
 					tree.get_mut(top(&stack)).unwrap().children.push(
-						Either::Right(ConditionBlock {
+						Either::Right(ConditionalBlock {
 							conditions: vec![(
 								Conditional::If,
 								token_span,
@@ -729,11 +724,8 @@ pub fn parse_from_token_stream(
 		));
 	}
 
-	//dbg!(&arena);
-	//dbg!(&tree);
-
-	// In order to make our job easier later down the line, for each conditional node ordered by appearance, we
-	// want to know it's node ID and the () for the parent nodes. The () consists of:
+	// In order to make our job easier later down the line, for each conditional branch node ordered-by-appearance,
+	// we want to know it's node ID and the () for the parent nodes. The () consists of:
 	// - The parent's position within `order_by_appearance`. <- We don't have this information yet.
 	// - The parent's node ID.
 	let old_order = order_by_appearance;
@@ -759,7 +751,7 @@ pub fn parse_from_token_stream(
 		order_by_appearance,
 		end_position: token_stream_end,
 		syntax_diags,
-		contains_conditional_compilation: true,
+		contains_conditional_directives: true,
 	})
 }
 
@@ -801,7 +793,7 @@ pub fn print_ast(ast: Vec<Node>) -> String {
 /// The error type for parsing operations.
 #[derive(Debug)]
 pub enum ParseErr {
-	/// This number doesn't map to a conditional branch.
+	/// This number doesn't map to a controlling conditional directive.
 	InvalidNum(usize),
 	/// This number has a dependent number that was not specified in the key.
 	InvalidChain(usize),
@@ -811,9 +803,8 @@ pub enum ParseErr {
 
 /// A tree of token streams generated from a GLSL source string.
 ///
-/// The tree represents all conditional compilation branches. Call the [`evaluate()`](Self::evaluate),
-/// [`parse_by_order_of_appearance()`](Self::parse_by_order_of_appearance), or
-/// [`parse_by_order_of_nesting()`](Self::parse_by_order_of_nesting) method to parse an abstract syntax tree with
+/// The tree represents all conditional compilation branches. Call the [`root()`](Self::root),
+/// [`evaluate()`](Self::evaluate) or [`with_key()`](Self::with_key) method to parse an abstract syntax tree with
 /// the selected conditional branches into a [`ParseResult`].
 ///
 /// # Examples
@@ -823,7 +814,7 @@ pub enum ParseErr {
 /// # Why is this necessary?
 /// Conditional compilation is implemented through the preprocessor, which sets no rules as to where conditional
 /// branching can take place, (apart from the fact that a preprocessor directive must exist on its own line). This
-/// means that a conditional branch could, for example, completely change the entire signature of a program:
+/// means that a conditional branch could, for example, completely change the signature of a program:
 /// ```c
 ///  1│ void foo() {
 ///  2│
@@ -890,22 +881,22 @@ pub enum ParseErr {
 ///
 /// The main reason this option wasn't chosen is because it would immensely complicate the parsing logic, and in
 /// turn the maintainability of this project. As with all recursive-descent parsers, the individual parsing
-/// functions hold onto any temporary state. In this example, the function for parsing functions holds information
+/// functions hold onto any temporary state. In this case, the function for parsing functions holds information
 /// such as the name, the starting position, the parameters, etc. If we would encounter the conditional branching
 /// within this parsing function, we would somehow need to know ahead-of-time whether this conditional branch will
 /// affect the function node, and if so, be able to return up the call stack to split the parser whilst also
 /// somehow not losing the temporary state. This would require abandoning the recursive-descent approach, which
-/// would greatly complicate the parser and make writing the parsing logic itself an absolutely awful mess, and
-/// that is not a trade-off I'm willing to take.
+/// would greatly complicate the parser and make writing & maintaining the parsing logic itself a convoluted mess,
+/// and that is not a trade-off I'm willing to take.
 ///
 /// This complication occurs because the preprocessor is a separate pass ran before the main compiler and does not
 /// follow the GLSL grammar rules, which means that preprocessor directives and macros can be included literally
-/// anywhere and the file may still be valid after expansion. In comparison, some newer languages include
+/// anywhere and the file *may* still be valid after expansion. In comparison, some newer languages include
 /// conditional compilation as part of the language grammar itself. In Rust for example, conditional compilation is
 /// applied via attributes to entire expressions/statements, which means that you can't run into this mess where a
-/// conditional branch splits a function mid-way through parsing. GLSL unfortunately uses the C preprocessor, which
-/// results in this sort of stuff (the approach taken by this crate) being necessary to achieve 100%
-/// specification-defined behaviour.
+/// conditional branch could split a function mid-way through parsing. GLSL unfortunately uses the C preprocessor,
+/// which results in the approach taken by this crate being necessary to achieve 100% specification-compliant
+/// behaviour.
 ///
 /// Note that macros can actually be correctly expanded within the same pass as the main parser without introducing
 /// too much complexity, it's just that conditional compilation can't.
@@ -913,7 +904,7 @@ pub struct TokenTree {
 	/// The arena of token streams.
 	///
 	/// # Invariants
-	/// If `contains_conditional_compilation` is `false`, this is:
+	/// If `contains_conditional_directives` is `false`, this vector is:
 	/// ```ignore
 	/// vec![enitire_token_stream]
 	/// ```
@@ -921,7 +912,9 @@ pub struct TokenTree {
 	/// The tree.
 	///
 	/// # Invariants
-	/// If `contains_conditional_compilation` is `false`, this is:
+	/// `self.[0]` always exists and is the root node.
+	///
+	/// If `contains_conditional_directives` is `false`, this vector is:
 	/// ```ignore
 	/// vec![TreeNode {
 	///     parent: None,
@@ -929,13 +922,13 @@ pub struct TokenTree {
 	/// }]
 	/// ```
 	tree: Vec<TreeNode>,
-	/// IDs of the conditional nodes ordered by appearance.
+	/// IDs of the conditional branch nodes ordered by appearance.
 	///
-	/// - `0` - The ID of the `[n]`th conditional node.
-	/// - `1` - The `(index into self, node ID)` of the parent nodes which this conditional node depends on.
+	/// - `0` - The ID of the `[n]`th conditional branch node.
+	/// - `1` - The `(index into self, node ID)` of the parent nodes which this conditional branch node depends on.
 	///
 	/// # Invariants
-	/// If `contains_conditional_compilation` is `false`, this is empty.
+	/// If `contains_conditional_directives` is `false`, this is empty.
 	///
 	/// If this contains entries, each `self[n].1[0]` is guaranteed to exist and be of value `(0,
 	/// Self::ROOT_NODE_ID)`. Also, `self[0]` is guaranteed to exist, (and point to the root node).
@@ -946,29 +939,30 @@ pub struct TokenTree {
 	/// Syntax diagnostics related to conditional compilation directives.
 	///
 	/// # Invariants
-	/// If `contains_conditional_compilation` is `false`, this is empty.
+	/// If `contains_conditional_directives` is `false`, this is empty.
 	#[allow(unused)]
 	syntax_diags: Vec<Syntax>,
 
-	/// Whether there are any conditional compilation branches.
-	contains_conditional_compilation: bool,
+	/// Whether there are any conditional directives.
+	contains_conditional_directives: bool,
 }
 
 impl TokenTree {
-	/// Node id of the root node.
+	/// Node ID of the root node.
 	const ROOT_NODE_ID: usize = 0;
 
-	/// Parses the root token stream.
+	/// Parses the root token stream; no conditional branches are included.
 	///
 	/// Whilst this is guaranteed to succeed, if the entire source string is wrapped within a conditional block
 	/// this will return an empty AST.
 	///
 	/// # Syntax highlighting
-	/// The `syntax_highlight_entire_file` parameter controls whether to produce syntax tokens for the entire file,
-	/// rather than just for the root tokens. This involves parsing all conditional branches in order to produce
-	/// all the syntax highlighting information. Whilst the implementation of this functionality uses the smallest
-	/// possible number of permutations that cover the entire file, if there are a lot of conditional branches that
-	/// can result in the source string being parsed many times, which may have performance implications.
+	/// The `syntax_highlight_entire_source` parameter controls whether to produce syntax tokens for the entire
+	/// source string, rather than just for the root tokens. This involves parsing all conditional branches in
+	/// order to produce all the syntax highlighting information. Whilst the implementation of this functionality
+	/// uses the smallest possible number of permutations that cover the entire source string, if there are a lot
+	/// of conditional branches that can result in the token tree being parsed many times which may have
+	/// performance implications.
 	///
 	/// The actual syntax highlighting results are based off the chosen permutations which cannot be controlled. If
 	/// you require more control, you must manually parse the relevant permutations and collect the tokens
@@ -979,9 +973,9 @@ impl TokenTree {
 	/// # Examples
 	/// For a fully detailed example on how to use this method to create an abstract syntax tree, see the
 	/// documentation for the [`parse_from_str()`] function.
-	pub fn root(&self, syntax_highlight_entire_file: bool) -> ParseResult {
+	pub fn root(&self, syntax_highlight_entire_source: bool) -> ParseResult {
 		// Get the relevant streams for the root branch.
-		let streams = if !self.contains_conditional_compilation {
+		let streams = if !self.contains_conditional_directives {
 			self.arena.clone()
 		} else {
 			let mut streams = Vec::new();
@@ -1002,18 +996,20 @@ impl TokenTree {
 		while !walker.is_done() {
 			parse_stmt(&mut walker, &mut nodes);
 		}
-		let (nodes, syntax_diags, semantic_diags, mut root_tokens) = (
+		let (ast, syntax_diags, semantic_diags, mut root_tokens) = (
 			nodes,
 			walker.syntax_diags,
 			walker.semantic_diags,
 			walker.syntax_tokens,
 		);
 
-		if syntax_highlight_entire_file && self.contains_conditional_compilation
+		if syntax_highlight_entire_source
+			&& self.contains_conditional_directives
 		{
 			let mut merged_syntax_tokens =
 				Vec::with_capacity(root_tokens.len());
-			let mut conditional_regions = Vec::new();
+			// This will store the regions of the conditional blocks.
+			let mut conditional_block_regions = Vec::new();
 
 			let keys = self
 				.minimal_no_of_permutations_for_complete_syntax_highlighting();
@@ -1035,10 +1031,10 @@ impl TokenTree {
 			}
 
 			// Deal with all tokens produced from conditional branches, as well as any root tokens in-between
-			// conditional branches, (if any).
+			// the conditional blocks.
 			for (i, key) in keys.iter().enumerate() {
-				let node = self.tree.get(key[0]).unwrap();
-				conditional_regions.push(node.span);
+				let node = &self.tree[key[0]];
+				conditional_block_regions.push(node.span);
 
 				let (
 					ParseResult {
@@ -1046,7 +1042,7 @@ impl TokenTree {
 						..
 					},
 					_,
-				) = self.parse_node_ids_chronologically(key);
+				) = self.parse_nodes(key);
 				loop {
 					let SyntaxToken { span: s, .. } = match new_tokens.get(0) {
 						Some(t) => t,
@@ -1066,11 +1062,11 @@ impl TokenTree {
 				}
 
 				if let Some(next_key) = keys.get(i + 1) {
-					let next_node = self.tree.get(next_key[0]).unwrap();
+					let next_node = &self.tree[next_key[0]];
 					let span = Span::new(node.span.end, next_node.span.start);
 					if !span.is_zero_width() {
 						// We have another conditional block after this one; there may be root tokens in-between
-						// these two blocks.
+						// these two blocks which require moving over.
 						loop {
 							let SyntaxToken { span: s, .. } =
 								match root_tokens.get(0) {
@@ -1093,15 +1089,15 @@ impl TokenTree {
 			merged_syntax_tokens.append(&mut root_tokens);
 
 			ParseResult {
-				ast: nodes,
+				ast,
 				syntax_diags,
 				semantic_diags,
 				syntax_tokens: merged_syntax_tokens,
-				disabled_code_regions: conditional_regions,
+				disabled_code_regions: conditional_block_regions,
 			}
 		} else {
 			ParseResult {
-				ast: nodes,
+				ast,
 				syntax_diags,
 				semantic_diags,
 				syntax_tokens: root_tokens,
@@ -1110,31 +1106,34 @@ impl TokenTree {
 		}
 	}
 
-	/// Parses the token tree by enabling conditional branches if they evaluate to true.
+	/// Parses the token tree by including conditional branches if they evaluate to true.
 	///
-	/// Whilst this is guaranteed to succeed, if the entire source string is wrapped within a conditional block
+	/// Whilst this is guaranteed to succeed, if the entire source string is wrapped within a conditional branch
 	/// that fails evaluation this will return an empty AST.
 	///
 	/// # Syntax highlighting
-	/// The `syntax_highlight_entire_file` parameter controls whether to produce syntax tokens for the entire file,
-	/// rather than just for the evaluated branches. This involves parsing all conditional branches in order to
-	/// produce all the syntax highlighting information. Whilst the implementation of this functionality uses the
-	/// smallest possible number of permutations that cover the entire file, if there are a lot of conditional
-	/// branches that can result in the source string being parsed many times, which may have performance
-	/// implications.
+	/// The `syntax_highlight_entire_source` parameter controls whether to produce syntax tokens for the entire
+	/// source string, rather than just for the included conditional branches. This involves parsing **all**
+	/// conditional branches in order to produce all the syntax highlighting information. Whilst the implementation
+	/// of this functionality uses the smallest possible number of permutations that cover the entire source
+	/// string, if there are a lot of conditional branches that can result in the token tree being parsed many
+	/// times which may have performance implications.
 	///
 	/// The actual syntax highlighting results are based off the chosen permutations which cannot be controlled. If
 	/// you require more control, you must manually parse the relevant permutations and collect the tokens
 	/// yourself.
 	///
 	/// If there are no conditional branches, or the only conditional branches that exist are also evaluated as
-	/// true in the running of the parser, this parameter does nothing.
+	/// true and included in the running of the parser, this parameter does nothing.
 	///
 	/// # Examples
 	/// For a fully detailed example on how to use this method to create an abstract syntax tree, see the
 	/// documentation for the [`parse_from_str()`] function.
-	pub fn evaluate(&self, syntax_highlight_entire_file: bool) -> ParseResult {
-		// Parse the evaluated branches.
+	pub fn evaluate(
+		&self,
+		syntax_highlight_entire_source: bool,
+	) -> ParseResult {
+		// Parse the token tree, evaluating conditional compilation.
 		let mut walker = Walker::new(DynamicTokenStreamProvider::new(
 			&self.arena,
 			&self.tree,
@@ -1143,177 +1142,47 @@ impl TokenTree {
 		while !walker.is_done() {
 			parse_stmt(&mut walker, &mut nodes);
 		}
-		let eval_key = walker.token_provider.chosen_key;
-		let eval_spans = walker.token_provider.chosen_spans;
 
-		let (nodes, syntax_diags, semantic_diags, mut eval_tokens) = (
+		let eval_key = walker.token_provider.chosen_key;
+		let eval_regions = walker.token_provider.chosen_regions;
+		let (ast, syntax_diags, semantic_diags, eval_tokens) = (
 			nodes,
 			walker.syntax_diags,
 			walker.semantic_diags,
 			walker.syntax_tokens,
 		);
 
-		//dbg!(&eval_key);
-		//dbg!(&eval_spans);
+		let (syntax_tokens, disabled_code_regions) =
+			if syntax_highlight_entire_source
+				&& self.contains_conditional_directives
+			{
+				self.merge_syntax_tokens(eval_key, eval_regions, eval_tokens)
+			} else {
+				(eval_tokens, Vec::new())
+			};
 
-		if syntax_highlight_entire_file && self.contains_conditional_compilation
-		{
-			let mut keys = self
-				.minimal_no_of_permutations_for_complete_syntax_highlighting();
-			// We want to exclude the key that we've parsed when evaluating the tree. If that leaves no keys left,
-			// we know we've covered the entire tree with this evaluation, so we can return early.
-			keys.retain(|k| k != &eval_key);
-			if keys.is_empty() {
-				return ParseResult {
-					ast: nodes,
-					syntax_diags,
-					semantic_diags,
-					syntax_tokens: eval_tokens,
-					disabled_code_regions: Vec::new(),
-				};
-			}
-
-			// Parse all of the keys and store relevant information.
-			// `(key, parse_result, spans_of_conditional_nodes)`
-			let mut keys = keys
-				.into_iter()
-				.map(|k| {
-					let (a, b) = self.parse_node_ids_chronologically(&k);
-					(k, a, b)
-				})
-				.collect::<Vec<_>>();
-
-			//dbg!(&keys);
-
-			let mut disabled_regions = Vec::new();
-			let mut chosen_spans_with_keys = Vec::new();
-			let mut span_to_next_eval_range =
-				Span::new(0, eval_spans.first().map(|s| s.start).unwrap_or(0));
-			let mut eval_span_idx = 0;
-			let mut consuming_eval = false;
-			loop {
-				if !consuming_eval {
-					let mut spans_that_can_fit = Vec::new();
-					for (key, _, spans) in keys.iter() {
-						for span in spans {
-							if span_to_next_eval_range.contains(*span) {
-								spans_that_can_fit.push((*span, key.clone()));
-							}
-						}
-					}
-
-					// We now have an exhaustive list of all spans from key permutations that can fit before the
-					// next eval range. We want to sort them chronologically and remove duplicates.
-					spans_that_can_fit.sort_by(|a, b| {
-						if a.0.is_before(&b.0) {
-							std::cmp::Ordering::Less
-						} else if a.0.is_after(&b.0) {
-							std::cmp::Ordering::Greater
-						} else {
-							std::cmp::Ordering::Equal
-						}
-					});
-					spans_that_can_fit.dedup_by(|a, b| a.0 == b.0);
-
-					spans_that_can_fit
-						.iter()
-						.for_each(|(span, _)| disabled_regions.push(*span));
-					chosen_spans_with_keys.append(&mut spans_that_can_fit);
-
-					if eval_span_idx == eval_spans.len() {
-						break;
-					}
-					consuming_eval = true;
-				} else {
-					chosen_spans_with_keys
-						.push((eval_spans[eval_span_idx], eval_key.clone()));
-					match eval_spans.get(eval_span_idx + 1) {
-						Some(next) => {
-							span_to_next_eval_range = Span::new(
-								eval_spans[eval_span_idx].end,
-								next.start,
-							)
-						}
-						None => {
-							span_to_next_eval_range = Span::new(
-								eval_spans[eval_span_idx].end,
-								self.end_position,
-							)
-						}
-					}
-					eval_span_idx += 1;
-					consuming_eval = false;
-				}
-			}
-
-			//dbg!(&chosen_spans_with_keys);
-
-			// We now have a vector of chronologically ordered spans (that cover the entire source string) along
-			// with the permutation key from which to take the tokens.
-			let mut merged_syntax_tokens =
-				Vec::with_capacity(eval_tokens.len());
-			for (span, key) in chosen_spans_with_keys {
-				let tokens = if key == eval_key {
-					&mut eval_tokens
-				} else {
-					&mut keys
-						.iter_mut()
-						.find(|(k, _, _)| k == &key)
-						.unwrap()
-						.1
-						.syntax_tokens
-				};
-
-				loop {
-					let token = match tokens.get(0) {
-						Some(t) => t,
-						None => break,
-					};
-
-					if token.span.is_before(&span) {
-						// Token is before the relevant span, so we can safely discard it.
-						tokens.remove(0);
-					} else if span.contains(token.span) {
-						merged_syntax_tokens.push(tokens.remove(0));
-					} else {
-						// Token is after the current span. We won't know if we need it until the next iteration of
-						// the for loop, so we don't continue further with this token stream.
-						break;
-					}
-				}
-			}
-
-			ParseResult {
-				ast: nodes,
-				syntax_diags,
-				semantic_diags,
-				syntax_tokens: merged_syntax_tokens,
-				disabled_code_regions: disabled_regions,
-			}
-		} else {
-			ParseResult {
-				ast: nodes,
-				syntax_diags,
-				semantic_diags,
-				syntax_tokens: eval_tokens,
-				disabled_code_regions: Vec::new(),
-			}
+		ParseResult {
+			ast,
+			syntax_diags,
+			semantic_diags,
+			syntax_tokens,
+			disabled_code_regions,
 		}
 	}
 
-	/// Parses a token tree by enabling conditional branches in the order of their appearance.
+	/// Parses a token tree by including conditional branches if they are part of the provided key.
 	///
 	/// This method can return an `Err` in the following cases:
-	/// - The `key` has a number which doesn't map to a conditional compilation branch.
+	/// - The `key` has a number which doesn't map to a controlling conditional directive.
 	/// - The `key` has a number which depends on another number that is missing.
 	///
 	/// # Syntax highlighting
-	/// The `syntax_highlight_entire_file` parameter controls whether to produce syntax tokens for the entire file,
-	/// rather than just for the selected branches. This involves parsing all conditional branches in order to
-	/// produce all the syntax highlighting information. Whilst the implementation of this functionality uses the
-	/// smallest possible number of permutations that cover the entire file, if there are a lot of conditional
-	/// branches that can result in the source string being parsed many times, which may have performance
-	/// implications.
+	/// The `syntax_highlight_entire_source` parameter controls whether to produce syntax tokens for the entire
+	/// source string, rather than just for the selected conditional branches. This involves parsing all
+	/// conditional branches in order to produce all the syntax highlighting information. Whilst the implementation
+	/// of this functionality uses the smallest possible number of permutations that cover the entire source
+	/// string, if there are a lot of conditional branches that can result in the token tree being parsed many
+	/// times which may have performance implications.
 	///
 	/// The actual syntax highlighting results are based off the chosen permutations which cannot be controlled. If
 	/// you require more control, you must manually parse the relevant permutations and collect the tokens
@@ -1324,14 +1193,14 @@ impl TokenTree {
 	/// # Examples
 	/// For a fully detailed example on how to use this method to create an abstract syntax tree, see the
 	/// documentation for the [`parse_from_str()`] function.
-	pub fn parse_by_order_of_appearance(
+	pub fn with_key(
 		&self,
 		key: impl AsRef<[usize]>,
-		_syntax_highlight_entire_file: bool,
+		syntax_highlight_entire_source: bool,
 	) -> Result<ParseResult, ParseErr> {
 		let key = key.as_ref();
 
-		if !self.contains_conditional_compilation {
+		if !self.contains_conditional_directives {
 			return Err(ParseErr::NoConditionalBranches);
 		}
 
@@ -1353,100 +1222,164 @@ impl TokenTree {
 			nodes.push(*id);
 		}
 
-		// TODO: Implement entire-file syntax option
+		let (
+			ParseResult {
+				ast,
+				syntax_diags,
+				semantic_diags,
+				syntax_tokens,
+				disabled_code_regions: _,
+			},
+			chosen_regions,
+		) = self.parse_nodes(&nodes);
 
-		Ok(self.parse_node_ids_chronologically(&nodes).0)
-	}
+		let (syntax_tokens, disabled_code_regions) =
+			if syntax_highlight_entire_source
+				&& self.contains_conditional_directives
+			{
+				self.merge_syntax_tokens(nodes, chosen_regions, syntax_tokens)
+			} else {
+				(syntax_tokens, Vec::new())
+			};
 
-	/// TODO: Implement.
-	#[allow(unused)]
-	pub fn parse_by_order_of_nesting(
-		&self,
-		key: impl AsRef<[(usize, usize)]>,
-	) -> Option<ParseResult> {
-		todo!()
+		Ok(ParseResult {
+			ast,
+			syntax_diags,
+			semantic_diags,
+			syntax_tokens,
+			disabled_code_regions,
+		})
 	}
 
 	/// Parses the specified nodes.
 	///
-	/// Returns a `ParseResult` along with a vector of spans of the chosen conditional nodes, (doesn't include the
-	/// root node).
+	/// Returns a `ParseResult` along with a vector of chosen regions.
 	///
 	/// # Invariants
 	/// At least one node ID needs to be specified.
 	///
-	/// The IDs of the nodes-to-parse need to be in chronological order.
+	/// The IDs of the nodes need to be in chronological order.
 	///
-	/// The IDs need to map to a valid permutation of conditional blocks.
-	fn parse_node_ids_chronologically(
-		&self,
-		nodes: &[NodeId],
-	) -> (ParseResult, Vec<Span>) {
+	/// The IDs need to map to a valid permutation of conditional branches.
+	fn parse_nodes(&self, nodes: &[NodeId]) -> (ParseResult, Vec<Span>) {
 		if nodes.is_empty() {
 			panic!("Expected at least one node to parse");
 		}
 
 		let mut streams = Vec::new();
-		let mut chosen_spans = Vec::new();
-		let mut disabled_code_regions = Vec::new();
+		let mut chosen_regions = Vec::new();
 		let mut conditional_syntax_tokens = Vec::new();
-		let mut end_conditional_syntax_tokens_stack = Vec::new();
 		let mut nodes_idx = 0;
-		let mut call_stack = vec![(0, 0)];
+		let mut call_stack = vec![(0, 0, 0, -1)];
 		// Panic: We have at least one node, so at least one iteration of this loop can be performed without
 		// any panics.
 		'outer: loop {
-			let (node_id, child_idx) = call_stack.last_mut().unwrap();
+			let (node_id, child_idx, cond_block_idx, evaluated_cond_block) =
+				match call_stack.last_mut() {
+					Some(t) => t,
+					None => break,
+				};
 			let node = &self.tree[*node_id];
+			let Some(child) = node.children.get(*child_idx) else { break; };
 
-			// Consume the next content child of this node.
-			while let Some(child) = node.children.get(*child_idx) {
-				*child_idx += 1;
-				match child {
-					Either::Left(arena_id) => {
-						streams.push(self.arena[*arena_id].clone())
+			match child {
+				Either::Left(arena_id) => {
+					let stream = self.arena[*arena_id].clone();
+
+					if let Some((_, span)) = stream.last() {
+						chosen_regions.push(Span::new(
+							stream.first().unwrap().1.start,
+							span.end,
+						));
 					}
-					Either::Right(ConditionBlock { conditions, end }) => {
-						if nodes.len() == nodes_idx {
-							continue;
+
+					*child_idx += 1;
+					if *child_idx == node.children.len() {
+						// We have gone through all of the children of this node, so we want to pop it from the
+						// stack.
+						call_stack.pop();
+					}
+
+					streams.push(stream);
+				}
+				Either::Right(cond_block) => {
+					let matched_condition_node_id;
+					loop {
+						if *cond_block_idx == cond_block.conditions.len() {
+							// We've gone through all of the conditional blocks. We can now push the syntax tokens
+							// for the `#endif` and move onto the next child of this node.
+							if let Some((
+								_,
+								directive_span,
+								syntax_tokens,
+								_,
+								hash_token,
+								dir_token,
+							)) = &cond_block.end
+							{
+								let mut tokens = vec![*hash_token, *dir_token];
+								if !syntax_tokens.is_empty() {
+									tokens.push(SyntaxToken {
+										ty: SyntaxType::Invalid,
+										modifiers: SyntaxModifiers::CONDITIONAL,
+										span: Span::new(
+											syntax_tokens
+												.first()
+												.unwrap()
+												.1
+												.start,
+											syntax_tokens.last().unwrap().1.end,
+										),
+									});
+								}
+								conditional_syntax_tokens.push(tokens);
+
+								if *evaluated_cond_block
+									== cond_block.conditions.len() as isize - 1
+								{
+									// We have chosen the final conditional block, which means we are responsible
+									// for syntax highlighting the `#endif` directive. (This is only relevant if we
+									// are syntax highlighting the entire file). The reason we can't do this
+									// unconditionally is because if the final block wasn't picked, then an
+									// alternative permutation is responsible for syntax highlighting it, but the
+									// span of the syntax highlight region stretches to cover the `#endif` part. If
+									// we declared this as chosen, the other span region wouldn't fit and would
+									// therefore be discarded, and hence syntax highlighting would be missing for
+									// the final branch.
+									chosen_regions.push(*directive_span);
+								}
+							}
+
+							*cond_block_idx = 0;
+							*child_idx += 1;
+							*evaluated_cond_block = -1;
+							if *child_idx == node.children.len() {
+								// We have gone through all of the children of this node, so we want to pop it from
+								// the stack.
+								call_stack.pop();
+							}
+
+							continue 'outer;
 						}
-						// Check if any of the conditional branches match the current key number.
-						for (
+
+						let current_cond_block_idx = *cond_block_idx;
+
+						let (
 							_,
-							_,
+							directive_span,
 							syntax_tokens,
 							_,
 							branch_node_id,
 							hash_token,
 							dir_token,
-						) in conditions
-						{
-							if *branch_node_id == nodes[nodes_idx] {
-								chosen_spans
-									.push(self.tree[*branch_node_id].span);
+						) = &cond_block.conditions[current_cond_block_idx];
 
-								let mut tokens = vec![*hash_token, *dir_token];
-								for (token, span) in syntax_tokens.iter() {
-									tokens.push(SyntaxToken {
-										ty: token.non_semantic_colour(),
-										modifiers: SyntaxModifiers::CONDITIONAL,
-										span: *span,
-									});
-								}
-								conditional_syntax_tokens.push(tokens);
+						*cond_block_idx += 1;
 
-								call_stack.push((*branch_node_id, 0));
-								nodes_idx += 1;
-
-								if let Some((
-									_,
-									_,
-									syntax_tokens,
-									_,
-									hash_token,
-									dir_token,
-								)) = end
-								{
+						match nodes.get(nodes_idx) {
+							Some(n) => {
+								if *branch_node_id == *n {
+									// We have found a matching branch.
 									let mut tokens =
 										vec![*hash_token, *dir_token];
 									for (token, span) in syntax_tokens.iter() {
@@ -1457,29 +1390,23 @@ impl TokenTree {
 											span: *span,
 										});
 									}
-									end_conditional_syntax_tokens_stack
-										.push(tokens);
+									conditional_syntax_tokens.push(tokens);
+
+									matched_condition_node_id = *branch_node_id;
+									*evaluated_cond_block =
+										current_cond_block_idx as isize;
+									chosen_regions.push(*directive_span);
+									break;
 								}
-								continue 'outer;
-							} else {
-								disabled_code_regions
-									.push(self.tree[*branch_node_id].span);
 							}
+							None => {}
 						}
 					}
-				}
-			}
 
-			// We have consumed all the content of this node which means we can pop it from the stack and continue
-			// with the parent node, (if there is one).
-			if call_stack.len() > 1 {
-				call_stack.pop();
-				if let Some(e) = end_conditional_syntax_tokens_stack.pop() {
-					// We may not have an ending token if the conditional block lacks a `#endif`, hence this check.
-					conditional_syntax_tokens.push(e);
+					call_stack.push((matched_condition_node_id, 0, 0, -1));
+					nodes_idx += 1;
+					continue;
 				}
-			} else {
-				break 'outer;
 			}
 		}
 
@@ -1499,24 +1426,161 @@ impl TokenTree {
 				syntax_diags: walker.syntax_diags,
 				semantic_diags: walker.semantic_diags,
 				syntax_tokens: walker.syntax_tokens,
-				disabled_code_regions,
+				disabled_code_regions: Vec::new(),
 			},
-			chosen_spans,
+			chosen_regions,
 		)
+	}
+
+	/// Merges syntax tokens from other keys to cover the entire file.
+	///
+	/// This method takes the chosen key, the chosen regions, and syntax tokens from said chosen key. If there are
+	/// no other permutations, this will return the syntax tokens verbatim.
+	fn merge_syntax_tokens(
+		&self,
+		chosen_key: Vec<usize>,
+		chosen_regions: Vec<Span>,
+		mut chosen_tokens: Vec<SyntaxToken>,
+	) -> (Vec<SyntaxToken>, Vec<Span>) {
+		dbg!(&chosen_key);
+		dbg!(&chosen_regions);
+		let mut other_keys =
+			self.minimal_no_of_permutations_for_complete_syntax_highlighting();
+		// We want to exclude the key that we've already chosen. If that leaves no keys left, we know we've already
+		// covered the entire tree, so we can return early.
+		other_keys.retain(|k| k != &chosen_key);
+		if other_keys.is_empty() {
+			return (chosen_tokens, Vec::new());
+		}
+
+		// Parse all of the keys and store relevant information.
+		// `(key, parse_result, chosen_spans)`.
+		let mut other_keys = other_keys
+			.into_iter()
+			.map(|k| {
+				let (a, b) = self.parse_nodes(&k);
+				(k, a, b)
+			})
+			.collect::<Vec<_>>();
+
+		// This will store the calculated regions of disabled code in the context of the chosen key.
+		let mut disabled_regions_for_chosen_key = Vec::new();
+		// This will store the regions of tokens (with the key they came from) in a chronological order that covers
+		// the entire source string.
+		let mut final_regions_with_key = Vec::new();
+
+		let mut span_to_next_chosen_region =
+			Span::new(0, chosen_regions.first().map(|s| s.start).unwrap_or(0));
+		let mut chosen_regions_idx = 0;
+		// We toggle between consuming regions from the chosen key and consuming regions from the other keys on
+		// each iteration on the loop.
+		let mut consuming_chosen = false;
+		loop {
+			if !consuming_chosen {
+				// We create a vector of all regions from the other keys that can fit before the next region in the
+				// chosen key.
+				let mut regions_that_can_fit = Vec::new();
+				for (key, _, regions) in other_keys.iter() {
+					for region in regions {
+						if span_to_next_chosen_region.contains(*region) {
+							regions_that_can_fit.push((*region, key.clone()));
+						}
+					}
+				}
+
+				// We sort the vector chronologically and remove any duplicates. It doesn't matter which duplicate
+				// we remove since they will be identical.
+				regions_that_can_fit.sort_by(|a, b| {
+					if a.0.is_before(&b.0) {
+						std::cmp::Ordering::Less
+					} else if a.0.is_after(&b.0) {
+						std::cmp::Ordering::Greater
+					} else {
+						std::cmp::Ordering::Equal
+					}
+				});
+				regions_that_can_fit.dedup_by(|a, b| a.0 == b.0);
+
+				// This vector is also a list of disabled regions from the perspective of the chosen key, so we
+				// want to append it.
+				regions_that_can_fit.iter().for_each(|(span, _)| {
+					disabled_regions_for_chosen_key.push(*span)
+				});
+
+				final_regions_with_key.append(&mut regions_that_can_fit);
+
+				if chosen_regions_idx == chosen_regions.len() {
+					break;
+				}
+				consuming_chosen = true;
+			} else {
+				// We push the next region from the chosen key.
+				let current_region = chosen_regions[chosen_regions_idx];
+				final_regions_with_key
+					.push((current_region, chosen_key.clone()));
+				match chosen_regions.get(chosen_regions_idx + 1) {
+					Some(next) => {
+						span_to_next_chosen_region =
+							Span::new(current_region.end, next.start);
+					}
+					None => {
+						span_to_next_chosen_region =
+							Span::new(current_region.end, self.end_position);
+					}
+				}
+
+				chosen_regions_idx += 1;
+				consuming_chosen = false;
+			}
+		}
+
+		// We now have a vector of chronologically ordered regions along with the key we should take tokens from.
+		// We can now create a new vector that contains all of these tokens.
+		let mut merged_syntax_tokens = Vec::with_capacity(chosen_tokens.len());
+		for (range, key) in final_regions_with_key {
+			let tokens = if key == chosen_key {
+				&mut chosen_tokens
+			} else {
+				&mut other_keys
+					.iter_mut()
+					.find(|(k, _, _)| k == &key)
+					.unwrap()
+					.1
+					.syntax_tokens
+			};
+
+			loop {
+				let Some(token) = tokens.get(0) else { break; };
+
+				if token.span.is_before(&range) {
+					// This token is before the current range. We clearly have already gone past it, so it can
+					// safely be discarded.
+					tokens.remove(0);
+				} else if range.contains(token.span) {
+					merged_syntax_tokens.push(tokens.remove(0));
+				} else {
+					// This token is after the current range. We haven't gotten there yet, so that means we can
+					// finish dealing with this token stream for now.
+					break;
+				}
+			}
+		}
+
+		(merged_syntax_tokens, disabled_regions_for_chosen_key)
 	}
 
 	/// Returns all of the keys (**of node IDs, not order-of-appearance numbers**) required to fully syntax
 	/// highlight the entire tree.
 	///
-	/// Each key points to the nodes which contain the actual tokens of the conditional branch. To get information
-	/// about the conditional directive itself, you must look up the parent and find the node ID in one of the
-	/// child conditional blocks.
+	/// Each key points to the conditional branch nodes that contain the actual tokens of the conditional branch.
+	/// To get information about the controlling conditional directive itself, you must look up the parent and find
+	/// the node ID in one of the child's conditional blocks.
 	fn minimal_no_of_permutations_for_complete_syntax_highlighting(
 		&self,
 	) -> Vec<Vec<NodeId>> {
-		// TODO: Merge permutations which that have no collisions, such as the first condition from the first
-		// conditional block with the first condition from the second conditional block. It may make sense to
-		// replace the `order_by_appearance` traversal with a manual stack traversal of the tree.
+		// TODO: Merge permutations that have no collisions, such as the first branch from the first conditional
+		// block with the first branch from the second conditional block. It may make sense to replace the
+		// `order_by_appearance` traversal with a manual stack traversal of the tree.
 
 		let mut chains_of_nodes = Vec::new();
 		for (id, required_ids) in self.order_by_appearance.iter().skip(1) {
@@ -1549,10 +1613,14 @@ impl TokenTree {
 		chains_of_nodes
 	}
 
-	/// Returns a vector of all conditional directives.
+	/// Returns a vector of all controlling conditional directives in the tree.
 	///
-	/// The return value consists of `(conditional_type, span_of_directive)`, in order of appearance. Note that an
-	/// offset of `+1` must be applied since the root node takes the index of `0`.
+	/// The return value consists of:
+	/// - `0` - The conditional directive type. This cannot be `Conditional::End`.
+	/// - `1` - Span of the directive.
+	///
+	/// Note that the first controlling conditional directive (index of `1`) is at the beginning of this vector
+	/// (index `0`), so an offset must be performed.
 	pub fn get_all_conditional_directives(&self) -> Vec<(Conditional, Span)> {
 		let mut directives = Vec::new();
 		for (_i, (node_id, _)) in
@@ -1582,12 +1650,18 @@ impl TokenTree {
 		chosen_conditional_directive: usize,
 	) -> Vec<usize> {
 		// There is no existing key, so we need to construct one from scratch. Each node within the vector has
-		// a list of all prerequisite parents, so we can just use that (removing the unneeded parent node IDs).
+		// a list of all prerequisite parents, so we can just use that, (removing the unneeded parent node IDs).
 		let Some((_new_selection_node_id, parent_info)) = self.order_by_appearance.get(chosen_conditional_directive) else {
 				return Vec::new();
 			};
 
-		parent_info.iter().skip(1).map(|(idx, _)| *idx).collect()
+		let mut key = parent_info
+			.iter()
+			.skip(1)
+			.map(|(idx, _)| *idx)
+			.collect::<Vec<_>>();
+		key.push(chosen_conditional_directive);
+		key
 	}
 
 	/// Modifies an existing key to access the specified conditional directive.
@@ -1611,7 +1685,7 @@ impl TokenTree {
 				*child_idx += 1;
 				match child {
 					Either::Left(_) => {}
-					Either::Right(ConditionBlock { conditions, .. }) => {
+					Either::Right(ConditionalBlock { conditions, .. }) => {
 						let mut found_new_selection = false;
 						for (_, _, _, _, cond_node_id, _, _) in
 							conditions.iter()
@@ -1651,9 +1725,9 @@ impl TokenTree {
 		new_key
 	}
 
-	/// Returns whether the source string contains any conditional compilation branches.
-	pub fn contains_conditional_compilation(&self) -> bool {
-		self.contains_conditional_compilation
+	/// Returns whether the source string contains any conditional directives.
+	pub fn contains_conditional_directives(&self) -> bool {
+		self.contains_conditional_directives
 	}
 }
 
@@ -1667,17 +1741,17 @@ struct TreeNode {
 	parent: Option<NodeId>,
 	/// The children/contents of this node. Each entry either points to a token stream (in the arena), or is a
 	/// conditional block which points to child nodes for each conditional branch.
-	children: Vec<Either<ArenaId, ConditionBlock>>,
+	children: Vec<Either<ArenaId, ConditionalBlock>>,
 	/// The span of the entire node.
 	///
-	/// If this is a conditional branch node, the span starts from the beginning of the conditional directive to
-	/// the beginning of the next `elif`/`else` conditional directive, or to the end of the `endif` directive.
+	/// If this is a conditional branch node, the span starts from the beginning of the controlling conditional
+	/// directive to the beginning of the next `#elif`/`#else` directive, or to the end of the `#endif` directive.
 	span: Span,
 }
 
 /// A conditional block, part of a `TreeNode`.
 #[derive(Debug)]
-struct ConditionBlock {
+struct ConditionalBlock {
 	/// The individual conditional branches.
 	///
 	/// - `0` - The type of condition.
@@ -1703,7 +1777,7 @@ struct ConditionBlock {
 	)>,
 	/// The `#endif` directive.
 	///
-	/// This is separate because the `#endif` doesn't contain any children, (since it ends the condition block),
+	/// This is separate because the `#endif` doesn't contain any children, (since it ends the conditional block),
 	/// hence a `NodeId` for this would be semantically nonsensical.
 	///
 	/// - `0` - The type of conditional directive.
@@ -1725,6 +1799,7 @@ struct ConditionBlock {
 	)>,
 }
 
+/// Describes the type of a conditional directive.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Conditional {
 	IfDef,
@@ -1907,12 +1982,10 @@ struct DynamicTokenStreamProvider<'a> {
 	ptrs: Vec<(usize, usize, usize, isize)>,
 	/// The key of node IDs that was chosen in the evaluation.
 	chosen_key: Vec<usize>,
-	/// The spans of the content of the chosen branches. This includes spans of the chosen conditional
-	/// directives themselves.
 	/// The spans of regions of relevant syntax tokens. This includes all tokens within conditional branches that
 	/// have been chosen, as well as all tokens for the directives themselves that have been looked at, but not
 	/// necessarily chosen; i.e. this would include a failed `#elif`/`#else` and the `#endif`.
-	chosen_spans: Vec<Span>,
+	chosen_regions: Vec<Span>,
 	/// The span of the currently-last token. This is updated everytime a new stream is pushed.
 	last_span: Span,
 }
@@ -1925,7 +1998,7 @@ impl<'a> DynamicTokenStreamProvider<'a> {
 			tree,
 			ptrs: vec![(TokenTree::ROOT_NODE_ID, 0, 0, -1)],
 			chosen_key: Vec::new(),
-			chosen_spans: Vec::new(),
+			chosen_regions: Vec::new(),
 			last_span: Span::new(0, 0),
 		}
 	}
@@ -1969,7 +2042,7 @@ impl<'a> TokenStreamProvider<'a> for DynamicTokenStreamProvider<'a> {
 					// what conditional compilation will evaluate to.
 					if let Some((_, span)) = stream.last() {
 						self.last_span = *span;
-						self.chosen_spans.push(Span::new(
+						self.chosen_regions.push(Span::new(
 							stream.first().unwrap().1.start,
 							span.end,
 						));
@@ -2011,8 +2084,8 @@ impl<'a> TokenStreamProvider<'a> for DynamicTokenStreamProvider<'a> {
 										),
 									});
 								}
-								if *evaluated_cond_block as usize
-									== cond_block.conditions.len()
+								if *evaluated_cond_block
+									== cond_block.conditions.len() as isize - 1
 								{
 									// We have chosen the final conditional block, which means we are responsible
 									// for syntax highlighting the `#endif` directive. (This is only relevant if we
@@ -2023,7 +2096,7 @@ impl<'a> TokenStreamProvider<'a> for DynamicTokenStreamProvider<'a> {
 									// we declared this as chosen, the other span region wouldn't fit and would
 									// therefore be discarded, and hence syntax highlighting would be missing for
 									// the final branch.
-									self.chosen_spans.push(*directive_span);
+									self.chosen_regions.push(*directive_span);
 								}
 							}
 
@@ -2039,6 +2112,8 @@ impl<'a> TokenStreamProvider<'a> for DynamicTokenStreamProvider<'a> {
 							continue 'outer;
 						}
 
+						let current_cond_block_idx = *cond_block_idx;
+
 						let (
 							condition_ty,
 							directive_span,
@@ -2047,7 +2122,7 @@ impl<'a> TokenStreamProvider<'a> for DynamicTokenStreamProvider<'a> {
 							node_id,
 							hash_token,
 							dir_token,
-						) = &cond_block.conditions[*cond_block_idx];
+						) = &cond_block.conditions[current_cond_block_idx];
 
 						*cond_block_idx += 1;
 
@@ -2090,8 +2165,9 @@ impl<'a> TokenStreamProvider<'a> for DynamicTokenStreamProvider<'a> {
 												matched_condition_node_id =
 													*node_id;
 												*evaluated_cond_block =
-													*cond_block_idx as isize;
-												self.chosen_spans
+													current_cond_block_idx
+														as isize;
+												self.chosen_regions
 													.push(*directive_span);
 												break;
 											}
@@ -2131,8 +2207,9 @@ impl<'a> TokenStreamProvider<'a> for DynamicTokenStreamProvider<'a> {
 									if result && *evaluated_cond_block == -1 {
 										matched_condition_node_id = *node_id;
 										*evaluated_cond_block =
-											*cond_block_idx as isize;
-										self.chosen_spans.push(*directive_span);
+											current_cond_block_idx as isize;
+										self.chosen_regions
+											.push(*directive_span);
 										break;
 									}
 								}
@@ -2155,8 +2232,8 @@ impl<'a> TokenStreamProvider<'a> for DynamicTokenStreamProvider<'a> {
 									// An `else` branch is always unconditionally chosen.
 									matched_condition_node_id = *node_id;
 									*evaluated_cond_block =
-										*cond_block_idx as isize;
-									self.chosen_spans.push(*directive_span);
+										current_cond_block_idx as isize;
+									self.chosen_regions.push(*directive_span);
 									break;
 								}
 							}

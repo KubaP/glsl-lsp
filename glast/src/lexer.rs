@@ -1913,1170 +1913,1188 @@ fn match_word(str: String) -> Token {
 }
 
 #[cfg(test)]
-use crate::span::span;
+mod tests {
+	use super::{parse_from_str_with_version, NumType, OpTy, Token};
+	use crate::span;
 
-#[cfg(test)]
-macro_rules! assert_tokens2 {
-	($src:expr, $($token:expr),*) => {
-		let (tokens, _metadata) = parse_from_str_with_version($src, crate::GlslVersion::_450);
-		assert_eq!(tokens, vec![
-			$(
-				$token,
-			)*
-		])
-	};
-}
-
-#[test]
-fn spans() {
-	// Identifiers/keywords
-	assert_tokens2!("return", (Token::Return, span(0, 6)));
-	assert_tokens2!("break ", (Token::Break, span(0, 5)));
-	assert_tokens2!(
-		"return break",
-		(Token::Return, span(0, 6)),
-		(Token::Break, span(7, 12))
-	);
-	// Punctuation
-	assert_tokens2!(";", (Token::Semi, span(0, 1)));
-	assert_tokens2!(": ", (Token::Colon, span(0, 1)));
-	assert_tokens2!(
-		"; :",
-		(Token::Semi, span(0, 1)),
-		(Token::Colon, span(2, 3))
-	);
-	// Comments
-	assert_tokens2!(
-		"// comment",
-		(Token::LineComment(" comment".into()), span(0, 10))
-	);
-	assert_tokens2!(
-		"/* a */",
-		(
-			Token::BlockComment {
-				str: " a ".into(),
-				contains_eof: false
-			},
-			span(0, 7)
-		)
-	);
-	assert_tokens2!(
-		"/* a",
-		(
-			Token::BlockComment {
-				str: " a".into(),
-				contains_eof: true
-			},
-			span(0, 4)
-		)
-	);
-	// Directive
-	//assert_eq!(parse_from_str("#dir"), vec![(Token::Directive("dir".into()), span(0, 4))]);
-	//assert_eq!(parse_from_str("#dir a "), vec![(Token::Directive("dir a ".into()), span(0, 7))]);
-	// Invalid
-	assert_tokens2!("@", (Token::Invalid('@'), span(0, 1)));
-	assert_tokens2!("¬", (Token::Invalid('¬'), span(0, 1)));
-	assert_tokens2!(
-		"@  ¬",
-		(Token::Invalid('@'), span(0, 1)),
-		(Token::Invalid('¬'), span(3, 4))
-	);
-	// Numbers
-	assert_tokens2!(".", (Token::Dot, span(0, 1)));
-	assert_tokens2!(". ", (Token::Dot, span(0, 1)));
-	assert_tokens2!(
-		"0xF.",
-		(
-			Token::Num {
-				num: "F".into(),
-				suffix: None,
-				type_: NumType::Hex
-			},
-			span(0, 3)
-		),
-		(Token::Dot, span(3, 4))
-	);
-	assert_tokens2!(
-		"123u.",
-		(
-			Token::Num {
-				num: "123".into(),
-				suffix: Some("u".into()),
-				type_: NumType::Dec
-			},
-			span(0, 4)
-		),
-		(Token::Dot, span(4, 5))
-	);
-	assert_tokens2!(
-		"1.2.",
-		(
-			Token::Num {
-				num: "1.2".into(),
-				suffix: None,
-				type_: NumType::Float
-			},
-			span(0, 3)
-		),
-		(Token::Dot, span(3, 4))
-	);
-	assert_tokens2!(
-		"1e",
-		(
-			Token::Num {
-				num: "1".into(),
-				suffix: Some("e".into()),
-				type_: NumType::Dec
-			},
-			span(0, 2)
-		)
-	);
-	assert_tokens2!(
-		"123 ",
-		(
-			Token::Num {
-				num: "123".into(),
-				suffix: None,
-				type_: NumType::Dec
-			},
-			span(0, 3)
-		)
-	);
-	assert_tokens2!(
-		"1e+=",
-		(
-			Token::Num {
-				num: "1".into(),
-				suffix: Some("e".into()),
-				type_: NumType::Dec
-			},
-			span(0, 2)
-		),
-		(Token::Op(OpTy::AddEq), span(2, 4))
-	);
-	assert_tokens2!(
-		"1e+",
-		(
-			Token::Num {
-				num: "1".into(),
-				suffix: Some("e".into()),
-				type_: NumType::Dec
-			},
-			span(0, 2)
-		),
-		(Token::Op(OpTy::Add), span(2, 3))
-	);
-}
-
-/// Asserts whether the token output of the `parse_from_str()` function matches the right hand side; this ignores
-/// the span information.
-#[cfg(test)]
-macro_rules! assert_tokens {
-    ($src:expr, $($token:expr),*) => {
-		let output = parse_from_str_with_version($src, crate::GlslVersion::_450).0.into_iter().map(|(t, _)| t).collect::<Vec<_>>();
-        assert_eq!(output, vec![
-            $(
-                $token,
-            )*
-        ])
-    };
-}
-
-#[test]
-fn identifiers() {
-	assert_tokens!("ident", Token::Ident("ident".into()));
-	assert_tokens!("gl_something", Token::Ident("gl_something".into()));
-	assert_tokens!("id_145", Token::Ident("id_145".into()));
-	assert_tokens!("_9ga", Token::Ident("_9ga".into()));
-
-	// Broken by line continuator
-	assert_tokens!("my_\\\r\nident", Token::Ident("my_ident".into()));
-	assert_tokens!("_\\\n9ga", Token::Ident("_9ga".into()));
-}
-
-#[test]
-fn keywords() {
-	assert_tokens!("true", Token::Bool(true));
-	assert_tokens!("false", Token::Bool(false));
-	assert_tokens!("if", Token::If);
-	assert_tokens!("else", Token::Else);
-	assert_tokens!("for", Token::For);
-	assert_tokens!("do", Token::Do);
-	assert_tokens!("while", Token::While);
-	assert_tokens!("continue", Token::Continue);
-	assert_tokens!("switch", Token::Switch);
-	assert_tokens!("case", Token::Case);
-	assert_tokens!("default", Token::Default);
-	assert_tokens!("break", Token::Break);
-	assert_tokens!("return", Token::Return);
-	assert_tokens!("discard", Token::Discard);
-	assert_tokens!("struct", Token::Struct);
-	assert_tokens!("subroutine", Token::Subroutine);
-	assert_tokens!("const", Token::Const);
-	assert_tokens!("in", Token::In);
-	assert_tokens!("out", Token::Out);
-	assert_tokens!("inout", Token::InOut);
-	assert_tokens!("attribute", Token::Attribute);
-	assert_tokens!("uniform", Token::Uniform);
-	assert_tokens!("varying", Token::Varying);
-	assert_tokens!("buffer", Token::Buffer);
-	assert_tokens!("shared", Token::Shared);
-	assert_tokens!("centroid", Token::Centroid);
-	assert_tokens!("sample", Token::Sample);
-	assert_tokens!("patch", Token::Patch);
-	assert_tokens!("layout", Token::Layout);
-	assert_tokens!("flat", Token::Flat);
-	assert_tokens!("smooth", Token::Smooth);
-	assert_tokens!("noperspective", Token::NoPerspective);
-	assert_tokens!("highp", Token::HighP);
-	assert_tokens!("mediump", Token::MediumP);
-	assert_tokens!("lowp", Token::LowP);
-	assert_tokens!("invariant", Token::Invariant);
-	assert_tokens!("precise", Token::Precise);
-	assert_tokens!("coherent", Token::Coherent);
-	assert_tokens!("volatile", Token::Volatile);
-	assert_tokens!("restrict", Token::Restrict);
-	assert_tokens!("readonly", Token::Readonly);
-	assert_tokens!("writeonly", Token::Writeonly);
-	// Reserved
-	assert_tokens!("common", Token::Reserved("common".into()));
-	assert_tokens!("partition", Token::Reserved("partition".into()));
-	assert_tokens!("active", Token::Reserved("active".into()));
-	assert_tokens!("asm", Token::Reserved("asm".into()));
-	assert_tokens!("class", Token::Reserved("class".into()));
-	assert_tokens!("union", Token::Reserved("union".into()));
-	assert_tokens!("enum", Token::Reserved("enum".into()));
-	assert_tokens!("typedef", Token::Reserved("typedef".into()));
-	assert_tokens!("template", Token::Reserved("template".into()));
-	assert_tokens!("this", Token::Reserved("this".into()));
-	assert_tokens!("resource", Token::Reserved("resource".into()));
-	assert_tokens!("goto", Token::Reserved("goto".into()));
-	assert_tokens!("inline", Token::Reserved("inline".into()));
-	assert_tokens!("noinline", Token::Reserved("noinline".into()));
-	assert_tokens!("public", Token::Reserved("public".into()));
-	assert_tokens!("static", Token::Reserved("static".into()));
-	assert_tokens!("extern", Token::Reserved("extern".into()));
-	assert_tokens!("external", Token::Reserved("external".into()));
-	assert_tokens!("interface", Token::Reserved("interface".into()));
-	assert_tokens!("long", Token::Reserved("long".into()));
-	assert_tokens!("short", Token::Reserved("short".into()));
-	assert_tokens!("half", Token::Reserved("half".into()));
-	assert_tokens!("fixed", Token::Reserved("fixed".into()));
-	assert_tokens!("unsigned", Token::Reserved("unsigned".into()));
-	assert_tokens!("superp", Token::Reserved("superp".into()));
-	assert_tokens!("input", Token::Reserved("input".into()));
-	assert_tokens!("output", Token::Reserved("output".into()));
-	assert_tokens!("hvec2", Token::Reserved("hvec2".into()));
-	assert_tokens!("hvec3", Token::Reserved("hvec3".into()));
-	assert_tokens!("hvec4", Token::Reserved("hvec4".into()));
-	assert_tokens!("fvec2", Token::Reserved("fvec2".into()));
-	assert_tokens!("fvec3", Token::Reserved("fvec3".into()));
-	assert_tokens!("fvec4", Token::Reserved("fvec4".into()));
-	assert_tokens!("sampler3DRect", Token::Reserved("sampler3DRect".into()));
-	assert_tokens!("filter", Token::Reserved("filter".into()));
-	assert_tokens!("sizeof", Token::Reserved("sizeof".into()));
-	assert_tokens!("cast", Token::Reserved("cast".into()));
-	assert_tokens!("namespace", Token::Reserved("namespace".into()));
-	assert_tokens!("using", Token::Reserved("using".into()));
-
-	// Broken by line continuator
-	assert_tokens!("tr\\\rue", Token::Bool(true));
-	assert_tokens!("dis\\\ncard", Token::Discard);
-	assert_tokens!("sub\\\r\nroutine", Token::Subroutine);
-}
-
-#[test]
-fn punctuation() {
-	assert_tokens!(";", Token::Semi);
-	assert_tokens!(".", Token::Dot);
-	assert_tokens!(",", Token::Comma);
-	assert_tokens!("(", Token::LParen);
-	assert_tokens!(")", Token::RParen);
-	assert_tokens!("[", Token::LBracket);
-	assert_tokens!("]", Token::RBracket);
-	assert_tokens!("{", Token::LBrace);
-	assert_tokens!("}", Token::RBrace);
-	assert_tokens!(":", Token::Colon);
-	assert_tokens!("=", Token::Op(OpTy::Eq));
-	assert_tokens!("+", Token::Op(OpTy::Add));
-	assert_tokens!("-", Token::Op(OpTy::Sub));
-	assert_tokens!("*", Token::Op(OpTy::Mul));
-	assert_tokens!("/", Token::Op(OpTy::Div));
-	assert_tokens!(">", Token::Op(OpTy::Gt));
-	assert_tokens!("<", Token::Op(OpTy::Lt));
-	assert_tokens!("!", Token::Op(OpTy::Not));
-	assert_tokens!("~", Token::Op(OpTy::Flip));
-	assert_tokens!("?", Token::Question);
-	assert_tokens!("%", Token::Op(OpTy::Rem));
-	assert_tokens!("&", Token::Op(OpTy::And));
-	assert_tokens!("|", Token::Op(OpTy::Or));
-	assert_tokens!("^", Token::Op(OpTy::Xor));
-	assert_tokens!("==", Token::Op(OpTy::EqEq));
-	assert_tokens!("!=", Token::Op(OpTy::NotEq));
-	assert_tokens!(">=", Token::Op(OpTy::Ge));
-	assert_tokens!("<=", Token::Op(OpTy::Le));
-	assert_tokens!("&&", Token::Op(OpTy::AndAnd));
-	assert_tokens!("||", Token::Op(OpTy::OrOr));
-	assert_tokens!("^^", Token::Op(OpTy::XorXor));
-	assert_tokens!("++", Token::Op(OpTy::AddAdd));
-	assert_tokens!("--", Token::Op(OpTy::SubSub));
-	assert_tokens!("<<", Token::Op(OpTy::LShift));
-	assert_tokens!(">>", Token::Op(OpTy::RShift));
-	assert_tokens!("+=", Token::Op(OpTy::AddEq));
-	assert_tokens!("-=", Token::Op(OpTy::SubEq));
-	assert_tokens!("*=", Token::Op(OpTy::MulEq));
-	assert_tokens!("/=", Token::Op(OpTy::DivEq));
-	assert_tokens!("%=", Token::Op(OpTy::RemEq));
-	assert_tokens!("&=", Token::Op(OpTy::AndEq));
-	assert_tokens!("|=", Token::Op(OpTy::OrEq));
-	assert_tokens!("^=", Token::Op(OpTy::XorEq));
-	assert_tokens!("<<=", Token::Op(OpTy::LShiftEq));
-	assert_tokens!(">>=", Token::Op(OpTy::RShiftEq));
-
-	// Broken by line continuator
-	assert_tokens!("!\\\n=", Token::Op(OpTy::NotEq));
-	assert_tokens!("+\\\r=", Token::Op(OpTy::AddEq));
-	assert_tokens!("=\\\n=", Token::Op(OpTy::EqEq));
-	assert_tokens!(">>\\\r\n=", Token::Op(OpTy::RShiftEq));
-}
-
-#[test]
-#[rustfmt::skip]
-fn comments() {
-	// Line comments
-	assert_tokens!("// a comment", Token::LineComment(" a comment".into()));
-	assert_tokens!("//a comment", Token::LineComment("a comment".into()));
-
-	// Broken by line continuator
-	assert_tokens!("// a comment \\\rcontinuation", Token::LineComment(" a comment continuation".into()));
-	assert_tokens!("//a comment\\\ncontinuation", Token::LineComment("a commentcontinuation".into()));
-	assert_tokens!("//a comment \\\r\ncontinuation", Token::LineComment("a comment continuation".into()));
-	assert_tokens!("/\\\r/ a comment", Token::LineComment(" a comment".into()));
-	assert_tokens!("/\\\r\n/ a comment", Token::LineComment(" a comment".into()));
-	assert_tokens!("//\\\n a comment", Token::LineComment(" a comment".into()));
-
-	// Multi-line comments
-	assert_tokens!("/* a comment */", Token::BlockComment{ str: " a comment ".into(), contains_eof: false});
-	assert_tokens!("/*a comment*/", Token::BlockComment{ str: "a comment".into(), contains_eof: false});
-	assert_tokens!("/* <Ll#,;#l,_!\"^$!6 */", Token::BlockComment{ str: " <Ll#,;#l,_!\"^$!6 ".into(), contains_eof: false});
-	assert_tokens!("/* open-ended comment", Token::BlockComment{ str: " open-ended comment".into(), contains_eof: true});
-
-	// Broken by line continuator
-	assert_tokens!("/\\\r* a comment */", Token::BlockComment{ str: " a comment ".into(), contains_eof: false});
-	assert_tokens!("/\\\n*a comment*\\\r\n/", Token::BlockComment{ str: "a comment".into(), contains_eof: false});
-}
-
-#[test]
-#[rustfmt::skip]
-fn integers(){
-	// Zero
-	assert_tokens!("0", Token::Num{num: "0".into(), suffix: None, type_: NumType::Dec});
-	// Zero with suffix
-	assert_tokens!("0u", Token::Num{num: "0".into(), suffix: Some("u".into()), type_: NumType::Dec});
-	// Decimal
-	assert_tokens!("1", Token::Num{num: "1".into(), suffix: None, type_: NumType::Dec});
-	assert_tokens!("123456", Token::Num{num: "123456".into(), suffix: None, type_: NumType::Dec});
-	assert_tokens!("100008", Token::Num{num: "100008".into(), suffix: None,  type_: NumType::Dec});
-	// Decimal with suffix
-	assert_tokens!("1u", Token::Num{num: "1".into(), suffix: Some("u".into()), type_: NumType::Dec});
-	assert_tokens!("123456u", Token::Num{num: "123456".into(), suffix: Some("u".into()), type_: NumType::Dec});
-	assert_tokens!("100008u", Token::Num{num: "100008".into(), suffix: Some("u".into()),  type_: NumType::Dec});
-	// Octal
-	assert_tokens!("00", Token::Num{num: "0".into(), suffix: None,  type_: NumType::Oct});
-	assert_tokens!("01715", Token::Num{num: "1715".into(), suffix: None,  type_: NumType::Oct});
-	assert_tokens!("09183", Token::Num{num: "9183".into(), suffix: None, type_: NumType::Oct});
-	// Octal with suffix
-	assert_tokens!("00u", Token::Num{num: "0".into(), suffix: Some("u".into()),  type_: NumType::Oct});
-	assert_tokens!("01715u", Token::Num{num: "1715".into(), suffix: Some("u".into()),  type_: NumType::Oct});
-	assert_tokens!("09183u", Token::Num{num: "9183".into(), suffix: Some("u".into()), type_: NumType::Oct});
-	// Hexadecimal
-	assert_tokens!("0x", Token::Num{num: "".into(), suffix: None, type_: NumType::Hex});
-	assert_tokens!("0x91fa", Token::Num{num: "91fa".into(), suffix: None,  type_: NumType::Hex});
-	assert_tokens!("0x00F", Token::Num{num: "00F".into(), suffix: None,  type_: NumType::Hex});
-	// Hexadecimal with suffix
-	assert_tokens!("0xu", Token::Num{num: "".into(), suffix: Some("u".into()), type_: NumType::Hex});
-	assert_tokens!("0x91fau", Token::Num{num: "91fa".into(), suffix: Some("u".into()),  type_: NumType::Hex});
-	assert_tokens!("0x00Fu", Token::Num{num: "00F".into(), suffix: Some("u".into()),  type_: NumType::Hex});
-	
-	// Broken by line continuator
-	assert_tokens!("123\\\r456", Token::Num{num: "123456".into(), suffix: None, type_: NumType::Dec});
-	assert_tokens!("12\\\n3456u", Token::Num{num: "123456".into(), suffix: Some("u".into()), type_: NumType::Dec});
-	assert_tokens!("0171\\\n5", Token::Num{num: "1715".into(), suffix: None,  type_: NumType::Oct});
-	assert_tokens!("0x91\\\r\nfa", Token::Num{num: "91fa".into(), suffix: None,  type_: NumType::Hex});
-	assert_tokens!("0x\\\r91fau", Token::Num{num: "91fa".into(), suffix: Some("u".into()),  type_: NumType::Hex});
-	assert_tokens!("0x\\\nu", Token::Num{num: "".into(), suffix: Some("u".into()), type_: NumType::Hex});
-}
-
-#[test]
-#[rustfmt::skip]
-fn floats() {
-	// Zeroes
-	assert_tokens!("0.0", Token::Num{num: "0.0".into(), suffix: None, type_: NumType::Float});
-	assert_tokens!("0.", Token::Num{num: "0.".into(), suffix: None, type_: NumType::Float});
-	assert_tokens!(".0", Token::Num{num: ".0".into(), suffix: None, type_: NumType::Float});
-	// Zeroes with suffix
-	assert_tokens!("0.0lf", Token::Num{num: "0.0".into(), suffix: Some("lf".into()), type_: NumType::Float});
-	assert_tokens!("0.lf", Token::Num{num: "0.".into(), suffix: Some("lf".into()), type_: NumType::Float});
-	assert_tokens!(".0lf", Token::Num{num: ".0".into(), suffix: Some("lf".into()), type_: NumType::Float});
-	// Zeroes with exponent
-	assert_tokens!("0e7", Token::Num{num: "0e7".into(), suffix: None, type_: NumType::Float});
-	assert_tokens!("0e+7", Token::Num{num: "0e+7".into(), suffix: None, type_: NumType::Float});
-	assert_tokens!("0e-7", Token::Num{num: "0e-7".into(), suffix: None, type_: NumType::Float});
-	assert_tokens!("0.0e7", Token::Num{num: "0.0e7".into(), suffix: None, type_: NumType::Float});
-	assert_tokens!("0.0e+7", Token::Num{num: "0.0e+7".into(), suffix: None, type_: NumType::Float});
-	assert_tokens!("0.0e-7", Token::Num{num: "0.0e-7".into(), suffix: None, type_: NumType::Float});
-	assert_tokens!("0.e7", Token::Num{num: "0.e7".into(), suffix: None, type_: NumType::Float});
-	assert_tokens!("0.e+7", Token::Num{num: "0.e+7".into(), suffix: None, type_: NumType::Float});
-	assert_tokens!("0.e-7", Token::Num{num: "0.e-7".into(), suffix: None, type_: NumType::Float});
-	assert_tokens!(".0e7", Token::Num{num: ".0e7".into(), suffix: None, type_: NumType::Float});
-	assert_tokens!(".0e+7", Token::Num{num: ".0e+7".into(), suffix: None, type_: NumType::Float});
-	assert_tokens!(".0e-7", Token::Num{num: ".0e-7".into(), suffix: None, type_: NumType::Float});
-	// Zeroes with exponent and suffix
-	assert_tokens!("0e7lf", Token::Num{num: "0e7".into(), suffix: Some("lf".into()), type_: NumType::Float});
-	assert_tokens!("0e+7lf", Token::Num{num: "0e+7".into(), suffix: Some("lf".into()), type_: NumType::Float});
-	assert_tokens!("0e-7lf", Token::Num{num: "0e-7".into(), suffix: Some("lf".into()), type_: NumType::Float});
-	assert_tokens!("0.0e7lf", Token::Num{num: "0.0e7".into(), suffix: Some("lf".into()), type_: NumType::Float});
-	assert_tokens!("0.0e+7lf", Token::Num{num: "0.0e+7".into(), suffix: Some("lf".into()), type_: NumType::Float});
-	assert_tokens!("0.0e-7lf", Token::Num{num: "0.0e-7".into(), suffix: Some("lf".into()), type_: NumType::Float});
-	assert_tokens!("0.e7lf", Token::Num{num: "0.e7".into(), suffix: Some("lf".into()), type_: NumType::Float});
-	assert_tokens!("0.e+7lf", Token::Num{num: "0.e+7".into(), suffix: Some("lf".into()), type_: NumType::Float});
-	assert_tokens!("0.e-7lf", Token::Num{num: "0.e-7".into(), suffix: Some("lf".into()), type_: NumType::Float});
-	assert_tokens!(".0e7lf", Token::Num{num: ".0e7".into(), suffix: Some("lf".into()), type_: NumType::Float});
-	assert_tokens!(".0e+7lf", Token::Num{num: ".0e+7".into(), suffix: Some("lf".into()), type_: NumType::Float});
-	assert_tokens!(".0e-7lf", Token::Num{num: ".0e-7".into(), suffix: Some("lf".into()), type_: NumType::Float});
-	// Digits
-	assert_tokens!("1.0", Token::Num{num: "1.0".into(), suffix: None, type_: NumType::Float});
-	assert_tokens!("1.1", Token::Num{num: "1.1".into(), suffix: None, type_: NumType::Float});
-	assert_tokens!("1.", Token::Num{num: "1.".into(), suffix: None, type_: NumType::Float});
-	assert_tokens!(".1", Token::Num{num: ".1".into(), suffix: None, type_: NumType::Float});
-	// Digits with suffix
-	assert_tokens!("1.0lf", Token::Num{num: "1.0".into(), suffix: Some("lf".into()), type_: NumType::Float});
-	assert_tokens!("1.1lf", Token::Num{num: "1.1".into(), suffix: Some("lf".into()), type_: NumType::Float});
-	assert_tokens!("1.lf", Token::Num{num: "1.".into(), suffix: Some("lf".into()), type_: NumType::Float});
-	assert_tokens!(".1lf", Token::Num{num: ".1".into(), suffix: Some("lf".into()), type_: NumType::Float});
-	// Digits with exponent
-	assert_tokens!("1e7", Token::Num{num: "1e7".into(), suffix: None, type_: NumType::Float});
-	assert_tokens!("1e+7", Token::Num{num: "1e+7".into(), suffix: None, type_: NumType::Float});
-	assert_tokens!("1e-7", Token::Num{num: "1e-7".into(), suffix: None, type_: NumType::Float});
-	assert_tokens!("1.0e7", Token::Num{num: "1.0e7".into(), suffix: None, type_: NumType::Float});
-	assert_tokens!("1.0e+7", Token::Num{num: "1.0e+7".into(), suffix: None, type_: NumType::Float});
-	assert_tokens!("1.0e-7", Token::Num{num: "1.0e-7".into(), suffix: None, type_: NumType::Float});
-	assert_tokens!("1.1e7", Token::Num{num: "1.1e7".into(), suffix: None, type_: NumType::Float});
-	assert_tokens!("1.1e+7", Token::Num{num: "1.1e+7".into(), suffix: None, type_: NumType::Float});
-	assert_tokens!("1.1e-7", Token::Num{num: "1.1e-7".into(), suffix: None, type_: NumType::Float});
-	assert_tokens!("1.e7", Token::Num{num: "1.e7".into(), suffix: None, type_: NumType::Float});
-	assert_tokens!("1.e+7", Token::Num{num: "1.e+7".into(), suffix: None, type_: NumType::Float});
-	assert_tokens!("1.e-7", Token::Num{num: "1.e-7".into(), suffix: None, type_: NumType::Float});
-	assert_tokens!(".1e7", Token::Num{num: ".1e7".into(), suffix: None, type_: NumType::Float});
-	assert_tokens!(".1e+7", Token::Num{num: ".1e+7".into(), suffix: None, type_: NumType::Float});
-	assert_tokens!(".1e-7", Token::Num{num: ".1e-7".into(), suffix: None, type_: NumType::Float});
-	// Digits with exponent and suffix
-	assert_tokens!("1e7lf", Token::Num{num: "1e7".into(), suffix: Some("lf".into()), type_: NumType::Float});
-	assert_tokens!("1e+7lf", Token::Num{num: "1e+7".into(), suffix: Some("lf".into()), type_: NumType::Float});
-	assert_tokens!("1e-7lf", Token::Num{num: "1e-7".into(), suffix: Some("lf".into()), type_: NumType::Float});
-	assert_tokens!("1.0e7lf", Token::Num{num: "1.0e7".into(), suffix: Some("lf".into()), type_: NumType::Float});
-	assert_tokens!("1.0e+7lf", Token::Num{num: "1.0e+7".into(), suffix: Some("lf".into()), type_: NumType::Float});
-	assert_tokens!("1.0e-7lf", Token::Num{num: "1.0e-7".into(), suffix: Some("lf".into()), type_: NumType::Float});
-	assert_tokens!("1.1e7lf", Token::Num{num: "1.1e7".into(), suffix: Some("lf".into()), type_: NumType::Float});
-	assert_tokens!("1.1e+7lf", Token::Num{num: "1.1e+7".into(), suffix: Some("lf".into()), type_: NumType::Float});
-	assert_tokens!("1.1e-7lf", Token::Num{num: "1.1e-7".into(), suffix: Some("lf".into()), type_: NumType::Float});
-	assert_tokens!("1.e7lf", Token::Num{num: "1.e7".into(), suffix: Some("lf".into()), type_: NumType::Float});
-	assert_tokens!("1.e+7lf", Token::Num{num: "1.e+7".into(), suffix: Some("lf".into()), type_: NumType::Float});
-	assert_tokens!("1.e-7lf", Token::Num{num: "1.e-7".into(), suffix: Some("lf".into()), type_: NumType::Float});
-	assert_tokens!(".1e7lf", Token::Num{num: ".1e7".into(), suffix: Some("lf".into()), type_: NumType::Float});
-	assert_tokens!(".1e+7lf", Token::Num{num: ".1e+7".into(), suffix: Some("lf".into()), type_: NumType::Float});
-	assert_tokens!(".1e-7lf", Token::Num{num: ".1e-7".into(), suffix: Some("lf".into()), type_: NumType::Float});
-	
-	// Broken by line continuator
-	assert_tokens!("0.\\\r0", Token::Num{num: "0.0".into(), suffix: None, type_: NumType::Float});
-	assert_tokens!(".\\\n0", Token::Num{num: ".0".into(), suffix: None, type_: NumType::Float});
-	assert_tokens!(".0\\\nlf", Token::Num{num: ".0".into(), suffix: Some("lf".into()), type_: NumType::Float});
-	assert_tokens!("0.\\\r\nlf", Token::Num{num: "0.".into(), suffix: Some("lf".into()), type_: NumType::Float});
-	assert_tokens!("0e\\\r7", Token::Num{num: "0e7".into(), suffix: None, type_: NumType::Float});
-	assert_tokens!("0e\\\r\n-7", Token::Num{num: "0e-7".into(), suffix: None, type_: NumType::Float});
-	assert_tokens!(".0\\\r\ne+7", Token::Num{num: ".0e+7".into(), suffix: None, type_: NumType::Float});
-	assert_tokens!("1.0e-\\\n7lf", Token::Num{num: "1.0e-7".into(), suffix: Some("lf".into()), type_: NumType::Float});
-	assert_tokens!(".1\\\re-7lf", Token::Num{num: ".1e-7".into(), suffix: Some("lf".into()), type_: NumType::Float});
-}
-
-#[test]
-#[rustfmt::skip]
-fn illegal(){
-	// Note: All of these characters will be parsed as part of a preprocessor directive string; only later once the
-	// string is tokenised will any errors come up.
-	assert_tokens!("@", Token::Invalid('@'));
-	assert_tokens!("¬", Token::Invalid('¬'));
-	assert_tokens!("`", Token::Invalid('`'));
-	assert_tokens!("¦", Token::Invalid('¦'));
-	assert_tokens!("'", Token::Invalid('\''));
-	assert_tokens!("\"", Token::Invalid('"'));
-	assert_tokens!("£", Token::Invalid('£'));
-	assert_tokens!("$", Token::Invalid('$'));
-	assert_tokens!("€", Token::Invalid('€'));
-}
-
-#[cfg(test)]
-mod preproc_tests {
-	use super::{
-		parse_from_str_with_version,
-		preprocessor::{
-			ConditionToken, DefineToken, ExtensionToken, LineToken,
-			TokenStream, UndefToken, VersionToken,
-		},
-		Token,
-	};
-	use crate::span::span;
-
-	#[test]
-	fn empty() {
-		assert_tokens2!(
-			"#",
-			(Token::Directive(TokenStream::Empty), span(0, 1))
-		);
-
-		assert_tokens2!(
-			"#    ",
-			(Token::Directive(TokenStream::Empty), span(0, 5))
-		);
+	macro_rules! assert_tokens2 {
+		($src:expr, $($token:expr),*) => {
+			let (tokens, _metadata) = parse_from_str_with_version($src, crate::GlslVersion::_450);
+			assert_eq!(tokens, vec![
+				$(
+					$token,
+				)*
+			])
+		};
 	}
 
 	#[test]
-	fn custom() {
+	fn spans() {
+		// Identifiers/keywords
+		assert_tokens2!("return", (Token::Return, span(0, 6)));
+		assert_tokens2!("break ", (Token::Break, span(0, 5)));
 		assert_tokens2!(
-			"#custom",
+			"return break",
+			(Token::Return, span(0, 6)),
+			(Token::Break, span(7, 12))
+		);
+		// Punctuation
+		assert_tokens2!(";", (Token::Semi, span(0, 1)));
+		assert_tokens2!(": ", (Token::Colon, span(0, 1)));
+		assert_tokens2!(
+			"; :",
+			(Token::Semi, span(0, 1)),
+			(Token::Colon, span(2, 3))
+		);
+		// Comments
+		assert_tokens2!(
+			"// comment",
+			(Token::LineComment(" comment".into()), span(0, 10))
+		);
+		assert_tokens2!(
+			"/* a */",
 			(
-				Token::Directive(TokenStream::Custom {
-					kw: ("custom".into(), span(1, 7)),
-					content: None
-				}),
+				Token::BlockComment {
+					str: " a ".into(),
+					contains_eof: false
+				},
 				span(0, 7)
 			)
 		);
-
 		assert_tokens2!(
-			"# custom      ",
+			"/* a",
 			(
-				Token::Directive(TokenStream::Custom {
-					kw: ("custom".into(), span(2, 8)),
-					content: Some(("      ".into(), span(8, 14)))
-				}),
-				span(0, 14)
+				Token::BlockComment {
+					str: " a".into(),
+					contains_eof: true
+				},
+				span(0, 4)
 			)
 		);
-
+		// Directive
+		//assert_eq!(parse_from_str("#dir"), vec![(Token::Directive("dir".into()), span(0, 4))]);
+		//assert_eq!(parse_from_str("#dir a "), vec![(Token::Directive("dir a ".into()), span(0, 7))]);
+		// Invalid
+		assert_tokens2!("@", (Token::Invalid('@'), span(0, 1)));
+		assert_tokens2!("¬", (Token::Invalid('¬'), span(0, 1)));
 		assert_tokens2!(
-			"#custom foobar 5 @;#",
+			"@  ¬",
+			(Token::Invalid('@'), span(0, 1)),
+			(Token::Invalid('¬'), span(3, 4))
+		);
+		// Numbers
+		assert_tokens2!(".", (Token::Dot, span(0, 1)));
+		assert_tokens2!(". ", (Token::Dot, span(0, 1)));
+		assert_tokens2!(
+			"0xF.",
 			(
-				Token::Directive(TokenStream::Custom {
-					kw: ("custom".into(), span(1, 7)),
-					content: Some((" foobar 5 @;#".into(), span(7, 20)))
-				}),
-				span(0, 20)
+				Token::Num {
+					num: "F".into(),
+					suffix: None,
+					type_: NumType::Hex
+				},
+				span(0, 3)
+			),
+			(Token::Dot, span(3, 4))
+		);
+		assert_tokens2!(
+			"123u.",
+			(
+				Token::Num {
+					num: "123".into(),
+					suffix: Some("u".into()),
+					type_: NumType::Dec
+				},
+				span(0, 4)
+			),
+			(Token::Dot, span(4, 5))
+		);
+		assert_tokens2!(
+			"1.2.",
+			(
+				Token::Num {
+					num: "1.2".into(),
+					suffix: None,
+					type_: NumType::Float
+				},
+				span(0, 3)
+			),
+			(Token::Dot, span(3, 4))
+		);
+		assert_tokens2!(
+			"1e",
+			(
+				Token::Num {
+					num: "1".into(),
+					suffix: Some("e".into()),
+					type_: NumType::Dec
+				},
+				span(0, 2)
 			)
 		);
-
 		assert_tokens2!(
-			"# custom-5 bar",
+			"123 ",
 			(
-				Token::Directive(TokenStream::Custom {
-					kw: ("custom".into(), span(2, 8)),
-					content: Some(("-5 bar".into(), span(8, 14))),
-				}),
-				span(0, 14)
+				Token::Num {
+					num: "123".into(),
+					suffix: None,
+					type_: NumType::Dec
+				},
+				span(0, 3)
 			)
 		);
-	}
-
-	#[test]
-	fn invalid() {
 		assert_tokens2!(
-			"# # 55 @ `!",
+			"1e+=",
 			(
-				Token::Directive(TokenStream::Invalid {
-					content: ("# 55 @ `!".into(), span(2, 11))
-				}),
-				span(0, 11)
-			)
+				Token::Num {
+					num: "1".into(),
+					suffix: Some("e".into()),
+					type_: NumType::Dec
+				},
+				span(0, 2)
+			),
+			(Token::Op(OpTy::AddEq), span(2, 4))
 		);
-	}
-
-	#[test]
-	fn version() {
 		assert_tokens2!(
-			"#version",
+			"1e+",
 			(
-				Token::Directive(TokenStream::Version {
-					kw: span(1, 8),
-					tokens: vec![]
-				}),
-				span(0, 8)
-			)
-		);
-
-		assert_tokens2!(
-			"#version 450 core",
-			(
-				Token::Directive(TokenStream::Version {
-					kw: span(1, 8),
-					tokens: vec![
-						(VersionToken::Num(450), span(9, 12)),
-						(VersionToken::Word("core".into()), span(13, 17)),
-					]
-				}),
-				span(0, 17)
-			)
-		);
-
-		assert_tokens2!(
-			"#   version 330 es",
-			(
-				Token::Directive(TokenStream::Version {
-					kw: span(4, 11),
-					tokens: vec![
-						(VersionToken::Num(330), span(12, 15)),
-						(VersionToken::Word("es".into()), span(16, 18)),
-					]
-				}),
-				span(0, 18)
-			)
-		);
-
-		assert_tokens2!(
-			"#version foobar     ",
-			(
-				Token::Directive(TokenStream::Version {
-					kw: span(1, 8),
-					tokens: vec![(
-						VersionToken::Word("foobar".into()),
-						span(9, 15)
-					)]
-				}),
-				span(0, 20)
-			)
-		);
-
-		assert_tokens2!(
-			"# version 100compatability ##@;",
-			(
-				Token::Directive(TokenStream::Version {
-					kw: span(2, 9),
-					tokens: vec![
-						(
-							VersionToken::InvalidNum("100compatability".into()),
-							span(10, 26)
-						),
-						(VersionToken::Invalid('#'), span(27, 28)),
-						(VersionToken::Invalid('#'), span(28, 29)),
-						(VersionToken::Invalid('@'), span(29, 30)),
-						(VersionToken::Invalid(';'), span(30, 31))
-					]
-				}),
-				span(0, 31)
-			)
+				Token::Num {
+					num: "1".into(),
+					suffix: Some("e".into()),
+					type_: NumType::Dec
+				},
+				span(0, 2)
+			),
+			(Token::Op(OpTy::Add), span(2, 3))
 		);
 	}
 
-	#[test]
-	fn extension() {
-		assert_tokens2!(
-			"#extension",
-			(
-				Token::Directive(TokenStream::Extension {
-					kw: span(1, 10),
-					tokens: vec![]
-				}),
-				span(0, 10)
-			)
-		);
-		assert_tokens2!(
-			"#  extension foobar : enable",
-			(
-				Token::Directive(TokenStream::Extension {
-					kw: span(3, 12),
-					tokens: vec![
-						(ExtensionToken::Word("foobar".into()), span(13, 19)),
-						(ExtensionToken::Colon, span(20, 21)),
-						(ExtensionToken::Word("enable".into()), span(22, 28))
-					]
-				}),
-				span(0, 28)
-			)
-		);
-		assert_tokens2!(
-			"#extension: 600   ",
-			(
-				Token::Directive(TokenStream::Extension {
-					kw: span(1, 10),
-					tokens: vec![
-						(ExtensionToken::Colon, span(10, 11)),
-						(ExtensionToken::Invalid('6'), span(12, 13)),
-						(ExtensionToken::Invalid('0'), span(13, 14)),
-						(ExtensionToken::Invalid('0'), span(14, 15))
-					]
-				}),
-				span(0, 18)
-			)
-		);
+	/// Asserts whether the token output of the `parse_from_str()` function matches the right hand side; this
+	/// ignores the span information.
+	macro_rules! assert_tokens {
+		($src:expr, $($token:expr),*) => {
+			let output = parse_from_str_with_version($src, crate::GlslVersion::_450).0.into_iter().map(|(t, _)| t).collect::<Vec<_>>();
+			assert_eq!(output, vec![
+				$(
+					$token,
+				)*
+			])
+		};
 	}
 
 	#[test]
-	fn line() {
-		assert_tokens2!(
-			"#line",
-			(
-				Token::Directive(TokenStream::Line {
-					kw: span(1, 5),
-					tokens: vec![]
-				}),
-				span(0, 5)
-			)
-		);
+	fn identifiers() {
+		assert_tokens!("ident", Token::Ident("ident".into()));
+		assert_tokens!("gl_something", Token::Ident("gl_something".into()));
+		assert_tokens!("id_145", Token::Ident("id_145".into()));
+		assert_tokens!("_9ga", Token::Ident("_9ga".into()));
 
-		assert_tokens2!(
-			"# line 5 1007",
-			(
-				Token::Directive(TokenStream::Line {
-					kw: span(2, 6),
-					tokens: vec![
-						(LineToken::Num(5), span(7, 8)),
-						(LineToken::Num(1007), span(9, 13))
-					]
-				}),
-				span(0, 13)
-			)
-		);
-
-		assert_tokens2!(
-			"#line FOO",
-			(
-				Token::Directive(TokenStream::Line {
-					kw: span(1, 5),
-					tokens: vec![(LineToken::Ident("FOO".into()), span(6, 9))]
-				}),
-				span(0, 9)
-			)
-		);
-
-		assert_tokens2!(
-			"#  line  734abc     ",
-			(
-				Token::Directive(TokenStream::Line {
-					kw: span(3, 7),
-					tokens: vec![(
-						LineToken::InvalidNum("734abc".into()),
-						span(9, 15)
-					)]
-				}),
-				span(0, 20)
-			)
-		);
+		// Broken by line continuator
+		assert_tokens!("my_\\\r\nident", Token::Ident("my_ident".into()));
+		assert_tokens!("_\\\n9ga", Token::Ident("_9ga".into()));
 	}
 
 	#[test]
-	fn define() {
-		use super::{NumType, OpTy};
-
-		// Object-like
-		assert_tokens2!(
-			"#define",
-			(
-				Token::Directive(TokenStream::Define {
-					kw: span(1, 7),
-					ident_tokens: vec![],
-					body_tokens: vec![],
-				}),
-				span(0, 7)
-			)
+	fn keywords() {
+		assert_tokens!("true", Token::Bool(true));
+		assert_tokens!("false", Token::Bool(false));
+		assert_tokens!("if", Token::If);
+		assert_tokens!("else", Token::Else);
+		assert_tokens!("for", Token::For);
+		assert_tokens!("do", Token::Do);
+		assert_tokens!("while", Token::While);
+		assert_tokens!("continue", Token::Continue);
+		assert_tokens!("switch", Token::Switch);
+		assert_tokens!("case", Token::Case);
+		assert_tokens!("default", Token::Default);
+		assert_tokens!("break", Token::Break);
+		assert_tokens!("return", Token::Return);
+		assert_tokens!("discard", Token::Discard);
+		assert_tokens!("struct", Token::Struct);
+		assert_tokens!("subroutine", Token::Subroutine);
+		assert_tokens!("const", Token::Const);
+		assert_tokens!("in", Token::In);
+		assert_tokens!("out", Token::Out);
+		assert_tokens!("inout", Token::InOut);
+		assert_tokens!("attribute", Token::Attribute);
+		assert_tokens!("uniform", Token::Uniform);
+		assert_tokens!("varying", Token::Varying);
+		assert_tokens!("buffer", Token::Buffer);
+		assert_tokens!("shared", Token::Shared);
+		assert_tokens!("centroid", Token::Centroid);
+		assert_tokens!("sample", Token::Sample);
+		assert_tokens!("patch", Token::Patch);
+		assert_tokens!("layout", Token::Layout);
+		assert_tokens!("flat", Token::Flat);
+		assert_tokens!("smooth", Token::Smooth);
+		assert_tokens!("noperspective", Token::NoPerspective);
+		assert_tokens!("highp", Token::HighP);
+		assert_tokens!("mediump", Token::MediumP);
+		assert_tokens!("lowp", Token::LowP);
+		assert_tokens!("invariant", Token::Invariant);
+		assert_tokens!("precise", Token::Precise);
+		assert_tokens!("coherent", Token::Coherent);
+		assert_tokens!("volatile", Token::Volatile);
+		assert_tokens!("restrict", Token::Restrict);
+		assert_tokens!("readonly", Token::Readonly);
+		assert_tokens!("writeonly", Token::Writeonly);
+		// Reserved
+		assert_tokens!("common", Token::Reserved("common".into()));
+		assert_tokens!("partition", Token::Reserved("partition".into()));
+		assert_tokens!("active", Token::Reserved("active".into()));
+		assert_tokens!("asm", Token::Reserved("asm".into()));
+		assert_tokens!("class", Token::Reserved("class".into()));
+		assert_tokens!("union", Token::Reserved("union".into()));
+		assert_tokens!("enum", Token::Reserved("enum".into()));
+		assert_tokens!("typedef", Token::Reserved("typedef".into()));
+		assert_tokens!("template", Token::Reserved("template".into()));
+		assert_tokens!("this", Token::Reserved("this".into()));
+		assert_tokens!("resource", Token::Reserved("resource".into()));
+		assert_tokens!("goto", Token::Reserved("goto".into()));
+		assert_tokens!("inline", Token::Reserved("inline".into()));
+		assert_tokens!("noinline", Token::Reserved("noinline".into()));
+		assert_tokens!("public", Token::Reserved("public".into()));
+		assert_tokens!("static", Token::Reserved("static".into()));
+		assert_tokens!("extern", Token::Reserved("extern".into()));
+		assert_tokens!("external", Token::Reserved("external".into()));
+		assert_tokens!("interface", Token::Reserved("interface".into()));
+		assert_tokens!("long", Token::Reserved("long".into()));
+		assert_tokens!("short", Token::Reserved("short".into()));
+		assert_tokens!("half", Token::Reserved("half".into()));
+		assert_tokens!("fixed", Token::Reserved("fixed".into()));
+		assert_tokens!("unsigned", Token::Reserved("unsigned".into()));
+		assert_tokens!("superp", Token::Reserved("superp".into()));
+		assert_tokens!("input", Token::Reserved("input".into()));
+		assert_tokens!("output", Token::Reserved("output".into()));
+		assert_tokens!("hvec2", Token::Reserved("hvec2".into()));
+		assert_tokens!("hvec3", Token::Reserved("hvec3".into()));
+		assert_tokens!("hvec4", Token::Reserved("hvec4".into()));
+		assert_tokens!("fvec2", Token::Reserved("fvec2".into()));
+		assert_tokens!("fvec3", Token::Reserved("fvec3".into()));
+		assert_tokens!("fvec4", Token::Reserved("fvec4".into()));
+		assert_tokens!(
+			"sampler3DRect",
+			Token::Reserved("sampler3DRect".into())
 		);
+		assert_tokens!("filter", Token::Reserved("filter".into()));
+		assert_tokens!("sizeof", Token::Reserved("sizeof".into()));
+		assert_tokens!("cast", Token::Reserved("cast".into()));
+		assert_tokens!("namespace", Token::Reserved("namespace".into()));
+		assert_tokens!("using", Token::Reserved("using".into()));
 
-		assert_tokens2!(
-			"#define foobar",
-			(
-				Token::Directive(TokenStream::Define {
-					kw: span(1, 7),
-					ident_tokens: vec![(
-						DefineToken::Ident("foobar".into()),
-						span(8, 14)
-					)],
-					body_tokens: vec![],
-				}),
-				span(0, 14)
-			)
-		);
+		// Broken by line continuator
+		assert_tokens!("tr\\\rue", Token::Bool(true));
+		assert_tokens!("dis\\\ncard", Token::Discard);
+		assert_tokens!("sub\\\r\nroutine", Token::Subroutine);
+	}
 
-		assert_tokens2!(
-			"#  define FOO 5   ",
-			(
-				Token::Directive(TokenStream::Define {
-					kw: span(3, 9),
-					ident_tokens: vec![(
-						DefineToken::Ident("FOO".into()),
-						span(10, 13)
-					)],
-					body_tokens: vec![(
-						Token::Num {
-							type_: NumType::Dec,
-							num: "5".into(),
-							suffix: None
-						},
-						span(14, 15)
-					)]
-				}),
-				span(0, 18)
-			)
-		);
+	#[test]
+	fn punctuation() {
+		assert_tokens!(";", Token::Semi);
+		assert_tokens!(".", Token::Dot);
+		assert_tokens!(",", Token::Comma);
+		assert_tokens!("(", Token::LParen);
+		assert_tokens!(")", Token::RParen);
+		assert_tokens!("[", Token::LBracket);
+		assert_tokens!("]", Token::RBracket);
+		assert_tokens!("{", Token::LBrace);
+		assert_tokens!("}", Token::RBrace);
+		assert_tokens!(":", Token::Colon);
+		assert_tokens!("=", Token::Op(OpTy::Eq));
+		assert_tokens!("+", Token::Op(OpTy::Add));
+		assert_tokens!("-", Token::Op(OpTy::Sub));
+		assert_tokens!("*", Token::Op(OpTy::Mul));
+		assert_tokens!("/", Token::Op(OpTy::Div));
+		assert_tokens!(">", Token::Op(OpTy::Gt));
+		assert_tokens!("<", Token::Op(OpTy::Lt));
+		assert_tokens!("!", Token::Op(OpTy::Not));
+		assert_tokens!("~", Token::Op(OpTy::Flip));
+		assert_tokens!("?", Token::Question);
+		assert_tokens!("%", Token::Op(OpTy::Rem));
+		assert_tokens!("&", Token::Op(OpTy::And));
+		assert_tokens!("|", Token::Op(OpTy::Or));
+		assert_tokens!("^", Token::Op(OpTy::Xor));
+		assert_tokens!("==", Token::Op(OpTy::EqEq));
+		assert_tokens!("!=", Token::Op(OpTy::NotEq));
+		assert_tokens!(">=", Token::Op(OpTy::Ge));
+		assert_tokens!("<=", Token::Op(OpTy::Le));
+		assert_tokens!("&&", Token::Op(OpTy::AndAnd));
+		assert_tokens!("||", Token::Op(OpTy::OrOr));
+		assert_tokens!("^^", Token::Op(OpTy::XorXor));
+		assert_tokens!("++", Token::Op(OpTy::AddAdd));
+		assert_tokens!("--", Token::Op(OpTy::SubSub));
+		assert_tokens!("<<", Token::Op(OpTy::LShift));
+		assert_tokens!(">>", Token::Op(OpTy::RShift));
+		assert_tokens!("+=", Token::Op(OpTy::AddEq));
+		assert_tokens!("-=", Token::Op(OpTy::SubEq));
+		assert_tokens!("*=", Token::Op(OpTy::MulEq));
+		assert_tokens!("/=", Token::Op(OpTy::DivEq));
+		assert_tokens!("%=", Token::Op(OpTy::RemEq));
+		assert_tokens!("&=", Token::Op(OpTy::AndEq));
+		assert_tokens!("|=", Token::Op(OpTy::OrEq));
+		assert_tokens!("^=", Token::Op(OpTy::XorEq));
+		assert_tokens!("<<=", Token::Op(OpTy::LShiftEq));
+		assert_tokens!(">>=", Token::Op(OpTy::RShiftEq));
 
-		assert_tokens2!(
-			"#define FOO_5  if [bar##0x6}",
-			(
-				Token::Directive(TokenStream::Define {
-					kw: span(1, 7),
-					ident_tokens: vec![(
-						DefineToken::Ident("FOO_5".into()),
-						span(8, 13)
-					)],
-					body_tokens: vec![
-						(Token::If, span(15, 17)),
-						(Token::LBracket, span(18, 19)),
-						(Token::Ident("bar".into()), span(19, 22)),
-						(Token::MacroConcat, span(22, 24)),
-						(
-							Token::Num {
-								type_: NumType::Hex,
-								num: "6".into(),
-								suffix: None
-							},
-							span(24, 27)
-						),
-						(Token::RBrace, span(27, 28))
-					]
-				}),
-				span(0, 28)
-			)
-		);
+		// Broken by line continuator
+		assert_tokens!("!\\\n=", Token::Op(OpTy::NotEq));
+		assert_tokens!("+\\\r=", Token::Op(OpTy::AddEq));
+		assert_tokens!("=\\\n=", Token::Op(OpTy::EqEq));
+		assert_tokens!(">>\\\r\n=", Token::Op(OpTy::RShiftEq));
+	}
 
-		assert_tokens2!(
-			"#define baz ( )",
-			(
-				Token::Directive(TokenStream::Define {
-					kw: span(1, 7),
-					ident_tokens: vec![(
-						DefineToken::Ident("baz".into()),
-						span(8, 11)
-					),],
-					body_tokens: vec![
-						(Token::LParen, span(12, 13)),
-						(Token::RParen, span(14, 15))
-					]
-				}),
-				span(0, 15)
-			)
-		);
+	#[test]
+	#[rustfmt::skip]
+	fn comments() {
+		// Line comments
+		assert_tokens!("// a comment", Token::LineComment(" a comment".into()));
+		assert_tokens!("//a comment", Token::LineComment("a comment".into()));
 
-		assert_tokens2!(
-			"#define 5 @@ ` ",
-			(
-				Token::Directive(TokenStream::Define {
-					kw: span(1, 7),
-					ident_tokens: vec![],
-					body_tokens: vec![
-						(
+		// Broken by line continuator
+		assert_tokens!("// a comment \\\rcontinuation", Token::LineComment(" a comment continuation".into()));
+		assert_tokens!("//a comment\\\ncontinuation", Token::LineComment("a commentcontinuation".into()));
+		assert_tokens!("//a comment \\\r\ncontinuation", Token::LineComment("a comment continuation".into()));
+		assert_tokens!("/\\\r/ a comment", Token::LineComment(" a comment".into()));
+		assert_tokens!("/\\\r\n/ a comment", Token::LineComment(" a comment".into()));
+		assert_tokens!("//\\\n a comment", Token::LineComment(" a comment".into()));
+
+		// Multi-line comments
+		assert_tokens!("/* a comment */", Token::BlockComment{ str: " a comment ".into(), contains_eof: false});
+		assert_tokens!("/*a comment*/", Token::BlockComment{ str: "a comment".into(), contains_eof: false});
+		assert_tokens!("/* <Ll#,;#l,_!\"^$!6 */", Token::BlockComment{ str: " <Ll#,;#l,_!\"^$!6 ".into(), contains_eof: false});
+		assert_tokens!("/* open-ended comment", Token::BlockComment{ str: " open-ended comment".into(), contains_eof: true});
+
+		// Broken by line continuator
+		assert_tokens!("/\\\r* a comment */", Token::BlockComment{ str: " a comment ".into(), contains_eof: false});
+		assert_tokens!("/\\\n*a comment*\\\r\n/", Token::BlockComment{ str: "a comment".into(), contains_eof: false});
+	}
+
+	#[test]
+	#[rustfmt::skip]
+	fn integers(){
+		// Zero
+		assert_tokens!("0", Token::Num{num: "0".into(), suffix: None, type_: NumType::Dec});
+		// Zero with suffix
+		assert_tokens!("0u", Token::Num{num: "0".into(), suffix: Some("u".into()), type_: NumType::Dec});
+		// Decimal
+		assert_tokens!("1", Token::Num{num: "1".into(), suffix: None, type_: NumType::Dec});
+		assert_tokens!("123456", Token::Num{num: "123456".into(), suffix: None, type_: NumType::Dec});
+		assert_tokens!("100008", Token::Num{num: "100008".into(), suffix: None,  type_: NumType::Dec});
+		// Decimal with suffix
+		assert_tokens!("1u", Token::Num{num: "1".into(), suffix: Some("u".into()), type_: NumType::Dec});
+		assert_tokens!("123456u", Token::Num{num: "123456".into(), suffix: Some("u".into()), type_: NumType::Dec});
+		assert_tokens!("100008u", Token::Num{num: "100008".into(), suffix: Some("u".into()),  type_: NumType::Dec});
+		// Octal
+		assert_tokens!("00", Token::Num{num: "0".into(), suffix: None,  type_: NumType::Oct});
+		assert_tokens!("01715", Token::Num{num: "1715".into(), suffix: None,  type_: NumType::Oct});
+		assert_tokens!("09183", Token::Num{num: "9183".into(), suffix: None, type_: NumType::Oct});
+		// Octal with suffix
+		assert_tokens!("00u", Token::Num{num: "0".into(), suffix: Some("u".into()),  type_: NumType::Oct});
+		assert_tokens!("01715u", Token::Num{num: "1715".into(), suffix: Some("u".into()),  type_: NumType::Oct});
+		assert_tokens!("09183u", Token::Num{num: "9183".into(), suffix: Some("u".into()), type_: NumType::Oct});
+		// Hexadecimal
+		assert_tokens!("0x", Token::Num{num: "".into(), suffix: None, type_: NumType::Hex});
+		assert_tokens!("0x91fa", Token::Num{num: "91fa".into(), suffix: None,  type_: NumType::Hex});
+		assert_tokens!("0x00F", Token::Num{num: "00F".into(), suffix: None,  type_: NumType::Hex});
+		// Hexadecimal with suffix
+		assert_tokens!("0xu", Token::Num{num: "".into(), suffix: Some("u".into()), type_: NumType::Hex});
+		assert_tokens!("0x91fau", Token::Num{num: "91fa".into(), suffix: Some("u".into()),  type_: NumType::Hex});
+		assert_tokens!("0x00Fu", Token::Num{num: "00F".into(), suffix: Some("u".into()),  type_: NumType::Hex});
+		
+		// Broken by line continuator
+		assert_tokens!("123\\\r456", Token::Num{num: "123456".into(), suffix: None, type_: NumType::Dec});
+		assert_tokens!("12\\\n3456u", Token::Num{num: "123456".into(), suffix: Some("u".into()), type_: NumType::Dec});
+		assert_tokens!("0171\\\n5", Token::Num{num: "1715".into(), suffix: None,  type_: NumType::Oct});
+		assert_tokens!("0x91\\\r\nfa", Token::Num{num: "91fa".into(), suffix: None,  type_: NumType::Hex});
+		assert_tokens!("0x\\\r91fau", Token::Num{num: "91fa".into(), suffix: Some("u".into()),  type_: NumType::Hex});
+		assert_tokens!("0x\\\nu", Token::Num{num: "".into(), suffix: Some("u".into()), type_: NumType::Hex});
+	}
+
+	#[test]
+	#[rustfmt::skip]
+	fn floats() {
+		// Zeroes
+		assert_tokens!("0.0", Token::Num{num: "0.0".into(), suffix: None, type_: NumType::Float});
+		assert_tokens!("0.", Token::Num{num: "0.".into(), suffix: None, type_: NumType::Float});
+		assert_tokens!(".0", Token::Num{num: ".0".into(), suffix: None, type_: NumType::Float});
+		// Zeroes with suffix
+		assert_tokens!("0.0lf", Token::Num{num: "0.0".into(), suffix: Some("lf".into()), type_: NumType::Float});
+		assert_tokens!("0.lf", Token::Num{num: "0.".into(), suffix: Some("lf".into()), type_: NumType::Float});
+		assert_tokens!(".0lf", Token::Num{num: ".0".into(), suffix: Some("lf".into()), type_: NumType::Float});
+		// Zeroes with exponent
+		assert_tokens!("0e7", Token::Num{num: "0e7".into(), suffix: None, type_: NumType::Float});
+		assert_tokens!("0e+7", Token::Num{num: "0e+7".into(), suffix: None, type_: NumType::Float});
+		assert_tokens!("0e-7", Token::Num{num: "0e-7".into(), suffix: None, type_: NumType::Float});
+		assert_tokens!("0.0e7", Token::Num{num: "0.0e7".into(), suffix: None, type_: NumType::Float});
+		assert_tokens!("0.0e+7", Token::Num{num: "0.0e+7".into(), suffix: None, type_: NumType::Float});
+		assert_tokens!("0.0e-7", Token::Num{num: "0.0e-7".into(), suffix: None, type_: NumType::Float});
+		assert_tokens!("0.e7", Token::Num{num: "0.e7".into(), suffix: None, type_: NumType::Float});
+		assert_tokens!("0.e+7", Token::Num{num: "0.e+7".into(), suffix: None, type_: NumType::Float});
+		assert_tokens!("0.e-7", Token::Num{num: "0.e-7".into(), suffix: None, type_: NumType::Float});
+		assert_tokens!(".0e7", Token::Num{num: ".0e7".into(), suffix: None, type_: NumType::Float});
+		assert_tokens!(".0e+7", Token::Num{num: ".0e+7".into(), suffix: None, type_: NumType::Float});
+		assert_tokens!(".0e-7", Token::Num{num: ".0e-7".into(), suffix: None, type_: NumType::Float});
+		// Zeroes with exponent and suffix
+		assert_tokens!("0e7lf", Token::Num{num: "0e7".into(), suffix: Some("lf".into()), type_: NumType::Float});
+		assert_tokens!("0e+7lf", Token::Num{num: "0e+7".into(), suffix: Some("lf".into()), type_: NumType::Float});
+		assert_tokens!("0e-7lf", Token::Num{num: "0e-7".into(), suffix: Some("lf".into()), type_: NumType::Float});
+		assert_tokens!("0.0e7lf", Token::Num{num: "0.0e7".into(), suffix: Some("lf".into()), type_: NumType::Float});
+		assert_tokens!("0.0e+7lf", Token::Num{num: "0.0e+7".into(), suffix: Some("lf".into()), type_: NumType::Float});
+		assert_tokens!("0.0e-7lf", Token::Num{num: "0.0e-7".into(), suffix: Some("lf".into()), type_: NumType::Float});
+		assert_tokens!("0.e7lf", Token::Num{num: "0.e7".into(), suffix: Some("lf".into()), type_: NumType::Float});
+		assert_tokens!("0.e+7lf", Token::Num{num: "0.e+7".into(), suffix: Some("lf".into()), type_: NumType::Float});
+		assert_tokens!("0.e-7lf", Token::Num{num: "0.e-7".into(), suffix: Some("lf".into()), type_: NumType::Float});
+		assert_tokens!(".0e7lf", Token::Num{num: ".0e7".into(), suffix: Some("lf".into()), type_: NumType::Float});
+		assert_tokens!(".0e+7lf", Token::Num{num: ".0e+7".into(), suffix: Some("lf".into()), type_: NumType::Float});
+		assert_tokens!(".0e-7lf", Token::Num{num: ".0e-7".into(), suffix: Some("lf".into()), type_: NumType::Float});
+		// Digits
+		assert_tokens!("1.0", Token::Num{num: "1.0".into(), suffix: None, type_: NumType::Float});
+		assert_tokens!("1.1", Token::Num{num: "1.1".into(), suffix: None, type_: NumType::Float});
+		assert_tokens!("1.", Token::Num{num: "1.".into(), suffix: None, type_: NumType::Float});
+		assert_tokens!(".1", Token::Num{num: ".1".into(), suffix: None, type_: NumType::Float});
+		// Digits with suffix
+		assert_tokens!("1.0lf", Token::Num{num: "1.0".into(), suffix: Some("lf".into()), type_: NumType::Float});
+		assert_tokens!("1.1lf", Token::Num{num: "1.1".into(), suffix: Some("lf".into()), type_: NumType::Float});
+		assert_tokens!("1.lf", Token::Num{num: "1.".into(), suffix: Some("lf".into()), type_: NumType::Float});
+		assert_tokens!(".1lf", Token::Num{num: ".1".into(), suffix: Some("lf".into()), type_: NumType::Float});
+		// Digits with exponent
+		assert_tokens!("1e7", Token::Num{num: "1e7".into(), suffix: None, type_: NumType::Float});
+		assert_tokens!("1e+7", Token::Num{num: "1e+7".into(), suffix: None, type_: NumType::Float});
+		assert_tokens!("1e-7", Token::Num{num: "1e-7".into(), suffix: None, type_: NumType::Float});
+		assert_tokens!("1.0e7", Token::Num{num: "1.0e7".into(), suffix: None, type_: NumType::Float});
+		assert_tokens!("1.0e+7", Token::Num{num: "1.0e+7".into(), suffix: None, type_: NumType::Float});
+		assert_tokens!("1.0e-7", Token::Num{num: "1.0e-7".into(), suffix: None, type_: NumType::Float});
+		assert_tokens!("1.1e7", Token::Num{num: "1.1e7".into(), suffix: None, type_: NumType::Float});
+		assert_tokens!("1.1e+7", Token::Num{num: "1.1e+7".into(), suffix: None, type_: NumType::Float});
+		assert_tokens!("1.1e-7", Token::Num{num: "1.1e-7".into(), suffix: None, type_: NumType::Float});
+		assert_tokens!("1.e7", Token::Num{num: "1.e7".into(), suffix: None, type_: NumType::Float});
+		assert_tokens!("1.e+7", Token::Num{num: "1.e+7".into(), suffix: None, type_: NumType::Float});
+		assert_tokens!("1.e-7", Token::Num{num: "1.e-7".into(), suffix: None, type_: NumType::Float});
+		assert_tokens!(".1e7", Token::Num{num: ".1e7".into(), suffix: None, type_: NumType::Float});
+		assert_tokens!(".1e+7", Token::Num{num: ".1e+7".into(), suffix: None, type_: NumType::Float});
+		assert_tokens!(".1e-7", Token::Num{num: ".1e-7".into(), suffix: None, type_: NumType::Float});
+		// Digits with exponent and suffix
+		assert_tokens!("1e7lf", Token::Num{num: "1e7".into(), suffix: Some("lf".into()), type_: NumType::Float});
+		assert_tokens!("1e+7lf", Token::Num{num: "1e+7".into(), suffix: Some("lf".into()), type_: NumType::Float});
+		assert_tokens!("1e-7lf", Token::Num{num: "1e-7".into(), suffix: Some("lf".into()), type_: NumType::Float});
+		assert_tokens!("1.0e7lf", Token::Num{num: "1.0e7".into(), suffix: Some("lf".into()), type_: NumType::Float});
+		assert_tokens!("1.0e+7lf", Token::Num{num: "1.0e+7".into(), suffix: Some("lf".into()), type_: NumType::Float});
+		assert_tokens!("1.0e-7lf", Token::Num{num: "1.0e-7".into(), suffix: Some("lf".into()), type_: NumType::Float});
+		assert_tokens!("1.1e7lf", Token::Num{num: "1.1e7".into(), suffix: Some("lf".into()), type_: NumType::Float});
+		assert_tokens!("1.1e+7lf", Token::Num{num: "1.1e+7".into(), suffix: Some("lf".into()), type_: NumType::Float});
+		assert_tokens!("1.1e-7lf", Token::Num{num: "1.1e-7".into(), suffix: Some("lf".into()), type_: NumType::Float});
+		assert_tokens!("1.e7lf", Token::Num{num: "1.e7".into(), suffix: Some("lf".into()), type_: NumType::Float});
+		assert_tokens!("1.e+7lf", Token::Num{num: "1.e+7".into(), suffix: Some("lf".into()), type_: NumType::Float});
+		assert_tokens!("1.e-7lf", Token::Num{num: "1.e-7".into(), suffix: Some("lf".into()), type_: NumType::Float});
+		assert_tokens!(".1e7lf", Token::Num{num: ".1e7".into(), suffix: Some("lf".into()), type_: NumType::Float});
+		assert_tokens!(".1e+7lf", Token::Num{num: ".1e+7".into(), suffix: Some("lf".into()), type_: NumType::Float});
+		assert_tokens!(".1e-7lf", Token::Num{num: ".1e-7".into(), suffix: Some("lf".into()), type_: NumType::Float});
+		
+		// Broken by line continuator
+		assert_tokens!("0.\\\r0", Token::Num{num: "0.0".into(), suffix: None, type_: NumType::Float});
+		assert_tokens!(".\\\n0", Token::Num{num: ".0".into(), suffix: None, type_: NumType::Float});
+		assert_tokens!(".0\\\nlf", Token::Num{num: ".0".into(), suffix: Some("lf".into()), type_: NumType::Float});
+		assert_tokens!("0.\\\r\nlf", Token::Num{num: "0.".into(), suffix: Some("lf".into()), type_: NumType::Float});
+		assert_tokens!("0e\\\r7", Token::Num{num: "0e7".into(), suffix: None, type_: NumType::Float});
+		assert_tokens!("0e\\\r\n-7", Token::Num{num: "0e-7".into(), suffix: None, type_: NumType::Float});
+		assert_tokens!(".0\\\r\ne+7", Token::Num{num: ".0e+7".into(), suffix: None, type_: NumType::Float});
+		assert_tokens!("1.0e-\\\n7lf", Token::Num{num: "1.0e-7".into(), suffix: Some("lf".into()), type_: NumType::Float});
+		assert_tokens!(".1\\\re-7lf", Token::Num{num: ".1e-7".into(), suffix: Some("lf".into()), type_: NumType::Float});
+	}
+
+	#[test]
+	#[rustfmt::skip]
+	fn illegal(){
+		// Note: All of these characters will be parsed as part of a preprocessor directive string; only later once
+		// the string is tokenised will any errors come up.
+		assert_tokens!("@", Token::Invalid('@'));
+		assert_tokens!("¬", Token::Invalid('¬'));
+		assert_tokens!("`", Token::Invalid('`'));
+		assert_tokens!("¦", Token::Invalid('¦'));
+		assert_tokens!("'", Token::Invalid('\''));
+		assert_tokens!("\"", Token::Invalid('"'));
+		assert_tokens!("£", Token::Invalid('£'));
+		assert_tokens!("$", Token::Invalid('$'));
+		assert_tokens!("€", Token::Invalid('€'));
+	}
+
+	#[cfg(test)]
+	mod preproc {
+		use super::super::{
+			parse_from_str_with_version,
+			preprocessor::{
+				ConditionToken, DefineToken, ExtensionToken, LineToken,
+				TokenStream, UndefToken, VersionToken,
+			},
+			Token,
+		};
+		use crate::span;
+
+		#[test]
+		fn empty() {
+			assert_tokens2!(
+				"#",
+				(Token::Directive(TokenStream::Empty), span(0, 1))
+			);
+
+			assert_tokens2!(
+				"#    ",
+				(Token::Directive(TokenStream::Empty), span(0, 5))
+			);
+		}
+
+		#[test]
+		fn custom() {
+			assert_tokens2!(
+				"#custom",
+				(
+					Token::Directive(TokenStream::Custom {
+						kw: ("custom".into(), span(1, 7)),
+						content: None
+					}),
+					span(0, 7)
+				)
+			);
+
+			assert_tokens2!(
+				"# custom      ",
+				(
+					Token::Directive(TokenStream::Custom {
+						kw: ("custom".into(), span(2, 8)),
+						content: Some(("      ".into(), span(8, 14)))
+					}),
+					span(0, 14)
+				)
+			);
+
+			assert_tokens2!(
+				"#custom foobar 5 @;#",
+				(
+					Token::Directive(TokenStream::Custom {
+						kw: ("custom".into(), span(1, 7)),
+						content: Some((" foobar 5 @;#".into(), span(7, 20)))
+					}),
+					span(0, 20)
+				)
+			);
+
+			assert_tokens2!(
+				"# custom-5 bar",
+				(
+					Token::Directive(TokenStream::Custom {
+						kw: ("custom".into(), span(2, 8)),
+						content: Some(("-5 bar".into(), span(8, 14))),
+					}),
+					span(0, 14)
+				)
+			);
+		}
+
+		#[test]
+		fn invalid() {
+			assert_tokens2!(
+				"# # 55 @ `!",
+				(
+					Token::Directive(TokenStream::Invalid {
+						content: ("# 55 @ `!".into(), span(2, 11))
+					}),
+					span(0, 11)
+				)
+			);
+		}
+
+		#[test]
+		fn version() {
+			assert_tokens2!(
+				"#version",
+				(
+					Token::Directive(TokenStream::Version {
+						kw: span(1, 8),
+						tokens: vec![]
+					}),
+					span(0, 8)
+				)
+			);
+
+			assert_tokens2!(
+				"#version 450 core",
+				(
+					Token::Directive(TokenStream::Version {
+						kw: span(1, 8),
+						tokens: vec![
+							(VersionToken::Num(450), span(9, 12)),
+							(VersionToken::Word("core".into()), span(13, 17)),
+						]
+					}),
+					span(0, 17)
+				)
+			);
+
+			assert_tokens2!(
+				"#   version 330 es",
+				(
+					Token::Directive(TokenStream::Version {
+						kw: span(4, 11),
+						tokens: vec![
+							(VersionToken::Num(330), span(12, 15)),
+							(VersionToken::Word("es".into()), span(16, 18)),
+						]
+					}),
+					span(0, 18)
+				)
+			);
+
+			assert_tokens2!(
+				"#version foobar     ",
+				(
+					Token::Directive(TokenStream::Version {
+						kw: span(1, 8),
+						tokens: vec![(
+							VersionToken::Word("foobar".into()),
+							span(9, 15)
+						)]
+					}),
+					span(0, 20)
+				)
+			);
+
+			assert_tokens2!(
+				"# version 100compatability ##@;",
+				(
+					Token::Directive(TokenStream::Version {
+						kw: span(2, 9),
+						tokens: vec![
+							(
+								VersionToken::InvalidNum(
+									"100compatability".into()
+								),
+								span(10, 26)
+							),
+							(VersionToken::Invalid('#'), span(27, 28)),
+							(VersionToken::Invalid('#'), span(28, 29)),
+							(VersionToken::Invalid('@'), span(29, 30)),
+							(VersionToken::Invalid(';'), span(30, 31))
+						]
+					}),
+					span(0, 31)
+				)
+			);
+		}
+
+		#[test]
+		fn extension() {
+			assert_tokens2!(
+				"#extension",
+				(
+					Token::Directive(TokenStream::Extension {
+						kw: span(1, 10),
+						tokens: vec![]
+					}),
+					span(0, 10)
+				)
+			);
+			assert_tokens2!(
+				"#  extension foobar : enable",
+				(
+					Token::Directive(TokenStream::Extension {
+						kw: span(3, 12),
+						tokens: vec![
+							(
+								ExtensionToken::Word("foobar".into()),
+								span(13, 19)
+							),
+							(ExtensionToken::Colon, span(20, 21)),
+							(
+								ExtensionToken::Word("enable".into()),
+								span(22, 28)
+							)
+						]
+					}),
+					span(0, 28)
+				)
+			);
+			assert_tokens2!(
+				"#extension: 600   ",
+				(
+					Token::Directive(TokenStream::Extension {
+						kw: span(1, 10),
+						tokens: vec![
+							(ExtensionToken::Colon, span(10, 11)),
+							(ExtensionToken::Invalid('6'), span(12, 13)),
+							(ExtensionToken::Invalid('0'), span(13, 14)),
+							(ExtensionToken::Invalid('0'), span(14, 15))
+						]
+					}),
+					span(0, 18)
+				)
+			);
+		}
+
+		#[test]
+		fn line() {
+			assert_tokens2!(
+				"#line",
+				(
+					Token::Directive(TokenStream::Line {
+						kw: span(1, 5),
+						tokens: vec![]
+					}),
+					span(0, 5)
+				)
+			);
+
+			assert_tokens2!(
+				"# line 5 1007",
+				(
+					Token::Directive(TokenStream::Line {
+						kw: span(2, 6),
+						tokens: vec![
+							(LineToken::Num(5), span(7, 8)),
+							(LineToken::Num(1007), span(9, 13))
+						]
+					}),
+					span(0, 13)
+				)
+			);
+
+			assert_tokens2!(
+				"#line FOO",
+				(
+					Token::Directive(TokenStream::Line {
+						kw: span(1, 5),
+						tokens: vec![(
+							LineToken::Ident("FOO".into()),
+							span(6, 9)
+						)]
+					}),
+					span(0, 9)
+				)
+			);
+
+			assert_tokens2!(
+				"#  line  734abc     ",
+				(
+					Token::Directive(TokenStream::Line {
+						kw: span(3, 7),
+						tokens: vec![(
+							LineToken::InvalidNum("734abc".into()),
+							span(9, 15)
+						)]
+					}),
+					span(0, 20)
+				)
+			);
+		}
+
+		#[test]
+		fn define() {
+			use super::{NumType, OpTy};
+
+			// Object-like
+			assert_tokens2!(
+				"#define",
+				(
+					Token::Directive(TokenStream::Define {
+						kw: span(1, 7),
+						ident_tokens: vec![],
+						body_tokens: vec![],
+					}),
+					span(0, 7)
+				)
+			);
+
+			assert_tokens2!(
+				"#define foobar",
+				(
+					Token::Directive(TokenStream::Define {
+						kw: span(1, 7),
+						ident_tokens: vec![(
+							DefineToken::Ident("foobar".into()),
+							span(8, 14)
+						)],
+						body_tokens: vec![],
+					}),
+					span(0, 14)
+				)
+			);
+
+			assert_tokens2!(
+				"#  define FOO 5   ",
+				(
+					Token::Directive(TokenStream::Define {
+						kw: span(3, 9),
+						ident_tokens: vec![(
+							DefineToken::Ident("FOO".into()),
+							span(10, 13)
+						)],
+						body_tokens: vec![(
 							Token::Num {
 								type_: NumType::Dec,
 								num: "5".into(),
 								suffix: None
 							},
-							span(8, 9)
-						),
-						(Token::Invalid('@'), span(10, 11)),
-						(Token::Invalid('@'), span(11, 12)),
-						(Token::Invalid('`'), span(13, 14)),
-					]
-				}),
-				span(0, 15)
-			)
-		);
+							span(14, 15)
+						)]
+					}),
+					span(0, 18)
+				)
+			);
 
-		// Function-like
-		assert_tokens2!(
-			"#define FOOBAR()",
-			(
-				Token::Directive(TokenStream::Define {
-					kw: span(1, 7),
-					ident_tokens: vec![
-						(DefineToken::Ident("FOOBAR".into()), span(8, 14)),
-						(DefineToken::LParen, span(14, 15)),
-						(DefineToken::RParen, span(15, 16)),
-					],
-					body_tokens: vec![]
-				}),
-				span(0, 16)
-			)
-		);
+			assert_tokens2!(
+				"#define FOO_5  if [bar##0x6}",
+				(
+					Token::Directive(TokenStream::Define {
+						kw: span(1, 7),
+						ident_tokens: vec![(
+							DefineToken::Ident("FOO_5".into()),
+							span(8, 13)
+						)],
+						body_tokens: vec![
+							(Token::If, span(15, 17)),
+							(Token::LBracket, span(18, 19)),
+							(Token::Ident("bar".into()), span(19, 22)),
+							(Token::MacroConcat, span(22, 24)),
+							(
+								Token::Num {
+									type_: NumType::Hex,
+									num: "6".into(),
+									suffix: None
+								},
+								span(24, 27)
+							),
+							(Token::RBrace, span(27, 28))
+						]
+					}),
+					span(0, 28)
+				)
+			);
 
-		assert_tokens2!(
-			"#define baz( )",
-			(
-				Token::Directive(TokenStream::Define {
-					kw: span(1, 7),
-					ident_tokens: vec![
-						(DefineToken::Ident("baz".into()), span(8, 11)),
-						(DefineToken::LParen, span(11, 12)),
-						(DefineToken::RParen, span(13, 14))
-					],
-					body_tokens: vec![]
-				}),
-				span(0, 14)
-			)
-		);
+			assert_tokens2!(
+				"#define baz ( )",
+				(
+					Token::Directive(TokenStream::Define {
+						kw: span(1, 7),
+						ident_tokens: vec![(
+							DefineToken::Ident("baz".into()),
+							span(8, 11)
+						),],
+						body_tokens: vec![
+							(Token::LParen, span(12, 13)),
+							(Token::RParen, span(14, 15))
+						]
+					}),
+					span(0, 15)
+				)
+			);
 
-		assert_tokens2!(
-			"#define FOOBAR( a, b)",
-			(
-				Token::Directive(TokenStream::Define {
-					kw: span(1, 7),
-					ident_tokens: vec![
-						(DefineToken::Ident("FOOBAR".into()), span(8, 14)),
-						(DefineToken::LParen, span(14, 15)),
-						(DefineToken::Ident("a".into()), span(16, 17)),
-						(DefineToken::Comma, span(17, 18)),
-						(DefineToken::Ident("b".into()), span(19, 20)),
-						(DefineToken::RParen, span(20, 21)),
-					],
-					body_tokens: vec![]
-				}),
-				span(0, 21)
-			)
-		);
+			assert_tokens2!(
+				"#define 5 @@ ` ",
+				(
+					Token::Directive(TokenStream::Define {
+						kw: span(1, 7),
+						ident_tokens: vec![],
+						body_tokens: vec![
+							(
+								Token::Num {
+									type_: NumType::Dec,
+									num: "5".into(),
+									suffix: None
+								},
+								span(8, 9)
+							),
+							(Token::Invalid('@'), span(10, 11)),
+							(Token::Invalid('@'), span(11, 12)),
+							(Token::Invalid('`'), span(13, 14)),
+						]
+					}),
+					span(0, 15)
+				)
+			);
 
-		assert_tokens2!(
-			"#define FOOBAR( a # @@",
-			(
-				Token::Directive(TokenStream::Define {
-					kw: span(1, 7),
-					ident_tokens: vec![
-						(DefineToken::Ident("FOOBAR".into()), span(8, 14)),
-						(DefineToken::LParen, span(14, 15)),
-						(DefineToken::Ident("a".into()), span(16, 17)),
-						(DefineToken::Invalid('#'), span(18, 19)),
-						(DefineToken::Invalid('@'), span(20, 21)),
-						(DefineToken::Invalid('@'), span(21, 22)),
-					],
-					body_tokens: vec![]
-				}),
-				span(0, 22)
-			)
-		);
+			// Function-like
+			assert_tokens2!(
+				"#define FOOBAR()",
+				(
+					Token::Directive(TokenStream::Define {
+						kw: span(1, 7),
+						ident_tokens: vec![
+							(DefineToken::Ident("FOOBAR".into()), span(8, 14)),
+							(DefineToken::LParen, span(14, 15)),
+							(DefineToken::RParen, span(15, 16)),
+						],
+						body_tokens: vec![]
+					}),
+					span(0, 16)
+				)
+			);
 
-		assert_tokens2!(
-			"#define FOOBAR( a)  if [0x7u## %!",
-			(
-				Token::Directive(TokenStream::Define {
-					kw: span(1, 7),
-					ident_tokens: vec![
-						(DefineToken::Ident("FOOBAR".into()), span(8, 14)),
-						(DefineToken::LParen, span(14, 15)),
-						(DefineToken::Ident("a".into()), span(16, 17)),
-						(DefineToken::RParen, span(17, 18)),
-					],
-					body_tokens: vec![
-						(Token::If, span(20, 22)),
-						(Token::LBracket, span(23, 24)),
-						(
-							Token::Num {
-								type_: NumType::Hex,
-								num: "7".into(),
-								suffix: Some("u".into())
-							},
-							span(24, 28)
-						),
-						(Token::MacroConcat, span(28, 30)),
-						(Token::Op(OpTy::Rem), span(31, 32)),
-						(Token::Op(OpTy::Not), span(32, 33)),
-					]
-				}),
-				span(0, 33)
-			)
-		);
-	}
+			assert_tokens2!(
+				"#define baz( )",
+				(
+					Token::Directive(TokenStream::Define {
+						kw: span(1, 7),
+						ident_tokens: vec![
+							(DefineToken::Ident("baz".into()), span(8, 11)),
+							(DefineToken::LParen, span(11, 12)),
+							(DefineToken::RParen, span(13, 14))
+						],
+						body_tokens: vec![]
+					}),
+					span(0, 14)
+				)
+			);
 
-	#[test]
-	fn undef() {
-		assert_tokens2!(
-			"#undef",
-			(
-				Token::Directive(TokenStream::Undef {
-					kw: span(1, 6),
-					tokens: vec![]
-				}),
-				span(0, 6)
-			)
-		);
+			assert_tokens2!(
+				"#define FOOBAR( a, b)",
+				(
+					Token::Directive(TokenStream::Define {
+						kw: span(1, 7),
+						ident_tokens: vec![
+							(DefineToken::Ident("FOOBAR".into()), span(8, 14)),
+							(DefineToken::LParen, span(14, 15)),
+							(DefineToken::Ident("a".into()), span(16, 17)),
+							(DefineToken::Comma, span(17, 18)),
+							(DefineToken::Ident("b".into()), span(19, 20)),
+							(DefineToken::RParen, span(20, 21)),
+						],
+						body_tokens: vec![]
+					}),
+					span(0, 21)
+				)
+			);
 
-		assert_tokens2!(
-			"# undef foo ",
-			(
-				Token::Directive(TokenStream::Undef {
-					kw: span(2, 7),
-					tokens: vec![(
-						UndefToken::Ident("foo".into()),
-						span(8, 11)
-					)]
-				}),
-				span(0, 12)
-			)
-		);
+			assert_tokens2!(
+				"#define FOOBAR( a # @@",
+				(
+					Token::Directive(TokenStream::Define {
+						kw: span(1, 7),
+						ident_tokens: vec![
+							(DefineToken::Ident("FOOBAR".into()), span(8, 14)),
+							(DefineToken::LParen, span(14, 15)),
+							(DefineToken::Ident("a".into()), span(16, 17)),
+							(DefineToken::Invalid('#'), span(18, 19)),
+							(DefineToken::Invalid('@'), span(20, 21)),
+							(DefineToken::Invalid('@'), span(21, 22)),
+						],
+						body_tokens: vec![]
+					}),
+					span(0, 22)
+				)
+			);
 
-		assert_tokens2!(
-			"#    undef foobar @ `` 4    ",
-			(
-				Token::Directive(TokenStream::Undef {
-					kw: span(5, 10),
-					tokens: vec![
-						(UndefToken::Ident("foobar".into()), span(11, 17)),
-						(UndefToken::Invalid('@'), span(18, 19)),
-						(UndefToken::Invalid('`'), span(20, 21)),
-						(UndefToken::Invalid('`'), span(21, 22)),
-						(UndefToken::Invalid('4'), span(23, 24)),
-					]
-				}),
-				span(0, 28)
-			)
-		);
-	}
+			assert_tokens2!(
+				"#define FOOBAR( a)  if [0x7u## %!",
+				(
+					Token::Directive(TokenStream::Define {
+						kw: span(1, 7),
+						ident_tokens: vec![
+							(DefineToken::Ident("FOOBAR".into()), span(8, 14)),
+							(DefineToken::LParen, span(14, 15)),
+							(DefineToken::Ident("a".into()), span(16, 17)),
+							(DefineToken::RParen, span(17, 18)),
+						],
+						body_tokens: vec![
+							(Token::If, span(20, 22)),
+							(Token::LBracket, span(23, 24)),
+							(
+								Token::Num {
+									type_: NumType::Hex,
+									num: "7".into(),
+									suffix: Some("u".into())
+								},
+								span(24, 28)
+							),
+							(Token::MacroConcat, span(28, 30)),
+							(Token::Op(OpTy::Rem), span(31, 32)),
+							(Token::Op(OpTy::Not), span(32, 33)),
+						]
+					}),
+					span(0, 33)
+				)
+			);
+		}
 
-	#[test]
-	fn conditional() {
-		assert_tokens2!(
-			"#if",
-			(
-				Token::Directive(TokenStream::If {
-					kw: span(1, 3),
-					tokens: vec![]
-				}),
-				span(0, 3)
-			)
-		);
+		#[test]
+		fn undef() {
+			assert_tokens2!(
+				"#undef",
+				(
+					Token::Directive(TokenStream::Undef {
+						kw: span(1, 6),
+						tokens: vec![]
+					}),
+					span(0, 6)
+				)
+			);
 
-		assert_tokens2!(
-			"# if FOO > 5",
-			(
-				Token::Directive(TokenStream::If {
-					kw: span(2, 4),
-					tokens: vec![
-						(ConditionToken::Ident("FOO".into()), span(5, 8)),
-						(ConditionToken::Gt, span(9, 10)),
-						(ConditionToken::Num(5), span(11, 12))
-					]
-				}),
-				span(0, 12)
-			)
-		);
+			assert_tokens2!(
+				"# undef foo ",
+				(
+					Token::Directive(TokenStream::Undef {
+						kw: span(2, 7),
+						tokens: vec![(
+							UndefToken::Ident("foo".into()),
+							span(8, 11)
+						)]
+					}),
+					span(0, 12)
+				)
+			);
 
-		assert_tokens2!(
-			"#if 5001bar",
-			(
-				Token::Directive(TokenStream::If {
-					kw: span(1, 3),
-					tokens: vec![(
-						ConditionToken::InvalidNum("5001bar".into()),
-						span(4, 11)
-					)]
-				}),
-				span(0, 11)
-			)
-		);
+			assert_tokens2!(
+				"#    undef foobar @ `` 4    ",
+				(
+					Token::Directive(TokenStream::Undef {
+						kw: span(5, 10),
+						tokens: vec![
+							(UndefToken::Ident("foobar".into()), span(11, 17)),
+							(UndefToken::Invalid('@'), span(18, 19)),
+							(UndefToken::Invalid('`'), span(20, 21)),
+							(UndefToken::Invalid('`'), span(21, 22)),
+							(UndefToken::Invalid('4'), span(23, 24)),
+						]
+					}),
+					span(0, 28)
+				)
+			);
+		}
 
-		assert_tokens2!(
-			"#if (defined foobar) && 5 <8",
-			(
-				Token::Directive(TokenStream::If {
-					kw: span(1, 3),
-					tokens: vec![
-						(ConditionToken::LParen, span(4, 5)),
-						(ConditionToken::Defined, span(5, 12)),
-						(ConditionToken::Ident("foobar".into()), span(13, 19)),
-						(ConditionToken::RParen, span(19, 20)),
-						(ConditionToken::AndAnd, span(21, 23)),
-						(ConditionToken::Num(5), span(24, 25)),
-						(ConditionToken::Lt, span(26, 27)),
-						(ConditionToken::Num(8), span(27, 28))
-					]
-				}),
-				span(0, 28)
-			)
-		);
-		assert_tokens2!(
-			"#if baz @ ## :   ",
-			(
-				Token::Directive(TokenStream::If {
-					kw: span(1, 3),
-					tokens: vec![
-						(ConditionToken::Ident("baz".into()), span(4, 7)),
-						(ConditionToken::Invalid('@'), span(8, 9)),
-						(ConditionToken::Invalid('#'), span(10, 11)),
-						(ConditionToken::Invalid('#'), span(11, 12)),
-						(ConditionToken::Invalid(':'), span(13, 14)),
-					]
-				}),
-				span(0, 17)
-			)
-		);
-	}
+		#[test]
+		fn conditional() {
+			assert_tokens2!(
+				"#if",
+				(
+					Token::Directive(TokenStream::If {
+						kw: span(1, 3),
+						tokens: vec![]
+					}),
+					span(0, 3)
+				)
+			);
 
-	#[test]
-	fn error() {
-		assert_tokens2!(
-			"#error",
-			(
-				Token::Directive(TokenStream::Error {
-					kw: span(1, 6),
-					message: None
-				}),
-				span(0, 6)
-			)
-		);
+			assert_tokens2!(
+				"# if FOO > 5",
+				(
+					Token::Directive(TokenStream::If {
+						kw: span(2, 4),
+						tokens: vec![
+							(ConditionToken::Ident("FOO".into()), span(5, 8)),
+							(ConditionToken::Gt, span(9, 10)),
+							(ConditionToken::Num(5), span(11, 12))
+						]
+					}),
+					span(0, 12)
+				)
+			);
 
-		assert_tokens2!(
-			"# error foo bar ## @ ;      ",
-			(
-				Token::Directive(TokenStream::Error {
-					kw: span(2, 7),
-					message: Some((
-						" foo bar ## @ ;      ".into(),
-						span(7, 28)
-					))
-				}),
-				span(0, 28)
-			)
-		);
-	}
+			assert_tokens2!(
+				"#if 5001bar",
+				(
+					Token::Directive(TokenStream::If {
+						kw: span(1, 3),
+						tokens: vec![(
+							ConditionToken::InvalidNum("5001bar".into()),
+							span(4, 11)
+						)]
+					}),
+					span(0, 11)
+				)
+			);
 
-	#[test]
-	fn pragma() {
-		assert_tokens2!(
-			"#pragma",
-			(
-				Token::Directive(TokenStream::Pragma {
-					kw: span(1, 7),
-					options: None
-				}),
-				span(0, 7)
-			)
-		);
+			assert_tokens2!(
+				"#if (defined foobar) && 5 <8",
+				(
+					Token::Directive(TokenStream::If {
+						kw: span(1, 3),
+						tokens: vec![
+							(ConditionToken::LParen, span(4, 5)),
+							(ConditionToken::Defined, span(5, 12)),
+							(
+								ConditionToken::Ident("foobar".into()),
+								span(13, 19)
+							),
+							(ConditionToken::RParen, span(19, 20)),
+							(ConditionToken::AndAnd, span(21, 23)),
+							(ConditionToken::Num(5), span(24, 25)),
+							(ConditionToken::Lt, span(26, 27)),
+							(ConditionToken::Num(8), span(27, 28))
+						]
+					}),
+					span(0, 28)
+				)
+			);
+			assert_tokens2!(
+				"#if baz @ ## :   ",
+				(
+					Token::Directive(TokenStream::If {
+						kw: span(1, 3),
+						tokens: vec![
+							(ConditionToken::Ident("baz".into()), span(4, 7)),
+							(ConditionToken::Invalid('@'), span(8, 9)),
+							(ConditionToken::Invalid('#'), span(10, 11)),
+							(ConditionToken::Invalid('#'), span(11, 12)),
+							(ConditionToken::Invalid(':'), span(13, 14)),
+						]
+					}),
+					span(0, 17)
+				)
+			);
+		}
 
-		assert_tokens2!(
-			"# pragma foo bar ## @ ;      ",
-			(
-				Token::Directive(TokenStream::Pragma {
-					kw: span(2, 8),
-					options: Some((
-						" foo bar ## @ ;      ".into(),
-						span(8, 29)
-					))
-				}),
-				span(0, 29)
-			)
-		);
+		#[test]
+		fn error() {
+			assert_tokens2!(
+				"#error",
+				(
+					Token::Directive(TokenStream::Error {
+						kw: span(1, 6),
+						message: None
+					}),
+					span(0, 6)
+				)
+			);
+
+			assert_tokens2!(
+				"# error foo bar ## @ ;      ",
+				(
+					Token::Directive(TokenStream::Error {
+						kw: span(2, 7),
+						message: Some((
+							" foo bar ## @ ;      ".into(),
+							span(7, 28)
+						))
+					}),
+					span(0, 28)
+				)
+			);
+		}
+
+		#[test]
+		fn pragma() {
+			assert_tokens2!(
+				"#pragma",
+				(
+					Token::Directive(TokenStream::Pragma {
+						kw: span(1, 7),
+						options: None
+					}),
+					span(0, 7)
+				)
+			);
+
+			assert_tokens2!(
+				"# pragma foo bar ## @ ;      ",
+				(
+					Token::Directive(TokenStream::Pragma {
+						kw: span(2, 8),
+						options: Some((
+							" foo bar ## @ ;      ".into(),
+							span(8, 29)
+						))
+					}),
+					span(0, 29)
+				)
+			);
+		}
 	}
 }

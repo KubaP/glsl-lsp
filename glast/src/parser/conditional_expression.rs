@@ -648,6 +648,33 @@ impl Op {
 		}
 	}
 
+	/// Returns whether this operator is a binary operator.
+	fn is_bin(&self) -> bool {
+		match &self.ty {
+			OpTy::Add(_)
+			| OpTy::Sub(_)
+			| OpTy::Mul(_)
+			| OpTy::Div(_)
+			| OpTy::Rem(_)
+			| OpTy::And(_)
+			| OpTy::Or(_)
+			| OpTy::Xor(_)
+			| OpTy::LShift(_)
+			| OpTy::RShift(_)
+			| OpTy::EqEq(_)
+			| OpTy::NotEq(_)
+			| OpTy::AndAnd(_)
+			| OpTy::OrOr(_)
+			| OpTy::Gt(_)
+			| OpTy::Lt(_)
+			| OpTy::Ge(_)
+			| OpTy::Le(_) => true,
+			OpTy::Neg(_) | OpTy::Flip(_) | OpTy::Not(_) => false,
+			OpTy::ParenStart => false,
+			OpTy::Paren(_, _, _) => false,
+		}
+	}
+
 	fn to_bin_op(self) -> BinOp {
 		let ty = match self.ty {
 				OpTy::Add(_) => BinOpTy::Add,
@@ -711,12 +738,20 @@ impl ShuntingYard {
 				_ => {}
 			}
 
-			if op.precedence() <= back.precedence() {
+			if op.precedence() == back.precedence()
+				&& op.is_bin() && back.is_bin()
+			{
 				// By checking for `==`, we make operators of the same precedence right-associative. This is
 				// important so that the final constructed recursive expression tree is nested in such an order
 				// that allows it to be evaluated with the correct operator order. If this wasn't in place, an
 				// expression such as `2 - 1 - 1` would evaluate to `2`, because the `1 - 1` part would be
 				// evaluated first.
+				//
+				// Note that we only do this for binary operators. For unaries this logic actually breaks the final
+				// output.
+				let moved = self.operators.pop_back().unwrap();
+				self.stack.push_back(Either::Right(moved));
+			} else if op.precedence() < back.precedence() {
 				let moved = self.operators.pop_back().unwrap();
 				self.stack.push_back(Either::Right(moved));
 			} else {
@@ -1810,40 +1845,40 @@ mod tests {
 					left: Box::from(Expr {
 						ty: ExprTy::Binary {
 							left: Box::from(Expr {
-								ty: ExprTy::Num(16),
-								span: span(0, 2),
+								ty: ExprTy::Binary {
+									left: Box::from(Expr {
+										ty: ExprTy::Num(16),
+										span: span(0, 2),
+									}),
+									op: BinOp {
+										ty: BinOpTy::Div,
+										span: span(3, 4),
+									},
+									right: Some(Box::from(Expr {
+										ty: ExprTy::Num(7),
+										span: span(5, 6),
+									})),
+								},
+								span: span(0, 6),
 							}),
 							op: BinOp {
-								ty: BinOpTy::Div,
-								span: span(3, 4),
+								ty: BinOpTy::Sub,
+								span: span(7, 8),
 							},
 							right: Some(Box::from(Expr {
-								ty: ExprTy::Num(7),
-								span: span(5, 6),
-							})),
-						},
-						span: span(0, 6),
-					}),
-					op: BinOp {
-						ty: BinOpTy::Sub,
-						span: span(7, 8),
-					},
-					right: Some(Box::from(Expr {
-						ty: ExprTy::Binary {
-							left: Box::from(Expr {
 								ty: ExprTy::Num(4),
 								span: span(9, 10),
-							}),
-							op: BinOp {
-								ty: BinOpTy::Add,
-								span: span(11, 12),
-							},
-							right: Some(Box::from(Expr {
-								ty: ExprTy::Num(3),
-								span: span(13, 14),
 							})),
 						},
-						span: span(9, 14),
+						span: span(0, 10),
+					}),
+					op: BinOp {
+						ty: BinOpTy::Add,
+						span: span(11, 12),
+					},
+					right: Some(Box::from(Expr {
+						ty: ExprTy::Num(3),
+						span: span(13, 14),
 					})),
 				},
 				span: span(0, 14),

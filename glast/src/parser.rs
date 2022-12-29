@@ -47,8 +47,8 @@ mod conditional_expression;
 mod expression;
 mod printing;
 mod syntax;
-//#[cfg(test)]
-//mod walker_tests;
+#[cfg(test)]
+mod walker_tests;
 
 pub use syntax::*;
 
@@ -169,14 +169,14 @@ pub struct ParseResult {
 /// # Examples
 /// Parse a simple GLSL expression:
 /// ```rust
-/// # use glast::parser::parse_from_str;
+/// # use glast::parser::{parse_from_str, ParseResult};
 /// let src = r#"
 /// ##version 450 core
 /// int i = 5.0 + 1;
 /// "#;
-/// let trees = parse_from_str(&src).unwrap();
-/// let ParseResult { ast, .. } = trees.root(false); // We don't care about extra
-///                                                  // syntax highlighting information
+/// let tree = parse_from_str(&src).unwrap();
+/// let ParseResult { ast, .. } = tree.root(false); // We don't care about extra
+///                                                 // syntax highlighting information
 /// ```
 ///
 /// # Further reading
@@ -762,12 +762,13 @@ pub fn parse_from_token_stream(
 /// # Examples
 /// Print a simple GLSL expression:
 /// ```rust
-/// # use glast::parser::{parse_from_str, print_ast};
+/// # use glast::parser::{parse_from_str, print_ast, ParseResult};
 /// let src = r#"
 /// ##version 450 core
 /// int i = 5.0 + 1;
 /// "#;
-/// let ParseResult { ast, .. } = parse_from_str(&src).unwrap().root(false);
+/// let tree = parse_from_str(&src).unwrap();
+/// let ParseResult { ast, .. } = tree.root(false);
 /// println!("{}", print_ast(ast));
 /// ```
 /// Would result in:

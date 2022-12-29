@@ -947,6 +947,85 @@ pub struct TokenTree {
 	contains_conditional_directives: bool,
 }
 
+type NodeId = usize;
+type ArenaId = usize;
+
+/// A node within the token tree.
+#[derive(Debug)]
+struct TreeNode {
+	/// The parent of this node.
+	parent: Option<NodeId>,
+	/// The children/contents of this node. Each entry either points to a token stream (in the arena), or is a
+	/// conditional block which points to child nodes for each conditional branch.
+	children: Vec<Either<ArenaId, ConditionalBlock>>,
+	/// The span of the entire node.
+	///
+	/// If this is a conditional branch node, the span starts from the beginning of the controlling conditional
+	/// directive to the beginning of the next `#elif`/`#else` directive, or to the end of the `#endif` directive.
+	span: Span,
+}
+
+/// A conditional block, part of a `TreeNode`.
+#[derive(Debug)]
+struct ConditionalBlock {
+	/// The individual conditional branches.
+	///
+	/// - `0` - The type of condition.
+	/// - `1` - The span of the entire directive.
+	/// - `2` - The tokens in the directive.
+	/// - `3` - The span of the tokens **only**, this does not include the `#if` part.
+	/// - `4` - The ID of the node that contains the contents of the branch.
+	/// - `5` - The syntax highlighting token for the `#` symbol.
+	/// - `6` - The syntax highlighting token for the name of the directive.
+	///
+	/// # Invariants
+	/// There will always be an entry at `[0]` and it will be a `Conditional::IfDef/IfNotDef/If` variant.
+	///
+	/// This will never contain a `Conditional::End` variant.
+	conditions: Vec<(
+		Conditional,
+		Span,
+		Vec<Spanned<ConditionToken>>,
+		Span,
+		NodeId,
+		SyntaxToken,
+		SyntaxToken,
+	)>,
+	/// The `#endif` directive.
+	///
+	/// This is separate because the `#endif` doesn't contain any children, (since it ends the conditional block),
+	/// hence a `NodeId` for this would be semantically nonsensical.
+	///
+	/// - `0` - The type of conditional directive.
+	/// - `1` - The span of the entire directive.
+	/// - `2` - The tokens in the directive.
+	/// - `3` - The span of the tokens **only**, this does not include the `#endif` part.
+	/// - `4` - The syntax highlighting token for the `#` symbol.
+	/// - `5` - The syntax highlighting token for the `endif` directive name.
+	///
+	/// # Invariants
+	/// This will be a `Conditional::End` variant.
+	end: Option<(
+		Conditional,
+		Span,
+		Vec<Spanned<ConditionToken>>,
+		Span,
+		SyntaxToken,
+		SyntaxToken,
+	)>,
+}
+
+/// Describes the type of a conditional directive.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Conditional {
+	IfDef,
+	IfNotDef,
+	If,
+	ElseIf,
+	Else,
+	End,
+}
+
 impl TokenTree {
 	/// Node ID of the root node.
 	const ROOT_NODE_ID: usize = 0;
@@ -1731,95 +1810,6 @@ impl TokenTree {
 	}
 }
 
-type NodeId = usize;
-type ArenaId = usize;
-
-/// A node within the token tree.
-#[derive(Debug)]
-struct TreeNode {
-	/// The parent of this node.
-	parent: Option<NodeId>,
-	/// The children/contents of this node. Each entry either points to a token stream (in the arena), or is a
-	/// conditional block which points to child nodes for each conditional branch.
-	children: Vec<Either<ArenaId, ConditionalBlock>>,
-	/// The span of the entire node.
-	///
-	/// If this is a conditional branch node, the span starts from the beginning of the controlling conditional
-	/// directive to the beginning of the next `#elif`/`#else` directive, or to the end of the `#endif` directive.
-	span: Span,
-}
-
-/// A conditional block, part of a `TreeNode`.
-#[derive(Debug)]
-struct ConditionalBlock {
-	/// The individual conditional branches.
-	///
-	/// - `0` - The type of condition.
-	/// - `1` - The span of the entire directive.
-	/// - `2` - The tokens in the directive.
-	/// - `3` - The span of the tokens **only**, this does not include the `#if` part.
-	/// - `4` - The ID of the node that contains the contents of the branch.
-	/// - `5` - The syntax highlighting token for the `#` symbol.
-	/// - `6` - The syntax highlighting token for the name of the directive.
-	///
-	/// # Invariants
-	/// There will always be an entry at `[0]` and it will be a `Conditional::IfDef/IfNotDef/If` variant.
-	///
-	/// This will never contain a `Conditional::End` variant.
-	conditions: Vec<(
-		Conditional,
-		Span,
-		Vec<Spanned<ConditionToken>>,
-		Span,
-		NodeId,
-		SyntaxToken,
-		SyntaxToken,
-	)>,
-	/// The `#endif` directive.
-	///
-	/// This is separate because the `#endif` doesn't contain any children, (since it ends the conditional block),
-	/// hence a `NodeId` for this would be semantically nonsensical.
-	///
-	/// - `0` - The type of conditional directive.
-	/// - `1` - The span of the entire directive.
-	/// - `2` - The tokens in the directive.
-	/// - `3` - The span of the tokens **only**, this does not include the `#endif` part.
-	/// - `4` - The syntax highlighting token for the `#` symbol.
-	/// - `5` - The syntax highlighting token for the `endif` directive name.
-	///
-	/// # Invariants
-	/// This will be a `Conditional::End` variant.
-	end: Option<(
-		Conditional,
-		Span,
-		Vec<Spanned<ConditionToken>>,
-		Span,
-		SyntaxToken,
-		SyntaxToken,
-	)>,
-}
-
-/// Describes the type of a conditional directive.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum Conditional {
-	IfDef,
-	IfNotDef,
-	If,
-	ElseIf,
-	Else,
-	End,
-}
-
-/// Information necessary to expand a macro.
-#[derive(Debug, Clone)]
-enum Macro {
-	Object(TokenStream),
-	Function {
-		params: Vec<Ident>,
-		body: TokenStream,
-	},
-}
-
 /// A token stream provider.
 trait TokenStreamProvider<'a>: Clone {
 	/// Returns the next token stream. If the end of the source string has been reached, `None` will be returned.
@@ -2287,6 +2277,16 @@ struct Walker<'a, Provider: TokenStreamProvider<'a>> {
 
 	/// The syntax highlighting tokens created from the tokens parsed so-far.
 	syntax_tokens: Vec<SyntaxToken>,
+}
+
+/// Data for a macro.
+#[derive(Debug, Clone)]
+enum Macro {
+	Object(TokenStream),
+	Function {
+		params: Vec<Ident>,
+		body: TokenStream,
+	},
 }
 
 #[allow(unused)]

@@ -1,9 +1,8 @@
 //! Types and functionality related to the parser.
 //!
-//! This module contains the structs and enums used to represent the AST, and the
+//! This module contains the structs and enums used to represent the AST (in the [`ast`] submodule), and the
 //! [`parse_from_str()`]/[`parse_from_token_stream()`] functions that return a [`TokenTree`], which can be used to
-//! parse the token tree into an abstract syntax tree ([`ParseResult`]). The [`ast`] submodule contains the AST
-//! types themselves, and there is also the [`SyntaxToken`] type used to represent syntax highlighting spans.
+//! parse the token tree into an abstract syntax tree ([`ParseResult`]).
 //!
 //! # Parser
 //! The parser is (aiming to be) 100% specification compliant; that is, all valid source strings are parsed to
@@ -31,26 +30,23 @@
 //! entire source string, all parsing functions have a `syntax_highlight_entire_file` boolean parameter.
 //!
 //! # Differences in behaviour
-//! The GLSL specification does not mention what the result should be if a syntactical/semantic error is
+//! The GLSL specification does not mention what the result should be if a syntax/semantic error is
 //! encountered, apart from the fact that a compile-time error must be emitted. The [`ParseResult`] contains all
 //! detected compile-time diagnostics.
 //!
-//! Since this crate is part of a larger language extension effort, it is designed to handle errors in a UX
-//! friendly manner. Therefore, this parser tries its best to recover from syntax errors in a sensible manner and
-//! provide a "best effort" AST. The AST retains 100% semantic meaning of the token stream only if no syntax or
-//! semantic errors are produced. If any errors are produced, that means some information has been lost in the
-//! tokenstream-to-ast conversion.
+//! Since this crate is part of a larger effort to provide an LSP implementation, it is designed to handle errors
+//! in a UX friendly manner. Therefore, this parser tries its best to recover from syntax errors in a sensible
+//! manner and provide a "best effort" AST. The AST retains 100% semantic meaning of the token stream only if no
+//! syntax or semantic errors are produced. If any errors are produced, that means some information has been lost
+//! in the tokenstream-to-ast conversion.
 
 pub mod ast;
 pub mod conditional_eval;
 mod conditional_expression;
 mod expression;
 mod printing;
-mod syntax;
 #[cfg(test)]
 mod walker_tests;
-
-pub use syntax::*;
 
 use crate::{
 	diag::{
@@ -66,6 +62,7 @@ use crate::{
 		OpTy, Token, TokenStream,
 	},
 	parser::conditional_expression::cond_parser,
+	syntax::*,
 	Either, GlslVersion, Span, Spanned,
 };
 use ast::*;
@@ -1189,7 +1186,7 @@ impl TokenTree {
 	/// Parses the token tree by including conditional branches if they evaluate to true.
 	///
 	/// Whilst this is guaranteed to succeed, if the entire source string is wrapped within a conditional branch
-	/// that fails evaluation this will return an empty AST.
+	/// that fails evaluation this will return an empty AST. This method also returns the evaluated key.
 	///
 	/// # Syntax highlighting
 	/// The `syntax_highlight_entire_source` parameter controls whether to produce syntax tokens for the entire
@@ -1212,7 +1209,7 @@ impl TokenTree {
 	pub fn evaluate(
 		&self,
 		syntax_highlight_entire_source: bool,
-	) -> ParseResult {
+	) -> (ParseResult, Vec<usize>) {
 		// Parse the token tree, evaluating conditional compilation.
 		let mut walker = Walker::new(DynamicTokenStreamProvider::new(
 			&self.arena,
@@ -1236,18 +1233,25 @@ impl TokenTree {
 			if syntax_highlight_entire_source
 				&& self.contains_conditional_directives
 			{
-				self.merge_syntax_tokens(eval_key, eval_regions, eval_tokens)
+				self.merge_syntax_tokens(
+					eval_key.clone(),
+					eval_regions,
+					eval_tokens,
+				)
 			} else {
 				(eval_tokens, Vec::new())
 			};
 
-		ParseResult {
-			ast,
-			syntax_diags,
-			semantic_diags,
-			syntax_tokens,
-			disabled_code_regions,
-		}
+		(
+			ParseResult {
+				ast,
+				syntax_diags,
+				semantic_diags,
+				syntax_tokens,
+				disabled_code_regions,
+			},
+			eval_key,
+		)
 	}
 
 	/// Parses a token tree by including conditional branches if they are part of the provided key.
@@ -1701,7 +1705,9 @@ impl TokenTree {
 	///
 	/// Note that the first controlling conditional directive (index of `1`) is at the beginning of this vector
 	/// (index `0`), so an offset must be performed.
-	pub fn get_all_conditional_directives(&self) -> Vec<(Conditional, Span)> {
+	pub fn get_all_controlling_conditional_directives(
+		&self,
+	) -> Vec<(Conditional, Span)> {
 		let mut directives = Vec::new();
 		for (_i, (node_id, _)) in
 			self.order_by_appearance.iter().enumerate().skip(1)
@@ -1720,11 +1726,11 @@ impl TokenTree {
 		directives
 	}
 
-	/// Creates a new key to access the specified conditional directive.
+	/// Creates a new key to access the specified controlling conditional directive.
 	///
-	/// This method takes the index (of the chronological appearance) of the directive, and returns a key that
-	/// reaches that directive. The new key contains the minimal number of prerequisite directives necessary to
-	/// reach the chosen directive.
+	/// This method takes the index (of the chronological appearance) of the controlling conditional directive
+	/// (`#if`/`#ifdef`/`#ifndef`/`#elif`/`#else`), and returns a key that reaches that conditional branch. The new
+	/// key contains the minimal number of prerequisite branches necessary to reach the chosen directive.
 	pub fn create_key(
 		&self,
 		chosen_conditional_directive: usize,
@@ -1744,15 +1750,16 @@ impl TokenTree {
 		key
 	}
 
-	/// Modifies an existing key to access the specified conditional directive.
+	/// Modifies an existing key to access the specified controlling conditional directive.
 	///
-	/// This method keeps all existing chosen branches as long as they don't conflict with the newly chosen branch.
-	pub fn modify_key(
+	/// This method keeps all existing conditional branches as long as they don't conflict with the newly chosen
+	/// branch.
+	pub fn add_selection_to_key(
 		&self,
-		original_key: &Vec<usize>,
+		existing_key: &Vec<usize>,
 		chosen_conditional_directive: usize,
 	) -> Vec<usize> {
-		let mut new_key = Vec::with_capacity(original_key.len());
+		let mut new_key = Vec::with_capacity(existing_key.len());
 
 		let mut call_stack = vec![(0, 0)];
 		let mut cond_counter = 0;
@@ -1777,7 +1784,7 @@ impl TokenTree {
 								new_key.push(cond_counter);
 								found_new_selection = true;
 							} else if !found_new_selection
-								&& original_key.contains(&cond_counter)
+								&& existing_key.contains(&cond_counter)
 							{
 								new_key.push(cond_counter);
 								call_stack.push((*cond_node_id, 0));
@@ -1803,6 +1810,42 @@ impl TokenTree {
 		}
 
 		new_key
+	}
+
+	/// Modifies an existing key to remove access to the specified controlling conditional directive.
+	///
+	/// This method keeps all existing conditional branches as long as they don't depend on the specified to-remove
+	/// branch.
+	pub fn remove_selection_from_key(
+		&self,
+		existing_key: &Vec<usize>,
+		removed_conditional_directive: usize,
+	) -> Vec<usize> {
+		existing_key
+			.iter()
+			.filter_map(|node| {
+				// This node is the to-remove node.
+				if *node == removed_conditional_directive {
+					return None;
+				}
+
+				// This node doesn't even exist
+				let Some((_node_id, parent_info)) = self.order_by_appearance.get(*node) else {
+				return None;
+			};
+
+				// This node depends on the to-remove node.
+				if parent_info
+					.iter()
+					.find(|(i, _)| *i == removed_conditional_directive)
+					.is_some()
+				{
+					return None;
+				}
+
+				return Some(*node);
+			})
+			.collect()
 	}
 
 	/// Returns whether the source string contains any conditional directives.
@@ -6730,7 +6773,7 @@ fn parse_directive<'a, P: TokenStreamProvider<'a>>(
 
 				// We can't perform the token concatenation right here since the contents of the macro body will
 				// change depending on the parameters, but we can still concatenate in order to find any
-				// syntactical/semantic diagnostics.
+				// syntax/semantic diagnostics.
 				let (_, mut syntax, mut semantic) =
 					preprocessor::concat_macro_body(body_tokens.clone());
 				walker.append_syntax_diags(&mut syntax);

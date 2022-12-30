@@ -394,8 +394,8 @@ pub enum ConditionToken {
 impl ConditionToken {
 	/// Produces a syntax token corresponding to the type of this conditional token. This performs simple,
 	/// non-semantically-aware colouring.
-	pub fn non_semantic_colour(&self) -> crate::parser::SyntaxType {
-		use crate::parser::SyntaxType;
+	pub fn non_semantic_colour(&self) -> crate::syntax::SyntaxType {
+		use crate::syntax::SyntaxType;
 		match self {
 			ConditionToken::Num(_) => SyntaxType::Number,
 			ConditionToken::Ident(_) => SyntaxType::Ident,

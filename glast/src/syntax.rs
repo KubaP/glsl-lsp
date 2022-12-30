@@ -1,3 +1,5 @@
+//! Syntax highlighting types.
+
 use crate::Span;
 use bitflags::bitflags;
 
@@ -14,8 +16,9 @@ pub struct SyntaxToken {
 
 /// The type of syntax highlighting token.
 ///
-/// For semantic highlighting, any [`UncheckedIdent`](SyntaxToken::UncheckedIdent) tokens must be name-resolved
-/// into a more concrete token type.
+/// For semantic highlighting purposes, any [`UncheckedIdent`](SyntaxToken::UncheckedIdent) tokens must be
+/// name-resolved into a more concrete identifier type. This functionality is currently waiting on the `analyzer`
+/// module.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SyntaxType {
 	/// A keyword.
@@ -72,13 +75,13 @@ pub enum SyntaxType {
 }
 
 bitflags! {
-	/// The syntax highlighting modifiers.
+	/// The modifiers of a syntax highlighting token.
 	///
 	/// This is a `bitflag`. It contains:
-	/// - `MACRO_DEFINITION`,
-	/// - `MACRO_BODY`,
-	/// - `UNDEFINE`,
-	/// - `CONDITIONAL`.
+	/// - `MACRO_DEFINITION` = `1`,
+	/// - `MACRO_BODY` = `2`,
+	/// - `UNDEFINE` = `4`,
+	/// - `CONDITIONAL` = `8`.
 	pub struct SyntaxModifiers: u32 {
 		/// Tokens within the macro definition, e.g. `BAR(A, B)`
 		const MACRO_DEFINITION = 0b00000001;

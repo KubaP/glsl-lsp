@@ -25,9 +25,9 @@
 //! [this](https://github.com/KubaP/glsl-lsp/blob/release/glast/docs/lexer_grammar.bnf) file.
 //!
 //! # Differences in behaviour
-//! Since this crate is part of a larger language extension effort, it is designed to handle errors in a UX
-//! friendly manner. This means that there are some minor differences between the behaviour of this lexer and of a
-//! lexer as specified by the GLSL specification. The differences are listed below:
+//! Since this crate is part of a larger effort to provide an LSP implementation, it is designed to handle errors
+//! in a UX friendly manner. This means that there are some minor differences between the behaviour of this lexer
+//! and of a lexer as specified by the GLSL specification. The differences are listed below:
 //!
 //! - When the lexer comes across a character which is not part of the allowed character set it emits the
 //!   [`Invalid`](Token::Invalid) token. The specification has no such token; it just mentions that a character
@@ -46,7 +46,7 @@
 //!   `#define TEST +5 \n uint i = 5uTEST`. Currently, this crate doesn't work according to this behaviour, hence
 //!   for now the lexer will treat the suffix as `uTEST` instead.
 //!
-//! See the [`preprocessor`] module for an overview of the lexer's behaviour for each individual preprocessor
+//! See the [`preprocessor`] submodule for an overview of the lexer's behaviour for each individual preprocessor
 //! directive.
 //!
 //! To be certain that the source is valid, these cases (apart from the macro issue) must be checked afterwards by
@@ -87,10 +87,10 @@ pub fn parse_from_str(
 	let mut lexer = Lexer::new(source);
 	let tokens = parse_tokens(&mut lexer, false, false);
 	match lexer.metadata.version {
-		GlslVersion::_450 => Ok((tokens, lexer.metadata)),
 		GlslVersion::Unsupported => {
 			Err(ParseErr::UnsupportedVersion(lexer.metadata.version))
 		}
+		_ => Ok((tokens, lexer.metadata)),
 	}
 }
 
@@ -375,8 +375,8 @@ pub enum OpTy {
 impl Token {
 	/// Produces a syntax token corresponding to the type of this lexer token. This performs simple,
 	/// non-semantically-aware colouring.
-	pub fn non_semantic_colour(&self) -> crate::parser::SyntaxType {
-		use crate::parser::SyntaxType;
+	pub fn non_semantic_colour(&self) -> crate::syntax::SyntaxType {
+		use crate::syntax::SyntaxType;
 		match self {
 			Token::Num { .. } => SyntaxType::Number,
 			Token::Bool(_) => SyntaxType::Boolean,

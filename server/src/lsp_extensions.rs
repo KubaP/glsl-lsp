@@ -27,7 +27,8 @@ pub struct EvalConditionalParams {
 pub enum EvalConditionalChoice {
 	Off,
 	Evaluate,
-	Choice(u64),
+	ChoiceOn(u64),
+	ChoiceOff(u64),
 }
 impl<'de> Deserialize<'de> for EvalConditionalChoice {
 	fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
@@ -58,11 +59,22 @@ impl<'de> Deserialize<'de> for EvalConditionalChoice {
 				}
 			}
 
-			fn visit_u64<E>(self, v: u64) -> Result<Self::Value, E>
+			fn visit_map<A>(self, mut map: A) -> Result<Self::Value, A::Error>
 			where
-				E: serde::de::Error,
+				A: serde::de::MapAccess<'v>,
 			{
-				Ok(EvalConditionalChoice::Choice(v))
+				let Some((key, value)) = map.next_entry::<String, u64>()? else {
+					return Err(serde::de::Error::custom(format!(
+						"map does not have a \"on\" or \"off\" key"
+					)));
+				};
+				match key.as_ref() {
+					"on" => Ok(EvalConditionalChoice::ChoiceOn(value)),
+					"off" => Ok(EvalConditionalChoice::ChoiceOff(value)),
+					_ => Err(serde::de::Error::custom(format!(
+						"map does not have a \"on\" or \"off\" key"
+					))),
+				}
 			}
 		}
 

@@ -199,14 +199,33 @@ impl LanguageServer for Lsp {
 			.await;
 
 		let state = self.state.lock().await;
-		let result = state
-			.provide_semantic_tokens(&params.text_document.uri)
-			.await;
+		let result = state.provide_semantic_tokens(&params.text_document.uri);
 
 		Ok(Some(SemanticTokensResult::Tokens(SemanticTokens {
 			result_id: None,
 			data: result,
 		})))
+	}
+
+	async fn code_lens(
+		&self,
+		params: CodeLensParams,
+	) -> Result<Option<Vec<CodeLens>>> {
+		self.client
+			.log_message(
+				MessageType::INFO,
+				"Server received 'textDocument/codeLens' event.",
+			)
+			.await;
+
+		let state = self.state.lock().await;
+		let lenses = state.provide_code_lens(&params.text_document.uri);
+
+		if lenses.is_empty() {
+			Ok(None)
+		} else {
+			Ok(Some(lenses))
+		}
 	}
 	// endregion: `textDocument/*` events.
 
@@ -249,6 +268,28 @@ impl Lsp {
 			ast: state.provide_ast(&params.text_document_uri),
 		})
 	}
+
+	/// Handles the `glsl/evalConditional` notification.
+	async fn eval_conditional(
+		&self,
+		params: lsp_extensions::EvalConditionalParams,
+	) {
+		self.client
+			.log_message(
+				MessageType::INFO,
+				"Server received 'glsl/evalConditional' event.",
+			)
+			.await;
+
+		let mut state = self.state.lock().await;
+		state
+			.handle_conditional_eval(
+				&self.client,
+				&params.text_document_uri,
+				params.choice,
+			)
+			.await;
+	}
 }
 
 #[tokio::main]
@@ -261,6 +302,7 @@ async fn main() {
 		state: Mutex::new(Server::new()),
 	})
 	.custom_method(lsp_extensions::AST_CONTENT, Lsp::ast_content)
+	.custom_method(lsp_extensions::EVAL_CONDITIONAL, Lsp::eval_conditional)
 	.finish();
 
 	tower_lsp::Server::new(stdin, stdout, socket)

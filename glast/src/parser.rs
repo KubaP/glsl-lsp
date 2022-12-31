@@ -639,7 +639,7 @@ pub fn parse_from_token_stream(
 					};
 
 					// We are not expecting anything after `#endif`.
-					let span = if tokens.is_empty() {
+					let span_of_tokens = if tokens.is_empty() {
 						kw_span.next_single_width()
 					} else {
 						let span = Span::new(
@@ -673,7 +673,7 @@ pub fn parse_from_token_stream(
 							Conditional::End,
 							token_span,
 							tokens,
-							span,
+							span_of_tokens,
 							hash_syntax,
 							name_syntax,
 						));
@@ -1421,10 +1421,10 @@ impl TokenTree {
 								if *evaluated_cond_block
 									== cond_block.conditions.len() as isize - 1
 								{
-									// We have chosen the final conditional block, which means we are responsible
-									// for syntax highlighting the `#endif` directive. (This is only relevant if we
-									// are syntax highlighting the entire file). The reason we can't do this
-									// unconditionally is because if the final block wasn't picked, then an
+									// We have either chosen the final conditional branch, which means we are
+									// responsible for syntax highlighting the `#endif` directive. (This is only
+									// relevant if we are syntax highlighting the entire file). The reason we can't
+									// do this unconditionally is because if the final block wasn't picked, then an
 									// alternative permutation is responsible for syntax highlighting it, but the
 									// span of the syntax highlight region stretches to cover the `#endif` part. If
 									// we declared this as chosen, the other span region wouldn't fit and would
@@ -1817,8 +1817,6 @@ impl TokenTree {
 			}
 		}
 
-		dbg!(&sibling_map);
-
 		let chosen_parents =
 			match self.order_by_appearance.get(chosen_conditional_directive) {
 				Some((_, parent_info)) => {
@@ -1828,8 +1826,6 @@ impl TokenTree {
 					return existing_key.to_vec();
 				}
 			};
-
-		dbg!(&chosen_parents);
 
 		// Vector of vectors of siblings of nodes that the newly chosen node depends on.
 		let mut siblings = sibling_map
@@ -1851,8 +1847,6 @@ impl TokenTree {
 			Some(v) => siblings.push(v),
 			None => return existing_key.to_vec(),
 		}
-
-		dbg!(&siblings);
 
 		let mut new_key = Vec::with_capacity(existing_key.len());
 		'outer: for existing in existing_key {
@@ -1881,8 +1875,6 @@ impl TokenTree {
 			// This node does not clash, so we can keep it.
 			new_key.push(*existing);
 		}
-
-		dbg!(&new_key);
 
 		let mut insertion = chosen_parents;
 		insertion.remove(0); // Remove the `0` root parent, since that's treated implicitly in the key.
@@ -2092,19 +2084,29 @@ impl<'a> TokenStreamProvider<'a> for PreselectedTokenStreamProvider<'a> {
 	) -> Option<TokenStream> {
 		match self.streams.get(self.cursor) {
 			Some(v) => {
-				if let Some(f) = self.conditional_syntax_tokens.first() {
-					if let Some(SyntaxToken { span, .. }) = f.first() {
-						if let Some((_, s)) = v.first() {
-							if span.is_before(s) {
+				if let Some((_, stream_span)) = v.first() {
+					while let Some(f) = self.conditional_syntax_tokens.first() {
+						if let Some(SyntaxToken {
+							span: cond_span, ..
+						}) = f.first()
+						{
+							if cond_span.is_before(stream_span) {
 								syntax_tokens.append(
 									&mut self
 										.conditional_syntax_tokens
 										.remove(0),
 								);
+							} else {
+								break;
 							}
+						} else {
+							// This vector conditional syntax tokens is empty, so there's no need to keep it
+							// around. If we didn't remove this, we could theoretically have an infinite loop.
+							self.conditional_syntax_tokens.remove(0);
 						}
 					}
 				}
+
 				self.cursor += 1;
 				return Some(v.clone());
 			}

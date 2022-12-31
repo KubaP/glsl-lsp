@@ -766,7 +766,7 @@ pub fn parse_from_token_stream(
 /// "#;
 /// let tree = parse_from_str(&src).unwrap();
 /// let ParseResult { ast, .. } = tree.root(false);
-/// println!("{}", print_ast(ast));
+/// println!("{}", print_ast(&ast));
 /// ```
 /// Would result in:
 /// ```text
@@ -784,7 +784,7 @@ pub fn parse_from_token_stream(
 ///     )
 /// )
 /// ```
-pub fn print_ast(ast: Vec<Node>) -> String {
+pub fn print_ast(ast: &[Node]) -> String {
 	printing::print_ast(ast)
 }
 

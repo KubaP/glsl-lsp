@@ -4,7 +4,7 @@ use super::ast::*;
 use crate::Either;
 use std::fmt::Write;
 
-pub(super) fn print_ast(ast: Vec<Node>) -> String {
+pub(super) fn print_ast(ast: &[Node]) -> String {
 	let mut writer = Writer {
 		buffer: String::with_capacity(1_000),
 		indent: 0,
@@ -73,8 +73,8 @@ macro_rules! continue_eol {
 	};
 }
 
-fn print_node(w: &mut Writer, node: Node) {
-	match node.ty {
+fn print_node(w: &mut Writer, node: &Node) {
+	match &node.ty {
 		NodeTy::Empty => continue_eol!(w, "Empty"),
 		NodeTy::Expr(expr) => {
 			continue_eol!(w, "Expr(");
@@ -271,17 +271,17 @@ fn print_node(w: &mut Writer, node: Node) {
 			continue_eol!(w, "If(");
 			w.indent();
 			for branch in branches {
-				match branch.condition.0 {
+				match &branch.condition.0 {
 					IfCondition::If(e) => {
 						new_line_whole!(w, "if: (");
 						w.indent();
 						if let Some(cond) = e {
 							new_line_part!(w, "cond: ");
-							print_expr(w, cond);
+							print_expr(w, &cond);
 						}
-						if let Some(body) = branch.body {
+						if let Some(ref body) = branch.body {
 							new_line_whole!(w, "body: Scope(");
-							print_scope(w, body);
+							print_scope(w, &body);
 							new_line_whole!(w, ")");
 						}
 						w.de_indent();
@@ -292,11 +292,11 @@ fn print_node(w: &mut Writer, node: Node) {
 						w.indent();
 						if let Some(cond) = e {
 							new_line_part!(w, "cond: ");
-							print_expr(w, cond);
+							print_expr(w, &cond);
 						}
-						if let Some(body) = branch.body {
+						if let Some(ref body) = branch.body {
 							new_line_whole!(w, "body: Scope(");
-							print_scope(w, body);
+							print_scope(w, &body);
 							new_line_whole!(w, ")");
 						}
 						w.de_indent();
@@ -305,9 +305,9 @@ fn print_node(w: &mut Writer, node: Node) {
 					IfCondition::Else => {
 						new_line_whole!(w, "else: (");
 						w.indent();
-						if let Some(body) = branch.body {
+						if let Some(ref body) = branch.body {
 							new_line_whole!(w, "body: Scope(");
-							print_scope(w, body);
+							print_scope(w, &body);
 							new_line_whole!(w, ")");
 						}
 						w.de_indent();
@@ -328,17 +328,17 @@ fn print_node(w: &mut Writer, node: Node) {
 			new_line_whole!(w, "cases: [");
 			w.indent();
 			for case in cases {
-				match case.expr {
+				match &case.expr {
 					Either::Left(e) => {
 						new_line_whole!(w, "case: (");
 						w.indent();
-						if let Some(expr) = e {
+						if let Some(ref expr) = e {
 							new_line_part!(w, "expr: ");
-							print_expr(w, expr);
+							print_expr(w, &expr);
 						}
 						new_line_whole!(w, "body: Scope(");
-						if let Some(body) = case.body {
-							print_scope(w, body);
+						if let Some(ref body) = case.body {
+							print_scope(w, &body);
 						}
 						new_line_whole!(w, ")");
 						w.de_indent();
@@ -346,8 +346,8 @@ fn print_node(w: &mut Writer, node: Node) {
 					}
 					Either::Right(_) => {
 						new_line_whole!(w, "default: Scope(");
-						if let Some(body) = case.body {
-							print_scope(w, body);
+						if let Some(ref body) = case.body {
+							print_scope(w, &body);
 						}
 						new_line_whole!(w, ")");
 					}
@@ -368,15 +368,15 @@ fn print_node(w: &mut Writer, node: Node) {
 			w.indent();
 			if let Some(init) = init {
 				new_line_part!(w, "init: ");
-				print_node(w, *init);
+				print_node(w, &init);
 			}
 			if let Some(cond) = cond {
 				new_line_part!(w, "cond: ");
-				print_node(w, *cond);
+				print_node(w, &cond);
 			}
 			if let Some(inc) = inc {
 				new_line_part!(w, "inc: ");
-				print_node(w, *inc);
+				print_node(w, &inc);
 			}
 			if let Some(body) = body {
 				new_line_whole!(w, "body: Scope(");
@@ -569,24 +569,24 @@ fn print_node(w: &mut Writer, node: Node) {
 	}
 }
 
-fn print_scope(w: &mut Writer, scope: Scope) {
+fn print_scope(w: &mut Writer, scope: &Scope) {
 	w.indent();
-	for node in scope.contents {
+	for node in scope.contents.iter() {
 		new_line_part!(w);
 		print_node(w, node);
 	}
 	w.de_indent();
 }
 
-fn print_params(w: &mut Writer, params: Vec<Param>) {
+fn print_params(w: &mut Writer, params: &[Param]) {
 	new_line_whole!(w, "params: [");
 	w.indent();
 	for param in params {
 		new_line_whole!(w, "(");
 		w.indent();
 		new_line_part!(w, "type: ");
-		print_type(w, param.type_);
-		if let Omittable::Some(ident) = param.ident {
+		print_type(w, &param.type_);
+		if let Omittable::Some(ref ident) = param.ident {
 			new_line_whole!(w, "ident: {}", print_ident(ident));
 		}
 		w.de_indent();
@@ -596,12 +596,12 @@ fn print_params(w: &mut Writer, params: Vec<Param>) {
 	new_line_whole!(w, "]");
 }
 
-fn print_ident(ident: Ident) -> String {
-	ident.name
+fn print_ident(ident: &Ident) -> &str {
+	&ident.name
 }
 
-fn print_expr(w: &mut Writer, expr: Expr) {
-	match expr.ty {
+fn print_expr(w: &mut Writer, expr: &Expr) {
+	match &expr.ty {
 		ExprTy::Lit(l) => match l {
 			Lit::Bool(b) => continue_eol!(w, "{b}"),
 			Lit::Int(i) => continue_eol!(w, "{i}"),
@@ -617,7 +617,7 @@ fn print_expr(w: &mut Writer, expr: Expr) {
 			new_line_whole!(w, "op: {}", print_pre_op(op));
 			if let Some(expr) = expr {
 				new_line_part!(w);
-				print_expr(w, *expr);
+				print_expr(w, &expr);
 			}
 			w.de_indent();
 			new_line_whole!(w, ")");
@@ -627,7 +627,7 @@ fn print_expr(w: &mut Writer, expr: Expr) {
 			w.indent();
 			new_line_whole!(w, "op: {}", print_post_op(op));
 			new_line_part!(w);
-			print_expr(w, *expr);
+			print_expr(w, &expr);
 			w.de_indent();
 			new_line_whole!(w, ")");
 		}
@@ -636,10 +636,10 @@ fn print_expr(w: &mut Writer, expr: Expr) {
 			w.indent();
 			new_line_whole!(w, "op: {}", print_bin_op(op));
 			new_line_part!(w, "left: ");
-			print_expr(w, *left);
+			print_expr(w, &left);
 			if let Some(right) = right {
 				new_line_part!(w, "right: ");
-				print_expr(w, *right);
+				print_expr(w, &right);
 			}
 			w.de_indent();
 			new_line_whole!(w, ")");
@@ -652,14 +652,14 @@ fn print_expr(w: &mut Writer, expr: Expr) {
 			continue_eol!(w, "Ternary(");
 			w.indent();
 			new_line_part!(w, "cond: ");
-			print_expr(w, *cond);
+			print_expr(w, &cond);
 			if let Some(true_) = true_ {
 				new_line_part!(w, "true: ");
-				print_expr(w, *true_);
+				print_expr(w, &true_);
 			}
 			if let Some(false_) = false_ {
 				new_line_part!(w, "false: ");
-				print_expr(w, *false_);
+				print_expr(w, &false_);
 			}
 			w.de_indent();
 			new_line_whole!(w, ")");
@@ -669,7 +669,7 @@ fn print_expr(w: &mut Writer, expr: Expr) {
 			w.indent();
 			if let Some(expr) = expr {
 				new_line_part!(w);
-				print_expr(w, *expr);
+				print_expr(w, &expr);
 			}
 			w.de_indent();
 			new_line_whole!(w, ")");
@@ -678,10 +678,10 @@ fn print_expr(w: &mut Writer, expr: Expr) {
 			continue_eol!(w, "DotAccess(");
 			w.indent();
 			new_line_part!(w, "obj: ");
-			print_expr(w, *obj);
+			print_expr(w, &obj);
 			if let Some(leaf) = leaf {
 				new_line_part!(w, "leaf: ");
-				print_expr(w, *leaf);
+				print_expr(w, &leaf);
 			}
 			w.de_indent();
 			new_line_whole!(w, ")");
@@ -690,10 +690,10 @@ fn print_expr(w: &mut Writer, expr: Expr) {
 			continue_eol!(w, "Index(");
 			w.indent();
 			new_line_part!(w, "item: ");
-			print_expr(w, *item);
+			print_expr(w, &item);
 			if let Some(i) = i {
 				new_line_part!(w, "i: ");
-				print_expr(w, *i);
+				print_expr(w, &i);
 			}
 			w.de_indent();
 			new_line_whole!(w, ")");
@@ -727,7 +727,7 @@ fn print_expr(w: &mut Writer, expr: Expr) {
 			continue_eol!(w, "ArrayConstructor(");
 			w.indent();
 			new_line_part!(w, "type: ");
-			print_expr(w, *arr);
+			print_expr(w, &arr);
 			new_line_whole!(w, "params: [");
 			w.indent();
 			for arg in args {
@@ -753,8 +753,8 @@ fn print_expr(w: &mut Writer, expr: Expr) {
 	}
 }
 
-fn print_type(w: &mut Writer, type_: Type) {
-	match type_.ty {
+fn print_type(w: &mut Writer, type_: &Type) {
+	match &type_.ty {
 		TypeTy::Single(p) => continue_eol!(w, "{}", print_primitive(p)),
 		TypeTy::Array(p, a) => {
 			continue_eol!(w, "{}", print_primitive(p));
@@ -763,7 +763,7 @@ fn print_type(w: &mut Writer, type_: Type) {
 				new_line_whole!(w, "[");
 				w.indent();
 				new_line_part!(w);
-				print_expr(w, expr);
+				print_expr(w, &expr);
 				w.de_indent();
 				new_line_whole!(w, "]");
 			}
@@ -776,7 +776,7 @@ fn print_type(w: &mut Writer, type_: Type) {
 				new_line_whole!(w, "[");
 				w.indent();
 				new_line_part!(w);
-				print_expr(w, expr);
+				print_expr(w, &expr);
 				w.de_indent();
 				new_line_whole!(w, "]");
 			}
@@ -784,7 +784,7 @@ fn print_type(w: &mut Writer, type_: Type) {
 				new_line_whole!(w, "[");
 				w.indent();
 				new_line_part!(w);
-				print_expr(w, expr);
+				print_expr(w, &expr);
 				w.de_indent();
 				new_line_whole!(w, "]");
 			}
@@ -798,7 +798,7 @@ fn print_type(w: &mut Writer, type_: Type) {
 					new_line_part!(w, "[");
 					w.indent();
 					new_line_part!(w);
-					print_expr(w, expr);
+					print_expr(w, &expr);
 					w.de_indent();
 					new_line_whole!(w, "]");
 				}
@@ -808,12 +808,12 @@ fn print_type(w: &mut Writer, type_: Type) {
 	}
 	if !type_.qualifiers.is_empty() {
 		new_line_whole!(w, "+ qualifiers: [");
-		print_qualifier(w, type_.qualifiers);
+		print_qualifier(w, &type_.qualifiers);
 		new_line_whole!(w, "]");
 	}
 }
 
-fn print_pre_op(op: PreOp) -> String {
+fn print_pre_op(op: &PreOp) -> String {
 	(match op.ty {
 		PreOpTy::Add => "++",
 		PreOpTy::Sub => "--",
@@ -824,7 +824,7 @@ fn print_pre_op(op: PreOp) -> String {
 	.to_owned()
 }
 
-fn print_post_op(op: PostOp) -> String {
+fn print_post_op(op: &PostOp) -> String {
 	(match op.ty {
 		PostOpTy::Add => "++",
 		PostOpTy::Sub => "-",
@@ -832,7 +832,7 @@ fn print_post_op(op: PostOp) -> String {
 	.to_owned()
 }
 
-fn print_bin_op(op: BinOp) -> String {
+fn print_bin_op(op: &BinOp) -> String {
 	(match op.ty {
 		BinOpTy::Add => "+",
 		BinOpTy::Sub => "-",
@@ -868,12 +868,12 @@ fn print_bin_op(op: BinOp) -> String {
 	.to_owned()
 }
 
-fn print_primitive(primitive: Primitive) -> String {
+fn print_primitive(primitive: &Primitive) -> &str {
 	if let Primitive::Struct(ident) = primitive {
-		return ident.name;
+		return &ident.name;
 	}
 
-	(match primitive {
+	match primitive {
 		Primitive::Scalar(Fundamental::Void) => "void",
 		Primitive::Scalar(Fundamental::Bool) => "bool",
 		Primitive::Scalar(Fundamental::Int) => "int",
@@ -1071,18 +1071,17 @@ fn print_primitive(primitive: Primitive) -> String {
 		}
 		Primitive::Atomic => "atomic_uint",
 		_ => unreachable!(),
-	})
-	.to_owned()
+	}
 }
 
-fn print_qualifier(w: &mut Writer, qualifiers: Vec<Qualifier>) {
+fn print_qualifier(w: &mut Writer, qualifiers: &[Qualifier]) {
 	w.indent();
 	for qualifier in qualifiers {
-		if let QualifierTy::Layout(layouts) = qualifier.ty {
+		if let QualifierTy::Layout(layouts) = &qualifier.ty {
 			new_line_whole!(w, "layout: [");
 			w.indent();
 			for layout in layouts {
-				match layout.ty {
+				match &layout.ty {
 					LayoutTy::Shared => new_line_whole!(w, "shared"),
 					LayoutTy::Packed => new_line_whole!(w, "packed"),
 					LayoutTy::Std140 => new_line_whole!(w, "std140"),

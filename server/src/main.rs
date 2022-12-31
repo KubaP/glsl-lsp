@@ -10,11 +10,11 @@ use tower_lsp::{
 	jsonrpc::Result, lsp_types::*, Client, LanguageServer, LspService,
 };
 
+/* WARNING: Ensure that these match the values in `Cargo.toml` */
 const SERVER_NAME: &str = "glsl-lsp";
 const SERVER_VERSION: &str = "0.0.1";
 
 /// The language server.
-#[derive(Debug)]
 struct Lsp {
 	/// Handle for communicating with the language client.
 	client: Client,
@@ -149,7 +149,7 @@ impl LanguageServer for Lsp {
 		state
 			.handle_file_open(&self.client, uri.clone(), version, text)
 			.await;
-		state.publish_diagnostics(&self.client, uri).await;
+		state.publish_diagnostics(&self.client, &uri).await;
 	}
 
 	async fn did_change(&self, mut params: DidChangeTextDocumentParams) {
@@ -162,12 +162,12 @@ impl LanguageServer for Lsp {
 
 		let mut state = self.state.lock().await;
 		state.handle_file_change(
-			params.text_document.uri.clone(),
+			&params.text_document.uri,
 			params.text_document.version,
 			params.content_changes.remove(0).text,
 		);
 		state
-			.publish_diagnostics(&self.client, params.text_document.uri)
+			.publish_diagnostics(&self.client, &params.text_document.uri)
 			.await;
 	}
 
@@ -200,7 +200,7 @@ impl LanguageServer for Lsp {
 
 		let state = self.state.lock().await;
 		let result = state
-			.provide_semantic_tokens(&self.client, params.text_document.uri)
+			.provide_semantic_tokens(&params.text_document.uri)
 			.await;
 
 		Ok(Some(SemanticTokensResult::Tokens(SemanticTokens {
@@ -208,7 +208,7 @@ impl LanguageServer for Lsp {
 			data: result,
 		})))
 	}
-
+	// endregion: `textDocument/*` events.
 
 	// region: `workspace/*` events.
 	async fn did_change_configuration(
@@ -245,9 +245,8 @@ impl Lsp {
 			.await;
 
 		let state = self.state.lock().await;
-
 		Ok(lsp_extensions::AstContentResult {
-			ast: state.provide_ast(params.text_document_uri),
+			ast: state.provide_ast(&params.text_document_uri),
 		})
 	}
 }

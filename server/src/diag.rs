@@ -8,14 +8,14 @@ use tower_lsp::lsp_types::{
 
 /// Converts [`Syntax`] and [`Semantic`] diagnostics to LSP diagnostics.
 pub fn convert(
-	syntax_diags: Vec<Syntax>,
-	semantic_diags: Vec<Semantic>,
+	syntax_diags: &[Syntax],
+	semantic_diags: &[Semantic],
 	diags: &mut Vec<Diagnostic>,
 	file: &crate::file::File,
 	supports_related_info: bool,
 ) {
 	for diag in syntax_diags {
-		let (message, span, related) = convert_syntax(diag);
+		let (message, span, related) = convert_syntax(diag.clone());
 		diags.push(Diagnostic {
 			range: file.span_to_lsp(span),
 			severity: Some(DiagnosticSeverity::ERROR),
@@ -73,7 +73,7 @@ pub fn convert(
 
 	for diag in semantic_diags {
 		let (message, span, severity, error_code, related) =
-			convert_semantic(diag);
+			convert_semantic(diag.clone());
 		diags.push(Diagnostic {
 			range: file.span_to_lsp(span),
 			severity: Some(match severity {

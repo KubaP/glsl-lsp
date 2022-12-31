@@ -1,11 +1,11 @@
 //! Semantic token highlighting functionality.
 
-use glast::parser::{SyntaxToken, SyntaxType};
+use glast::syntax::*;
 use tower_lsp::lsp_types::{Position, SemanticToken};
 
 /// Converts [`SyntaxToken`]s to LSP semantic tokens.
 pub fn convert(
-	syntax_tokens: Vec<SyntaxToken>,
+	syntax_tokens: &[SyntaxToken],
 	file: &crate::file::File,
 	supports_multiline: bool,
 ) -> Vec<SemanticToken> {
@@ -18,7 +18,7 @@ pub fn convert(
 		span,
 	} in syntax_tokens
 	{
-		let range = file.span_to_lsp(span);
+		let range = file.span_to_lsp(*span);
 		if range.start.line != range.end.line && !supports_multiline {
 			// We have a multi-line token but the client doesn't support that, so we must split it per-line. What
 			// we do is the following:
@@ -177,7 +177,7 @@ const DIRECTIVE_EXT_BEHAVIOUR: u32 = 25;
 const DIRECTIVE_LINE_NUMBER: u32 = 26;
 const DIRECTIVE_ERROR: u32 = 27;
 
-fn convert_to_lsp_ty(ty: SyntaxType) -> u32 {
+fn convert_to_lsp_ty(ty: &SyntaxType) -> u32 {
 	match ty {
 		SyntaxType::Keyword => KEYWORD,
 		SyntaxType::Punctuation => PUNCTUATION,

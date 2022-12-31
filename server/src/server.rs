@@ -1,9 +1,6 @@
 //! The server logic/implementation.
 
-use crate::file::{
-	get_file_config, ConditionalCompilationState, File, FileConfig,
-};
-use glast::parser::ParseResult;
+use crate::file::{get_file_config, File};
 use std::collections::HashMap;
 use tower_lsp::{
 	lsp_types::{
@@ -14,10 +11,9 @@ use tower_lsp::{
 };
 
 /// The server state.
-#[derive(Debug)]
 pub struct Server {
 	/// Currently open files, (and any files previously opened within this session).
-	files: HashMap<Url, (File, FileConfig)>,
+	files: HashMap<Url, File>,
 
 	/// The state of diagnostic-related functionality.
 	diag_state: DiagState,
@@ -143,80 +139,57 @@ impl Server {
 		version: i32,
 		contents: String,
 	) {
-		if let Some((file, _)) = self.files.get_mut(&uri) {
+		if let Some(file) = self.files.get_mut(&uri) {
 			// We have encountered this file before. Check if the version is the same; if so, that means the
 			// file was closed and has now been reopened without any edits and hence doesn't need updating.
 			if !file.version == version {
-				file.update(version, contents);
+				file.update_contents(version, contents);
 			}
 		} else {
 			// We have not encountered this file before.
-			let file_config = get_file_config(client, &uri).await;
-			self.files.insert(
-				uri.clone(),
-				(File::new(uri, version, contents), file_config),
-			);
+			let config = get_file_config(client, &uri).await;
+			self.files
+				.insert(uri.clone(), File::new(uri, version, contents, config));
 		}
 	}
 
 	/// Handles the `textDocument/didChange` notification.
 	pub fn handle_file_change(
 		&mut self,
-		uri: Url,
+		uri: &Url,
 		version: i32,
 		contents: String,
 	) {
-		match self.files.get_mut(&uri) {
-			Some((file, _)) => file.update(version, contents),
+		match self.files.get_mut(uri) {
+			Some(file) => file.update_contents(version, contents),
 			None => unreachable!("[Server::handle_file_change] Received a file `uri: {uri}` that has not been opened yet"),
 		}
 	}
 
 	/// Sends the `textDocument/publishDiagnostics` notification.
-	pub async fn publish_diagnostics(&self, client: &Client, uri: Url) {
+	pub async fn publish_diagnostics(&self, client: &Client, uri: &Url) {
 		if !self.diag_state.enabled {
 			return;
 		}
 
-		let Some((file, file_config)) = self.files.get(&uri) else {
+		let Some(file) = self.files.get(uri) else {
 			unreachable!("[Server::publish_diagnostics] Received a file `uri: {uri}` that has not been opened yet");
 		};
 
-		let Ok(tree) = glast::parser::parse_from_str(&file.contents) else { return; };
-		let ParseResult {
-			syntax_diags,
-			semantic_diags,
-			disabled_code_regions,
-			..
-		} = match &file_config.conditional_compilation_state {
-			ConditionalCompilationState::Off => {
-				tree.root(file_config.syntax_highlight_entire_file)
-			}
-			ConditionalCompilationState::Evaluate => {
-				tree.evaluate(file_config.syntax_highlight_entire_file)
-			}
-			ConditionalCompilationState::Key(key) => {
-				match tree.parse_by_order_of_appearance(
-					key,
-					file_config.syntax_highlight_entire_file,
-				) {
-					Ok(p) => p,
-					Err(_) => return,
-				}
-			}
-		};
+		let Some((_, parse_result)) = &file.cache else { return; };
+
 		let mut diags = Vec::new();
 		crate::diag::convert(
-			syntax_diags,
-			semantic_diags,
+			&parse_result.syntax_diags,
+			&parse_result.semantic_diags,
 			&mut diags,
 			file,
 			self.diag_state.supports_related_information,
 		);
-		for span in disabled_code_regions {
+		for span in &parse_result.disabled_code_regions {
 			crate::diag::disable_region(
-				span,
-				&file_config.conditional_compilation_state,
+				*span,
+				&file.config.conditional_compilation_state,
 				&mut diags,
 				file,
 			);
@@ -233,39 +206,20 @@ impl Server {
 	/// Fulfils the `textDocument/semanticTokens/full` request.
 	pub async fn provide_semantic_tokens(
 		&self,
-		client: &Client,
-		uri: Url,
+		uri: &Url,
 	) -> Vec<SemanticToken> {
 		if !self.highlighting_state.enabled {
 			return vec![];
 		}
 
-		let Some((file, file_config)) = self.files.get(&uri) else {
+		let Some(file) = self.files.get(uri) else {
 			unreachable!("[Server::provide_semantic_tokens] Received a file `uri: {uri}` that has not been opened yet");
 		};
 
-		let Ok(tree) = glast::parser::parse_from_str(&file.contents) else { return vec![]; };
-		let ParseResult { syntax_tokens, .. } =
-			match &file_config.conditional_compilation_state {
-				ConditionalCompilationState::Off => {
-					tree.root(file_config.syntax_highlight_entire_file)
-				}
-				ConditionalCompilationState::Evaluate => {
-					tree.evaluate(file_config.syntax_highlight_entire_file)
-				}
-				ConditionalCompilationState::Key(key) => {
-					match tree.parse_by_order_of_appearance(
-						key,
-						file_config.syntax_highlight_entire_file,
-					) {
-						Ok(p) => p,
-						Err(_) => return vec![],
-					}
-				}
-			};
-		self.publish_diagnostics(client, uri).await;
+		let Some((_, parse_result)) = &file.cache else { return Vec::new(); };
+
 		crate::semantic::convert(
-			syntax_tokens,
+			&parse_result.syntax_tokens,
 			file,
 			self.highlighting_state.supports_multiline,
 		)
@@ -280,21 +234,24 @@ impl Server {
 		params: DidChangeConfigurationParams,
 	) {
 		let Some(str) = params.settings.as_str() else { return; };
-		let mut requires_updating = false;
+		let mut changed_files = Vec::new();
 		match str {
 			"fileSettings" => {
-				for (uri, (_, file_config)) in self.files.iter_mut() {
-					let new_settings = get_file_config(client, uri).await;
-					if new_settings != *file_config {
-						requires_updating = true;
+				for (uri, file) in self.files.iter_mut() {
+					let new_config = get_file_config(client, uri).await;
+					if new_config != file.config {
+						changed_files.push(uri.clone());
+						file.update_config(new_config);
 					}
-					*file_config = new_settings;
 				}
 			}
 			_ => panic!("[Server::handle_configuration_change] Unexpected settings value: `{str}`")
 		}
 
-		if requires_updating {
+		for uri in changed_files.iter() {
+			self.publish_diagnostics(client, &uri).await;
+		}
+		if !changed_files.is_empty() {
 			let _ = client.send_request::<SemanticTokensRefresh>(()).await;
 		}
 	}
@@ -302,24 +259,13 @@ impl Server {
 
 	// region: custom events.
 	/// Fulfils the `glsl/astContent` request.
-	pub fn provide_ast(&self, uri: Url) -> String {
-		let Some((file, file_config)) = self.files.get(&uri)else{
+	pub fn provide_ast(&self, uri: &Url) -> String {
+		let Some(file) = self.files.get(uri)else{
 			unreachable!("[Server::provide_ast] Received a file `uri: {uri}` that has not been opened yet");	
 		};
 
-		let Ok(tree) = glast::parser::parse_from_str(&file.contents) else { return "<ERROR PARSING FILE>".into(); };
-		let ParseResult { ast, .. } =
-			match &file_config.conditional_compilation_state {
-				ConditionalCompilationState::Off => tree.root(false),
-				ConditionalCompilationState::Evaluate => tree.evaluate(false),
-				ConditionalCompilationState::Key(key) => {
-					match tree.parse_by_order_of_appearance(key, false) {
-						Ok(p) => p,
-						Err(_) => return "<ERROR PARSING FILE>".into(),
-					}
-				}
-			};
-		glast::parser::print_ast(ast)
+		let Some((_, parse_result)) = &file.cache else { return "<ERROR PARSING FILE>".into(); };
+		glast::parser::print_ast(&parse_result.ast)
 	}
 	// endregion: custom events.
 }

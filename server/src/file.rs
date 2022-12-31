@@ -1,43 +1,122 @@
 //! Contains types for representing source files.
 
-use glast::Span;
+use glast::{
+	parser::{ParseResult, TokenTree},
+	Span,
+};
 use tower_lsp::{
 	lsp_types::{Position, Range, Url},
 	Client,
 };
 
 /// A GLSL source file.
-#[derive(Debug)]
 pub struct File {
 	/// The uri of this file.
 	pub uri: Url,
 	/// The current version number of this file.
 	pub version: i32,
-	/// The contents of this file.
-	pub contents: String,
 	/// A character index-to-line conversion table.
 	///
 	/// - `0` - Line number, (same as vector index).
 	/// - `1` - Character index which starts at the line number.
 	pub lines: Vec<(usize, usize)>,
+	/// The configuration of this file.
+	pub config: FileConfig,
+	/// The cached data of the parsing operation.
+	pub cache: Option<(TokenTree, ParseResult)>,
+	/// This will be `Some` if `self.config.conditional_compilation_state == Evaluate`.
+	pub chosen_key: Option<Vec<usize>>,
 }
 
 impl File {
 	/// Constructs a new file with the specified contents.
-	pub fn new(uri: Url, version: i32, contents: String) -> Self {
+	pub fn new(
+		uri: Url,
+		version: i32,
+		contents: String,
+		mut config: FileConfig,
+	) -> Self {
+		let (cache, chosen_key) = match Self::parse(&mut config, &contents) {
+			Some((a, b, chosen_key)) => (Some((a, b)), chosen_key),
+			None => (None, None),
+		};
 		Self {
 			uri,
 			version,
 			lines: Self::generate_line_table(&contents),
-			contents,
+			config,
+			cache,
+			chosen_key,
 		}
 	}
 
 	/// Updates the file with new content, and performs any necessary recalculations.
-	pub fn update(&mut self, version: i32, contents: String) {
+	pub fn update_contents(&mut self, version: i32, contents: String) {
 		self.version = version;
 		self.lines = Self::generate_line_table(&contents);
-		self.contents = contents;
+		let (cache, chosen_key) = match Self::parse(&mut self.config, &contents)
+		{
+			Some((a, b, chosen_key)) => (Some((a, b)), chosen_key),
+			None => (None, None),
+		};
+		self.cache = cache;
+		self.chosen_key = chosen_key;
+	}
+
+	/// Updates the configuration of the file, and re-parses it if necessary.
+	pub fn update_config(&mut self, config: FileConfig) {
+		self.config = config;
+		let Some(cache) = &mut self.cache else { return; };
+		let (parse_result, chosen_key) = match &self
+			.config
+			.conditional_compilation_state
+		{
+			ConditionalCompilationState::Off => {
+				(cache.0.root(self.config.syntax_highlight_entire_file), None)
+			}
+			ConditionalCompilationState::Evaluate => {
+				let (a, b) =
+					cache.0.evaluate(self.config.syntax_highlight_entire_file);
+				(a, Some(b))
+			}
+			ConditionalCompilationState::Key(key) => {
+				match cache
+					.0
+					.with_key(key, self.config.syntax_highlight_entire_file)
+				{
+					Ok(p) => (p, None),
+					Err(_) => return,
+				}
+			}
+		};
+		cache.1 = parse_result;
+		self.chosen_key = chosen_key;
+	}
+
+	fn parse(
+		config: &mut FileConfig,
+		contents: &str,
+	) -> Option<(TokenTree, ParseResult, Option<Vec<usize>>)> {
+		let Ok(tree) = glast::parser::parse_from_str(contents) else { return None; };
+		let (parse_result, chosen_key) = match &config
+			.conditional_compilation_state
+		{
+			ConditionalCompilationState::Off => {
+				(tree.root(config.syntax_highlight_entire_file), None)
+			}
+			ConditionalCompilationState::Evaluate => {
+				let (a, b) = tree.evaluate(config.syntax_highlight_entire_file);
+				(a, Some(b))
+			}
+			ConditionalCompilationState::Key(key) => {
+				match tree.with_key(key, config.syntax_highlight_entire_file) {
+					Ok(p) => (p, None),
+					Err(_) => return None,
+				}
+			}
+		};
+
+		Some((tree, parse_result, chosen_key))
 	}
 
 	/// Converts a [`Span`] to an LSP [`Range`] type.
@@ -166,7 +245,7 @@ pub enum ConditionalCompilationState {
 }
 
 /// Returns the up-to-date file configuration for a given uri. This takes into account fine-grained configuration
-/// values on a per-directory/per-file basis.
+/// settings on a per-directory/per-file basis.
 pub async fn get_file_config(client: &Client, uri: &Url) -> FileConfig {
 	use tower_lsp::lsp_types::{
 		request::WorkspaceConfiguration, ConfigurationItem, ConfigurationParams,

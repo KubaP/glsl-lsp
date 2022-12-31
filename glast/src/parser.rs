@@ -1526,8 +1526,6 @@ impl TokenTree {
 		chosen_regions: Vec<Span>,
 		mut chosen_tokens: Vec<SyntaxToken>,
 	) -> (Vec<SyntaxToken>, Vec<Span>) {
-		dbg!(&chosen_key);
-		dbg!(&chosen_regions);
 		let mut other_keys =
 			self.minimal_no_of_permutations_for_complete_syntax_highlighting();
 		// We want to exclude the key that we've already chosen. If that leaves no keys left, we know we've already
@@ -1759,54 +1757,179 @@ impl TokenTree {
 		existing_key: &Vec<usize>,
 		chosen_conditional_directive: usize,
 	) -> Vec<usize> {
-		let mut new_key = Vec::with_capacity(existing_key.len());
-
-		let mut call_stack = vec![(0, 0)];
+		let mut call_stack = vec![(0, 0, 0)];
+		// This map will store a vector of sibling branches. This is a map so that the iteration can access the
+		// correct vector to push into, but once the iteration is over we only care about the values not the keys.
+		// Each vector has all of the order-of-appearance indexes of sibling conditional branches.
+		let mut sibling_map: HashMap<(usize, usize), Vec<usize>> =
+			HashMap::new();
 		let mut cond_counter = 0;
 		'outer: loop {
-			let (node_id, child_idx) = call_stack.last_mut().unwrap();
+			let (node_id, child_idx, cond_block_idx) =
+				match call_stack.last_mut() {
+					Some(t) => t,
+					None => break,
+				};
 			let node = &self.tree[*node_id];
+			let Some(child) = node.children.get(*child_idx) else { break; };
 
-			// Consume the next content child of this node.
-			while let Some(child) = node.children.get(*child_idx) {
-				*child_idx += 1;
-				match child {
-					Either::Left(_) => {}
-					Either::Right(ConditionalBlock { conditions, .. }) => {
-						let mut found_new_selection = false;
-						for (_, _, _, _, cond_node_id, _, _) in
-							conditions.iter()
-						{
-							cond_counter += 1;
-
-							if cond_counter == chosen_conditional_directive {
-								// This branch is newly selected.
-								new_key.push(cond_counter);
-								found_new_selection = true;
-							} else if !found_new_selection
-								&& existing_key.contains(&cond_counter)
-							{
-								new_key.push(cond_counter);
-								call_stack.push((*cond_node_id, 0));
-								continue 'outer;
-							}
-							// If the new selection is part of this block and it has already been matched, we don't
-							// want to include any original selections from this block as that would result in more
-							// than one branch being chosen in a single block.
-						}
+			match child {
+				Either::Left(_) => {
+					*child_idx += 1;
+					if *child_idx == node.children.len() {
+						// We have gone through all of the children of this node, so we want to pop it from the
+						// stack.
+						call_stack.pop();
 					}
 				}
+				Either::Right(cond_block) => {
+					if *cond_block_idx == cond_block.conditions.len() {
+						// We have gone through all of the conditional branches.
+						*cond_block_idx = 0;
+						*child_idx += 1;
+						if *child_idx == node.children.len() {
+							// We have gone through all of the children of this node, so we want to pop it from the
+							// stack.
+							call_stack.pop();
+						}
 
-				if node.children.len() == *child_idx {
-					// We have consumed all of the children of this node.
-					if call_stack.len() > 1 {
-						call_stack.pop();
 						continue 'outer;
-					} else {
-						break 'outer;
+					}
+
+					cond_counter += 1;
+					let current_cond_block_idx = *cond_block_idx;
+					let (_, _, _, _, cond_branch_node_id, _, _) =
+						&cond_block.conditions[current_cond_block_idx];
+
+					match sibling_map.get_mut(&(*node_id, *child_idx)) {
+						Some(v) => v.push(cond_counter),
+						None => {
+							sibling_map.insert(
+								(*node_id, *child_idx),
+								vec![cond_counter],
+							);
+						}
+					}
+
+					*cond_block_idx += 1;
+					call_stack.push((*cond_branch_node_id, 0, 0));
+				}
+			}
+		}
+
+		dbg!(&sibling_map);
+
+		let chosen_parents =
+			match self.order_by_appearance.get(chosen_conditional_directive) {
+				Some((_, parent_info)) => {
+					parent_info.iter().map(|(i, _)| *i).collect::<Vec<_>>()
+				}
+				None => {
+					return existing_key.to_vec();
+				}
+			};
+
+		dbg!(&chosen_parents);
+
+		// Vector of vectors of siblings of nodes that the newly chosen node depends on.
+		let mut siblings = sibling_map
+			.values()
+			.filter(|siblings| {
+				for parent in chosen_parents.iter() {
+					if siblings.contains(parent) {
+						return true;
+					}
+				}
+				false
+			})
+			.collect::<Vec<_>>();
+
+		match sibling_map
+			.values()
+			.find(|siblings| siblings.contains(&chosen_conditional_directive))
+		{
+			Some(v) => siblings.push(v),
+			None => return existing_key.to_vec(),
+		}
+
+		dbg!(&siblings);
+
+		let mut new_key = Vec::with_capacity(existing_key.len());
+		'outer: for existing in existing_key {
+			for siblings in siblings.iter() {
+				if siblings.contains(existing) {
+					// This node is a sibling of the newly chosen node or one of the parent nodes required by the
+					// newly chosen node, so we disgard it.
+					continue 'outer;
+				}
+			}
+
+			let (_, parent_info) =
+				self.order_by_appearance.get(*existing).unwrap();
+			let parent_idx_s =
+				parent_info.iter().map(|(i, _)| *i).collect::<Vec<_>>();
+			for siblings in siblings.iter() {
+				for i in parent_idx_s.iter() {
+					if siblings.contains(i) {
+						// This node depends on a parent node that is a sibling of the newly chosen node or one of
+						// the parent nodes required by the newly chosen node, so we discard it.
+						continue 'outer;
 					}
 				}
 			}
+
+			// This node does not clash, so we can keep it.
+			new_key.push(*existing);
+		}
+
+		dbg!(&new_key);
+
+		let mut insertion = chosen_parents;
+		insertion.remove(0); // Remove the `0` root parent, since that's treated implicitly in the key.
+		insertion.push(chosen_conditional_directive);
+
+		if new_key.is_empty() {
+			return insertion;
+		} else if new_key.len() == 1 {
+			if insertion.last().unwrap() < new_key.first().unwrap() {
+				insertion.append(&mut new_key);
+				return insertion;
+			} else {
+				new_key.append(&mut insertion);
+				return new_key;
+			}
+		}
+
+		// We need to insert the new selection. The correct place to insert it will be chronological.
+		if insertion.last().unwrap() < new_key.first().unwrap() {
+			insertion.append(&mut new_key);
+			return insertion;
+		}
+
+		let mut insertion_idx = None;
+		for (i, val) in new_key.windows(2).enumerate() {
+			let first = val[0];
+			let second = val[1];
+
+			if first == *insertion.first().unwrap() {
+				insertion.remove(0);
+			}
+
+			if first < *insertion.first().unwrap()
+				&& *insertion.last().unwrap() < second
+			{
+				// The insertion fits between these two values.
+				insertion_idx = Some(i + 1);
+				break;
+			}
+		}
+
+		if let Some(insertion_idx) = insertion_idx {
+			for i in insertion.into_iter().rev() {
+				new_key.insert(insertion_idx, i);
+			}
+		} else {
+			new_key.append(&mut insertion);
 		}
 
 		new_key

@@ -2,7 +2,7 @@ import * as vscode from "vscode";
 import { window, workspace } from "vscode";
 
 import { getActiveGLSLEditor, Context, isGLSLDocument, isGLSLEditor, getAstEditor } from "./context";
-import * as extensions from "./extensions";
+import * as lsp_extensions from "./lsp_extensions";
 
 export type Cmd = (...args: any[]) => unknown;
 
@@ -40,7 +40,7 @@ export function ast(context: Context): Cmd {
 				textDocumentUri: activeEditor.document.uri.toString(),
 				textDocumentVersion: activeEditor.document.version,
 			};
-			const { ast } = await context.client.sendRequest(extensions.astContent, params, token);
+			const { ast } = await context.client.sendRequest(lsp_extensions.astContent, params, token);
 
 			return ast;
 		}

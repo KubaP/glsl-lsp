@@ -5,7 +5,7 @@ import { ConfigurationRequest } from "vscode-languageclient";
 
 import * as commands from "./commands";
 import { Context } from "./context";
-import { configurationRequest, onDidChangeConfiguration } from "./lsp";
+import * as lsp from "./lsp";
 
 // Global context variable.
 let ctx: Context | undefined;
@@ -23,8 +23,9 @@ export async function activate(context: ExtensionContext) {
 	ctx.registerCommand("showAst", commands.ast);
 
 	// Register LSP handlers.
-	ctx.client.onRequest(ConfigurationRequest.method, configurationRequest);
-	vscode.workspace.onDidChangeConfiguration((e) => onDidChangeConfiguration(e, ctx.client));
+	ctx.client.onRequest(ConfigurationRequest.method, lsp.configurationRequest);
+	ctx.subscribe(vscode.workspace.onDidChangeConfiguration((e) => lsp.onDidChangeConfiguration(e, ctx.client)));
+	ctx.registerCommand("evalConditional", lsp.evalConditional);
 
 	// Start the client.
 	ctx.client.start();

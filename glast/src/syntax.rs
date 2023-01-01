@@ -54,7 +54,7 @@ pub enum SyntaxType {
 	Ident,
 	/// A general bit of text in a directive.
 	Directive,
-	/// The macro concatenation operator.
+	/// The macro concatenation operator (`##`).
 	DirectiveConcat,
 	/// The hash `#` symbol in a directive.
 	DirectiveHash,

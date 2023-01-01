@@ -1,21 +1,45 @@
 # glast
 *glast* is a crate for parsing and manipulating **gl**sl **a**bstract **s**yntax **t**rees, and a lot more.
 
-The current aims of this crate are to allow for parsing and analysis of the OpenGL Shading Language version 4.50 and 4.60. This includes parsing source strings into ASTs, generating syntax highlighting information, as well as performing analysis such as type-checking.
-
-Unlike other similar crates and libraries, *glast* is designed to be fully specification compliant. That means it correctly handles complex behaviours such as macro expansion and conditional compilation. *glast* is also made for IDEs in mind, meaning it handles syntactical errors gracefully and has excellent error recovery strategies, and also produces information relevant to syntax highlighting.
-
 ⚠ This crate is still heavily **work-in-progress**.
 
-## Status
-All GLSL 4.50/4.60 features are implemented, apart from:
-- Some preprocessor directives are not fully supported.
-- The lexer assumes version 4.50 without checking.
+The aims of this crate are to allow for parsing and analysis of the OpenGL Shading Language. This includes parsing source strings into ASTs, generating file formatting and syntax highlighting information, as well as performing analysis such as name resolution and type checking.
 
-## Future Goals
-- Start working on the analysis part of the crate, e.g. name resolution.
-- Add a visitor API for easy traversal of the AST.
-- Support older versions of GLSL, such as 1.10, 3.00 and 3.30 amongst others.
+Unlike other similar crates and libraries, *glast* is designed to be 100% specification compliant. That means it correctly handles complex behaviours such as macro expansion and conditional compilation, even under some extremely unusual edge-cases.
+
+*glast* is also made for IDEs in mind, meaning it handles syntax errors gracefully and has excellent error recovery strategies to produce "best effort" results. It also produces syntax and semantic diagnostics, as well as information for syntax highlighting purposes.
+
+## Current status
+#### Lexer
+|Feature|Status|
+|-|-|
+|Parsing of tokens|✔|
+|Parsing of directives|✔|
+|Dealing with the line-continuation character|✔|
+|Switching GLSL version grammar on-the-fly|✔|
+|100% specification compliant behaviour|✔ [1]|
+
+[1]: Minor discrepancy that would almost never be hit. See [Issue#4](https://github.com/KubaP/glsl-lsp/issues/4).
+
+#### Parser
+|Feature|Status|
+|-|-|
+|Parsing of GLSL language constructs|✔|
+|Parsing all GLSL versions|⚠ [2]|
+|Correct expansion of macros|✔|
+|Handling conditional compilation|✔|
+|Producing syntax errors and relevant semantic diagnostics|✔|
+|Producing syntax highlighting information|✔|
+|Producing information for file formatting|❌|
+|Visitor API|❌|
+|100% specification compliant behaviour|⚠ [3]|
+
+[2]: Only GLSL 450 & 460 are currently supported.
+
+[3]: Not enough tests to validate with great certainty.
+
+#### Analyzer
+❌ Work not started yet.
 
 ## License
 This project is licensed under the **MIT** license - see [LICENSE](LICENSE) for details.

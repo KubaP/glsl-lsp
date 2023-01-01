@@ -7,7 +7,7 @@
 //! body of a `#define` directive.
 //!
 //! # Macro expansion
-//! Macros are expanded within the `#line`/`#if` and `#elif` directives only:
+//! Macros are expanded within the `#line`,`#if`, and `#elif` directives only:
 //! ```c
 //! #define FOO 450
 //!
@@ -766,7 +766,7 @@ pub(super) fn parse_version(
 
 	// Whether we are parsing the first number token of this version directive's content.
 	let mut first_number = true;
-	// This value is returned to the main lexer, which in turn can dynamically set it's own version number if the
+	// This value is returned to the main lexer, which in turn can dynamically set its own version number if the
 	// appropriate circumstances are met.
 	let mut version = None;
 

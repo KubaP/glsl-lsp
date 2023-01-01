@@ -287,7 +287,7 @@ pub enum Token {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum NumType {
 	/// A decimal is any number beginning with `1-9` without a decimal point or an exponent, or just the digit `0`
-	/// on it's own.
+	/// on its own.
 	Dec,
 	/// An octal is any number beginning with `0` without a decimal point or an exponent.
 	Oct,

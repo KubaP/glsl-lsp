@@ -132,7 +132,7 @@ pub enum Syntax {
 	/// ERROR - Found an illegal preprocessor directive.
 	///
 	/// - `0` - The span of the directive.
-	/// - `1` - The initial keyword and it's span, if there is one.
+	/// - `1` - The initial keyword and its span, if there is one.
 	FoundIllegalPreproc(Span, Option<Spanned<String>>),
 }
 

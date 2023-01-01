@@ -5,7 +5,7 @@
 //! parse the token tree into an abstract syntax tree ([`ParseResult`]).
 //!
 //! # Parser
-//! The parser is (aiming to be) 100% specification compliant; that is, all valid source strings are parsed to
+//! This parser is (aiming to be) 100% specification compliant; that is, all valid source strings are parsed to
 //! produce correct results with no compile-time errors, and all invalid source strings are parsed on a "best
 //! effort" basis to produce some results and the correct compile-time errors.
 //!
@@ -14,8 +14,8 @@
 //! all of the places that they are allowed to be expanded in. Because of the fact that macros can contain
 //! partially-valid grammar that only becomes fully valid at the call site with surrounding context, the parser
 //! discards information that a macro call site exists and just looks at the result of the expansion. Hence, the
-//! final AST has no information about macro call sites. Note that the syntax highlighting spans correctly colour
-//! macro call sites.
+//! final AST has no information about macro call sites. However, the syntax highlighting spans does correctly
+//! colour macro call sites.
 //!
 //! ## Conditional compilation
 //! This parser fully supports conditional compilation. Because conditional compilation is a pre-pass (part of the
@@ -30,15 +30,15 @@
 //! entire source string, all parsing functions have a `syntax_highlight_entire_file` boolean parameter.
 //!
 //! # Differences in behaviour
-//! The GLSL specification does not mention what the result should be if a syntax/semantic error is
-//! encountered, apart from the fact that a compile-time error must be emitted. The [`ParseResult`] contains all
-//! detected compile-time diagnostics.
-//!
 //! Since this crate is part of a larger effort to provide an LSP implementation, it is designed to handle errors
 //! in a UX friendly manner. Therefore, this parser tries its best to recover from syntax errors in a sensible
 //! manner and provide a "best effort" AST. The AST retains 100% semantic meaning of the token stream only if no
 //! syntax or semantic errors are produced. If any errors are produced, that means some information has been lost
-//! in the tokenstream-to-ast conversion.
+//! in the token stream-to-ast conversion.
+//!
+//! The GLSL specification does not mention what the result should be if a syntax/semantic error is encountered,
+//! apart from the fact that a compile-time error must be emitted. The [`ParseResult`] contains all detected
+//! compile-time diagnostics.
 
 pub mod ast;
 pub mod conditional_eval;
@@ -722,7 +722,7 @@ pub fn parse_from_token_stream(
 	}
 
 	// In order to make our job easier later down the line, for each conditional branch node ordered-by-appearance,
-	// we want to know it's node ID and the () for the parent nodes. The () consists of:
+	// we want to know its node ID and the () for the parent nodes. The () consists of:
 	// - The parent's position within `order_by_appearance`. <- We don't have this information yet.
 	// - The parent's node ID.
 	let old_order = order_by_appearance;

@@ -20,7 +20,9 @@ export async function activate(context: ExtensionContext) {
 	ctx = await Context.new(context, serverPath);
 
 	// Register commands.
-	ctx.registerCommand("showAst", commands.ast);
+	ctx.registerCommand("showAst", commands.showAst);
+	ctx.registerCommand("evaluateConditionals", commands.evaluateConditionals);
+	ctx.registerCommand("disableConditionals", commands.disableConditionals);
 
 	// Register LSP handlers.
 	ctx.client.onRequest(ConfigurationRequest.method, lsp.configurationRequest);

@@ -9,7 +9,7 @@ export type Cmd = (...args: any[]) => unknown;
 // Note that these functions are command "factories"; i.e. they can perform arbitrary set-up logic which may
 // require the global context, and then they return the actual function which runs upon the command invocation.
 
-export function ast(context: Context): Cmd {
+export function showAst(ctx: Context): Cmd {
 	class AstProvider implements vscode.TextDocumentContentProvider {
 		static scheme = "glsl-ast";
 		static uri = vscode.Uri.parse(`${AstProvider.scheme}://ast/tree.ast.glsl`);
@@ -19,8 +19,8 @@ export function ast(context: Context): Cmd {
 		constructor() {
 			// These are here because they are relevant to the functionality of the feature, and if this feature is
 			// disposed, we want to dispose of these handlers too.
-			context.subscribe(workspace.onDidChangeTextDocument(this.onDidChangeTextDocument, this));
-			context.subscribe(window.onDidChangeActiveTextEditor(this.onDidChangeActiveTextEditor, this));
+			ctx.subscribe(workspace.onDidChangeTextDocument(this.onDidChangeTextDocument, this));
+			ctx.subscribe(window.onDidChangeActiveTextEditor(this.onDidChangeActiveTextEditor, this));
 		}
 
 		get onDidChange(): vscode.Event<vscode.Uri> {
@@ -40,7 +40,7 @@ export function ast(context: Context): Cmd {
 				textDocumentUri: activeEditor.document.uri.toString(),
 				textDocumentVersion: activeEditor.document.version,
 			};
-			const { ast } = await context.client.sendRequest(lsp_extensions.astContent, params, token);
+			const { ast } = await ctx.client.sendRequest(lsp_extensions.astContent, params, token);
 
 			return ast;
 		}
@@ -73,7 +73,7 @@ export function ast(context: Context): Cmd {
 
 	// Create the provider.
 	const provider = new AstProvider();
-	context.subscribe(workspace.registerTextDocumentContentProvider(AstProvider.scheme, provider));
+	ctx.subscribe(workspace.registerTextDocumentContentProvider(AstProvider.scheme, provider));
 
 	// The command logic.
 	return async () => {
@@ -90,5 +90,27 @@ export function ast(context: Context): Cmd {
 
 		// Once the editor is open, fire the event to get new document contents.
 		provider.eventEmitter.fire(uri);
+	};
+}
+
+export function evaluateConditionals(ctx: Context): Cmd {
+	// The command logic.
+	return async () => {
+		const activeEditor = getActiveGLSLEditor();
+		if (!activeEditor) {
+			return;
+		}
+		await vscode.commands.executeCommand("glsl.evalConditional", activeEditor.document.uri.toString(), "eval");
+	};
+}
+
+export function disableConditionals(ctx: Context): Cmd {
+	// The command logic.
+	return async () => {
+		const activeEditor = getActiveGLSLEditor();
+		if (!activeEditor) {
+			return;
+		}
+		await vscode.commands.executeCommand("glsl.evalConditional", activeEditor.document.uri.toString(), "off");
 	};
 }

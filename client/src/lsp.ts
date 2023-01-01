@@ -39,8 +39,9 @@ export async function onDidChangeConfiguration(e: ConfigurationChangeEvent, clie
 	// must be the server that requests the updated setting because it can do it for each file and it knows the uri
 	// of each file.
 	if (
-		e.affectsConfiguration("glsl.syntaxHighlighting.highlightEntireFile") ||
-		e.affectsConfiguration("glsl.conditionalCompilation.state")
+		e.affectsConfiguration("glsl.conditionalCompilation.state") ||
+		e.affectsConfiguration("glsl.conditionalCompilation.codeLens") ||
+		e.affectsConfiguration("glsl.syntaxHighlighting.highlightEntireFile")
 	) {
 		await client.sendNotification(DidChangeConfigurationNotification.method, {
 			settings: "fileSettings",

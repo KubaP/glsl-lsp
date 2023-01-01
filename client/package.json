@@ -43,7 +43,7 @@
 				"configuration": "./glsl.language-configuration.json"
 			},
 			{
-				"id": "glsl_ast",
+				"id": "glsl.ast",
 				"extensions": [
 					".ast.glsl"
 				],
@@ -59,6 +59,16 @@
 		],
 		"commands": [
 			{
+				"command": "glsl.evaluateConditionals",
+				"category": "GLSL",
+				"title": "Evaluate conditional compilation for this file"
+			},
+			{
+				"command": "glsl.disableConditionals",
+				"category": "GLSL",
+				"title": "Disable conditional compilation for this file"
+			},
+			{
 				"command": "glsl.showAst",
 				"category": "GLSL (debug command)",
 				"title": "Show AST"
@@ -66,6 +76,14 @@
 		],
 		"menus": {
 			"commandPalette": [
+				{
+					"command": "glsl.evaluateConditionals",
+					"when": "editorLangId == glsl"
+				},
+				{
+					"command": "glsl.disableConditionals",
+					"when": "editorLangId == glsl"
+				},
 				{
 					"command": "glsl.showAst",
 					"when": "editorLangId == glsl"
@@ -85,7 +103,7 @@
 						"verbose"
 					],
 					"default": "off",
-					"description": "Traces the communication between VS Code and the language server. This is a debug setting useful for working on the extension itself."
+					"description": "Traces the communication between VS Code and the language server. This is a debug setting for developing the extension itself."
 				},
 				"glsl.conditionalCompilation.state": {
 					"scope": "resource",
@@ -94,23 +112,29 @@
 						"off",
 						"evaluate"
 					],
+					"default": "evaluate",
 					"enumItemLabels": [
 						"Off",
 						"Evaluate"
 					],
 					"enumDescriptions": [
 						"Conditional compilation is disabled",
-						"Evaluates the conditional directives on-the-fly"
+						"Conditional compilation is evaluated"
 					],
-					"default": "off",
-					"description": "The default state for conditional compilation evaluation when opening a new file. This setting can be overridden on a per-file basis using either an appropriate command or through the relevant codelenses."
+					"description": "The default state for conditional compilation when opening a new file. This setting can be overridden on a per-file basis using either a relevant CodeLens or an appropriate command."
+				},
+				"glsl.conditionalCompilation.codeLens": {
+					"scope": "resource",
+					"type": "boolean",
+					"default": true,
+					"description": "Whether to show CodeLens above controlling conditional compilation directives, allowing you to include/exclude them from the evaluation."
 				},
 				"glsl.syntaxHighlighting.highlightEntireFile": {
 					"scope": "resource",
 					"type": "boolean",
 					"default": true,
-					"description": "Whether to syntax highlight the entire file, as opposed to just the chosen code depending on the `glsl.conditionalCompilation.state` setting. Because of how conditional compilation is designed, this setting will require a file to be parsed more than once to fully parse and color every bit of text. Under certain complex conditional branching, this setting set to `true` can cause performance issues.",
-					"markdownDescription": "Whether to syntax highlight the entire file, as opposed to just the chosen code depending on the `#glsl.conditionalCompilation.state#` setting. Because of how conditional compilation is designed, this setting will require a file to be parsed more than once to fully parse and color every bit of text. Under certain complex conditional branching, this setting set to `true` can cause performance issues."
+					"description": "Whether to syntax highlight the entire file, as opposed to just the chosen code depending on the `glsl.conditionalCompilation.state` setting. Because of the fact that conditional compilation is implemented through the preprocessor, this setting will require a file to be parsed more than once to fully parse and color every bit of text. Under certain complex conditional branching, this setting set to `true` can cause performance issues.",
+					"markdownDescription": "Whether to syntax highlight the entire file, as opposed to just the chosen code depending on the `#glsl.conditionalCompilation.state#` setting. Because of the fact that conditional compilation is implemented through the preprocessor, this setting will require a file to be parsed more than once to fully parse and color every bit of text. Under certain complex conditional branching, this setting set to `true` can cause performance issues."
 				}
 			}
 		},

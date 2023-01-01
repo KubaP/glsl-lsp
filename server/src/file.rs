@@ -21,11 +21,16 @@ pub struct File {
 	/// - `1` - Character index which starts at the line number.
 	pub lines: Vec<(usize, usize)>,
 	/// The configuration of this file.
-	pub config: FileConfig,
+	pub config: Config,
 	/// The cached data of the parsing operation.
-	pub cache: Option<(TokenTree, ParseResult)>,
-	/// This will be `Some` if `self.config.conditional_compilation_state == Evaluate`.
-	pub chosen_key: Option<Vec<usize>>,
+	///
+	/// If this is `Some`, this contains:
+	/// - `0` - The token tree.
+	/// - `1` - The result of the parsing.
+	/// - `2` - The chosen key if `self.config.conditional_comp_state` is `Evaluate`.
+	///
+	/// If this is `None`, that means the file could not be parsed.
+	pub cache: Option<(TokenTree, ParseResult, Option<Vec<usize>>)>,
 }
 
 impl File {
@@ -34,19 +39,17 @@ impl File {
 		uri: Url,
 		version: i32,
 		contents: String,
-		mut config: FileConfig,
+		settings: ConfigSettings,
 	) -> Self {
-		let (cache, chosen_key) = match Self::parse(&mut config, &contents) {
-			Some((a, b, chosen_key)) => (Some((a, b)), chosen_key),
-			None => (None, None),
-		};
 		Self {
 			uri,
 			version,
 			lines: Self::generate_line_table(&contents),
-			config,
-			cache,
-			chosen_key,
+			cache: Self::parse(&settings, &contents),
+			config: Config {
+				settings,
+				overrides: Default::default(),
+			},
 		}
 	}
 
@@ -54,69 +57,47 @@ impl File {
 	pub fn update_contents(&mut self, version: i32, contents: String) {
 		self.version = version;
 		self.lines = Self::generate_line_table(&contents);
-		let (cache, chosen_key) = match Self::parse(&mut self.config, &contents)
-		{
-			Some((a, b, chosen_key)) => (Some((a, b)), chosen_key),
-			None => (None, None),
-		};
-		self.cache = cache;
-		self.chosen_key = chosen_key;
+		self.cache = Self::parse(&self.config.settings, &contents);
 	}
 
-	/// Updates the configuration of the file, and re-parses it if necessary.
-	pub fn update_config(&mut self, config: FileConfig) {
-		self.config = config;
+	/// Updates the configuration settings of the file, and re-parses it if necessary.
+	pub fn update_settings(&mut self, settings: ConfigSettings) {
+		if !self.config.overrides.conditional_comp_state {
+			self.config.settings.conditional_comp_state =
+				settings.conditional_comp_state;
+		}
+		self.config.settings.conditional_comp_code_lenses =
+			settings.conditional_comp_code_lenses;
+		self.config.settings.syntax_highlight_entire_file =
+			settings.syntax_highlight_entire_file;
+
 		let Some(cache) = &mut self.cache else { return; };
-		let (parse_result, chosen_key) = match &self
-			.config
-			.conditional_compilation_state
-		{
-			ConditionalCompilationState::Off => {
-				(cache.0.root(self.config.syntax_highlight_entire_file), None)
-			}
-			ConditionalCompilationState::Evaluate => {
-				let (a, b) =
-					cache.0.evaluate(self.config.syntax_highlight_entire_file);
-				(a, Some(b))
-			}
-			ConditionalCompilationState::Key(key) => {
-				match cache
-					.0
-					.with_key(key, self.config.syntax_highlight_entire_file)
-				{
-					Ok(p) => (p, None),
-					Err(_) => return,
+		let (parse_result, eval_chosen_key) =
+			match &self.config.settings.conditional_comp_state {
+				ConditionalCompilationState::Off => (
+					cache.0.root(
+						self.config.settings.syntax_highlight_entire_file,
+					),
+					None,
+				),
+				ConditionalCompilationState::Evaluate => {
+					let (a, b) = cache.0.evaluate(
+						self.config.settings.syntax_highlight_entire_file,
+					);
+					(a, Some(b))
 				}
-			}
-		};
+				ConditionalCompilationState::Key(key) => {
+					match cache.0.with_key(
+						key,
+						self.config.settings.syntax_highlight_entire_file,
+					) {
+						Ok(p) => (p, None),
+						Err(_) => return,
+					}
+				}
+			};
 		cache.1 = parse_result;
-		self.chosen_key = chosen_key;
-	}
-
-	fn parse(
-		config: &mut FileConfig,
-		contents: &str,
-	) -> Option<(TokenTree, ParseResult, Option<Vec<usize>>)> {
-		let Ok(tree) = glast::parser::parse_from_str(contents) else { return None; };
-		let (parse_result, chosen_key) = match &config
-			.conditional_compilation_state
-		{
-			ConditionalCompilationState::Off => {
-				(tree.root(config.syntax_highlight_entire_file), None)
-			}
-			ConditionalCompilationState::Evaluate => {
-				let (a, b) = tree.evaluate(config.syntax_highlight_entire_file);
-				(a, Some(b))
-			}
-			ConditionalCompilationState::Key(key) => {
-				match tree.with_key(key, config.syntax_highlight_entire_file) {
-					Ok(p) => (p, None),
-					Err(_) => return None,
-				}
-			}
-		};
-
-		Some((tree, parse_result, chosen_key))
+		cache.2 = eval_chosen_key;
 	}
 
 	/// Converts a [`Span`] to an LSP [`Range`] type.
@@ -163,6 +144,34 @@ impl File {
 		let (_, char_offset) = self.lines.get(position.line as usize).unwrap();
 
 		*char_offset + position.character as usize
+	}
+
+	fn parse(
+		settings: &ConfigSettings,
+		contents: &str,
+	) -> Option<(TokenTree, ParseResult, Option<Vec<usize>>)> {
+		let Ok(tree) = glast::parser::parse_from_str(contents) else { return None; };
+		let (parse_result, eval_chosen_key) = match &settings
+			.conditional_comp_state
+		{
+			ConditionalCompilationState::Off => {
+				(tree.root(settings.syntax_highlight_entire_file), None)
+			}
+			ConditionalCompilationState::Evaluate => {
+				let (a, b) =
+					tree.evaluate(settings.syntax_highlight_entire_file);
+				(a, Some(b))
+			}
+			ConditionalCompilationState::Key(key) => {
+				match tree.with_key(key, settings.syntax_highlight_entire_file)
+				{
+					Ok(p) => (p, None),
+					Err(_) => return None,
+				}
+			}
+		};
+
+		Some((tree, parse_result, eval_chosen_key))
 	}
 
 	/// Generates a conversion table based of the contents string.
@@ -226,10 +235,26 @@ impl File {
 
 /// A file configuration.
 ///
-/// This stores all per-directory/per-file settings that are relevant to a file.
+/// This stores all per-file settings that are relevant to a file.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct FileConfig {
-	pub conditional_compilation_state: ConditionalCompilationState,
+pub struct Config {
+	/// The active settings for this file.
+	pub settings: ConfigSettings,
+	/// What settings are overridden for this file.
+	pub overrides: ConfigOverrides,
+}
+
+/// The configuration settings.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ConfigSettings {
+	/// The state of conditional compilation. This is controlled by the `glsl.conditionalCompilation.state`
+	/// setting, or by manual overrides.
+	pub conditional_comp_state: ConditionalCompilationState,
+	/// Whether to show CodeLens above controlling conditional compilation directives. This is controlled by the
+	/// `glsl.conditionalCompilation.codeLens` setting.
+	pub conditional_comp_code_lenses: bool,
+	/// Whether to syntax highlight the entire file. This is controlled by the
+	/// `glsl.syntaxHighlighting.highlightEntireFile` setting.
 	pub syntax_highlight_entire_file: bool,
 }
 
@@ -244,9 +269,20 @@ pub enum ConditionalCompilationState {
 	Key(Vec<usize>),
 }
 
-/// Returns the up-to-date file configuration for a given uri. This takes into account fine-grained configuration
-/// settings on a per-directory/per-file basis.
-pub async fn get_file_config(client: &Client, uri: &Url) -> FileConfig {
+/// Which configuration settings are manually overridden. This would be a result of either a command or a CodeLens.
+///
+/// Each field in this struct matches the name of the relevant field in the [`ConfigSettings`] struct.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct ConfigOverrides {
+	pub conditional_comp_state: bool,
+}
+
+/// Returns the up-to-date file configuration settings for a given uri. This takes into account fine-grained
+/// configuration settings on a per-directory/per-file basis.
+pub async fn get_file_config_settings(
+	client: &Client,
+	uri: &Url,
+) -> ConfigSettings {
 	use tower_lsp::lsp_types::{
 		request::WorkspaceConfiguration, ConfigurationItem, ConfigurationParams,
 	};
@@ -262,6 +298,12 @@ pub async fn get_file_config(client: &Client, uri: &Url) -> FileConfig {
 				ConfigurationItem {
 					scope_uri: Some(uri.clone()),
 					section: Some(
+						"glsl.conditionalCompilation.codeLens".into(),
+					),
+				},
+				ConfigurationItem {
+					scope_uri: Some(uri.clone()),
+					section: Some(
 						"glsl.syntaxHighlighting.highlightEntireFile".into(),
 					),
 				},
@@ -269,22 +311,26 @@ pub async fn get_file_config(client: &Client, uri: &Url) -> FileConfig {
 		})
 		.await;
 
+	// WARNING: Keep the default values in line with the defaults inside `package.json`.
 	// Panic: The client handler always returns a vector of the same length as the request.
 	// See `configurationRequest()` in `main.ts`.
 	let Ok(mut result) = result else { unreachable!(); };
 	// Even though the vscode client package manifest sets a type for each configuration setting, the returned
 	// value can be of any type, so we need to deal with incorrect types through a default value.
-	let conditional_compilation_state =
-		match result.remove(0).as_str().unwrap_or("") {
+	let conditional_comp_state =
+		match result.remove(0).as_str().unwrap_or("evaluate") {
 			"off" => ConditionalCompilationState::Off,
 			"evaluate" => ConditionalCompilationState::Evaluate,
 			_ => ConditionalCompilationState::Off,
 		};
+	let conditional_comp_code_lenses =
+		result.remove(0).as_bool().unwrap_or(true);
 	let syntax_highlight_entire_file =
-		result.remove(0).as_bool().unwrap_or(false);
+		result.remove(0).as_bool().unwrap_or(true);
 
-	FileConfig {
-		conditional_compilation_state,
+	ConfigSettings {
+		conditional_comp_state,
+		conditional_comp_code_lenses,
 		syntax_highlight_entire_file,
 	}
 }

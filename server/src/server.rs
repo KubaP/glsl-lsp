@@ -1,7 +1,7 @@
 //! The server logic/implementation.
 
 use crate::{
-	file::{get_file_config, ConditionalCompilationState, File},
+	file::{get_file_config_settings, ConditionalCompilationState, File},
 	lsp_extensions::EvalConditionalChoice,
 };
 use std::collections::HashMap;
@@ -151,9 +151,11 @@ impl Server {
 			}
 		} else {
 			// We have not encountered this file before.
-			let config = get_file_config(client, &uri).await;
-			self.files
-				.insert(uri.clone(), File::new(uri, version, contents, config));
+			let settings = get_file_config_settings(client, &uri).await;
+			self.files.insert(
+				uri.clone(),
+				File::new(uri, version, contents, settings),
+			);
 		}
 	}
 
@@ -180,7 +182,7 @@ impl Server {
 			unreachable!("[Server::publish_diagnostics] Received a file `uri: {uri}` that has not been opened yet");
 		};
 
-		let Some((_, parse_result)) = &file.cache else { return; };
+		let Some((_, parse_result, _)) = &file.cache else { return; };
 
 		let mut diags = Vec::new();
 		crate::diag::convert(
@@ -193,7 +195,7 @@ impl Server {
 		for span in &parse_result.disabled_code_regions {
 			crate::diag::disable_region(
 				*span,
-				&file.config.conditional_compilation_state,
+				&file.config.settings.conditional_comp_state,
 				&mut diags,
 				file,
 			);
@@ -208,10 +210,7 @@ impl Server {
 	}
 
 	/// Fulfils the `textDocument/semanticTokens/full` request.
-	pub fn provide_semantic_tokens(
-		&self,
-		uri: &Url,
-	) -> Vec<SemanticToken> {
+	pub fn provide_semantic_tokens(&self, uri: &Url) -> Vec<SemanticToken> {
 		if !self.highlighting_state.enabled {
 			return vec![];
 		}
@@ -220,7 +219,7 @@ impl Server {
 			unreachable!("[Server::provide_semantic_tokens] Received a file `uri: {uri}` that has not been opened yet");
 		};
 
-		let Some((_, parse_result)) = &file.cache else { return Vec::new(); };
+		let Some((_, parse_result, _)) = &file.cache else { return Vec::new(); };
 
 		crate::semantic::convert(
 			&parse_result.syntax_tokens,
@@ -234,17 +233,21 @@ impl Server {
 		use tower_lsp::lsp_types::Command;
 
 		if !self.document_state.supports_code_lens {
-			return vec![];
+			return Vec::new();
 		}
 
 		let Some(file) = self.files.get(uri) else {
 			unreachable!("[Server::provide_code_lens] Received a file `uri: {uri}` that has not been opened yet");
 		};
 
-		let Some((token_tree, _)) = &file.cache else { return Vec::new(); };
-		let chosen_key = match &file.config.conditional_compilation_state {
+		if !file.config.settings.conditional_comp_code_lenses {
+			return Vec::new();
+		}
+
+		let Some((token_tree, _, eval_chosen_key)) = &file.cache else { return Vec::new(); };
+		let chosen_key = match &file.config.settings.conditional_comp_state {
 			ConditionalCompilationState::Off => None,
-			ConditionalCompilationState::Evaluate => file.chosen_key.as_ref(),
+			ConditionalCompilationState::Evaluate => eval_chosen_key.as_ref(),
 			ConditionalCompilationState::Key(k) => Some(k),
 		};
 
@@ -286,8 +289,11 @@ impl Server {
 			.collect::<Vec<_>>();
 
 		// Lenses at the top of the file.
-		match &file.config.conditional_compilation_state {
-			ConditionalCompilationState::Off => lenses.push(CodeLens {
+		if !token_tree
+			.get_all_controlling_conditional_directives()
+			.is_empty()
+		{
+			let eval = CodeLens {
 				range: file.span_to_lsp(glast::Span::new(0, 0)),
 				command: Some(Command {
 					title: "Evaluate conditional compilation".into(),
@@ -298,8 +304,8 @@ impl Server {
 					]),
 				}),
 				data: None,
-			}),
-			ConditionalCompilationState::Evaluate => lenses.push(CodeLens {
+			};
+			let disable = CodeLens {
 				range: file.span_to_lsp(glast::Span::new(0, 0)),
 				command: Some(Command {
 					title: "Disable conditional compilation".into(),
@@ -307,32 +313,14 @@ impl Server {
 					arguments: Some(vec![uri.to_string().into(), "off".into()]),
 				}),
 				data: None,
-			}),
-			ConditionalCompilationState::Key(_) => {
-				lenses.push(CodeLens {
-					range: file.span_to_lsp(glast::Span::new(0, 0)),
-					command: Some(Command {
-						title: "Evaluate conditional compilation".into(),
-						command: "glsl.evalConditional".into(),
-						arguments: Some(vec![
-							uri.to_string().into(),
-							"eval".into(),
-						]),
-					}),
-					data: None,
-				});
-				lenses.push(CodeLens {
-					range: file.span_to_lsp(glast::Span::new(0, 0)),
-					command: Some(Command {
-						title: "Disable conditional compilation".into(),
-						command: "glsl.evalConditional".into(),
-						arguments: Some(vec![
-							uri.to_string().into(),
-							"off".into(),
-						]),
-					}),
-					data: None,
-				});
+			};
+			match &file.config.settings.conditional_comp_state {
+				ConditionalCompilationState::Off => lenses.push(eval),
+				ConditionalCompilationState::Evaluate => lenses.push(disable),
+				ConditionalCompilationState::Key(_) => {
+					lenses.push(eval);
+					lenses.push(disable);
+				}
 			}
 		}
 
@@ -352,10 +340,10 @@ impl Server {
 		match str {
 			"fileSettings" => {
 				for (uri, file) in self.files.iter_mut() {
-					let new_config = get_file_config(client, uri).await;
-					if new_config != file.config {
+					let new_settings = get_file_config_settings(client, uri).await;
+					if new_settings != file.config.settings {
 						changed_files.push(uri.clone());
-						file.update_config(new_config);
+						file.update_settings(new_settings);
 					}
 				}
 			}
@@ -363,10 +351,14 @@ impl Server {
 		}
 
 		for uri in changed_files.iter() {
+			// We may have changed the conditional compilation state so we need to update greyed-out areas.
 			self.publish_diagnostics(client, &uri).await;
 		}
 		if !changed_files.is_empty() {
+			// We may have changed the conditional compilation state so we need to update syntax highlighting.
 			let _ = client.send_request::<SemanticTokensRefresh>(()).await;
+			// We may have changed the CodeLens visibility.
+			let _ = client.send_request::<CodeLensRefresh>(()).await;
 		}
 	}
 	// endregion: `workspace/*` events.
@@ -378,7 +370,7 @@ impl Server {
 			unreachable!("[Server::provide_ast] Received a file `uri: {uri}` that has not been opened yet");	
 		};
 
-		let Some((_, parse_result)) = &file.cache else { return "<ERROR PARSING FILE>".into(); };
+		let Some((_, parse_result, _)) = &file.cache else { return "<ERROR PARSING FILE>".into(); };
 		glast::parser::print_ast(&parse_result.ast)
 	}
 
@@ -395,24 +387,25 @@ impl Server {
 
 		// The only CodeLenses that are shown are ones that *will* change which conditional branches get parsed, so
 		// we always need to re-parse the file.
-		let mut new_config = file.config.clone();
+		let mut new_settings = file.config.settings.clone();
 		match choice {
 			EvalConditionalChoice::Off => {
-				new_config.conditional_compilation_state =
+				new_settings.conditional_comp_state =
 					ConditionalCompilationState::Off;
 			}
 			EvalConditionalChoice::Evaluate => {
-				new_config.conditional_compilation_state =
+				new_settings.conditional_comp_state =
 					ConditionalCompilationState::Evaluate;
 			}
 			EvalConditionalChoice::ChoiceOn(branch_idx) => {
-				let Some((token_tree, _)) = &file.cache else { return; };
-				let new_key = match &file.config.conditional_compilation_state {
+				let Some((token_tree, _, eval_chosen_key)) = &file.cache else { return; };
+				let new_key = match &file.config.settings.conditional_comp_state
+				{
 					ConditionalCompilationState::Off => {
 						token_tree.create_key(branch_idx as usize)
 					}
 					ConditionalCompilationState::Evaluate => {
-						if let Some(chosen_key) = &file.chosen_key {
+						if let Some(chosen_key) = eval_chosen_key {
 							token_tree.add_selection_to_key(
 								chosen_key,
 								branch_idx as usize,
@@ -429,15 +422,16 @@ impl Server {
 					}
 				};
 
-				new_config.conditional_compilation_state =
+				new_settings.conditional_comp_state =
 					ConditionalCompilationState::Key(new_key);
 			}
 			EvalConditionalChoice::ChoiceOff(branch_idx) => {
-				let Some((token_tree, _)) = &file.cache else { return; };
-				let new_key = match &file.config.conditional_compilation_state {
+				let Some((token_tree, _, eval_chosen_key)) = &file.cache else { return; };
+				let new_key = match &file.config.settings.conditional_comp_state
+				{
 					ConditionalCompilationState::Off => return,
 					ConditionalCompilationState::Evaluate => {
-						if let Some(chosen_key) = &file.chosen_key {
+						if let Some(chosen_key) = eval_chosen_key {
 							token_tree.remove_selection_from_key(
 								chosen_key,
 								branch_idx as usize,
@@ -454,13 +448,24 @@ impl Server {
 					}
 				};
 
-				new_config.conditional_compilation_state =
+				new_settings.conditional_comp_state =
 					ConditionalCompilationState::Key(new_key);
 			}
 		}
 
-		file.update_config(new_config);
+		let default_settings = get_file_config_settings(client, uri).await;
+		if default_settings.conditional_comp_state
+			== new_settings.conditional_comp_state
+		{
+			// We have made a change which has resulted in the new settings matching the default settings for this
+			// file. That means we can reset the override.
+			file.config.overrides.conditional_comp_state = false;
+		}
 
+		file.update_settings(new_settings);
+
+		// We have modified the conditional compilation state, so we need to update greyed-out areas, syntax
+		// highlighting, and CodeLenses.
 		self.publish_diagnostics(client, uri).await;
 		let _ = client.send_request::<SemanticTokensRefresh>(()).await;
 		let _ = client.send_request::<CodeLensRefresh>(()).await;

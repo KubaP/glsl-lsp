@@ -72,7 +72,7 @@ jobs:
 
             - name: Package release
               id: release-script
-              run: .\build\release.ps1
+              run: .\build\release-glast.ps1
 
             - name: Publish release
               uses: softprops/action-gh-release@v0.1.14

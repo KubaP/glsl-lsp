@@ -11,7 +11,7 @@
 			"args": ["--extensionDevelopmentPath=${workspaceFolder}"],
 			"env": {
 				"RUST_BACKTRACE": "1",
-				"__GLSL_DEBUG_SERVER_PATH": "${workspaceFolder}/server/target/debug/server.exe"
+				"__GLSL_DEBUG_SERVER_PATH": "${workspaceFolder}/server/target/debug/glsl-lsp.exe"
 			},
 			"sourceMaps": true,
 			"smartStep": true,
@@ -19,16 +19,15 @@
 			"preLaunchTask": "npm build client"
 		},
 		{
-			"type": "lldb",
+			"name": "Attach server",
+			"type": "cppvsdbg",
 			"request": "attach",
-			"program": "${workspaceFolder}/server/target/debug/server.exe",
-			"name": "Attach Extension",
-			"sourceLanguages": ["rust"]
+			"processId": "${command:pickProcess}"
 		},
 		{
+			"name": "Lib tests",
 			"type": "lldb",
 			"request": "launch",
-			"name": "Lib tests",
 			"cargo": {
 				"args": ["test", "--no-run", "--lib", "--package=glast"],
 				"filter": {

@@ -16,7 +16,7 @@ GLSL source strings **must** use the UTF-8 encoding. Only the following characte
 
 Any other characters produce a compile-time error.
 
-There are no digraphs or trigraphs, and no escape sequences other than the [line-continuation character](#line-continuation-character).
+There are no digraphs or trigraphs, and no escape sequences other than the [Line-Continuation Character](#line-continuation-character).
 
 The following are reserved keywords, using any of these results in a compile-time error:
 ```glsl
@@ -1612,18 +1612,57 @@ Un-defines a macro:
 ## ifdef
 ⚠ `defined` can also be a valid macro name
 ```glsl
-#ifdef SYMBOL
+#ifdef _IDENTIFIER_
 ```
-`SYMBOL` is any identifier string.
+`_IDENTIFIER_` specifies the name of a macro. This is not optional.
 
 ## ifndef
 ```glsl
-#ifndef SYMBOL
+#ifndef _IDENTIFIER_
 ```
-`SYMBOL` is any identifier string.
+`_IDENTIFIER_` specifies the name of a macro. This is not optional.
 
-## if
-## elif
+## if/elif
+Enables code depending on the evaluation of an expression:
+```glsl
+#if _EXPRESSION_
+#elif _EXPRESSION_
+```
+`_EXPRESSION_` is a compile-time expression that is evaluated according to the following set of rules.
+
+### Conditional expressions
+Conditional expressions fundamentally operate on decimal integer constants and nothing more. There is a notion of "boolean" values however there is no real distinction between boolean values and integer values. Any operation which "returns" a boolean really returns a number, and the values are converted where necessary:
+- If an operation requires integers, (such as addition or multiplication), any boolean values are converted to integers, where `false = 0` and `true = 1`.
+- If an operation requires booleans, (such as the logical and), any integer values are converted to booleans, where if `n == 0` the value is `false`, whilst any other number (including negatives) is treated as `true`.
+
+Macros are allowed within conditional expressions. If a macro name is used, and a macro with that name is previously defined and contains a body, the macro is expanded as normal:
+```glsl
+#define five 5
+#define foo_min five -
+
+// This is equivalent to: 5 - 5, which evaluates to false
+#if foo 5
+```
+This applies the same to function-like macros. Just like normal, for a function-like macro to be expanded it must be given the correct number of arguments.
+
+However, if a macro is defined but does not have a body, it produces a compile-time error:
+```glsl
+#define foo
+
+#if foo
+```
+
+If a macro name is used but the macro is not defined, the macro is expanded to the value `0`. This only happens for macro names, i.e. `MY_MACRO`. A function-like macro call, such as `MY_MACRO()`, is only attempted to be expanded, (and if the macro doesn't exist or has no body or has a different number of parameters the relevant error is reported).
+
+There is an operator which checks for the existence of a macro. The `defined` operator is invoked like:
+```glsl
+defined _IDENTIFIER_
+defined ( _IDENTIFIER_ )
+```
+`_IDENTIFIER_` is the name of a macro, and this can't be omitted. You cannot have a more complex expression within the brackets, nor any non-identifier token. If there are brackets, they must be matched correctly.
+
+This operator returns `0` if the macro is not defined, and `1` if it is. Note that the macro (if it exists) is **not** expanded within the defined operator.
+
 ## else
 ```glsl
 #else

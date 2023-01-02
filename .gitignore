@@ -8,3 +8,8 @@ target
 
 # Library cargo.lock file
 /glast/Cargo.lock
+
+# Build/publish script outputs
+/out
+/publish
+/kuba-p.glsl*

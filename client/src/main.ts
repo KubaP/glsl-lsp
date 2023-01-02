@@ -11,10 +11,11 @@ import * as lsp from "./lsp";
 let ctx: Context | undefined;
 
 export async function activate(context: ExtensionContext) {
-	// TODO: Decide on the path for the final distribution.
 	// For debugging/development purposes, the environment variable `__GLSL_DEBUG_SERVER_PATH` specifies the path
-	// to the server binary. This is appropriately set in the relevant `launch.json` configurations.
-	const serverPath = process.env.__GLSL_DEBUG_SERVER_PATH ?? context.asAbsolutePath(path.join("server.exe"));
+	// to the server binary. This is appropriately set in the relevant `launch.json` configurations. For release
+	// purposes, the build process replaces the `${GLSL_SERVER_PATH}` with a platform-specific binary name.
+	const serverPath =
+		process.env.__GLSL_DEBUG_SERVER_PATH ?? context.asAbsolutePath(path.join("..", "${GLSL_SERVER_PATH}"));
 
 	// Create our custom context object.
 	ctx = await Context.new(context, serverPath);

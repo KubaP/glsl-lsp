@@ -14,6 +14,9 @@ This is targetting GLSL `450` & `460` initially, but there are plans to support 
 |[`/docs`](/docs)|Project documentation|
 |[`/build`](/build)|Build & release scripts|
 
+## Build Instructions
+For instructions on how to build the project for debugging or release purposes, see [/build/Instructions.md](/build/Instructions.md).
+
 ## Contribution
 Contributions are always welcome, be it code, tests, documentation or bug reports, feature requests, etc. <!-- Please see the [contribution guide]() for more details.--> For help, please file an [issue](https://github.com/KubaP/glsl-lsp/issues).
 

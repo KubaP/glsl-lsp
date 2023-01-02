@@ -6721,7 +6721,7 @@ fn parse_directive<'a, P: TokenStreamProvider<'a>>(
 						walker.push_colour_with_modifiers(
 							span,
 							SyntaxType::ObjectMacro,
-							SyntaxModifiers::MACRO_DEFINITION,
+							SyntaxModifiers::MACRO_SIGNATURE,
 						);
 						(s, span)
 					}
@@ -6767,7 +6767,7 @@ fn parse_directive<'a, P: TokenStreamProvider<'a>>(
 						walker.push_colour_with_modifiers(
 							span,
 							SyntaxType::FunctionMacro,
-							SyntaxModifiers::MACRO_DEFINITION,
+							SyntaxModifiers::MACRO_SIGNATURE,
 						);
 						(s, span)
 					}
@@ -6780,7 +6780,7 @@ fn parse_directive<'a, P: TokenStreamProvider<'a>>(
 						walker.push_colour_with_modifiers(
 							span,
 							SyntaxType::Punctuation,
-							SyntaxModifiers::MACRO_DEFINITION,
+							SyntaxModifiers::MACRO_SIGNATURE,
 						);
 						span
 					}
@@ -6828,7 +6828,7 @@ fn parse_directive<'a, P: TokenStreamProvider<'a>>(
 							walker.push_colour_with_modifiers(
 								token_span,
 								SyntaxType::Punctuation,
-								SyntaxModifiers::MACRO_DEFINITION,
+								SyntaxModifiers::MACRO_SIGNATURE,
 							);
 							if prev == Prev::Comma {
 								walker.push_syntax_diag(Syntax::PreprocDefine(
@@ -6850,7 +6850,7 @@ fn parse_directive<'a, P: TokenStreamProvider<'a>>(
 							walker.push_colour_with_modifiers(
 								token_span,
 								SyntaxType::Parameter,
-								SyntaxModifiers::MACRO_DEFINITION,
+								SyntaxModifiers::MACRO_SIGNATURE,
 							);
 							params.push(Ident {
 								name: str,
@@ -6868,7 +6868,7 @@ fn parse_directive<'a, P: TokenStreamProvider<'a>>(
 							walker.push_colour_with_modifiers(
 								token_span,
 								SyntaxType::Punctuation,
-								SyntaxModifiers::MACRO_DEFINITION,
+								SyntaxModifiers::MACRO_SIGNATURE,
 							);
 							if prev == Prev::Comma {
 								walker.push_syntax_diag(Syntax::PreprocDefine(
@@ -6883,7 +6883,7 @@ fn parse_directive<'a, P: TokenStreamProvider<'a>>(
 							walker.push_colour_with_modifiers(
 								token_span,
 								SyntaxType::Invalid,
-								SyntaxModifiers::MACRO_DEFINITION,
+								SyntaxModifiers::MACRO_SIGNATURE,
 							);
 							walker.push_syntax_diag(Syntax::PreprocDefine(
 								PreprocDefineDiag::ParamsExpectedParam(
@@ -7970,7 +7970,7 @@ fn parse_pragma_directive<'a, P: TokenStreamProvider<'a>>(
 	walker.push_colour(dir_span.first_char(), SyntaxType::DirectiveHash);
 	walker.push_colour(kw_span, SyntaxType::DirectiveName);
 	if let Some(ref options) = options {
-		walker.push_colour(options.1, SyntaxType::Directive);
+		walker.push_colour(options.1, SyntaxType::DirectivePragma);
 	}
 	nodes.push(Node {
 		span: Span::new(

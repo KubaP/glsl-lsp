@@ -27,31 +27,44 @@ pub enum SyntaxType {
 	Punctuation,
 	/// An operator symbol.
 	Operator,
-	/// A function or function-like macro parameter.
-	Parameter,
-	/// A valid layout qualifier identifier.
-	LayoutQualifier,
 	/// A number.
 	Number,
 	/// A boolean.
 	Boolean,
+	//String,
 	/// A comment.
 	Comment,
-	/// An identifier which has not gone through name resolution.
+	///// A primitive type.
+	//Primitive,
+	///// A struct.
+	//Struct,
+	///// A function.
+	//Function,
+	///// A subroutine.
+	//Subroutine,
+	///// A variable.
+	//Variable,
+	/// A function or function-like macro parameter.
+	Parameter,
+	/// A valid layout qualifier identifier.
+	LayoutQualifier,
+	/// An identifier which has not gone through name resolution yet.
 	UncheckedIdent,
-	/// An unresolved identifier. This could be an unresolved variable ident, an unresolved type name, or an
-	/// illegal layout ident.
+	/// An identifier which has not gone through name resolution and never will. This token is only used for any
+	/// identifiers within macro bodies.
+	Ident,
+	/// An unresolved identifier. This could be an unresolved variable identifier, an unresolved type name, or an
+	/// illegal layout qualifier identifier.
 	UnresolvedIdent,
 	/// An invalid character.
 	Invalid,
 	/* PREPROCESSOR */
-	/// An object-like macro identifier. This is used at the macro definition site, and at any call sites.
+	///// A line-continuator character (`\`).
+	//LineContinuator,
+	/// An object-like macro identifier. This is used at the macro definition, and at any call sites.
 	ObjectMacro,
-	/// A function-like macro identifier. This is used at the macro definition site, and at any call sites.
+	/// A function-like macro identifier. This is used at the macro definition, and at any call sites.
 	FunctionMacro,
-	/// An identifier which has not gone through name resolution and never will. This token is only used for any
-	/// identifiers within macro bodies.
-	Ident,
 	/// A general bit of text in a directive.
 	Directive,
 	/// The macro concatenation operator (`##`).
@@ -72,20 +85,22 @@ pub enum SyntaxType {
 	DirectiveLineNumber,
 	/// The message in an `#error` directive.
 	DirectiveError,
+	/// The compiler option in a `#pragma` directive.
+	DirectivePragma,
 }
 
 bitflags! {
 	/// The modifiers of a syntax highlighting token.
 	///
 	/// This is a `bitflag`. It contains:
-	/// - `MACRO_DEFINITION` = `1`,
+	/// - `MACRO_SIGNATURE` = `1`,
 	/// - `MACRO_BODY` = `2`,
 	/// - `UNDEFINE` = `4`,
 	/// - `CONDITIONAL` = `8`.
 	pub struct SyntaxModifiers: u32 {
-		/// Tokens within the macro definition, e.g. `BAR(A, B)`
-		const MACRO_DEFINITION = 0b00000001;
-		/// Tokens within the macro body (replacement token list).
+		/// Tokens within the macro signature, e.g. the `BAR(A, B)` within `#define BAR(A, B) foo`.
+		const MACRO_SIGNATURE = 0b00000001;
+		/// Tokens within the macro body, e.g. the `foo + bar` within `#define FOO foo + bar`.
 		const MACRO_BODY = 0b00000010;
 		/// Tokens within the `#undef` directive; not applied to the `#undef` part.
 		const UNDEFINE = 0b00000100;

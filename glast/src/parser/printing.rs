@@ -149,6 +149,35 @@ fn print_node(w: &mut Writer, node: &Node) {
 			w.de_indent();
 			new_line_whole!(w, ")");
 		}
+		NodeTy::InterfaceDef {
+			qualifiers,
+			ident,
+			body,
+			instance,
+		} => {
+			continue_eol!(w, "InterfaceDef(");
+			w.indent();
+			if !qualifiers.is_empty() {
+				new_line_whole!(w, "qualifiers: [");
+				print_qualifiers(w, qualifiers);
+				new_line_whole!(w, "]");
+			}
+			new_line_whole!(w, "name: {}", print_ident(ident));
+			new_line_whole!(w, "body: [");
+			print_scope(w, body);
+			new_line_whole!(w, "]");
+			if let Omittable::Some(instance) = instance {
+				new_line_part!(w, "instance: ");
+				print_expr(w, instance);
+			}
+			w.de_indent();
+			new_line_whole!(w, ")");
+		}
+		NodeTy::Qualifiers(qualifiers) => {
+			continue_eol!(w, "Qualifiers: [");
+			print_qualifiers(w, qualifiers);
+			new_line_whole!(w, "]");
+		}
 		NodeTy::FnDecl {
 			return_type,
 			ident,
@@ -237,7 +266,7 @@ fn print_node(w: &mut Writer, node: &Node) {
 			w.indent();
 			if !qualifiers.is_empty() {
 				new_line_whole!(w, "qualifiers: [");
-				print_qualifier(w, qualifiers);
+				print_qualifiers(w, qualifiers);
 				new_line_whole!(w, "]");
 			}
 			new_line_whole!(w, "name: {}", print_ident(ident));
@@ -250,11 +279,11 @@ fn print_node(w: &mut Writer, node: &Node) {
 			body,
 			instance,
 		} => {
-			continue_eol!(w, "StructDecl(");
+			continue_eol!(w, "StructDef(");
 			w.indent();
 			if !qualifiers.is_empty() {
 				new_line_whole!(w, "qualifiers: [");
-				print_qualifier(w, qualifiers);
+				print_qualifiers(w, qualifiers);
 				new_line_whole!(w, "]");
 			}
 			new_line_whole!(w, "name: {}", print_ident(ident));
@@ -808,7 +837,7 @@ fn print_type(w: &mut Writer, type_: &Type) {
 	}
 	if !type_.qualifiers.is_empty() {
 		new_line_whole!(w, "+ qualifiers: [");
-		print_qualifier(w, &type_.qualifiers);
+		print_qualifiers(w, &type_.qualifiers);
 		new_line_whole!(w, "]");
 	}
 }
@@ -1074,7 +1103,7 @@ fn print_primitive(primitive: &Primitive) -> &str {
 	}
 }
 
-fn print_qualifier(w: &mut Writer, qualifiers: &[Qualifier]) {
+fn print_qualifiers(w: &mut Writer, qualifiers: &[Qualifier]) {
 	w.indent();
 	for qualifier in qualifiers {
 		if let QualifierTy::Layout(layouts) = &qualifier.ty {

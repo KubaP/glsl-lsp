@@ -81,6 +81,15 @@ pub enum NodeTy {
 	},
 	/// A variable definition with initialization, containing multiple variables, e.g. `int i, j, k = 0;`.
 	VarDefInits(Vec<(Type, Ident)>, Option<Expr>),
+	/// An interface block definition, e.g. `out V { vec2 pos; } v_out;`.
+	InterfaceDef {
+		qualifiers: Vec<Qualifier>,
+		ident: Ident,
+		body: Scope,
+		instance: Omittable<Expr>,
+	},
+	/// A list of qualifiers, e.g. `layout(points) in;`.
+	Qualifiers(Vec<Qualifier>),
 	/// A function declaration, e.g. `int foo(int i);`.
 	FnDecl {
 		return_type: Type,

@@ -409,6 +409,26 @@ pub enum StmtDiag {
 	/// - `0` - The position where the semi-colon is expected.
 	VarDefInitExpectedSemiAfterValue(Span),
 
+	/* INTERFACE BLOCKS */
+	/// ERROR - Found a statement within the interface body that is invalid. E.g. `out V { return; };`.
+	///
+	/// - `0` - The span of the statement.
+	InterfaceInvalidStmtInBody(Span),
+	/// ERROR - Found an interface bod`y that has no statements. E.g. `out V { };`.
+	///
+	/// - `0` - The span of the body.
+	InterfaceExpectedAtLeastOneStmtInBody(Span),
+	/// ERROR - Did not find an instance identifier or a semi-colon after the interface body. E.g. `out V { int i;
+	/// }`.
+	///
+	/// - `0` - The span of the invalid token(s), or the position where the semi-colon should be inserted.
+	InterfaceExpectedInstanceOrSemiAfterBody(Span),
+	/// ERROR - Did not find a semi-colon after the interface's instance ident. E.g. `out V { int i;
+	/// } foo_bar`.
+	///
+	/// - `0` - The position where the semi-colon should be inserted.
+	InterfaceExpectedSemiAfterInstance(Span),
+
 	/* FUNCTIONS */
 	/// ERROR - Did not find a comma after a parameter in a function's parameter list. E.g. `void fn(foo bar)`.
 	///
@@ -507,12 +527,12 @@ pub enum StmtDiag {
 	/// ERROR - Did not find an instance identifier or a semi-colon after the struct body. E.g. `struct Foo { int
 	/// i; }`.
 	///
-	/// - `0` - The span of the invalid token(s).
+	/// - `0` - The span of the invalid token(s), or the position where the semi-colon should be inserted.
 	StructExpectedInstanceOrSemiAfterBody(Span),
-	/// ERROR - Did not find a semi-colon after the struct body or optional instance ident. E.g. `struct Foo {}`.
+	/// ERROR - Did not find a semi-colon after the struct's instance ident. E.g. `struct Foo { int i; } foobar`.
 	///
 	/// - `0` - The position where the semi-colon should be inserted.
-	StructExpectedSemiAfterBodyOrInstance(Span),
+	StructExpectedSemiAfterInstance(Span),
 	/// ERROR - Found a struct declaration, which is not a legal GLSL statement. E.g. `struct Foo;`.
 	///
 	/// - `0` - The span of the declaration.

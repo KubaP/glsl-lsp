@@ -8,7 +8,7 @@ use super::{
 use crate::{
 	diag::{ExprDiag, PreprocDefineDiag, Semantic, Syntax},
 	lexer::preprocessor::ConditionToken,
-	Either, Span, Spanned,
+	Either, Span, SpanEncoding, Spanned,
 };
 use std::{
 	collections::{HashMap, HashSet, VecDeque},
@@ -35,8 +35,9 @@ in normal tokens, and that if the macro has no body but is defined, the token `1
 pub(super) fn cond_parser(
 	tokens: Vec<Spanned<ConditionToken>>,
 	macros: &HashMap<String, (Span, Macro)>,
+	span_encoding: SpanEncoding,
 ) -> (Option<Expr>, Vec<Syntax>, Vec<SyntaxToken>) {
-	let mut walker = Walker::new(tokens, macros);
+	let mut walker = Walker::new(tokens, macros, span_encoding);
 
 	let mut parser = ShuntingYard {
 		stack: VecDeque::new(),
@@ -84,6 +85,8 @@ struct Walker<'a> {
 
 	/// The syntax highlighting tokens created from the tokens parsed so-far.
 	syntax_tokens: Vec<SyntaxToken>,
+	/// The type of encoding of spans.
+	span_encoding: SpanEncoding,
 }
 
 impl<'a> Walker<'a> {
@@ -91,6 +94,7 @@ impl<'a> Walker<'a> {
 	fn new(
 		tokens: Vec<Spanned<ConditionToken>>,
 		macros: &'a HashMap<String, (Span, Macro)>,
+		span_encoding: SpanEncoding,
 	) -> Self {
 		let streams = if !tokens.is_empty() {
 			vec![("".into(), tokens, 0)]
@@ -112,6 +116,7 @@ impl<'a> Walker<'a> {
 			syntax_diags: Vec::new(),
 			semantic_diags: Vec::new(),
 			syntax_tokens: Vec::new(),
+			span_encoding,
 		};
 		walker._advance(true);
 		walker
@@ -360,6 +365,7 @@ impl<'a> Walker<'a> {
 							let (new_body, mut syntax, mut semantic) =
 								crate::lexer::preprocessor::concat_macro_body(
 									new_body,
+									self.span_encoding,
 								);
 							self.syntax_diags.append(&mut syntax);
 							self.semantic_diags.append(&mut semantic);
@@ -410,8 +416,13 @@ impl<'a> Walker<'a> {
 							for (token, _) in new_body {
 								write!(s, "{token}").unwrap();
 							}
-							let mut lexer = crate::lexer::Lexer::new(&s);
-							let new_tokens = crate::lexer::preprocessor::parse_condition_tokens(&mut lexer);
+							use crate::lexer::{self, Lexer, Utf16};
+							let mut lexer: Lexer<Utf16> =
+								Lexer::new(&s, self.span_encoding);
+							let new_tokens =
+								lexer::preprocessor::parse_condition_tokens(
+									&mut lexer,
+								);
 							self.streams.push((ident, new_tokens, 0));
 
 							// The first token in the new stream could be another macro call, so we re-run the loop
@@ -472,8 +483,13 @@ impl<'a> Walker<'a> {
 							for (token, _) in stream {
 								write!(s, "{token}").unwrap();
 							}
-							let mut lexer = crate::lexer::Lexer::new(&s);
-							let new_tokens = crate::lexer::preprocessor::parse_condition_tokens(&mut lexer);
+							use crate::lexer::{self, Lexer, Utf16};
+							let mut lexer: Lexer<Utf16> =
+								Lexer::new(&s, self.span_encoding);
+							let new_tokens =
+								lexer::preprocessor::parse_condition_tokens(
+									&mut lexer,
+								);
 							self.streams.push((ident, new_tokens, 0));
 
 							// The first token in a new stream could be another macro call, so we re-run the loop
@@ -1409,30 +1425,47 @@ mod tests {
 	/// Asserts that the given source string produces the specified expression.
 	macro_rules! assert_expr {
 		($macros:expr, $src:expr, $result:expr) => {
-			let mut lexer = crate::lexer::Lexer::new($src);
+			let mut lexer = crate::lexer::Lexer::<crate::lexer::Utf16>::new(
+				$src,
+				crate::SpanEncoding::Utf16,
+			);
 			let tokens =
 				crate::lexer::preprocessor::parse_condition_tokens(&mut lexer);
 			assert_eq!(
-				super::cond_parser(tokens, &$macros).0.unwrap(),
+				super::cond_parser(
+					tokens,
+					&$macros,
+					crate::SpanEncoding::Utf16
+				)
+				.0
+				.unwrap(),
 				$result
 			);
 		};
 		($src:expr, $result:expr) => {
-			let mut lexer = crate::lexer::Lexer::new($src);
+			let mut lexer = crate::lexer::Lexer::<crate::lexer::Utf16>::new(
+				$src,
+				crate::SpanEncoding::Utf16,
+			);
 			let tokens =
 				crate::lexer::preprocessor::parse_condition_tokens(&mut lexer);
 			let macros = std::collections::HashMap::new();
-			assert_eq!(super::cond_parser(tokens, &macros).0.unwrap(), $result);
+			assert_eq!(
+				super::cond_parser(tokens, &macros, crate::SpanEncoding::Utf16)
+					.0
+					.unwrap(),
+				$result
+			);
 		};
 	}
 
 	/// Asserts that the given source string produces the specified expression and syntax error(s).
 	macro_rules! assert_expr_err {
 		($macros:expr, $src:expr, $result:expr, $($error:expr),+) => {
-			let mut lexer = crate::lexer::Lexer::new($src);
+			let mut lexer = crate::lexer::Lexer::<crate::lexer::Utf16>::new($src, crate::SpanEncoding::Utf16);
 			let tokens =
 				crate::lexer::preprocessor::parse_condition_tokens(&mut lexer);
-			let (expr, syntax, _) = super::cond_parser(tokens, &$macros);
+			let (expr, syntax, _) = super::cond_parser(tokens, &$macros, crate::SpanEncoding::Utf16);
 			assert_eq!(expr.unwrap(), $result);
 			assert_eq!(
 				syntax,
@@ -1442,11 +1475,11 @@ mod tests {
 			);
 		};
 		($src:expr, $result:expr, $($error:expr),+) => {
-			let mut lexer = crate::lexer::Lexer::new($src);
+			let mut lexer = crate::lexer::Lexer::<crate::lexer::Utf16>::new($src, crate::SpanEncoding::Utf16);
 			let tokens =
 				crate::lexer::preprocessor::parse_condition_tokens(&mut lexer);
 			let macros = std::collections::HashMap::new();
-			let (expr, syntax, _) = super::cond_parser(tokens, &macros);
+			let (expr, syntax, _) = super::cond_parser(tokens, &macros, crate::SpanEncoding::Utf16);
 			assert_eq!(expr.unwrap(), $result);
 			assert_eq!(
 				syntax,
@@ -1460,11 +1493,11 @@ mod tests {
 	/// Asserts that the given source string produces no expression and the specified syntax error(s).
 	macro_rules! assert_err {
 		($src:expr, $($error:expr),+) => {
-			let mut lexer = crate::lexer::Lexer::new($src);
+			let mut lexer = crate::lexer::Lexer::<crate::lexer::Utf16>::new($src, crate::SpanEncoding::Utf16);
 			let tokens =
 				crate::lexer::preprocessor::parse_condition_tokens(&mut lexer);
 			let macros = std::collections::HashMap::new();
-			let (expr, syntax, _) = super::cond_parser(tokens, &macros);
+			let (expr, syntax, _) = super::cond_parser(tokens, &macros, crate::SpanEncoding::Utf16);
 			assert_eq!(expr, None);
 			assert_eq!(
 				syntax,

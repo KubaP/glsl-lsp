@@ -1,15 +1,48 @@
 /// A span in the source string.
 ///
-/// Keeps track of the offset between characters from the start of the source string, e.g. `if=abc` would be stored
-/// as `0-2, 2-3, 3-6`.
-///
-/// Illustrated example:
+/// Keeps track of the offset between **code units** from the start of the source string, e.g. `if=abc` would be
+/// stored as `0-2, 2-3, 3-6`:
 /// ```text
 ///   i   f   =   a   b   c
 ///  ├─────┤ ├─┤ ├─────────┤
 /// ^   ^   ^   ^   ^   ^   ^
 /// 0   1   2   3   4   5   6
 /// ```
+///
+/// A code unit is a basic building block used by the unicode encoding system. It is effectively the primitive type
+/// that is used to represent entire unicode code points. `utf-8` uses [`u8`] as the code unit, `utf-16` uses
+/// [`u16`] as the code unit, and `utf-32` uses [`char`] (`u32`).
+///
+/// The offsets depend on which code unit is being counted, which in turn depends on the called parsing function.
+/// By default, the spans count `utf-32` code units, i.e. rust [`char`]s, however, there are alternate functions
+/// that count `utf-16` or `utf-8` code units:
+/// - [`lexer::parse_with_utf_16_offsets()`](crate::lexer::parse_with_utf_16_offsets),
+/// - [`lexer::parse_with_utf_16_offsets_and_version()`](crate::lexer::parse_with_utf_16_offsets_and_version),
+/// - [`lexer::parse_with_utf_8_offsets()`](crate::lexer::parse_with_utf_8_offsets),
+/// - [`lexer::parse_with_utf_8_offsets_and_version()`](crate::lexer::parse_with_utf_8_offsets_and_version).
+///
+/// The difference is only noticeable with non-ascii characters. Take the following string: `a𐐀c`. It has the
+/// following representations in the different encodings (in decimal):
+/// ```text
+///         a (U+0061)    𐐀 (U+10400)          c (U+0063)
+/// utf-8:  [97, 0, 0, 0] [240, 144, 144, 128] [99, 0, 0, 0]
+/// utf-16: [97, 0]       [55297, 56320]       [99, 0]
+/// utf-32: [97]          [66560]              [99]
+/// ```
+///
+/// As you can see, both `a` and `c` use a single code point for all encodings; (a `u32` or `u16` takes up more
+/// memory than a `u8`, but we aren't concerned with that). However, the `𐐀` takes 4 code units in `utf-8`, but
+/// only two code units in `utf-16`, and only one code unit in `utf-32`. This is why the spans would differ:
+/// ```text
+///           a   𐐀   c
+///         ^   ^   ^   ^
+/// utf-8   0   1   5   6
+/// utf-16  0   1   3   4
+/// utf-32  0   1   2   3
+/// ```
+///
+/// Why is this nuance necessary? Because the Language Server Protocol operates on `utf-16` offsets by default, so
+/// support for that encoding was mandatory when authoring this crate.
 ///
 /// # Invariants
 /// If this type is manually constructed or modified, the `end` position must be equal-to or greater than the
@@ -200,6 +233,17 @@ impl std::fmt::Display for Span {
 	fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
 		write!(f, "{}..{}", self.start, self.end)
 	}
+}
+
+/// The type of code units the `Span`s are counting.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum SpanEncoding {
+	/// Spans count `utf-8` code units.
+	Utf8,
+	/// Spans count `utf-16` code units.
+	Utf16,
+	/// Spans count `utf-32` code units, i.e. rust [`char`]s.
+	Utf32,
 }
 
 /// Constructs a new [`Span`] from a start and end position.

@@ -54,16 +54,19 @@ macro_rules! register_fn_macro {
 /// From a source with no conditional compilation.
 mod single_source {
 	use super::*;
+	use crate::SpanEncoding;
 
 	#[test]
 	fn no_macro() {
-		let tokens = lexer::parse_from_str_with_version(
+		let tokens = lexer::parse_with_version(
 			"int foo 9 /*...*/bar",
 			GlslVersion::_450,
 		)
 		.0;
-		let mut walker =
-			Walker::new(RootTokenStreamProvider::new(vec![tokens]));
+		let mut walker = Walker::new(
+			RootTokenStreamProvider::new(vec![tokens]),
+			SpanEncoding::Utf16,
+		);
 		assert_token!(walker, Token::Ident("int".into()));
 		walker.advance();
 		assert_token!(walker, Token::Ident("foo".into()));
@@ -85,15 +88,17 @@ mod single_source {
 	#[test]
 	fn object_macro() {
 		// #define BAR bar
-		let tokens = lexer::parse_from_str_with_version(
+		let tokens = lexer::parse_with_version(
 			r#"
 		int foo 9 /*...*/BAR
 		"#,
 			GlslVersion::_450,
 		)
 		.0;
-		let mut walker =
-			Walker::new(RootTokenStreamProvider::new(vec![tokens]));
+		let mut walker = Walker::new(
+			RootTokenStreamProvider::new(vec![tokens]),
+			SpanEncoding::Utf16,
+		);
 		register_obj_macro!(walker, "BAR", Token::Ident("bar".into()));
 		assert_token!(walker, Token::Ident("int".into()));
 		walker.advance();
@@ -117,15 +122,17 @@ mod single_source {
 	fn nested_object_macro() {
 		// #define FOO foo
 		// #define BAR FOO
-		let tokens = lexer::parse_from_str_with_version(
+		let tokens = lexer::parse_with_version(
 			r#"
 		int foo 9 /*...*/BAR
 		"#,
 			GlslVersion::_450,
 		)
 		.0;
-		let mut walker =
-			Walker::new(RootTokenStreamProvider::new(vec![tokens]));
+		let mut walker = Walker::new(
+			RootTokenStreamProvider::new(vec![tokens]),
+			SpanEncoding::Utf16,
+		);
 		register_obj_macro!(walker, "FOO", Token::Ident("foo".into()));
 		register_obj_macro!(walker, "BAR", Token::Ident("FOO".into()));
 		assert_token!(walker, Token::Ident("int".into()));
@@ -149,15 +156,17 @@ mod single_source {
 	#[test]
 	fn empty_object_macro() {
 		// #define FOO
-		let tokens = lexer::parse_from_str_with_version(
+		let tokens = lexer::parse_with_version(
 			r#"
 		int foo 9 /*...*/FOO
 		"#,
 			GlslVersion::_450,
 		)
 		.0;
-		let mut walker =
-			Walker::new(RootTokenStreamProvider::new(vec![tokens]));
+		let mut walker = Walker::new(
+			RootTokenStreamProvider::new(vec![tokens]),
+			SpanEncoding::Utf16,
+		);
 		register_obj_macro!(walker, "FOO");
 		assert_token!(walker, Token::Ident("int".into()));
 		walker.advance();
@@ -178,15 +187,17 @@ mod single_source {
 	#[test]
 	fn function_macro() {
 		// #define BAR(A) A
-		let tokens = lexer::parse_from_str_with_version(
+		let tokens = lexer::parse_with_version(
 			r#"
 		int foo 9 /*...*/BAR(p)
 		"#,
 			GlslVersion::_450,
 		)
 		.0;
-		let mut walker =
-			Walker::new(RootTokenStreamProvider::new(vec![tokens]));
+		let mut walker = Walker::new(
+			RootTokenStreamProvider::new(vec![tokens]),
+			SpanEncoding::Utf16,
+		);
 		register_fn_macro!(
 			walker,
 			"BAR",
@@ -218,15 +229,17 @@ mod single_source {
 	fn nested_function_macro() {
 		// #define FOO(_1) _1
 		// #define BAR(A) FOO(A)
-		let tokens = lexer::parse_from_str_with_version(
+		let tokens = lexer::parse_with_version(
 			r#"
 		int foo 9 /*...*/BAR(p)
 		"#,
 			GlslVersion::_450,
 		)
 		.0;
-		let mut walker =
-			Walker::new(RootTokenStreamProvider::new(vec![tokens]));
+		let mut walker = Walker::new(
+			RootTokenStreamProvider::new(vec![tokens]),
+			SpanEncoding::Utf16,
+		);
 		register_fn_macro!(
 			walker,
 			"FOO",
@@ -269,15 +282,17 @@ mod single_source {
 	#[test]
 	fn empty_function_macro() {
 		// #define BAR(A)
-		let tokens = lexer::parse_from_str_with_version(
+		let tokens = lexer::parse_with_version(
 			r#"
 		int foo 9 /*...*/BAR(p)
 		"#,
 			GlslVersion::_450,
 		)
 		.0;
-		let mut walker =
-			Walker::new(RootTokenStreamProvider::new(vec![tokens]));
+		let mut walker = Walker::new(
+			RootTokenStreamProvider::new(vec![tokens]),
+			SpanEncoding::Utf16,
+		);
 		register_fn_macro!(
 			walker,
 			"BAR",
@@ -306,16 +321,18 @@ mod single_source {
 /// From a source containing conditional compilation.
 mod multi_source {
 	use super::*;
+	use crate::SpanEncoding;
 
 	#[test]
 	fn no_macro() {
 		let tokens = vec![
-			lexer::parse_from_str_with_version("int foo 9", GlslVersion::_450)
-				.0,
-			lexer::parse_from_str_with_version("/*...*/bar", GlslVersion::_450)
-				.0,
+			lexer::parse_with_version("int foo 9", GlslVersion::_450).0,
+			lexer::parse_with_version("/*...*/bar", GlslVersion::_450).0,
 		];
-		let mut walker = Walker::new(RootTokenStreamProvider::new(tokens));
+		let mut walker = Walker::new(
+			RootTokenStreamProvider::new(tokens),
+			SpanEncoding::Utf16,
+		);
 		assert_token!(walker, Token::Ident("int".into()));
 		walker.advance();
 		assert_token!(walker, Token::Ident("foo".into()));
@@ -338,14 +355,13 @@ mod multi_source {
 	fn object_macro() {
 		// #define BAR bar
 		let tokens = vec![
-			lexer::parse_from_str_with_version(
-				"int foo 9/*...*/",
-				GlslVersion::_450,
-			)
-			.0,
-			lexer::parse_from_str_with_version("BAR", GlslVersion::_450).0,
+			lexer::parse_with_version("int foo 9/*...*/", GlslVersion::_450).0,
+			lexer::parse_with_version("BAR", GlslVersion::_450).0,
 		];
-		let mut walker = Walker::new(RootTokenStreamProvider::new(tokens));
+		let mut walker = Walker::new(
+			RootTokenStreamProvider::new(tokens),
+			SpanEncoding::Utf16,
+		);
 		register_obj_macro!(walker, "BAR", Token::Ident("bar".into()));
 		assert_token!(walker, Token::Ident("int".into()));
 		walker.advance();
@@ -370,14 +386,13 @@ mod multi_source {
 		// #define FOO foo
 		// #define BAR FOO
 		let tokens = vec![
-			lexer::parse_from_str_with_version(
-				"int foo 9/*...*/",
-				GlslVersion::_450,
-			)
-			.0,
-			lexer::parse_from_str_with_version("BAR", GlslVersion::_450).0,
+			lexer::parse_with_version("int foo 9/*...*/", GlslVersion::_450).0,
+			lexer::parse_with_version("BAR", GlslVersion::_450).0,
 		];
-		let mut walker = Walker::new(RootTokenStreamProvider::new(tokens));
+		let mut walker = Walker::new(
+			RootTokenStreamProvider::new(tokens),
+			SpanEncoding::Utf16,
+		);
 		register_obj_macro!(walker, "FOO", Token::Ident("foo".into()));
 		register_obj_macro!(walker, "BAR", Token::Ident("FOO".into()));
 		assert_token!(walker, Token::Ident("int".into()));
@@ -402,14 +417,13 @@ mod multi_source {
 	fn empty_object_macro() {
 		// #define FOO
 		let tokens = vec![
-			lexer::parse_from_str_with_version(
-				"int foo 9/*...*/",
-				GlslVersion::_450,
-			)
-			.0,
-			lexer::parse_from_str_with_version("FOO", GlslVersion::_450).0,
+			lexer::parse_with_version("int foo 9/*...*/", GlslVersion::_450).0,
+			lexer::parse_with_version("FOO", GlslVersion::_450).0,
 		];
-		let mut walker = Walker::new(RootTokenStreamProvider::new(tokens));
+		let mut walker = Walker::new(
+			RootTokenStreamProvider::new(tokens),
+			SpanEncoding::Utf16,
+		);
 		register_obj_macro!(walker, "FOO");
 		assert_token!(walker, Token::Ident("int".into()));
 		walker.advance();
@@ -431,14 +445,13 @@ mod multi_source {
 	fn function_macro() {
 		// #define BAR(A) A
 		let tokens = vec![
-			lexer::parse_from_str_with_version(
-				"int foo 9/*...*/",
-				GlslVersion::_450,
-			)
-			.0,
-			lexer::parse_from_str_with_version("BAR(p)", GlslVersion::_450).0,
+			lexer::parse_with_version("int foo 9/*...*/", GlslVersion::_450).0,
+			lexer::parse_with_version("BAR(p)", GlslVersion::_450).0,
 		];
-		let mut walker = Walker::new(RootTokenStreamProvider::new(tokens));
+		let mut walker = Walker::new(
+			RootTokenStreamProvider::new(tokens),
+			SpanEncoding::Utf16,
+		);
 		register_fn_macro!(
 			walker,
 			"BAR",
@@ -471,14 +484,13 @@ mod multi_source {
 		// #define FOO(_1) _1
 		// #define BAR(A) FOO(A)
 		let tokens = vec![
-			lexer::parse_from_str_with_version(
-				"int foo 9/*...*/",
-				GlslVersion::_450,
-			)
-			.0,
-			lexer::parse_from_str_with_version("BAR(p)", GlslVersion::_450).0,
+			lexer::parse_with_version("int foo 9/*...*/", GlslVersion::_450).0,
+			lexer::parse_with_version("BAR(p)", GlslVersion::_450).0,
 		];
-		let mut walker = Walker::new(RootTokenStreamProvider::new(tokens));
+		let mut walker = Walker::new(
+			RootTokenStreamProvider::new(tokens),
+			SpanEncoding::Utf16,
+		);
 		register_fn_macro!(
 			walker,
 			"FOO",
@@ -522,14 +534,13 @@ mod multi_source {
 	fn empty_function_macro() {
 		// #define BAR(A)
 		let tokens = vec![
-			lexer::parse_from_str_with_version(
-				"int foo 9/*...*/",
-				GlslVersion::_450,
-			)
-			.0,
-			lexer::parse_from_str_with_version("BAR(p)", GlslVersion::_450).0,
+			lexer::parse_with_version("int foo 9/*...*/", GlslVersion::_450).0,
+			lexer::parse_with_version("BAR(p)", GlslVersion::_450).0,
 		];
-		let mut walker = Walker::new(RootTokenStreamProvider::new(tokens));
+		let mut walker = Walker::new(
+			RootTokenStreamProvider::new(tokens),
+			SpanEncoding::Utf16,
+		);
 		register_fn_macro!(
 			walker,
 			"BAR",
@@ -557,19 +568,22 @@ mod multi_source {
 
 mod function_macros {
 	use super::*;
+	use crate::SpanEncoding;
 
 	#[test]
 	fn interspersed_comments() {
 		// #define BAR(A) A
-		let tokens = lexer::parse_from_str_with_version(
+		let tokens = lexer::parse_with_version(
 			r#"
 		int foo 9 BAR/*...*/(p /*.*/)
 		"#,
 			GlslVersion::_450,
 		)
 		.0;
-		let mut walker =
-			Walker::new(RootTokenStreamProvider::new(vec![tokens]));
+		let mut walker = Walker::new(
+			RootTokenStreamProvider::new(vec![tokens]),
+			SpanEncoding::Utf16,
+		);
 		register_fn_macro!(
 			walker,
 			"BAR",

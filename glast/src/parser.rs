@@ -63,7 +63,7 @@ use crate::{
 	},
 	parser::conditional_expression::cond_parser,
 	syntax::*,
-	Either, GlslVersion, Span, Spanned,
+	Either, GlslVersion, Span, SpanEncoding, Spanned,
 };
 use ast::*;
 use expression::{expr_parser, Mode};
@@ -180,7 +180,7 @@ pub struct ParseResult {
 /// See the documentation for the [`TokenTree`] struct for a more in-depth explanation about why this seemingly
 /// roundabout way of doing things is necessary.
 pub fn parse_from_str(source: &str) -> Result<TokenTree, lexer::ParseErr> {
-	let (token_stream, metadata) = lexer::parse_from_str(source)?;
+	let (token_stream, metadata) = lexer::parse(source)?;
 	parse_from_token_stream(token_stream, metadata)
 }
 
@@ -219,6 +219,7 @@ pub fn parse_from_token_stream(
 			end_position: span.end,
 			syntax_diags: vec![],
 			contains_conditional_directives: false,
+			span_encoding: metadata.span_encoding,
 		});
 	}
 
@@ -749,6 +750,7 @@ pub fn parse_from_token_stream(
 		end_position: token_stream_end,
 		syntax_diags,
 		contains_conditional_directives: true,
+		span_encoding: metadata.span_encoding,
 	})
 }
 
@@ -943,6 +945,8 @@ pub struct TokenTree {
 
 	/// Whether there are any conditional directives.
 	contains_conditional_directives: bool,
+	/// The type of encoding of spans.
+	span_encoding: SpanEncoding,
 }
 
 type NodeId = usize;
@@ -1068,7 +1072,10 @@ impl TokenTree {
 		};
 
 		// Parse the root branch.
-		let mut walker = Walker::new(RootTokenStreamProvider::new(streams));
+		let mut walker = Walker::new(
+			RootTokenStreamProvider::new(streams),
+			self.span_encoding,
+		);
 		let mut nodes = Vec::new();
 		while !walker.is_done() {
 			parse_stmt(&mut walker, &mut nodes);
@@ -1211,10 +1218,10 @@ impl TokenTree {
 		syntax_highlight_entire_source: bool,
 	) -> (ParseResult, Vec<usize>) {
 		// Parse the token tree, evaluating conditional compilation.
-		let mut walker = Walker::new(DynamicTokenStreamProvider::new(
-			&self.arena,
-			&self.tree,
-		));
+		let mut walker = Walker::new(
+			DynamicTokenStreamProvider::new(&self.arena, &self.tree),
+			self.span_encoding,
+		);
 		let mut nodes = Vec::new();
 		while !walker.is_done() {
 			parse_stmt(&mut walker, &mut nodes);
@@ -1495,10 +1502,13 @@ impl TokenTree {
 		}
 
 		// Parse the pre-selected branches.
-		let mut walker = Walker::new(PreselectedTokenStreamProvider::new(
-			streams,
-			conditional_syntax_tokens,
-		));
+		let mut walker = Walker::new(
+			PreselectedTokenStreamProvider::new(
+				streams,
+				conditional_syntax_tokens,
+			),
+			self.span_encoding,
+		);
 		let mut nodes = Vec::new();
 		while !walker.is_done() {
 			parse_stmt(&mut walker, &mut nodes);
@@ -1977,6 +1987,7 @@ trait TokenStreamProvider<'a>: Clone {
 		macros: &HashMap<String, (Span, Macro)>,
 		syntax_diags: &mut Vec<Syntax>,
 		syntax_tokens: &mut Vec<SyntaxToken>,
+		span_encoding: SpanEncoding,
 	) -> Option<TokenStream>;
 
 	/// Returns the span of the last relevant token in the source string.
@@ -2023,6 +2034,7 @@ impl<'a> TokenStreamProvider<'a> for RootTokenStreamProvider<'a> {
 		_macros: &HashMap<String, (Span, Macro)>,
 		_syntax_diags: &mut Vec<Syntax>,
 		_syntax_tokens: &mut Vec<SyntaxToken>,
+		_span_encoding: SpanEncoding,
 	) -> Option<TokenStream> {
 		let v = self.streams.get(self.cursor).map(|v| v.clone());
 		self.cursor += 1;
@@ -2081,6 +2093,7 @@ impl<'a> TokenStreamProvider<'a> for PreselectedTokenStreamProvider<'a> {
 		_macros: &HashMap<String, (Span, Macro)>,
 		_syntax_diags: &mut Vec<Syntax>,
 		syntax_tokens: &mut Vec<SyntaxToken>,
+		_span_encoding: SpanEncoding,
 	) -> Option<TokenStream> {
 		match self.streams.get(self.cursor) {
 			Some(v) => {
@@ -2169,6 +2182,7 @@ impl<'a> TokenStreamProvider<'a> for DynamicTokenStreamProvider<'a> {
 		macros: &HashMap<String, (Span, Macro)>,
 		syntax_diags: &mut Vec<Syntax>,
 		syntax_tokens: &mut Vec<SyntaxToken>,
+		span_encoding: SpanEncoding,
 	) -> Option<TokenStream> {
 		'outer: loop {
 			let (node_ptr, child_idx, cond_block_idx, evaluated_cond_block) =
@@ -2354,7 +2368,11 @@ impl<'a> TokenStreamProvider<'a> for DynamicTokenStreamProvider<'a> {
 								syntax_tokens.push(*dir_token);
 
 								let (expr, mut syntax, mut colours) =
-									cond_parser(tokens.clone(), macros);
+									cond_parser(
+										tokens.clone(),
+										macros,
+										span_encoding,
+									);
 								syntax_diags.append(&mut syntax);
 								syntax_tokens.append(&mut colours);
 
@@ -2446,6 +2464,8 @@ struct Walker<'a, Provider: TokenStreamProvider<'a>> {
 
 	/// The syntax highlighting tokens created from the tokens parsed so-far.
 	syntax_tokens: Vec<SyntaxToken>,
+	/// The type of encoding of spans.
+	span_encoding: SpanEncoding,
 }
 
 /// Data for a macro.
@@ -2461,7 +2481,7 @@ enum Macro {
 #[allow(unused)]
 impl<'a, Provider: TokenStreamProvider<'a>> Walker<'a, Provider> {
 	/// Constructs a new walker.
-	fn new(mut token_provider: Provider) -> Self {
+	fn new(mut token_provider: Provider, span_encoding: SpanEncoding) -> Self {
 		let macros = HashMap::new();
 		let mut syntax_diags = Vec::new();
 		let mut syntax_tokens = Vec::new();
@@ -2471,6 +2491,7 @@ impl<'a, Provider: TokenStreamProvider<'a>> Walker<'a, Provider> {
 			&macros,
 			&mut syntax_diags,
 			&mut syntax_tokens,
+			span_encoding,
 		) {
 			Some(stream) => vec![("".into(), stream, 0)],
 			None => vec![],
@@ -2491,6 +2512,7 @@ impl<'a, Provider: TokenStreamProvider<'a>> Walker<'a, Provider> {
 			syntax_diags,
 			semantic_diags: Vec::new(),
 			syntax_tokens,
+			span_encoding,
 		}
 	}
 
@@ -2560,6 +2582,7 @@ impl<'a, Provider: TokenStreamProvider<'a>> Walker<'a, Provider> {
 			&mut syntax_diags,
 			&mut semantic_diags,
 			&mut syntax_tokens,
+			self.span_encoding,
 		);
 
 		// Copy of `Self::get()`.
@@ -2595,6 +2618,7 @@ impl<'a, Provider: TokenStreamProvider<'a>> Walker<'a, Provider> {
 			&mut self.syntax_diags,
 			&mut self.semantic_diags,
 			&mut self.syntax_tokens,
+			self.span_encoding,
 		);
 	}
 
@@ -2618,6 +2642,7 @@ impl<'a, Provider: TokenStreamProvider<'a>> Walker<'a, Provider> {
 			syntax_diags,
 			semantic_diags,
 			syntax_tokens,
+			self.span_encoding,
 		);
 	}
 
@@ -2642,6 +2667,7 @@ impl<'a, Provider: TokenStreamProvider<'a>> Walker<'a, Provider> {
 		syntax_diags: &mut Vec<Syntax>,
 		semantic_diags: &mut Vec<Semantic>,
 		syntax_tokens: &mut Vec<SyntaxToken>,
+		span_encoding: SpanEncoding,
 	) {
 		let mut dont_increment = false;
 		'outer: while let Some((identifier, stream, cursor)) =
@@ -2664,6 +2690,7 @@ impl<'a, Provider: TokenStreamProvider<'a>> Walker<'a, Provider> {
 						macros,
 						syntax_diags,
 						syntax_tokens,
+						span_encoding,
 					) {
 						Some(mut next_stream) => {
 							let (_, s, c) = &mut streams[0];
@@ -2878,6 +2905,7 @@ impl<'a, Provider: TokenStreamProvider<'a>> Walker<'a, Provider> {
 							let (new_body, mut syntax, mut semantic) =
 								lexer::preprocessor::concat_macro_body(
 									new_body,
+									span_encoding
 								);
 							syntax_diags.append(&mut syntax);
 							semantic_diags.append(&mut semantic);
@@ -7026,7 +7054,7 @@ fn parse_directive<'a, P: TokenStreamProvider<'a>>(
 				// Since object-like macros don't have parameters, we can perform the concatenation right here
 				// since we know the contents of the macro body will never change.
 				let (body_tokens, mut syntax, mut semantic) =
-					preprocessor::concat_macro_body(body_tokens);
+					preprocessor::concat_macro_body(body_tokens, walker.span_encoding);
 				walker.append_syntax_diags(&mut syntax);
 				walker.append_semantic_diags(&mut semantic);
 				body_tokens.iter().for_each(|(t, s)| {
@@ -7195,7 +7223,7 @@ fn parse_directive<'a, P: TokenStreamProvider<'a>>(
 				// change depending on the parameters, but we can still concatenate in order to find any
 				// syntax/semantic diagnostics.
 				let (_, mut syntax, mut semantic) =
-					preprocessor::concat_macro_body(body_tokens.clone());
+					preprocessor::concat_macro_body(body_tokens.clone(), walker.span_encoding);
 				walker.append_syntax_diags(&mut syntax);
 				walker.append_semantic_diags(&mut semantic);
 

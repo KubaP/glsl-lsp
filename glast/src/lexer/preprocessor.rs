@@ -41,7 +41,7 @@
 //! - Has different pre-defined macros, (which depend on the exact GLSL version).
 
 use super::{is_word, is_word_start, Lexer};
-use crate::{GlslVersion, Span, Spanned};
+use crate::{GlslVersion, Span, SpanEncoding, Spanned};
 
 /// A vector of tokens representing a specific preprocessor directive.
 ///
@@ -671,8 +671,8 @@ impl ConditionToken {
 }
 
 /// Constructs a directive with no tokens, just the keyword.
-pub(super) fn construct_empty(
-	lexer: &mut Lexer,
+pub(super) fn construct_empty<C: super::Char>(
+	lexer: &mut Lexer<C>,
 	directive_kw: String,
 	directive_kw_span: Span,
 ) -> TokenStream {
@@ -756,8 +756,8 @@ pub(super) fn construct_empty(
 }
 
 /// Parses a `#version` directive.
-pub(super) fn parse_version(
-	lexer: &mut Lexer,
+pub(super) fn parse_version<C: super::Char>(
+	lexer: &mut Lexer<C>,
 	directive_kw_span: Span,
 	is_first_non_comment_token: bool,
 ) -> (TokenStream, Option<GlslVersion>) {
@@ -963,8 +963,8 @@ pub(super) fn parse_version(
 }
 
 /// Parses an `#extension` directive.
-pub(super) fn parse_extension(
-	lexer: &mut Lexer,
+pub(super) fn parse_extension<C: super::Char>(
+	lexer: &mut Lexer<C>,
 	directive_kw_span: Span,
 ) -> TokenStream {
 	let mut tokens = Vec::new();
@@ -1054,8 +1054,8 @@ pub(super) fn parse_extension(
 }
 
 /// Parses a `#line` directive.
-pub(super) fn parse_line(
-	lexer: &mut Lexer,
+pub(super) fn parse_line<C: super::Char>(
+	lexer: &mut Lexer<C>,
 	directive_kw_span: Span,
 ) -> TokenStream {
 	let mut tokens = Vec::new();
@@ -1229,7 +1229,9 @@ pub(super) fn parse_line(
 }
 
 /// Parses the identifier part of a `#define` directive.
-pub(super) fn parse_define(lexer: &mut Lexer) -> Vec<Spanned<DefineToken>> {
+pub(super) fn parse_define<C: super::Char>(
+	lexer: &mut Lexer<C>,
+) -> Vec<Spanned<DefineToken>> {
 	let mut tokens = Vec::new();
 	// We continue off from where the lexer previously stopped.
 	let mut current;
@@ -1405,8 +1407,8 @@ pub(super) fn parse_define(lexer: &mut Lexer) -> Vec<Spanned<DefineToken>> {
 }
 
 /// Parses an `#undef` directive.
-pub(super) fn parse_undef(
-	lexer: &mut Lexer,
+pub(super) fn parse_undef<C: super::Char>(
+	lexer: &mut Lexer<C>,
 	directive_kw_span: Span,
 ) -> TokenStream {
 	let mut tokens = Vec::new();
@@ -1487,8 +1489,8 @@ pub(super) fn parse_undef(
 }
 
 /// Parses a `#ifdef`/`#ifndef`/`#if`/`#elif`/`#else`/`#endif` directive.
-pub(super) fn parse_condition(
-	lexer: &mut Lexer,
+pub(super) fn parse_condition<C: super::Char>(
+	lexer: &mut Lexer<C>,
 	directive_kw: &str,
 	directive_kw_span: Span,
 ) -> TokenStream {
@@ -1523,8 +1525,8 @@ pub(super) fn parse_condition(
 }
 
 /// Parses conditional directive tokens.
-pub(crate) fn parse_condition_tokens(
-	lexer: &mut Lexer,
+pub(crate) fn parse_condition_tokens<C: super::Char>(
+	lexer: &mut Lexer<C>,
 ) -> Vec<Spanned<ConditionToken>> {
 	let mut tokens = Vec::new();
 	let mut buffer = String::new();
@@ -1855,7 +1857,9 @@ macro_rules! match_op {
 }
 
 /// Matches a punctuation symbol.
-fn match_conditional_punctuation(lexer: &mut Lexer) -> Option<ConditionToken> {
+fn match_conditional_punctuation<C: super::Char>(
+	lexer: &mut Lexer<C>,
+) -> Option<ConditionToken> {
 	match_op!(lexer, "==", ConditionToken::EqEq);
 	match_op!(lexer, "!=", ConditionToken::NotEq);
 	match_op!(lexer, ">=", ConditionToken::Ge);
@@ -1885,6 +1889,7 @@ fn match_conditional_punctuation(lexer: &mut Lexer) -> Option<ConditionToken> {
 /// Performs token concatenation on the given token stream.
 pub(crate) fn concat_macro_body(
 	tokens: super::TokenStream,
+	span_encoding: SpanEncoding,
 ) -> (
 	super::TokenStream,
 	Vec<crate::diag::Syntax>,
@@ -1930,9 +1935,23 @@ pub(crate) fn concat_macro_body(
 					} else {
 						let mut new_string = prev.0.to_string();
 						new_string.push_str(&next.0.to_string());
-						let mut lexer = Lexer::new(&new_string);
-						let mut result =
-							super::parse_tokens(&mut lexer, true, false);
+						let mut result = match span_encoding {
+							SpanEncoding::Utf8 => {
+								let mut lexer: Lexer<super::Utf8> =
+									Lexer::new(&new_string, span_encoding);
+								super::parse_tokens(&mut lexer, true, false)
+							}
+							SpanEncoding::Utf16 => {
+								let mut lexer: Lexer<super::Utf16> =
+									Lexer::new(&new_string, span_encoding);
+								super::parse_tokens(&mut lexer, true, false)
+							}
+							SpanEncoding::Utf32 => {
+								let mut lexer: Lexer<super::Utf32> =
+									Lexer::new(&new_string, span_encoding);
+								super::parse_tokens(&mut lexer, true, false)
+							}
+						};
 						if result.len() == 1 {
 							// We have successfully concatenated. Since the lexer starts off at 0, we need to
 							// modify the span to be correct.

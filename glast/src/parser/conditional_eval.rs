@@ -254,37 +254,38 @@ mod tests {
 	/// must consist of an `#if` or `#elif` conditional directive only.
 	macro_rules! assert_eval {
 		($macros:expr, $src:expr, $result:expr) => {
-			let mut tokens = crate::lexer::parse_from_str_with_version(
+			let mut tokens = crate::lexer::parse_with_version(
 				$src,
 				crate::GlslVersion::_450,
 			)
 			.0;
 			match tokens.remove(0) {
-				(crate::lexer::Token::Directive(d), _) => match d {
-					crate::lexer::preprocessor::TokenStream::If {
-						tokens,
-						..
-					}
-					| crate::lexer::preprocessor::TokenStream::ElseIf {
-						tokens,
-						..
-					} => {
-						let (expr, _, _) =
-							crate::parser::conditional_expression::cond_parser(
-								tokens, &$macros,
+				(crate::lexer::Token::Directive(d), _) => {
+					match d {
+						crate::lexer::preprocessor::TokenStream::If {
+							tokens,
+							..
+						}
+						| crate::lexer::preprocessor::TokenStream::ElseIf {
+							tokens,
+							..
+						} => {
+							let (expr, _, _) = crate::parser::conditional_expression::cond_parser(
+								tokens, &$macros, crate::SpanEncoding::Utf16,
 							);
-						assert_eq!(
-							super::eval(expr.unwrap(), &$macros),
-							$result
-						);
+							assert_eq!(
+								super::eval(expr.unwrap(), &$macros),
+								$result
+							);
+						}
+						_ => panic!(),
 					}
-					_ => panic!(),
-				},
+				}
 				_ => panic!(),
 			}
 		};
 		($src:expr, $result:expr) => {
-			let mut tokens = crate::lexer::parse_from_str_with_version(
+			let mut tokens = crate::lexer::parse_with_version(
 				$src,
 				crate::GlslVersion::_450,
 			)
@@ -303,6 +304,7 @@ mod tests {
 							crate::parser::conditional_expression::cond_parser(
 								tokens,
 								&HashMap::new(),
+								crate::SpanEncoding::Utf16,
 							);
 						assert_eq!(
 							super::eval(expr.unwrap(), &HashMap::new()),

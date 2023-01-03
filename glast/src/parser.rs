@@ -3955,6 +3955,19 @@ fn try_parse_definition_declaration_expr<'a, P: TokenStreamProvider<'a>>(
 							name: i.clone(),
 							span: token_span,
 						};
+						walker.append_colours(&mut start_colours);
+						start_syntax.retain(|e| {
+							if let Syntax::Expr(
+								ExprDiag::FoundOperandAfterOperand(_, _),
+							) = e
+							{
+								false
+							} else {
+								true
+							}
+						});
+						walker.append_syntax_diags(&mut start_syntax);
+						walker.append_semantic_diags(&mut start_semantic);
 						walker.push_colour(
 							token_span,
 							SyntaxType::UncheckedIdent,

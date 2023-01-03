@@ -474,6 +474,9 @@ impl ShuntingYard {
 				(_, _) => {}
 			}
 
+			// TODO: Implement same precedence check for binary operators as in the conditional expression parser.
+			// This is strictly not necessary since we won't ever be mathematically evaluating expressions, but it
+			// would be a good idea nonetheless.
 			if op.precedence() < back.precedence() {
 				let moved = self.operators.pop_back().unwrap();
 				self.stack.push_back(Either::Right(moved));
@@ -2161,8 +2164,10 @@ impl ShuntingYard {
 					// We switch state since after an object access we are execting an operand, such as:
 					// `foo. bar()`.
 					state = State::Operand;
-
+					
 					can_start = Start::None;
+
+					arity_state = Arity::Operator;
 
 					self.colour(walker, span, SyntaxType::Operator);
 				}

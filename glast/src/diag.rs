@@ -856,6 +856,10 @@ pub enum PreprocConditionalDiag {
 	///
 	/// - `0` - The position where the expression should be inserted.
 	ExpectedExprAfterIf(Span),
+	/// ERROR - Did not find an expression after the `elseif` keyword.
+	///
+	/// - `0` - The position where the expression should be inserted.
+	ExpectedExprAfterElseIf(Span),
 	/// ERROR - Did not find an `#endif` directive to close a conditional block.
 	///
 	/// - `0` - The span of the opening `#ifdef`/`#ifndef`/`#if` directive.

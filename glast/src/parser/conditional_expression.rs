@@ -240,14 +240,14 @@ impl<'a> Walker<'a> {
 							// Look for any arguments until we hit a closing `)` parenthesis. The preprocessor
 							// immediately switches to the next argument when a `,` is encountered, unless we are
 							// within a parenthesis group.
-							#[derive(PartialEq)]
+							/* #[derive(PartialEq)]
 							enum Prev {
 								None,
 								Param,
 								Comma,
 								Invalid,
 							}
-							let mut prev = Prev::None;
+							let mut prev = Prev::None; */
 							let mut prev_span = l_paren_span;
 							let mut paren_groups = 0;
 							let mut args = Vec::new();
@@ -276,7 +276,7 @@ impl<'a> Walker<'a> {
 										if paren_groups == 0 {
 											let arg = std::mem::take(&mut arg);
 											args.push(arg);
-											prev = Prev::Comma;
+											/* prev = Prev::Comma; */
 										}
 										prev_span = *token_span;
 										*cursor += 1;
@@ -318,6 +318,7 @@ impl<'a> Walker<'a> {
 									span: *token_span,
 								});
 								arg.push((token.clone(), *token_span));
+								/* prev = Prev::Param; */
 								*cursor += 1;
 								first_token = false;
 							};

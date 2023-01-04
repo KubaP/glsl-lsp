@@ -505,7 +505,7 @@ pub fn parse_from_token_stream(
 
 					let span = if tokens.is_empty() {
 						syntax_diags.push(Syntax::PreprocConditional(
-							PreprocConditionalDiag::ExpectedExprAfterIf(
+							PreprocConditionalDiag::ExpectedExprAfterElseIf(
 								kw_span.next_single_width(),
 							),
 						));
@@ -936,11 +936,11 @@ pub struct TokenTree {
 	/// The ending position of the last token in the tree.
 	end_position: usize,
 
-	/// Syntax diagnostics related to conditional compilation directives.
+	/// Syntax diagnostics related to conditional compilation directives. Note that this vector won't contain any
+	/// syntax diagnostics in relation to conditional expressions, since those are not evaluated here.
 	///
 	/// # Invariants
 	/// If `contains_conditional_directives` is `false`, this is empty.
-	#[allow(unused)]
 	syntax_diags: Vec<Syntax>,
 
 	/// Whether there are any conditional directives.
@@ -1073,13 +1073,14 @@ impl TokenTree {
 
 		// Parse the root branch.
 		let mut walker = Walker::new(
-			RootTokenStreamProvider::new(streams),
+			RootTokenStreamProvider::new(streams, self.end_position),
 			self.span_encoding,
 		);
 		let mut nodes = Vec::new();
 		while !walker.is_done() {
 			parse_stmt(&mut walker, &mut nodes);
 		}
+		walker.syntax_diags.append(&mut self.syntax_diags.clone());
 		let (ast, syntax_diags, semantic_diags, mut root_tokens) = (
 			nodes,
 			walker.syntax_diags,
@@ -1219,13 +1220,18 @@ impl TokenTree {
 	) -> (ParseResult, Vec<usize>) {
 		// Parse the token tree, evaluating conditional compilation.
 		let mut walker = Walker::new(
-			DynamicTokenStreamProvider::new(&self.arena, &self.tree),
+			DynamicTokenStreamProvider::new(
+				&self.arena,
+				&self.tree,
+				self.end_position,
+			),
 			self.span_encoding,
 		);
 		let mut nodes = Vec::new();
 		while !walker.is_done() {
 			parse_stmt(&mut walker, &mut nodes);
 		}
+		walker.syntax_diags.append(&mut self.syntax_diags.clone());
 
 		let eval_key = walker.token_provider.chosen_key;
 		let eval_regions = walker.token_provider.chosen_regions;
@@ -1506,6 +1512,7 @@ impl TokenTree {
 			PreselectedTokenStreamProvider::new(
 				streams,
 				conditional_syntax_tokens,
+				self.end_position,
 			),
 			self.span_encoding,
 		);
@@ -1513,6 +1520,7 @@ impl TokenTree {
 		while !walker.is_done() {
 			parse_stmt(&mut walker, &mut nodes);
 		}
+		walker.syntax_diags.append(&mut self.syntax_diags.clone());
 
 		(
 			ParseResult {
@@ -1990,8 +1998,8 @@ trait TokenStreamProvider<'a>: Clone {
 		span_encoding: SpanEncoding,
 	) -> Option<TokenStream>;
 
-	/// Returns the span of the last relevant token in the source string.
-	fn get_last_span(&self) -> Span;
+	/// Returns the zero-width span of the source string.
+	fn get_end_span(&self) -> Span;
 }
 
 /// A root token stream provider.
@@ -2001,28 +2009,18 @@ struct RootTokenStreamProvider<'a> {
 	streams: Vec<TokenStream>,
 	/// Cursor position.
 	cursor: usize,
-	/// The pre-calculated last span.
-	last_span: Span,
+	/// The zero-width span at the end of the source string.
+	end_span: Span,
 	_phantom: std::marker::PhantomData<&'a ()>,
 }
 
 impl<'a> RootTokenStreamProvider<'a> {
 	/// Constructs a new pre-selected token stream provider.
-	fn new(streams: Vec<TokenStream>) -> Self {
-		let last_span = if let Some(stream) = streams.last() {
-			if let Some((_, span)) = stream.last() {
-				*span
-			} else {
-				Span::new(0, 0)
-			}
-		} else {
-			Span::new(0, 0)
-		};
-
+	fn new(streams: Vec<TokenStream>, end_position: usize) -> Self {
 		Self {
 			streams,
 			cursor: 0,
-			last_span,
+			end_span: Span::new(end_position, end_position),
 			_phantom: std::marker::PhantomData::default(),
 		}
 	}
@@ -2041,8 +2039,8 @@ impl<'a> TokenStreamProvider<'a> for RootTokenStreamProvider<'a> {
 		v
 	}
 
-	fn get_last_span(&self) -> Span {
-		self.last_span
+	fn get_end_span(&self) -> Span {
+		self.end_span
 	}
 }
 
@@ -2053,8 +2051,8 @@ struct PreselectedTokenStreamProvider<'a> {
 	streams: Vec<TokenStream>,
 	/// Cursor position.
 	cursor: usize,
-	/// The pre-calculated last span.
-	last_span: Span,
+	/// The zero-width span at the end of the source string.
+	end_span: Span,
 	/// Syntax tokens for each conditional directive that is part of the pre-selected evaluation, in order of
 	/// appearance.
 	conditional_syntax_tokens: Vec<Vec<SyntaxToken>>,
@@ -2066,21 +2064,12 @@ impl<'a> PreselectedTokenStreamProvider<'a> {
 	fn new(
 		streams: Vec<TokenStream>,
 		conditional_syntax_tokens: Vec<Vec<SyntaxToken>>,
+		end_position: usize,
 	) -> Self {
-		let last_span = if let Some(stream) = streams.last() {
-			if let Some((_, span)) = stream.last() {
-				*span
-			} else {
-				Span::new(0, 0)
-			}
-		} else {
-			Span::new(0, 0)
-		};
-
 		Self {
 			streams,
 			cursor: 0,
-			last_span,
+			end_span: Span::new(end_position, end_position),
 			conditional_syntax_tokens,
 			_phantom: std::marker::PhantomData::default(),
 		}
@@ -2133,8 +2122,8 @@ impl<'a> TokenStreamProvider<'a> for PreselectedTokenStreamProvider<'a> {
 		}
 	}
 
-	fn get_last_span(&self) -> Span {
-		self.last_span
+	fn get_end_span(&self) -> Span {
+		self.end_span
 	}
 }
 
@@ -2158,20 +2147,24 @@ struct DynamicTokenStreamProvider<'a> {
 	/// have been chosen, as well as all tokens for the directives themselves that have been looked at, but not
 	/// necessarily chosen; i.e. this would include a failed `#elif`/`#else` and the `#endif`.
 	chosen_regions: Vec<Span>,
-	/// The span of the currently-last token. This is updated everytime a new stream is pushed.
-	last_span: Span,
+	/// The zero-width span at the end of the source string.
+	end_span: Span,
 }
 
 impl<'a> DynamicTokenStreamProvider<'a> {
 	/// Constructs a new dynamic token stream provider.
-	fn new(arena: &'a [TokenStream], tree: &'a [TreeNode]) -> Self {
+	fn new(
+		arena: &'a [TokenStream],
+		tree: &'a [TreeNode],
+		end_position: usize,
+	) -> Self {
 		Self {
 			arena,
 			tree,
 			ptrs: vec![(TokenTree::ROOT_NODE_ID, 0, 0, -1)],
 			chosen_key: Vec::new(),
 			chosen_regions: Vec::new(),
-			last_span: Span::new(0, 0),
+			end_span: Span::new(end_position, end_position),
 		}
 	}
 }
@@ -2214,7 +2207,7 @@ impl<'a> TokenStreamProvider<'a> for DynamicTokenStreamProvider<'a> {
 					// Update the last span value. This value can't be calculated ahead-of-time since we don't know
 					// what conditional compilation will evaluate to.
 					if let Some((_, span)) = stream.last() {
-						self.last_span = *span;
+						/* self.end_span = *span; */
 						self.chosen_regions.push(Span::new(
 							stream.first().unwrap().1.start,
 							span.end,
@@ -2426,8 +2419,8 @@ impl<'a> TokenStreamProvider<'a> for DynamicTokenStreamProvider<'a> {
 		}
 	}
 
-	fn get_last_span(&self) -> Span {
-		self.last_span
+	fn get_end_span(&self) -> Span {
+		self.end_span
 	}
 }
 
@@ -2478,7 +2471,6 @@ enum Macro {
 	},
 }
 
-#[allow(unused)]
 impl<'a, Provider: TokenStreamProvider<'a>> Walker<'a, Provider> {
 	/// Constructs a new walker.
 	fn new(mut token_provider: Provider, span_encoding: SpanEncoding) -> Self {
@@ -2653,7 +2645,7 @@ impl<'a, Provider: TokenStreamProvider<'a>> Walker<'a, Provider> {
 
 	/// Returns the span of the last token in the token stream.
 	fn get_last_span(&self) -> Span {
-		self.token_provider.get_last_span()
+		self.token_provider.get_end_span()
 	}
 
 	/// Moves the cursor to the next token. This function takes all the necessary data by parameter so that the
@@ -2787,14 +2779,14 @@ impl<'a, Provider: TokenStreamProvider<'a>> Walker<'a, Provider> {
 							// Look for any arguments until we hit a closing `)` parenthesis. The preprocessor
 							// immediately switches to the next argument when a `,` is encountered, unless we are
 							// within a parenthesis group.
-							#[derive(PartialEq)]
+							/* #[derive(PartialEq)]
 							enum Prev {
 								None,
 								Param,
 								Comma,
 								Invalid,
 							}
-							let mut prev = Prev::None;
+							let mut prev = Prev::None; */
 							let mut prev_span = l_paren_span;
 							let mut paren_groups = 0;
 							let mut args = Vec::new();
@@ -2821,7 +2813,7 @@ impl<'a, Provider: TokenStreamProvider<'a>> Walker<'a, Provider> {
 										if paren_groups == 0 {
 											let arg = std::mem::take(&mut arg);
 											args.push(arg);
-											prev = Prev::Comma;
+											/* prev = Prev::Comma; */
 										}
 										prev_span = *token_span;
 										*cursor += 1;
@@ -2860,6 +2852,7 @@ impl<'a, Provider: TokenStreamProvider<'a>> Walker<'a, Provider> {
 									span: *token_span,
 								});
 								arg.push((token.clone(), *token_span));
+								/* prev = Prev::Param; */
 								*cursor += 1;
 							};
 							let call_site_span =
@@ -2905,7 +2898,7 @@ impl<'a, Provider: TokenStreamProvider<'a>> Walker<'a, Provider> {
 							let (new_body, mut syntax, mut semantic) =
 								lexer::preprocessor::concat_macro_body(
 									new_body,
-									span_encoding
+									span_encoding,
 								);
 							syntax_diags.append(&mut syntax);
 							semantic_diags.append(&mut semantic);
@@ -3040,12 +3033,11 @@ impl<'a, Provider: TokenStreamProvider<'a>> Walker<'a, Provider> {
 					SyntaxType::ObjectMacro,
 					SyntaxModifiers::UNDEFINE,
 				),
-				Macro::Function { params, body } => self
-					.push_colour_with_modifiers(
-						span,
-						SyntaxType::FunctionMacro,
-						SyntaxModifiers::UNDEFINE,
-					),
+				Macro::Function { .. } => self.push_colour_with_modifiers(
+					span,
+					SyntaxType::FunctionMacro,
+					SyntaxModifiers::UNDEFINE,
+				),
 			},
 			None => {
 				self.push_colour_with_modifiers(
@@ -7054,7 +7046,10 @@ fn parse_directive<'a, P: TokenStreamProvider<'a>>(
 				// Since object-like macros don't have parameters, we can perform the concatenation right here
 				// since we know the contents of the macro body will never change.
 				let (body_tokens, mut syntax, mut semantic) =
-					preprocessor::concat_macro_body(body_tokens, walker.span_encoding);
+					preprocessor::concat_macro_body(
+						body_tokens,
+						walker.span_encoding,
+					);
 				walker.append_syntax_diags(&mut syntax);
 				walker.append_semantic_diags(&mut semantic);
 				body_tokens.iter().for_each(|(t, s)| {
@@ -7223,7 +7218,10 @@ fn parse_directive<'a, P: TokenStreamProvider<'a>>(
 				// change depending on the parameters, but we can still concatenate in order to find any
 				// syntax/semantic diagnostics.
 				let (_, mut syntax, mut semantic) =
-					preprocessor::concat_macro_body(body_tokens.clone(), walker.span_encoding);
+					preprocessor::concat_macro_body(
+						body_tokens.clone(),
+						walker.span_encoding,
+					);
 				walker.append_syntax_diags(&mut syntax);
 				walker.append_semantic_diags(&mut semantic);
 
@@ -7986,99 +7984,11 @@ fn parse_line_directive<'a, P: TokenStreamProvider<'a>>(
 				));
 				None
 			}
-			LineToken::Ident(str) => {
-				let ident_span = token_span;
+			LineToken::Ident(_str) => {
+				let _ident_span = token_span;
 
-				let mut line = None;
-				let mut src_str_num = Omittable::None;
-				/* if let Some((_, replacement_list)) = walker.macros.get(&str) {
-								   'replacement: for (token, _) in replacement_list {
-									   match token {
-										   Token::Num { type_, num, suffix } => {
-											   if *type_ != NumType::Dec || suffix.is_some() {
-												   walker.push_syntax_diag(
-													   Syntax::PreprocLine(
-														   PreprocLineDiag::InvalidNumber(
-															   ident_span,
-														   ),
-													   ),
-												   );
-												   seek_end(walker, tokens, false);
-												   nodes.push(Node {
-													   span: Span::new(
-														   dir_span.start,
-														   kw_span.end,
-													   ),
-													   ty: NodeTy::LineDirective {
-														   line,
-														   src_str_num,
-													   },
-												   });
-												   return;
-											   }
-
-											   let num: usize = match num.parse() {
-												   Ok(n) => n,
-												   Err(_) => {
-													   walker.push_syntax_diag(
-														   Syntax::PreprocLine(
-															   PreprocLineDiag::InvalidNumber(
-																   ident_span,
-															   ),
-														   ),
-													   );
-													   seek_end(walker, tokens, false);
-													   nodes.push(Node {
-														   span: Span::new(
-															   dir_span.start,
-															   kw_span.end,
-														   ),
-														   ty: NodeTy::LineDirective {
-															   line,
-															   src_str_num,
-														   },
-													   });
-													   return;
-												   }
-											   };
-
-											   if src_str_num.is_some() {
-												   walker.push_syntax_diag(
-													   Syntax::PreprocTrailingTokens(
-														   ident_span,
-													   ),
-												   );
-												   break 'replacement;
-											   }
-
-											   if line.is_none() {
-												   line = Some((num, ident_span))
-											   } else {
-												   src_str_num =
-													   Omittable::Some((num, ident_span));
-											   }
-										   }
-										   _ => {
-											   walker.push_syntax_diag(Syntax::PreprocLine(
-												   PreprocLineDiag::ExpectedNumber(ident_span),
-											   ));
-											   seek_end(walker, tokens, false);
-											   nodes.push(Node {
-												   span: Span::new(
-													   dir_span.start,
-													   kw_span.end,
-												   ),
-												   ty: NodeTy::LineDirective {
-													   line,
-													   src_str_num,
-												   },
-											   });
-											   return;
-										   }
-									   }
-								   }
-							   }
-				*/
+				let line = None;
+				let src_str_num = Omittable::None;
 				if src_str_num.is_some() {
 					seek_end(walker, tokens, true);
 					nodes.push(Node {
@@ -8121,97 +8031,7 @@ fn parse_line_directive<'a, P: TokenStreamProvider<'a>>(
 				));
 				Omittable::None
 			}
-			LineToken::Ident(str) => {
-				let ident_span = token_span;
-
-				let mut src_str_num = Omittable::None;
-				if let Some((_, replacement_list)) = walker.macros.get(&str) {
-					/* 'replacement: for (token, _) in replacement_list {
-						   match token {
-							   Token::Num { type_, num, suffix } => {
-								   if *type_ != NumType::Dec || suffix.is_some() {
-									   walker.push_syntax_diag(
-										   Syntax::PreprocLine(
-											   PreprocLineDiag::InvalidNumber(
-												   ident_span,
-											   ),
-										   ),
-									   );
-									   seek_end(walker, tokens, false);
-									   nodes.push(Node {
-										   span: Span::new(
-											   dir_span.start,
-											   kw_span.end,
-										   ),
-										   ty: NodeTy::LineDirective {
-											   line,
-											   src_str_num,
-										   },
-									   });
-									   return;
-								   }
-
-								   let num: usize = match num.parse() {
-									   Ok(n) => n,
-									   Err(_) => {
-										   walker.push_syntax_diag(
-											   Syntax::PreprocLine(
-												   PreprocLineDiag::InvalidNumber(
-													   ident_span,
-												   ),
-											   ),
-										   );
-										   seek_end(walker, tokens, false);
-										   nodes.push(Node {
-											   span: Span::new(
-												   dir_span.start,
-												   kw_span.end,
-											   ),
-											   ty: NodeTy::LineDirective {
-												   line,
-												   src_str_num,
-											   },
-										   });
-										   return;
-									   }
-								   };
-
-								   if src_str_num.is_some() {
-									   walker.push_syntax_diag(
-										   Syntax::PreprocTrailingTokens(
-											   ident_span,
-										   ),
-									   );
-									   break 'replacement;
-								   }
-
-								   src_str_num =
-									   Omittable::Some((num, ident_span));
-							   }
-							   _ => {
-								   walker.push_syntax_diag(Syntax::PreprocLine(
-									   PreprocLineDiag::ExpectedNumber(ident_span),
-								   ));
-								   seek_end(walker, tokens, false);
-								   nodes.push(Node {
-									   span: Span::new(
-										   dir_span.start,
-										   kw_span.end,
-									   ),
-									   ty: NodeTy::LineDirective {
-										   line,
-										   src_str_num,
-									   },
-								   });
-								   return;
-							   }
-						   }
-					   }
-					*/
-				}
-
-				src_str_num
-			}
+			LineToken::Ident(_str) => Omittable::None,
 			LineToken::Invalid(_) => {
 				walker.push_colour(token_span, SyntaxType::Invalid);
 				walker.push_syntax_diag(Syntax::PreprocLine(

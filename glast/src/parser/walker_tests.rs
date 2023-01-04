@@ -64,7 +64,7 @@ mod single_source {
 		)
 		.0;
 		let mut walker = Walker::new(
-			RootTokenStreamProvider::new(vec![tokens]),
+			RootTokenStreamProvider::new(vec![tokens], 10000),
 			SpanEncoding::Utf16,
 		);
 		assert_token!(walker, Token::Ident("int".into()));
@@ -96,7 +96,7 @@ mod single_source {
 		)
 		.0;
 		let mut walker = Walker::new(
-			RootTokenStreamProvider::new(vec![tokens]),
+			RootTokenStreamProvider::new(vec![tokens], 10000),
 			SpanEncoding::Utf16,
 		);
 		register_obj_macro!(walker, "BAR", Token::Ident("bar".into()));
@@ -130,7 +130,7 @@ mod single_source {
 		)
 		.0;
 		let mut walker = Walker::new(
-			RootTokenStreamProvider::new(vec![tokens]),
+			RootTokenStreamProvider::new(vec![tokens], 10000),
 			SpanEncoding::Utf16,
 		);
 		register_obj_macro!(walker, "FOO", Token::Ident("foo".into()));
@@ -164,7 +164,7 @@ mod single_source {
 		)
 		.0;
 		let mut walker = Walker::new(
-			RootTokenStreamProvider::new(vec![tokens]),
+			RootTokenStreamProvider::new(vec![tokens], 10000),
 			SpanEncoding::Utf16,
 		);
 		register_obj_macro!(walker, "FOO");
@@ -195,7 +195,7 @@ mod single_source {
 		)
 		.0;
 		let mut walker = Walker::new(
-			RootTokenStreamProvider::new(vec![tokens]),
+			RootTokenStreamProvider::new(vec![tokens], 10000),
 			SpanEncoding::Utf16,
 		);
 		register_fn_macro!(
@@ -237,7 +237,7 @@ mod single_source {
 		)
 		.0;
 		let mut walker = Walker::new(
-			RootTokenStreamProvider::new(vec![tokens]),
+			RootTokenStreamProvider::new(vec![tokens], 10000),
 			SpanEncoding::Utf16,
 		);
 		register_fn_macro!(
@@ -290,7 +290,7 @@ mod single_source {
 		)
 		.0;
 		let mut walker = Walker::new(
-			RootTokenStreamProvider::new(vec![tokens]),
+			RootTokenStreamProvider::new(vec![tokens], 10000),
 			SpanEncoding::Utf16,
 		);
 		register_fn_macro!(
@@ -330,7 +330,7 @@ mod multi_source {
 			lexer::parse_with_version("/*...*/bar", GlslVersion::_450).0,
 		];
 		let mut walker = Walker::new(
-			RootTokenStreamProvider::new(tokens),
+			RootTokenStreamProvider::new(tokens, 10000),
 			SpanEncoding::Utf16,
 		);
 		assert_token!(walker, Token::Ident("int".into()));
@@ -359,7 +359,7 @@ mod multi_source {
 			lexer::parse_with_version("BAR", GlslVersion::_450).0,
 		];
 		let mut walker = Walker::new(
-			RootTokenStreamProvider::new(tokens),
+			RootTokenStreamProvider::new(tokens, 10000),
 			SpanEncoding::Utf16,
 		);
 		register_obj_macro!(walker, "BAR", Token::Ident("bar".into()));
@@ -390,7 +390,7 @@ mod multi_source {
 			lexer::parse_with_version("BAR", GlslVersion::_450).0,
 		];
 		let mut walker = Walker::new(
-			RootTokenStreamProvider::new(tokens),
+			RootTokenStreamProvider::new(tokens, 10000),
 			SpanEncoding::Utf16,
 		);
 		register_obj_macro!(walker, "FOO", Token::Ident("foo".into()));
@@ -421,7 +421,7 @@ mod multi_source {
 			lexer::parse_with_version("FOO", GlslVersion::_450).0,
 		];
 		let mut walker = Walker::new(
-			RootTokenStreamProvider::new(tokens),
+			RootTokenStreamProvider::new(tokens, 10000),
 			SpanEncoding::Utf16,
 		);
 		register_obj_macro!(walker, "FOO");
@@ -449,7 +449,7 @@ mod multi_source {
 			lexer::parse_with_version("BAR(p)", GlslVersion::_450).0,
 		];
 		let mut walker = Walker::new(
-			RootTokenStreamProvider::new(tokens),
+			RootTokenStreamProvider::new(tokens, 10000),
 			SpanEncoding::Utf16,
 		);
 		register_fn_macro!(
@@ -488,7 +488,7 @@ mod multi_source {
 			lexer::parse_with_version("BAR(p)", GlslVersion::_450).0,
 		];
 		let mut walker = Walker::new(
-			RootTokenStreamProvider::new(tokens),
+			RootTokenStreamProvider::new(tokens, 10000),
 			SpanEncoding::Utf16,
 		);
 		register_fn_macro!(
@@ -538,7 +538,7 @@ mod multi_source {
 			lexer::parse_with_version("BAR(p)", GlslVersion::_450).0,
 		];
 		let mut walker = Walker::new(
-			RootTokenStreamProvider::new(tokens),
+			RootTokenStreamProvider::new(tokens, 10000),
 			SpanEncoding::Utf16,
 		);
 		register_fn_macro!(
@@ -581,7 +581,7 @@ mod function_macros {
 		)
 		.0;
 		let mut walker = Walker::new(
-			RootTokenStreamProvider::new(vec![tokens]),
+			RootTokenStreamProvider::new(vec![tokens], 10000),
 			SpanEncoding::Utf16,
 		);
 		register_fn_macro!(

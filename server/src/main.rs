@@ -45,6 +45,11 @@ impl LanguageServer for Lsp {
 				version: Some(SERVER_VERSION.into()),
 			}),
 			capabilities: ServerCapabilities {
+				position_encoding: Some(match state.span_encoding {
+					glast::SpanEncoding::Utf8 => PositionEncodingKind::UTF8,
+					glast::SpanEncoding::Utf16 => PositionEncodingKind::UTF16,
+					glast::SpanEncoding::Utf32 => PositionEncodingKind::UTF32,
+				}),
 				// Sync the full text contents upon any change.
 				text_document_sync: Some(TextDocumentSyncCapability::Kind(
 					TextDocumentSyncKind::FULL,
@@ -99,10 +104,13 @@ impl LanguageServer for Lsp {
 					),
 				),
 				moniker_provider: None,
+				inlay_hint_provider: None,
 				workspace_symbol_provider: None,
 				workspace: None,
 				experimental: None,
 			},
+			// Legacy unofficial position encoding communication.
+			offset_encoding: None,
 		})
 	}
 

@@ -8,6 +8,9 @@ edition = "2021"
 [dependencies]
 glast = { path = "../glast" }
 tokio = { version = "1.17.0", features = ["full"] }
-tower-lsp = "0.17.0"
+tower-lsp = { version = "0.17.0", features = ["proposed"] }
 serde = "1.0.139"
 serde_json = "1.0.89"
+
+[patch.crates-io]
+tower-lsp = { git = "https://github.com/KubaP/tower-lsp" }

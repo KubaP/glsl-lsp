@@ -4,6 +4,7 @@ use crate::{
 	file::{get_file_config_settings, ConditionalCompilationState, File},
 	lsp_extensions::EvalConditionalChoice,
 };
+use glast::SpanEncoding;
 use std::collections::HashMap;
 use tower_lsp::{
 	lsp_types::{
@@ -25,6 +26,9 @@ pub struct Server {
 	highlighting_state: SemanticHighlightState,
 	/// The state of document-related functionality.
 	document_state: DocumentState,
+
+	/// The type of encoding of spans.
+	pub span_encoding: SpanEncoding,
 }
 
 /// The state of support for diagnostic-related functionality, as reported by the client.
@@ -64,15 +68,31 @@ impl Server {
 			diag_state: Default::default(),
 			highlighting_state: Default::default(),
 			document_state: Default::default(),
+			span_encoding: SpanEncoding::Utf16,
 		}
 	}
 
 	/// Initializes the server state, taking into account the reported capabilities from the client.
 	pub fn initialize(&mut self, params: InitializeParams) {
 		use tower_lsp::lsp_types::{
-			CodeLensClientCapabilities, PublishDiagnosticsClientCapabilities,
+			CodeLensClientCapabilities, GeneralClientCapabilities,
+			PositionEncodingKind, PublishDiagnosticsClientCapabilities,
 			SemanticTokensClientCapabilities, SemanticTokensFullOptions,
 		};
+
+		if let Some(GeneralClientCapabilities {
+			regular_expressions: _,
+			markdown: _,
+			stale_request_support: _,
+			position_encodings,
+		}) = params.capabilities.general
+		{
+			if let Some(encodings) = position_encodings {
+				if encodings.contains(&PositionEncodingKind::UTF8) {
+					self.span_encoding = SpanEncoding::Utf8;
+				}
+			}
+		}
 
 		if let Some(cap) = params.capabilities.text_document {
 			if let Some(PublishDiagnosticsClientCapabilities {
@@ -109,6 +129,8 @@ impl Server {
 				overlapping_token_support: _,
 				// Whether the client supports tokens spanning multiple lines.
 				multiline_token_support,
+				server_cancel_support: _,
+				augments_syntax_tokens: _,
 			}) = cap.semantic_tokens
 			{
 				if let Some(SemanticTokensFullOptions::Bool(b)) = requests.full

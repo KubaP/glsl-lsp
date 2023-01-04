@@ -29,7 +29,7 @@ This signifies that the server should send `workspace/configuration` requests to
 The reason why the new setting value(s) are not sent directly is because, at least in vscode, the on-configuration-change event only provides the key but not the new value nor the uri scope, so we need the server to request the updated values on a per-file basis.
 
 ## Protocol Extensions
-This extension uses custom protocol extensions for extra functionality. Some of these are quite important for the full functionality of the extension, but others are more so *"nice to have"* things.
+This extension uses custom protocol extensions for extra functionality. Some of these are quite important for the full functionality of the extension, but others are *"nice to have"* features. All of these extensions are implemented in the Visual Studio Code client; if you are unsure what purpose a certain extension has, or what payloads are sent from the client to the server, use that as a reference.
 
 ### AstContent
 This is a *Request*-type method from the client to the server. This method is called when:
@@ -69,7 +69,7 @@ The notification sent to the server:
 ```typescript
 export interface EvalConditionalParams {
     /// The `Uri` of the GLSL document in which the CodeLens was triggered.
-	textDocumentUri: Uri;
+    textDocumentUri: Uri;
     /// The evaluation choice.
     ///
     /// - `"off"` - Disable conditional compilation.
@@ -77,6 +77,6 @@ export interface EvalConditionalParams {
     /// - `{ "on"|"off": u64 }` - Enable conditional compilation with a key.
     ///   This value is a chronological index of the controlling conditional directive to include (`on`) or 
     ///   exclude (`off`).
-	choice: "off" | "eval" | { "on": u64 } | { "off": u64 };
+    choice: "off" | "eval" | { "on": u64 } | { "off": u64 };
 }
 ```

@@ -7,7 +7,9 @@ assignees: ''
 
 ---
 
+(Use the `GLSL: Show version` command from within VSCode to quickly copy this info.)
+**vscode extension version:** (Fill me out)
 **glsl-lsp version:** (Fill me out)
 
 **Describe the bug**
-A clear and concise description of what the bug is.
+(A clear and concise description of what the bug is.)

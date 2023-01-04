@@ -18,12 +18,12 @@ It can be easy to use very-similar words/phrases to describe the same things, an
 |Phrase|Meaning|
 |-|-|
 |Macro|A bit of text that is replaced with some other text.|
-|Macro expansion|The process of (recursively) replacing a macro call site with the replacement list of that macro.|
+|Macro expansion|The process of (recursively) replacing a macro call site with the body of that macro.|
 |Macro call site|The actual invocation of a macro.|
 |Macro definition|The `#define` directive and all of its contents.|
 |Macro's name|The identifier of a macro.|
 |Macro's signature|The identifier and optional parameter list that defines a macro.|
-|Macro's replacement list|The list of tokens that replace the macro call site.|
+|Macro's body|The list of tokens that replace the macro call site.|
 |Object-like macro|A macro which just expands to some content.|
 |Function-like macro|A macro which takes zero or more parameters and expands to some content, potentially including the parameters in the output.|
 

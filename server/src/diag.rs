@@ -1033,6 +1033,31 @@ fn convert_syntax_define(diag: PreprocDefineDiag) -> DiagReturn {
 #[rustfmt::skip]
 fn convert_syntax_condition(diag: PreprocConditionalDiag) -> DiagReturn {
 	match diag {
+		PreprocConditionalDiag::ExpectedNameAfterIfDef(pos) => (
+			format!("Syntax error: expected a macro name after `#ifdef`"),
+			pos,
+			None
+		),
+		PreprocConditionalDiag::ExpectedNameAfterIfNotDef(pos) => (
+			format!("Syntax error: expected a macro name after `#ifndef`"),
+			pos,
+			None
+		),
+		PreprocConditionalDiag::ExpectedExprAfterIf(pos) => (
+			format!("Syntax error: expected an expression after `#if`"),
+			pos,
+			None
+		),
+		PreprocConditionalDiag::ExpectedExprAfterElseIf(pos) => (
+			format!("Syntax error: expected an expression after `#elif`"),
+			pos,
+			None
+		),
+		PreprocConditionalDiag::UnclosedBlock(opening, pos) => (
+			format!("Syntax error: expected a closing `#endif` directive"),
+			pos,
+			Some((format!("Opening conditional directive here"), opening))
+		),
 		PreprocConditionalDiag::UnmatchedElseIf(span) => (
 			format!("Syntax error: found a trailing `#elif` directive"),
 			span,

@@ -204,7 +204,44 @@ impl Server {
 			unreachable!("[Server::publish_diagnostics] Received a file `uri: {uri}` that has not been opened yet");
 		};
 
-		let Some((_, parse_result, _)) = &file.cache else { return; };
+		let parse_result = match &file.cache {
+			Some((_, parse_result, _)) => parse_result,
+			_ => {
+				// If the file could not be parsed, it's because of an unsupported GLSL version.
+				use tower_lsp::lsp_types::{
+					Diagnostic, DiagnosticSeverity, Position, Range,
+				};
+				client
+					.publish_diagnostics(
+						file.uri.clone(),
+						vec![Diagnostic {
+							range: Range {
+								start: Position {
+									line: 0,
+									character: 0,
+								},
+								end: Position {
+									line: 0,
+									character: 0,
+								},
+							},
+							severity: Some(DiagnosticSeverity::INFORMATION),
+							code: None,
+							code_description: None,
+							source: Some("glsl".into()),
+							message: "Unsupported GLSL version".into(),
+							related_information: None,
+							tags: None,
+							data: None,
+						}],
+						self.diag_state
+							.supports_versioning
+							.then_some(file.version),
+					)
+					.await;
+				return;
+			}
+		};
 
 		let mut diags = Vec::new();
 		crate::diag::convert(

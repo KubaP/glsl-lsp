@@ -22,6 +22,16 @@ struct Lsp {
 	state: Mutex<Server>,
 }
 
+/// Logs an INFO message.
+macro_rules! info {
+	($self:expr, $msg:expr) => {
+		$self
+			.client
+			.log_message(tower_lsp::lsp_types::MessageType::INFO, $msg)
+			.await;
+	};
+}
+
 #[tower_lsp::async_trait]
 impl LanguageServer for Lsp {
 	// region: lifecycle events.
@@ -29,12 +39,8 @@ impl LanguageServer for Lsp {
 		&self,
 		params: InitializeParams,
 	) -> Result<InitializeResult> {
-		self.client
-			.log_message(
-				MessageType::INFO,
-				"Server received 'initialize' request.",
-			)
-			.await;
+		info!(self, format!("Server version: {SERVER_VERSION}"));
+		info!(self, "Received `initialize` request");
 
 		let mut state = self.state.lock().await;
 		state.initialize(params);
@@ -66,8 +72,8 @@ impl LanguageServer for Lsp {
 				document_symbol_provider: None,
 				code_action_provider: None,
 				code_lens_provider: Some(CodeLensOptions {
-					// This is only necessary if splitting the CodeLens request into two. We send the CodeLens with
-					// the command included so there's no need to resolve a CodeLens as a secondary step.
+					// This is only necessary if splitting the code lens request into two. We send the code lens
+					// with the commands included so there's no need to resolve a code lens as a secondary step.
 					resolve_provider: Some(false),
 				}),
 				document_link_provider: None,
@@ -115,31 +121,18 @@ impl LanguageServer for Lsp {
 	}
 
 	async fn initialized(&self, _: InitializedParams) {
-		self.client
-			.log_message(
-				MessageType::INFO,
-				"Server received 'initialized' message.",
-			)
-			.await;
+		info!(self, "Received `initialized` notification");
 	}
 
 	async fn shutdown(&self) -> Result<()> {
-		self.client
-			.log_message(
-				MessageType::INFO,
-				"Server received 'shutdown' message.",
-			)
-			.await;
-
+		info!(self, "Received `shutdown` request");
 		Ok(())
 	}
 	// endregion: lifecycle events.
 
 	// region: `textDocument/*` events.
 	async fn did_open(&self, params: DidOpenTextDocumentParams) {
-		self.client
-			.log_message(MessageType::INFO, "Server received 'did_open' event.")
-			.await;
+		info!(self, "Received `textDocument/didOpen` notification");
 
 		let TextDocumentItem {
 			uri,
@@ -161,12 +154,7 @@ impl LanguageServer for Lsp {
 	}
 
 	async fn did_change(&self, mut params: DidChangeTextDocumentParams) {
-		self.client
-			.log_message(
-				MessageType::INFO,
-				"Server received 'did_change' event.",
-			)
-			.await;
+		info!(self, "Received `textDocument/didChange` notification");
 
 		let mut state = self.state.lock().await;
 		state.handle_file_change(
@@ -180,31 +168,18 @@ impl LanguageServer for Lsp {
 	}
 
 	async fn did_save(&self, _params: DidSaveTextDocumentParams) {
-		self.client
-			.log_message(MessageType::INFO, "Server received 'did_save' event.")
-			.await;
+		info!(self, "Received `textDocument/didSave` notification");
 	}
 
 	async fn did_close(&self, _params: DidCloseTextDocumentParams) {
-		self.client
-			.log_message(
-				MessageType::INFO,
-				"Server received 'did_close' event.",
-			)
-			.await;
+		info!(self, "Received `textDocument/didClose` notification");
 	}
 
 	async fn semantic_tokens_full(
 		&self,
 		params: SemanticTokensParams,
 	) -> Result<Option<SemanticTokensResult>> {
-		let _ = params;
-		self.client
-			.log_message(
-				MessageType::INFO,
-				"Server received 'textDocument/semanticTokens/full' event.",
-			)
-			.await;
+		info!(self, "Received `textDocument/semanticTokens/full` request");
 
 		let state = self.state.lock().await;
 		let result = state.provide_semantic_tokens(&params.text_document.uri);
@@ -219,12 +194,7 @@ impl LanguageServer for Lsp {
 		&self,
 		params: CodeLensParams,
 	) -> Result<Option<Vec<CodeLens>>> {
-		self.client
-			.log_message(
-				MessageType::INFO,
-				"Server received 'textDocument/codeLens' event.",
-			)
-			.await;
+		info!(self, "Received `textDocument/codelens` request");
 
 		let state = self.state.lock().await;
 		let lenses = state.provide_code_lens(&params.text_document.uri);
@@ -242,12 +212,10 @@ impl LanguageServer for Lsp {
 		&self,
 		params: DidChangeConfigurationParams,
 	) {
-		self.client
-			.log_message(
-				MessageType::INFO,
-				"Server received 'workspace/didChangeConfiguration' event.",
-			)
-			.await;
+		info!(
+			self,
+			"Received `workspace/didChangeConfiguration` notification"
+		);
 
 		let mut state = self.state.lock().await;
 		state
@@ -264,12 +232,7 @@ impl Lsp {
 		&self,
 		params: lsp_extensions::AstContentParams,
 	) -> Result<lsp_extensions::AstContentResult> {
-		self.client
-			.log_message(
-				MessageType::INFO,
-				"Server received 'glsl/astContent' event.",
-			)
-			.await;
+		info!(self, "Received `glsl/astContent` request");
 
 		let state = self.state.lock().await;
 		Ok(lsp_extensions::AstContentResult {
@@ -282,12 +245,7 @@ impl Lsp {
 		&self,
 		params: lsp_extensions::EvalConditionalParams,
 	) {
-		self.client
-			.log_message(
-				MessageType::INFO,
-				"Server received 'glsl/evalConditional' event.",
-			)
-			.await;
+		info!(self, "Received `glsl/evalConditional` notification");
 
 		let mut state = self.state.lock().await;
 		state

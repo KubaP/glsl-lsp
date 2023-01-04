@@ -262,7 +262,7 @@ impl Server {
 			unreachable!("[Server::provide_code_lens] Received a file `uri: {uri}` that has not been opened yet");
 		};
 
-		if !file.config.settings.conditional_comp_code_lenses {
+		if !file.config.settings.conditional_comp_code_lens {
 			return Vec::new();
 		}
 
@@ -407,7 +407,7 @@ impl Server {
 			unreachable!("[Server::handle_conditional_eval] Received a file `uri: {uri}` that has not been opened yet");
 		};
 
-		// The only CodeLenses that are shown are ones that *will* change which conditional branches get parsed, so
+		// The only CodeLens that are shown are ones that *will* change which conditional branches get parsed, so
 		// we always need to re-parse the file.
 		let mut new_settings = file.config.settings.clone();
 		match choice {
@@ -487,7 +487,7 @@ impl Server {
 		file.update_settings(new_settings);
 
 		// We have modified the conditional compilation state, so we need to update greyed-out areas, syntax
-		// highlighting, and CodeLenses.
+		// highlighting, and CodeLens.
 		self.publish_diagnostics(client, uri).await;
 		let _ = client.send_request::<SemanticTokensRefresh>(()).await;
 		let _ = client.send_request::<CodeLensRefresh>(()).await;

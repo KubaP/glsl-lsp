@@ -541,6 +541,27 @@ fn convert_syntax_stmt(diag: StmtDiag) -> DiagReturn {
 			pos,
 			None
 		),
+		/* INTERFACE BLOCKS */
+		StmtDiag::InterfaceInvalidStmtInBody(span) => (
+			format!("Syntax error: found an invalid statement within the interface body; only variable definitions are allowed"),
+			span,
+			None
+		),
+		StmtDiag::InterfaceExpectedAtLeastOneStmtInBody(span) => (
+			format!("Syntax error: found an interface body that is empty"),
+			span,
+			None
+		),
+		StmtDiag::InterfaceExpectedInstanceOrSemiAfterBody(pos) => (
+			format!("Syntax error: expected a semi-colon `;` or an instance name after the interface body"),
+			pos,
+			None
+		),
+		StmtDiag::InterfaceExpectedSemiAfterInstance(pos) => (
+			format!("Syntax error: expected a semi-colon `;` after the interface's instance name"),
+			pos,
+			None
+		),
 		/* FUNCTIONS */
 		StmtDiag::ParamsExpectedCommaAfterParam(pos) => (
 			format!("Syntax error: expected a comma `,` after the parameter"),
@@ -654,7 +675,7 @@ fn convert_syntax_stmt(diag: StmtDiag) -> DiagReturn {
 			pos,
 			None
 		),
-		StmtDiag::StructExpectedSemiAfterBodyOrInstance(pos) => (
+		StmtDiag::StructExpectedSemiAfterInstance(pos) => (
 			format!("Syntax error: expected a semi-colon `;` after the struct's instance name"),
 			pos,
 			None

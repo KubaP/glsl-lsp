@@ -66,8 +66,8 @@ impl File {
 			self.config.settings.conditional_comp_state =
 				settings.conditional_comp_state;
 		}
-		self.config.settings.conditional_comp_code_lenses =
-			settings.conditional_comp_code_lenses;
+		self.config.settings.conditional_comp_code_lens =
+			settings.conditional_comp_code_lens;
 		self.config.settings.syntax_highlight_entire_file =
 			settings.syntax_highlight_entire_file;
 
@@ -221,7 +221,7 @@ impl File {
 			}
 		}
 		// Add a final zero-sized line at the very end. This effectively treats the previous line that was just
-		// added in the loop to extend from it's starting index to infinity.
+		// added in the loop to extend from its starting index to infinity.
 		//
 		// Note: We do this because in the `span_to_range()` method, we iterate over the lines in pairs, and
 		// without this "final" line, we wouldn't be able to correctly translate a span on the very last line. The
@@ -252,7 +252,7 @@ pub struct ConfigSettings {
 	pub conditional_comp_state: ConditionalCompilationState,
 	/// Whether to show CodeLens above controlling conditional compilation directives. This is controlled by the
 	/// `glsl.conditionalCompilation.codeLens` setting.
-	pub conditional_comp_code_lenses: bool,
+	pub conditional_comp_code_lens: bool,
 	/// Whether to syntax highlight the entire file. This is controlled by the
 	/// `glsl.syntaxHighlighting.highlightEntireFile` setting.
 	pub syntax_highlight_entire_file: bool,
@@ -323,14 +323,13 @@ pub async fn get_file_config_settings(
 			"evaluate" => ConditionalCompilationState::Evaluate,
 			_ => ConditionalCompilationState::Off,
 		};
-	let conditional_comp_code_lenses =
-		result.remove(0).as_bool().unwrap_or(true);
+	let conditional_comp_code_lens = result.remove(0).as_bool().unwrap_or(true);
 	let syntax_highlight_entire_file =
 		result.remove(0).as_bool().unwrap_or(true);
 
 	ConfigSettings {
 		conditional_comp_state,
-		conditional_comp_code_lenses,
+		conditional_comp_code_lens,
 		syntax_highlight_entire_file,
 	}
 }

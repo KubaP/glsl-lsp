@@ -35,7 +35,7 @@ pub fn convert(
 			//    line before then create the correct deltas.
 			// 4. For the rest, create a span between the first and second points. We also set the `prev_*`
 			//    variables to the value of the first point, so that once the multi-line span is finished, whatever
-			//    next token will have the correct data to perform it's own deltas.
+			//    next token will have the correct data to perform its own deltas.
 			let mut points = Vec::new();
 			points.push(span.start);
 			let start = file.position_to_lsp(span.start);
@@ -117,23 +117,25 @@ pub fn convert(
 
 /* WARNING: Ensure that the array and constant numbers match */
 
-pub const TOKEN_TYPES: [&str; 28] = [
+pub const TOKEN_TYPES: [&str; 31] = [
 	"keyword",
-	"builtInType", // nonstandard - inherits from `keyword`
-	"struct",
 	"punctuation", // nonstandard - inherits from `operator`
 	"operator",
-	"function",
-	"variable",
-	"parameter",
-	"layout", // custom - inherits from `variable`
 	"number",
 	"boolean", // nonstandard - inherits from `keyword`
 	"string",
 	"comment",
+	"builtInType", // nonstandard - inherits from `keyword`
+	"struct",
+	"function",
+	"subroutine", // nonstandard - inherits from `function`
+	"variable",
+	"parameter",
+	"layoutQualifier",       // custom - inherits from `variable`
+	"ident",                 // custom - inherits from `variable`
+	"unresolvedReference",   // nonstandard
+	"invalid", // custom - inherits from nonstandard `unresolvedReference`
 	"lineContinuator", // custom - inherits from nonstandard `escapeSequence`, which inherits from `string`
-	"unresolvedReference", // nonstandard
-	"invalid",         // custom - inherits from nonstandard `unresolvedReference`
 	"objectMacro",     // custom - inherits from `macro`
 	"functionMacro",   // custom - inherits from `macro`
 	"directive",       // custom - inherits from `keyword`
@@ -146,49 +148,54 @@ pub const TOKEN_TYPES: [&str; 28] = [
 	"directiveExtBehaviour", // custom - inherits from custom `directive`
 	"directiveLineNumber", // custom - inherits from `number`
 	"directiveError",  // custom - inherits from custom `directive`
+	"directivePragma", // custom - inherits from custom `directive`
 ];
 
 const KEYWORD: u32 = 0;
-const _PRIMITIVE: u32 = 1;
-const _STRUCT: u32 = 2;
-const PUNCTUATION: u32 = 3;
-const OPERATOR: u32 = 4;
-const _FUNCTION: u32 = 5;
-const VARIABLE: u32 = 6;
-const PARAMETER: u32 = 7;
-const LAYOUT: u32 = 8;
-const NUMBER: u32 = 9;
-const BOOLEAN: u32 = 10;
-const COMMENT: u32 = 11;
-const _STRING: u32 = 12;
-const _LINE_CONTINUATOR: u32 = 13;
-const UNRESOLVED: u32 = 14;
-const INVALID: u32 = 15;
-const OBJECT_MACRO: u32 = 16;
-const FUNCTION_MACRO: u32 = 17;
-const DIRECTIVE: u32 = 18;
-const DIRECTIVE_CONCAT: u32 = 19;
-const DIRECTIVE_HASH: u32 = 20;
-const DIRECTIVE_NAME: u32 = 21;
-const DIRECTIVE_VERSION: u32 = 22;
-const DIRECTIVE_PROFILE: u32 = 23;
-const DIRECTIVE_EXT_NAME: u32 = 24;
-const DIRECTIVE_EXT_BEHAVIOUR: u32 = 25;
-const DIRECTIVE_LINE_NUMBER: u32 = 26;
-const DIRECTIVE_ERROR: u32 = 27;
+const PUNCTUATION: u32 = 1;
+const OPERATOR: u32 = 2;
+const NUMBER: u32 = 3;
+const BOOLEAN: u32 = 4;
+const _STRING: u32 = 5;
+const COMMENT: u32 = 6;
+const _PRIMITIVE: u32 = 7;
+const _STRUCT: u32 = 8;
+const _FUNCTION: u32 = 9;
+const _SUBROUTINE: u32 = 10;
+const _VARIABLE: u32 = 11;
+const PARAMETER: u32 = 12;
+const LAYOUT_QUALIFIER: u32 = 13;
+const IDENT: u32 = 14;
+const UNRESOLVED_REFERENCE: u32 = 15;
+const INVALID: u32 = 16;
+const _LINE_CONTINUATOR: u32 = 17;
+const OBJECT_MACRO: u32 = 18;
+const FUNCTION_MACRO: u32 = 19;
+const DIRECTIVE: u32 = 20;
+const DIRECTIVE_CONCAT: u32 = 21;
+const DIRECTIVE_HASH: u32 = 22;
+const DIRECTIVE_NAME: u32 = 23;
+const DIRECTIVE_VERSION: u32 = 24;
+const DIRECTIVE_PROFILE: u32 = 25;
+const DIRECTIVE_EXT_NAME: u32 = 26;
+const DIRECTIVE_EXT_BEHAVIOUR: u32 = 27;
+const DIRECTIVE_LINE_NUMBER: u32 = 28;
+const DIRECTIVE_ERROR: u32 = 29;
+const DIRECTIVE_PRAGMA: u32 = 30;
 
 fn convert_to_lsp_ty(ty: &SyntaxType) -> u32 {
 	match ty {
 		SyntaxType::Keyword => KEYWORD,
 		SyntaxType::Punctuation => PUNCTUATION,
 		SyntaxType::Operator => OPERATOR,
-		SyntaxType::Parameter => PARAMETER,
-		SyntaxType::LayoutQualifier => LAYOUT,
 		SyntaxType::Number => NUMBER,
 		SyntaxType::Boolean => BOOLEAN,
 		SyntaxType::Comment => COMMENT,
-		SyntaxType::UncheckedIdent => VARIABLE,
-		SyntaxType::UnresolvedIdent => UNRESOLVED,
+		SyntaxType::Parameter => PARAMETER,
+		SyntaxType::LayoutQualifier => LAYOUT_QUALIFIER,
+		SyntaxType::UncheckedIdent => IDENT,
+		SyntaxType::Ident => IDENT,
+		SyntaxType::UnresolvedIdent => UNRESOLVED_REFERENCE,
 		SyntaxType::Invalid => INVALID,
 		SyntaxType::ObjectMacro => OBJECT_MACRO,
 		SyntaxType::FunctionMacro => FUNCTION_MACRO,
@@ -202,15 +209,15 @@ fn convert_to_lsp_ty(ty: &SyntaxType) -> u32 {
 		SyntaxType::DirectiveExtBehaviour => DIRECTIVE_EXT_BEHAVIOUR,
 		SyntaxType::DirectiveLineNumber => DIRECTIVE_LINE_NUMBER,
 		SyntaxType::DirectiveError => DIRECTIVE_ERROR,
-		SyntaxType::Ident => VARIABLE,
+		SyntaxType::DirectivePragma => DIRECTIVE_PRAGMA,
 	}
 }
 
 /* WARNING: Ensure that this array and order of declaration of `glast::parser::SyntaxModifiers` match */
 
 pub const TOKEN_MODIFIERS: [&str; 4] = [
-	"macroDefinition", // nonstandard
-	"macroBody",       // nonstandard
-	"undefine",        // nonstandard
-	"conditional",     // nonstandard
+	"macroSignature", // custom
+	"macroBody",      // custom
+	"undefine",       // custom
+	"conditional",    // custom
 ];

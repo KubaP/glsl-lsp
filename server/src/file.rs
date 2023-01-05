@@ -247,14 +247,14 @@ pub struct Config {
 /// The configuration settings.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ConfigSettings {
-	/// The state of conditional compilation. This is controlled by the `glsl.conditionalCompilation.state`
+	/// The state of conditional compilation. This is controlled by the `glsl-lsp.conditionalCompilation.state`
 	/// setting, or by manual overrides.
 	pub conditional_comp_state: ConditionalCompilationState,
 	/// Whether to show CodeLens above controlling conditional compilation directives. This is controlled by the
-	/// `glsl.conditionalCompilation.codeLens` setting.
+	/// `glsl-lsp.conditionalCompilation.codeLens` setting.
 	pub conditional_comp_code_lens: bool,
 	/// Whether to syntax highlight the entire file. This is controlled by the
-	/// `glsl.syntaxHighlighting.highlightEntireFile` setting.
+	/// `glsl-lsp.syntaxHighlighting.highlightEntireFile` setting.
 	pub syntax_highlight_entire_file: bool,
 }
 
@@ -293,18 +293,21 @@ pub async fn get_file_config_settings(
 			items: vec![
 				ConfigurationItem {
 					scope_uri: Some(uri.clone()),
-					section: Some("glsl.conditionalCompilation.state".into()),
-				},
-				ConfigurationItem {
-					scope_uri: Some(uri.clone()),
 					section: Some(
-						"glsl.conditionalCompilation.codeLens".into(),
+						"glsl-lsp.conditionalCompilation.state".into(),
 					),
 				},
 				ConfigurationItem {
 					scope_uri: Some(uri.clone()),
 					section: Some(
-						"glsl.syntaxHighlighting.highlightEntireFile".into(),
+						"glsl-lsp.conditionalCompilation.codeLens".into(),
+					),
+				},
+				ConfigurationItem {
+					scope_uri: Some(uri.clone()),
+					section: Some(
+						"glsl-lsp.syntaxHighlighting.highlightEntireFile"
+							.into(),
 					),
 				},
 			],

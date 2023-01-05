@@ -9,12 +9,12 @@
 - **GLSL**: Fading-out of regions of code if they are excluded from conditional compilation.
 - **GLSL**: Ability to display CodeLens above conditional compilation directives, for easy control over the evaluation of conditional compilation.
 - Basic GLSL grammar and language configuration; features such as auto-closing brackets, commenting-out shortcuts, word patterns, etc.
-- `glsl.syntaxHighlighting.highlightEntireFile` setting to control syntax highlighting behaviour.
-- `glsl.conditionalCompilation.state` setting to control the default state of conditional compilation.
-- `glsl.conditionalCompilation.codeLens` setting to control the visibility of conditional compilation-related CodeLens.
-- `glsl.evaluateConditionals`/`glsl.disableConditionals` commands to control the state of conditional compilation for the current file.
-- `glsl.showAst` command to show a pretty-printed AST of the current file. This command is mainly for debugging the extension itself.
-- `glsl.showVersion` command to show a pop-up with relevant information for reporting issues/bugs.
+- `glsl-lsp.syntaxHighlighting.highlightEntireFile` setting to control syntax highlighting behaviour.
+- `glsl-lsp.conditionalCompilation.state` setting to control the default state of conditional compilation.
+- `glsl-lsp.conditionalCompilation.codeLens` setting to control the visibility of conditional compilation-related CodeLens.
+- `glsl-lsp.evaluateConditionals`/`glsl-lsp.disableConditionals` commands to control the state of conditional compilation for the current file.
+- `glsl-lsp.showAst` command to show a pretty-printed AST of the current file. This command is mainly for debugging the extension itself.
+- `glsl-lsp.showVersion` command to show a pop-up with relevant information for reporting issues/bugs.
 - The following custom semantic token types:
     - `punctuation` - A punctuation symbol.
     - `boolean` - A boolean.

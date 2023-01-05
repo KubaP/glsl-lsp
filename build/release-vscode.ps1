@@ -24,11 +24,11 @@ if (Test-Path (Join-Path $script:ROOT "publish")) {
 	Remove-Item -Path (Join-Path $script:ROOT "publish") -Recurse -Force
 }
 
-# Copy over relevant files to `\publish\kuba-p.glsl\$EXT_VERSION`.
+# Copy over relevant files to `\publish\kuba-p.glsl-lsp\$EXT_VERSION`.
 $script:SRC_DIR = Get-Item -Path (Join-Path $script:ROOT "client")
 New-Item -Path $script:ROOT -Name "publish" -ItemType Directory -Force -Verbose
-New-Item -Path (Join-Path $script:ROOT "publish") -Name "kuba-p.glsl" -ItemType Directory -Force -Verbose
-$script:OUT_DIR = New-Item -Path (Join-Path $script:ROOT "publish" "kuba-p.glsl") -Name "$ext_version" `
+New-Item -Path (Join-Path $script:ROOT "publish") -Name "kuba-p.glsl-lsp" -ItemType Directory -Force -Verbose
+$script:OUT_DIR = New-Item -Path (Join-Path $script:ROOT "publish" "kuba-p.glsl-lsp") -Name "$ext_version" `
 	-ItemType Directory -Force -Verbose
 Get-ChildItem -Path $script:SRC_DIR | Where-Object {
 	@(

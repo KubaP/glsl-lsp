@@ -336,7 +336,7 @@ impl Server {
 						} else {
 							"Exclude".into()
 						},
-						command: "glsl.evalConditional".into(),
+						command: "glsl-lsp.evalConditional".into(),
 						arguments: Some(vec![
 							uri.to_string().into(),
 							serde_json::json!({ on_off: index as u64 }),
@@ -356,7 +356,7 @@ impl Server {
 				range: file.span_to_lsp(glast::Span::new(0, 0)),
 				command: Some(Command {
 					title: "Evaluate conditional compilation".into(),
-					command: "glsl.evalConditional".into(),
+					command: "glsl-lsp.evalConditional".into(),
 					arguments: Some(vec![
 						uri.to_string().into(),
 						"eval".into(),
@@ -368,7 +368,7 @@ impl Server {
 				range: file.span_to_lsp(glast::Span::new(0, 0)),
 				command: Some(Command {
 					title: "Disable conditional compilation".into(),
-					command: "glsl.evalConditional".into(),
+					command: "glsl-lsp.evalConditional".into(),
 					arguments: Some(vec![uri.to_string().into(), "off".into()]),
 				}),
 				data: None,

@@ -34,11 +34,11 @@ This will create a binary at `\server\target\$TARGET\release\$EXEC`.
 cd ..
 .\build\release-vscode-1.ps1 -Target $TARGET
 
-cd .\publish\kuba-p.glsl\$VERSION
+cd .\publish\kuba-p.glsl-lsp\$VERSION
 npm install
 npm run build
 npm run buildGrammar
 
 vsce package --target $VSCE_TARGET
 ```
-This will create the extension file at `\publish\kuba-p.glsl\$VERSION\glsl-$VSCE_TARGET-$VERSION.vsix`.
+This will create the extension file at `\publish\kuba-p.glsl-lsp\$VERSION\glsl-lsp-$VSCE_TARGET-$VERSION.vsix`.

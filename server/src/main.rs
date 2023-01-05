@@ -12,7 +12,7 @@ use tower_lsp::{
 
 /* WARNING: Ensure that these match the values in `Cargo.toml` */
 const SERVER_NAME: &str = "glsl-lsp";
-const SERVER_VERSION: &str = "0.0.1";
+const SERVER_VERSION: &str = "0.0.2";
 
 /// The language server.
 struct Lsp {

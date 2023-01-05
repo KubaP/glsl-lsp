@@ -53,31 +53,31 @@ jobs:
 
             - name: Install client dependencies
               run: npm install
-              working-directory: ./publish/kuba-p.glsl/${{ steps.build-script.outputs.EXT_VERSION }}
+              working-directory: ./publish/kuba-p.glsl-lsp/${{ steps.build-script.outputs.EXT_VERSION }}
 
             - name: Build client src
               run: npm run build
-              working-directory: ./publish/kuba-p.glsl/${{ steps.build-script.outputs.EXT_VERSION }}
+              working-directory: ./publish/kuba-p.glsl-lsp/${{ steps.build-script.outputs.EXT_VERSION }}
 
             - name: Build client grammar files
               run: npm run buildGrammar
-              working-directory: ./publish/kuba-p.glsl/${{ steps.build-script.outputs.EXT_VERSION }}
+              working-directory: ./publish/kuba-p.glsl-lsp/${{ steps.build-script.outputs.EXT_VERSION }}
               
             - name: Package
               run: vsce package --target ${{ matrix.vsce_target }}
-              working-directory: ./publish/kuba-p.glsl/${{ steps.build-client.outputs.EXT_VERSION }}
+              working-directory: ./publish/kuba-p.glsl-lsp/${{ steps.build-client.outputs.EXT_VERSION }}
 
             - name: Publish
               env:
                   VSCE_PAT: ${{ secrets.VSCE_PAT }}
-              run: vsce publish --packagePath glsl-${{ matrix.vsce_target }}-${{ steps.build-client.outputs.EXT_VERSION }}.vsix -p
-              working-directory: ./publish/kuba-p.glsl/${{ steps.build-client.outputs.EXT_VERSION }}
+              run: vsce publish --packagePath glsl-lsp-${{ matrix.vsce_target }}-${{ steps.build-client.outputs.EXT_VERSION }}.vsix -p
+              working-directory: ./publish/kuba-p.glsl-lsp/${{ steps.build-client.outputs.EXT_VERSION }}
 
             - name: Upload artifact for later github release
               uses: actions/upload-artifact@v3
               with:
-                name: glsl-${{ matrix.vsce_target }}
-                path: ./publish/kuba-p.glsl/${{ steps.build-script.outputs.EXT_VERSION }}/glsl-${{ matrix.vsce_target }}-${{ steps.build-script.outputs.EXT_VERSION }}.vsix
+                name: glsl-lsp-${{ matrix.vsce_target }}
+                path: ./publish/kuba-p.glsl-lsp/${{ steps.build-script.outputs.EXT_VERSION }}/glsl-lsp-${{ matrix.vsce_target }}-${{ steps.build-script.outputs.EXT_VERSION }}.vsix
 
     gh-release:
         name: "Create github release"
@@ -100,12 +100,12 @@ jobs:
             - name: Publish release
               uses: softprops/action-gh-release@v0.1.14
               with:
-                  name: "GLSL (vscode) v${{ needs.deploy.outputs.EXT_VERSION }}"
+                  name: "glsl-lsp (vscode) v${{ needs.deploy.outputs.EXT_VERSION }}"
                   body: "PASTE CHANGELOG HERE"
                   tag_name: "vscode/v${{ needs.deploy.outputs.EXT_VERSION }}"
                   target_commitish: ${{ github.sha }}
                   files: |
-                      ./glsl-win32-x64/glsl-win32-x64-${{ needs.deploy.outputs.EXT_VERSION }}.vsix
-                      ./glsl-linux-x64/glsl-linux-x64-${{ needs.deploy.outputs.EXT_VERSION }}.vsix
-                      ./glsl-darwin-x64/glsl-darwin-x64-${{ needs.deploy.outputs.EXT_VERSION }}.vsix
+                      ./glsl-lsp-win32-x64/glsl-lsp-win32-x64-${{ needs.deploy.outputs.EXT_VERSION }}.vsix
+                      ./glsl-lsp-linux-x64/glsl-lsp-linux-x64-${{ needs.deploy.outputs.EXT_VERSION }}.vsix
+                      ./glsl-lsp-darwin-x64/glsl-lsp-darwin-x64-${{ needs.deploy.outputs.EXT_VERSION }}.vsix
                   fail_on_unmatched_files: true

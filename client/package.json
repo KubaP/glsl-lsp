@@ -1,5 +1,5 @@
 {
-	"name": "glsl",
+	"name": "glsl-lsp",
 	"displayName": "GLSL",
 	"description": "OpenGL Shading Language support for Visual Studio Code.",
 	"version": "0.0.1",
@@ -30,7 +30,7 @@
 	],
 	"activationEvents": [
 		"onLanguage:glsl",
-		"onCommand:glsl.showVersion"
+		"onCommand:glsl-lsp.showVersion"
 	],
 	"main": "./out/main.js",
 	"contributes": {
@@ -79,22 +79,22 @@
 		],
 		"commands": [
 			{
-				"command": "glsl.evaluateConditionals",
+				"command": "glsl-lsp.evaluateConditionals",
 				"category": "GLSL",
 				"title": "Evaluate conditional compilation for this file"
 			},
 			{
-				"command": "glsl.disableConditionals",
+				"command": "glsl-lsp.disableConditionals",
 				"category": "GLSL",
 				"title": "Disable conditional compilation for this file"
 			},
 			{
-				"command": "glsl.showAst",
+				"command": "glsl-lsp.showAst",
 				"category": "GLSL (debug command)",
 				"title": "Show AST"
 			},
 			{
-				"command": "glsl.showVersion",
+				"command": "glsl-lsp.showVersion",
 				"category": "GLSL (debug command)",
 				"title": "Show version"
 			}
@@ -102,15 +102,15 @@
 		"menus": {
 			"commandPalette": [
 				{
-					"command": "glsl.evaluateConditionals",
+					"command": "glsl-lsp.evaluateConditionals",
 					"when": "editorLangId == glsl"
 				},
 				{
-					"command": "glsl.disableConditionals",
+					"command": "glsl-lsp.disableConditionals",
 					"when": "editorLangId == glsl"
 				},
 				{
-					"command": "glsl.showAst",
+					"command": "glsl-lsp.showAst",
 					"when": "editorLangId == glsl"
 				}
 			]
@@ -119,7 +119,7 @@
 			"type": "object",
 			"title": "GLSL",
 			"properties": {
-				"glsl.trace.server": {
+				"glsl-lsp.trace.server": {
 					"scope": "window",
 					"type": "string",
 					"enum": [
@@ -130,7 +130,7 @@
 					"default": "off",
 					"description": "Traces the communication between VS Code and the language server. This is a debug setting for developing the extension itself."
 				},
-				"glsl.conditionalCompilation.state": {
+				"glsl-lsp.conditionalCompilation.state": {
 					"scope": "resource",
 					"type": "string",
 					"enum": [
@@ -148,18 +148,18 @@
 					],
 					"description": "The default state for conditional compilation when opening a new file. This setting can be overridden on a per-file basis using either a relevant CodeLens or an appropriate command."
 				},
-				"glsl.conditionalCompilation.codeLens": {
+				"glsl-lsp.conditionalCompilation.codeLens": {
 					"scope": "resource",
 					"type": "boolean",
 					"default": true,
 					"description": "Whether to show CodeLens above controlling conditional compilation directives, allowing you to include/exclude them from the compilation."
 				},
-				"glsl.syntaxHighlighting.highlightEntireFile": {
+				"glsl-lsp.syntaxHighlighting.highlightEntireFile": {
 					"scope": "resource",
 					"type": "boolean",
 					"default": true,
-					"description": "Whether to syntax highlight the entire file, as opposed to just the chosen code depending on the `glsl.conditionalCompilation.state` setting. Because of the fact that conditional compilation is implemented through the preprocessor, this setting will require a file to be parsed more than once to fully parse and color every bit of text. Under certain complex conditional branching, this setting set to `true` can cause performance issues.",
-					"markdownDescription": "Whether to syntax highlight the entire file, as opposed to just the chosen code depending on the `#glsl.conditionalCompilation.state#` setting. Because of the fact that conditional compilation is implemented through the preprocessor, this setting will require a file to be parsed more than once to fully parse and color every bit of text. Under certain complex conditional branching, this setting set to `true` can cause performance issues."
+					"description": "Whether to syntax highlight the entire file, as opposed to just the chosen code depending on the `glsl-lsp.conditionalCompilation.state` setting. Because of the fact that conditional compilation is implemented through the preprocessor, this setting will require a file to be parsed more than once to fully parse and color every bit of text. Under certain complex conditional branching, this setting set to `true` can cause performance issues.",
+					"markdownDescription": "Whether to syntax highlight the entire file, as opposed to just the chosen code depending on the `#glsl-lsp.conditionalCompilation.state#` setting. Because of the fact that conditional compilation is implemented through the preprocessor, this setting will require a file to be parsed more than once to fully parse and color every bit of text. Under certain complex conditional branching, this setting set to `true` can cause performance issues."
 				}
 			}
 		},

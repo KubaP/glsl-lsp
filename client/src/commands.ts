@@ -18,7 +18,11 @@ export function evaluateConditionals(ctx: Context): Cmd {
 		if (!activeEditor) {
 			return;
 		}
-		await vscode.commands.executeCommand("glsl.evalConditional", activeEditor.document.uri.toString(), "eval");
+		await vscode.commands.executeCommand(
+			"glsl-lsp.evalConditional",
+			activeEditor.document.uri.toString(),
+			"eval"
+		);
 	};
 }
 
@@ -29,7 +33,11 @@ export function disableConditionals(ctx: Context): Cmd {
 		if (!activeEditor) {
 			return;
 		}
-		await vscode.commands.executeCommand("glsl.evalConditional", activeEditor.document.uri.toString(), "off");
+		await vscode.commands.executeCommand(
+			"glsl-lsp.evalConditional",
+			activeEditor.document.uri.toString(),
+			"off"
+		);
 	};
 }
 

@@ -57,9 +57,9 @@ export class Context {
 		};
 
 		// Create the language client. This also specifies the name of the output channel for messages from the
-		// server. Note: `glsl` must match the name of the extension in order for the trace logging configuration
-		// to work.
-		const client = new LanguageClient("glsl", "GLSL Language Server", serverOptions, clientOptions);
+		// server. Note: `glsl-lsp` must match the name of the extension in order for the trace logging
+		// configuration to work.
+		const client = new LanguageClient("glsl-lsp", "GLSL Language Server", serverOptions, clientOptions);
 
 		const ctx = new Context(vscode_context, client, clientOutput);
 		ctx.subscribe(serverOutput);
@@ -76,7 +76,7 @@ export class Context {
 	 * Registers a command.
 	 */
 	registerCommand(name: string, cmd_factory: (_: Context) => Cmd) {
-		const fullName = `glsl.${name}`;
+		const fullName = `glsl-lsp.${name}`;
 		const command = cmd_factory(this);
 		this.subscribe(vscode.commands.registerCommand(fullName, command));
 	}

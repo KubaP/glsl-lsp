@@ -24,12 +24,12 @@ export function configurationRequest(params: ConfigurationParams, _token: Cancel
 }
 
 /**
- * Sends the `workspace/didConfigurationChange` notification. This is triggered whenever any `glsl.*` setting is
- * modified at any uri scope.
+ * Sends the `workspace/didConfigurationChange` notification. This is triggered whenever any `glsl-lsp.*` setting
+ * is modified at any uri scope.
  */
 export async function onDidChangeConfiguration(e: ConfigurationChangeEvent, client: LanguageClient) {
 	// Ignore configuration changes that aren't relevant to our extension.
-	if (!e.affectsConfiguration("glsl")) {
+	if (!e.affectsConfiguration("glsl-lsp")) {
 		return;
 	}
 
@@ -39,9 +39,9 @@ export async function onDidChangeConfiguration(e: ConfigurationChangeEvent, clie
 	// must be the server that requests the updated setting because it can do it for each file and it knows the uri
 	// of each file.
 	if (
-		e.affectsConfiguration("glsl.conditionalCompilation.state") ||
-		e.affectsConfiguration("glsl.conditionalCompilation.codeLens") ||
-		e.affectsConfiguration("glsl.syntaxHighlighting.highlightEntireFile")
+		e.affectsConfiguration("glsl-lsp.conditionalCompilation.state") ||
+		e.affectsConfiguration("glsl-lsp.conditionalCompilation.codeLens") ||
+		e.affectsConfiguration("glsl-lsp.syntaxHighlighting.highlightEntireFile")
 	) {
 		await client.sendNotification(DidChangeConfigurationNotification.method, {
 			settings: "fileSettings",

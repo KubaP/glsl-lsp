@@ -31,7 +31,7 @@ jobs:
         outputs:
             EXT_VERSION: ${{ steps.build-script.outputs.EXT_VERSION }}
         runs-on: ${{ matrix.os }}
-        timeout-minutes: 10
+        timeout-minutes: 15 # Mac server build almost took 10 minutes.
         defaults:
             run:
                 shell: pwsh
@@ -49,11 +49,11 @@ jobs:
 
             - name: Copy client to publish directory
               id: build-script
-              run: ./build/release-vscode-1.ps1 -Target ${{ matrix.target }}
+              run: ./build/release-vscode.ps1 -Target ${{ matrix.target }}
 
             - name: Install client dependencies
               run: npm install
-              working-directory: publish
+              working-directory: ./publish/kuba-p.glsl/${{ steps.build-script.outputs.EXT_VERSION }}
 
             - name: Build client src
               run: npm run build

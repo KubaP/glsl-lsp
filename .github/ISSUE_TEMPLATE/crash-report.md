@@ -10,6 +10,7 @@ assignees: ''
 (Use the `GLSL: Show version` command from within VSCode to quickly copy this info.)
 **vscode extension version:** (Fill me out)
 **glsl-lsp version:** (Fill me out)
+**OS:** (Fill me out)
 
 (In order to create a high quality report, please try to figure out which addition/removal of a character causes the crash. For example, adding the `#` character in a specific position results in a crash)
 

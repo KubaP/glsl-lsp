@@ -1,4 +1,4 @@
-name: publish-server
+name: publish-glsl-lsp
 
 on:
     push:
@@ -45,7 +45,7 @@ jobs:
         outputs:
             VERSION: ${{ steps.build-script.outputs.VERSION }}
         runs-on: ${{ matrix.os }}
-        timeout-minutes: 10
+        timeout-minutes: 15 # Mac build almost took 10 minutes.
         needs: test
         defaults:
             run:
@@ -64,7 +64,7 @@ jobs:
 
             - name: Build script
               id: build-script
-              run: ./build/release-server.ps1 -Target ${{ matrix.target }}
+              run: ./build/release-glsl-lsp.ps1 -Target ${{ matrix.target }}
 
             - name: Upload artifact for later github release
               uses: actions/upload-artifact@v3

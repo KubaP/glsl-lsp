@@ -15,7 +15,7 @@ Unlike other similar crates and libraries, *glast* is designed to be 100% specif
 |-|-|
 |Parsing of tokens|✔|
 |Parsing of directives|✔|
-|Dealing with the line-continuation character|✔|
+|Handling the line-continuation character|✔|
 |Switching GLSL version grammar on-the-fly|✔|
 |100% specification compliant behaviour|✔ [1]|
 

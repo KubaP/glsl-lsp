@@ -1,0 +1,107 @@
+name: publish-vscode
+
+on:
+    push:
+        branches:
+            - "release/vscode"
+
+    # Allows running this workflow manually from the Actions tab
+    workflow_dispatch:
+
+env:
+    CARGO_INCREMENTAL: 0
+
+jobs:
+    deploy:
+        name: "Build and publish"
+        strategy:
+            matrix:
+                include:
+                  - os: windows-latest
+                    target: x86_64-pc-windows-msvc
+                    vsce_target: win32-x64
+                include:
+                  - os: ubuntu-latest
+                    target: x86_64-unknown-linux-gnu
+                    vsce_target: linux-x64
+                include:
+                  - os: macos-latest
+                    target: x86_64-apple-darwin
+                    vsce_target: darwin-x64
+        outputs:
+            EXT_VERSION: ${{ steps.build-script.outputs.EXT_VERSION }}
+        runs-on: ${{ matrix.os }}
+        timeout-minutes: 10
+        defaults:
+            run:
+                shell: pwsh
+
+        steps:
+            - name: Checkout repository
+              uses: actions/checkout@v3
+
+            - name: Install rust toolchain
+              run: rustup update
+
+            - name: Build server
+              run: cargo build --release --target=${{ matrix.target }}
+              working-directory: server
+
+            - name: Copy client to publish directory
+              id: build-script
+              run: /build/release-vscode-1.ps1 -Target ${{ matrix.target }}
+
+            - name: Install client dependencies
+              run: npm install
+              working-directory: publish
+
+            - name: Build client src
+              run: npm run build
+              working-directory: /publish/kuba-p.glsl/${{ steps.build-script.outputs.EXT_VERSION }}
+
+            - name: Build client grammar files
+              run: npm run buildGrammar
+              working-directory: /publish/kuba-p.glsl/${{ steps.build-script.outputs.EXT_VERSION }}
+              
+            - name: Publish
+              env:
+                  VSCE_PAT: ${{ secrets.VSCE_PAT }}
+              run: vsce publish --target ${{ matrix.vsce_target }} -p
+              working-directory: /publish/kuba-p.glsl/${{ steps.build-client.outputs.EXT_VERSION }}
+
+            - name: Upload artifact for later github release
+              uses: actions/upload-artifact@v3
+              with:
+                name: glsl-${{ matrix.vsce_target }}
+                path: /publish/kuba-p.glsl/${{ steps.build-script.outputs.EXT_VERSION }}/glsl-${{ matrix.vsce_target }}-${{ steps.build-script.outputs.EXT_VERSION }}.vsix
+
+    gh-release:
+        name: "Create github release"
+        runs-on: ubuntu-latest
+        timeout-minutes: 5
+        needs: deploy
+        defaults:
+            run:
+                shell: pwsh
+        permissions:
+            contents: write
+
+        steps:
+            - name: Checkout repository
+              uses: actions/checkout@v3
+
+            - name: Download artifacts
+              uses: actions/download-artifact@v3
+
+            - name: Publish release
+              uses: softprops/action-gh-release@v0.1.14
+              with:
+                  name: "GLSL (vscode) v${{ needs.deploy.outputs.EXT_VERSION }}"
+                  body: "PASTE CHANGELOG HERE"
+                  tag_name: "vscode/v${{ needs.deploy.outputs.EXT_VERSION }}"
+                  target_commitish: ${{ github.sha }}
+                  files:
+                    "glsl-win32-x64/glsl-win32-x64-${{ needs.deploy.outputs.EXT_VERSION }}.vsix"
+                    "glsl-linux-x64/glsl-linux-x64-${{ needs.deploy.outputs.EXT_VERSION }}.vsix"
+                    "glsl-darwin-x64/glsl-darwin-x64-${{ needs.deploy.outputs.EXT_VERSION }}.vsix"
+                  fail_on_unmatched_files: true

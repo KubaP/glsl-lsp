@@ -1,12 +1,12 @@
 [package]
 name = "glast"
-version = "0.0.1"
+version = "0.1.0"
 edition = "2021"
 authors = ["KubaP"]
-description = "A library for parsing and manipulating the OpenGL Shading Language."
+description = "A crate for parsing and manipulating the OpenGL Shading Language."
 license = "MIT"
 readme = "README.md"
-homepage = "https://github.com/KubaP/glsl-lsp"
+homepage = "https://github.com/KubaP/glsl-lsp/tree/master/glast"
 repository = "https://github.com/KubaP/glsl-lsp"
 keywords = ["GLSL", "OpenGL", "parser", "ast"]
 categories = ["parser-implementations", "rendering"]
@@ -14,8 +14,4 @@ categories = ["parser-implementations", "rendering"]
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [dependencies]
-
-[features]
-# Debug logging to stdio. It is necessary to feature-gate this because the LSP server communicates over stdin/out,
-# and printing random debug stuff breaks the communication protocol.
-logging = []
+bitflags = "1.3.2"

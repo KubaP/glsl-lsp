@@ -1,12 +1,21 @@
 [package]
-name = "server"
-version = "0.1.0"
+name = "glsl-lsp"
+version = "0.0.1"
 edition = "2021"
+authors = ["KubaP"]
+description = "An implementation of the Language Server Protocol for the OpenGL Shading Language."
+license = "MIT"
+readme = "README.md"
+homepage = "https://github.com/KubaP/glsl-lsp/tree/master/server"
+repository = "https://github.com/KubaP/glsl-lsp"
+keywords = ["GLSL", "OpenGL", "language server", "lsp"]
+categories = ["development-tools"]
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [dependencies]
 glast = { path = "../glast" }
 tokio = { version = "1.17.0", features = ["full"] }
-tower-lsp = "0.17.0"
+tower-lsp = { version = "0.17.0", features = ["proposed"] }
 serde = "1.0.139"
+serde_json = "1.0.89"

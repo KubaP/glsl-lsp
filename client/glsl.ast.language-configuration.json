@@ -1,0 +1,13 @@
+{
+	// Symbols used as brackets.
+	"brackets": [
+		["(", ")"],
+		["[", "]"]
+	],
+	"colorizedBracketPairs": [
+		["(", ")"],
+		["[", "]"]
+	],
+	// Pattern for any words, be it keywords of custom identifiers.
+	"wordPattern": "([a-z]|[A-Z]|\\_)([a-z]|[A-Z]|\\_|[0-9])*"
+}

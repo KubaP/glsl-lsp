@@ -11,7 +11,7 @@
 			"args": ["--extensionDevelopmentPath=${workspaceFolder}"],
 			"env": {
 				"RUST_BACKTRACE": "1",
-				"__GLSL_DEBUG_SERVER_PATH": "${workspaceFolder}/server/target/debug/server.exe"
+				"__GLSL_DEBUG_SERVER_PATH": "${workspaceFolder}/server/target/debug/glsl-lsp.exe"
 			},
 			"sourceMaps": true,
 			"smartStep": true,
@@ -19,29 +19,29 @@
 			"preLaunchTask": "npm build client"
 		},
 		{
-			"type": "lldb",
+			"name": "Attach server",
+			"type": "cppvsdbg",
 			"request": "attach",
-			"program": "${workspaceFolder}/server/target/debug/server.exe",
-			"name": "Attach Extension",
-			"sourceLanguages": ["rust"]
+			"processId": "${command:pickProcess}"
 		},
 		{
-			"type": "lldb",
+			"name": "Extension release",
+			"type": "extensionHost",
 			"request": "launch",
-			"name": "Playground",
-			"program": "${workspaceFolder}/playground/target/debug/playground.exe",
-			"args": [],
-			"cwd": "${workspaceFolder}/playground",
+			"args": ["--extensionDevelopmentPath=${workspaceFolder}"],
 			"env": {
-				"RUST_BACKTRACE": "1"
+				"RUST_BACKTRACE": "1",
+				"__GLSL_DEBUG_SERVER_PATH": "${workspaceFolder}/server/target/release/glsl-lsp.exe"
 			},
-			"sourceLanguages": ["rust"],
-			"preLaunchTask": "Cargo build playground"
+			"sourceMaps": true,
+			"smartStep": true,
+			"outFiles": ["${workspaceFolder}/client/out/**/*.js"],
+			"preLaunchTask": "npm build client release"
 		},
 		{
+			"name": "Lib tests",
 			"type": "lldb",
 			"request": "launch",
-			"name": "Lib tests",
 			"cargo": {
 				"args": ["test", "--no-run", "--lib", "--package=glast"],
 				"filter": {

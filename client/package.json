@@ -25,25 +25,29 @@
 					".glsl",
 					".vs",
 					".vert",
-					".vshader",
 					".v.glsl",
+					".tc",
+					".tesc",
+					".tc.glsl",
+					".te",
+					".tese",
+					".te.glsl",
 					".gs",
 					".geom",
-					".gshader",
 					".g.glsl",
 					".fs",
 					".frag",
-					".fshader",
-					".f.glsl"
+					".f.glsl",
+					".comp"
 				],
 				"configuration": "./glsl.language-configuration.json"
 			},
 			{
-				"id": "glsl_syntax_tree",
+				"id": "glsl.ast",
 				"extensions": [
-					".glsl.cst"
+					".ast.glsl"
 				],
-				"configuration": "./glsl.cst.language-configuration.json"
+				"configuration": "./glsl.ast.language-configuration.json"
 			}
 		],
 		"grammars": [
@@ -51,19 +55,41 @@
 				"language": "glsl",
 				"scopeName": "source.glsl",
 				"path": "./syntaxes/glsl.tmLanguage.json"
-			},
-			{
-				"language": "glsl_syntax_tree",
-				"scopeName": "source.glsl_syntax_tree",
-				"path": "./syntaxes/glsl.cst.tmLanguage.json"
 			}
 		],
 		"commands": [
 			{
-				"command": "glsl.syntaxTree",
-				"title": "GLSL: Show syntax tree"
+				"command": "glsl.evaluateConditionals",
+				"category": "GLSL",
+				"title": "Evaluate conditional compilation for this file"
+			},
+			{
+				"command": "glsl.disableConditionals",
+				"category": "GLSL",
+				"title": "Disable conditional compilation for this file"
+			},
+			{
+				"command": "glsl.showAst",
+				"category": "GLSL (debug command)",
+				"title": "Show AST"
 			}
 		],
+		"menus": {
+			"commandPalette": [
+				{
+					"command": "glsl.evaluateConditionals",
+					"when": "editorLangId == glsl"
+				},
+				{
+					"command": "glsl.disableConditionals",
+					"when": "editorLangId == glsl"
+				},
+				{
+					"command": "glsl.showAst",
+					"when": "editorLangId == glsl"
+				}
+			]
+		},
 		"configuration": {
 			"type": "object",
 			"title": "GLSL",
@@ -77,16 +103,166 @@
 						"verbose"
 					],
 					"default": "off",
-					"description": "Traces the communication between VS Code and the language server."
+					"description": "Traces the communication between VS Code and the language server. This is a debug setting for developing the extension itself."
+				},
+				"glsl.conditionalCompilation.state": {
+					"scope": "resource",
+					"type": "string",
+					"enum": [
+						"off",
+						"evaluate"
+					],
+					"default": "evaluate",
+					"enumItemLabels": [
+						"Off",
+						"Evaluate"
+					],
+					"enumDescriptions": [
+						"Conditional compilation is disabled",
+						"Conditional compilation is evaluated"
+					],
+					"description": "The default state for conditional compilation when opening a new file. This setting can be overridden on a per-file basis using either a relevant CodeLens or an appropriate command."
+				},
+				"glsl.conditionalCompilation.codeLens": {
+					"scope": "resource",
+					"type": "boolean",
+					"default": true,
+					"description": "Whether to show CodeLens above controlling conditional compilation directives, allowing you to include/exclude them from the evaluation."
+				},
+				"glsl.syntaxHighlighting.highlightEntireFile": {
+					"scope": "resource",
+					"type": "boolean",
+					"default": true,
+					"description": "Whether to syntax highlight the entire file, as opposed to just the chosen code depending on the `glsl.conditionalCompilation.state` setting. Because of the fact that conditional compilation is implemented through the preprocessor, this setting will require a file to be parsed more than once to fully parse and color every bit of text. Under certain complex conditional branching, this setting set to `true` can cause performance issues.",
+					"markdownDescription": "Whether to syntax highlight the entire file, as opposed to just the chosen code depending on the `#glsl.conditionalCompilation.state#` setting. Because of the fact that conditional compilation is implemented through the preprocessor, this setting will require a file to be parsed more than once to fully parse and color every bit of text. Under certain complex conditional branching, this setting set to `true` can cause performance issues."
 				}
 			}
-		}
+		},
+		"semanticTokenTypes": [
+			{
+				"id": "builtInType",
+				"superType": "keyword",
+				"description": "Style for built-in types"
+			},
+			{
+				"id": "punctuation",
+				"superType": "operator",
+				"description": "Style for punctuation symbols that are not operators"
+			},
+			{
+				"id": "layout",
+				"superType": "variable",
+				"description": "Style for a valid layout qualifier identifier"
+			},
+			{
+				"id": "boolean",
+				"superType": "keyword",
+				"description": "Style for boolean literals"
+			},
+			{
+				"id": "lineContinuator",
+				"superType": "escapeSequence",
+				"description": "Style for escape sequence characters"
+			},
+			{
+				"id": "escapeSequence",
+				"superType": "string",
+				"description": "Style for escape sequence characters"
+			},
+			{
+				"id": "unresolvedReference",
+				"description": "Style for unresolved identifiers"
+			},
+			{
+				"id": "invalid",
+				"description": "Style for invalid tokens",
+				"superType": "unresolvedReference"
+			},
+			{
+				"id": "objectMacro",
+				"superType": "macro",
+				"description": "Style for object-like macro identifiers"
+			},
+			{
+				"id": "functionMacro",
+				"superType": "macro",
+				"description": "Style for function-like macro identifiers"
+			},
+			{
+				"id": "directive",
+				"superType": "keyword",
+				"description": "General style for all preprocessor directive text"
+			},
+			{
+				"id": "directiveConcat",
+				"superType": "directive",
+				"description": "Style for the token concatenator `##`"
+			},
+			{
+				"id": "directiveHash",
+				"superType": "directive",
+				"description": "Style for the `#` symbol in a preprocessor directive"
+			},
+			{
+				"id": "directiveName",
+				"superType": "directive",
+				"description": "Style for the name of the preprocessor directive, e.g. `version`"
+			},
+			{
+				"id": "directiveVersion",
+				"superType": "number",
+				"description": "Style for the GLSL version in a #version directive"
+			},
+			{
+				"id": "directiveProfile",
+				"superType": "directive",
+				"description": "Style for the GLSL profile in a #version directive"
+			},
+			{
+				"id": "directiveExtName",
+				"superType": "variable",
+				"description": "Style for the extension name in a #extension directive"
+			},
+			{
+				"id": "directiveExtBehaviour",
+				"superType": "directive",
+				"description": "Style for the extension behaviour in a #extension directive"
+			},
+			{
+				"id": "directiveLineNumber",
+				"superType": "number",
+				"description": "Style for the numbers in a #line directive"
+			},
+			{
+				"id": "directiveError",
+				"superType": "directive",
+				"description": "Style for the message in an #error directive"
+			}
+		],
+		"semanticTokenModifiers": [
+			{
+				"id": "macroDefinition",
+				"description": "Normal tokens within a macro definition"
+			},
+			{
+				"id": "macroBody",
+				"description": "Normal tokens within a macro body"
+			},
+			{
+				"id": "undefine",
+				"description": "Normal tokens within a `#undef` directive"
+			},
+			{
+				"id": "conditional",
+				"description": "Normal tokens within a conditional directive"
+			}
+		]
 	},
 	"scripts": {
 		"vscode:prepublish": "npm run build",
 		"build": "tsc -b",
 		"watch": "tsc -b -w",
-		"buildGrammar": "npx js-yaml syntaxes/glsl.tmLanguage.yaml > syntaxes/glsl.tmLanguage.json && npx js-yaml syntaxes/glsl.cst.tmLanguage.yaml > syntaxes/glsl.cst.tmLanguage.json"
+		"buildGrammar": "npx js-yaml syntaxes/glsl.tmLanguage.yaml > syntaxes/glsl.tmLanguage.json"
 	},
 	"dependencies": {
 		"vscode-languageclient": "^8.0.2"

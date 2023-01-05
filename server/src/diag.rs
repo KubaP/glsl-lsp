@@ -1,622 +1,1078 @@
-use crate::{state, File};
-use glast::{
-	error::SyntaxErr::{self, *},
-	Span,
-};
+//! Diagnostic functionality.
+
+use glast::{diag::*, Span};
 use tower_lsp::lsp_types::{
-	Diagnostic, DiagnosticRelatedInformation, DiagnosticSeverity, Location,
+	Diagnostic, DiagnosticRelatedInformation, DiagnosticSeverity,
+	DiagnosticTag, Location, NumberOrString,
 };
 
-/// Converts a [`SyntaxErr`] to an LSP `Diagnostic` type.
-///
-/// - `err` - the syntax error,
-/// - `file` - the file the error is from,
-/// - `diags` - a vector to which the diagnostic(s) will be appended to; it is done this way instead of by return
-///   value because some syntax errors create more than one diagnostic,
-/// - `diag_conf` - the state of diagnostic capabilities.
-pub fn to_diagnostic(
-	err: SyntaxErr,
-	file: &File,
+/// Converts [`Syntax`] and [`Semantic`] diagnostics to LSP diagnostics.
+pub fn convert(
+	syntax_diags: &[Syntax],
+	semantic_diags: &[Semantic],
 	diags: &mut Vec<Diagnostic>,
-	diag_conf: &state::Diagnostics,
+	file: &crate::file::File,
+	supports_related_info: bool,
 ) {
-	let (message, span, related) = match err {
-		/* EXPRESSION */
-		FoundOperandAfterOperand(prev, current) => (
-			"Syntax error: expected binary operator between the operands",
-			Span::new_between(prev, current),
-			None
-		),
-		InvalidPrefixOperator(token) => (
-			"Syntax error: invalid prefix operator",
-			token,
-			None
-		),
-		FoundPrefixInsteadOfPostfix(token) => (
-			"Syntax error: invalid postfix operator",
-			token,None
-		),
-		FoundOperatorInsteadOfOperand(prev, current) => (
-			"Syntax error: expected an operand between the operators",
-			Span::new_between(prev, current),
-			None
-		),
-		FoundOperatorFirstThing(token) => (
-			"Syntax error: expression cannot start with a non-prefix operator",
-			token,None
-		),
-		FoundClosingDelimInsteadOfOperand(prev, current) => (
-			"Syntax error: expected an operand between the operator and delimiter",
-			Span::new_between(prev, current),None
-		),
-		FoundUnmatchedClosingDelim(token, _) => (
-			"Syntax error: found unmatched closing delimiter",
-			token,None
-		),
-		FoundCommaInsteadOfOperand(prev, current) => (
-			"Syntax error: expected an operand between the operator and comma",
-			Span::new_between(prev, current),
-			None
-		),
-		FoundCommaFirstThing(token) => (
-			"Syntax error: expression cannot start with a comma `,`",
-			token,
-			None
-		),
-		FoundCommaAtTopLevel(_) => todo!(),
-		FoundDotInsteadOfOperand(op, dot) => (
-			"Syntax error: expected operand between operator and dot `.`",
-			Span::new_between(op, dot),
-			None
-		),
-		FoundDotFirstThing(token) => (
-			"Syntax error: expression cannot start with a dot `.`",
-			token,
-			None
-		),
-		FoundEq(_token) => todo!(),
-		FoundInvalidToken(token) => (
-			"Syntax error: invalid token",
-			token,
-			None,
-		),
-		UnclosedParenthesis(opening, expected) => (
-			"Syntax error: expected a closing delimiter `)`",
-			expected,
-			Some(("opening delimiter here", opening)),
-		),
-		UnclosedIndexOperator(opening, expected) => (
-			"Syntax error: expected a closing delimiter `]`",
-			expected,
-			Some(("opening delimiter here", opening)),
-		),
-		UnclosedFunctionCall(opening, expected) => (
-			"Syntax error: expected a closing delimiter `)`",
-			expected,
-			Some(("opening delimiter here", opening)),
-		),
-		UnclosedInitializerList(opening, expected) => (
-			"Syntax error: expected a closing delimiter `}`",
-			expected,
-			Some(("opening delimiter here", opening)),
-		),
-		UnclosedArrayConstructor(opening, expected) => (
-			"Syntax error: expected a closing delimiter `)`",
-			expected,
-			Some(("opening delimiter here", opening)),
-		),
-		/* LAYOUT QUALIFIER */
-		ExpectedParenAfterLayoutKw(pos) => (
-			"Syntax error: expected an opening delimiter `(` after `layout`",
-			pos,
-			None
-		),
-		ExpectedParenAtEndOfLayout(opening, expected) => (
-			"Syntax error: expected a closing delimiter `)`",
-			expected,
-			Some(("opening delimiter here", opening)),
-		),
-		ExpectedLayoutIdentAfterParen(pos) => (
-			"Syntax error: expected a layout identifier after the opening parenthesis `(`",
-			pos,
-			None
-		),
-		ExpectedLayoutIdentAfterComma(pos) => (
-			"Syntax error: expected a layout identifier after the comma `,`",
-			pos,
-			None
-		),
-		ExpectedCommaAfterLayoutIdentOrExpr(pos) => (
-			"Syntax error: expected a comma `,` after a layout identifier/expression",
-			pos,
-			None
-		),
-		InvalidLayoutIdentifier(token) => (
-			"Syntax error: invalid layout identifier",
-			token,
-			None
-		),
-		ExpectedEqAfterLayoutIdent(pos) => (
-			"Syntax error: expected an equals sign `=` after a layout identifier",
-			pos,
-			None
-		),
-		ExpectedExprAfterLayoutEq(pos) => (
-			"Syntax error: expected an expression after the equals sign `=`",
-			pos,
-			None
-		),
-		/* GENERAL */
-		ExpectedType(token) => (
-			"Syntax error: expected a type",
-			token,
-			None,
-		),
-		ExpectedIdent(token) => (
-			"Syntax error: expected an identifier",
-			token,
-			None
-		),
-		ExpectedBraceScopeEnd(opening, expected) => (
-			"Syntax error: expected a closing scope delimiter `}`",
-			expected,
-			Some(("opening delimiter here", opening))
-		),
-		ExpectedStmtFoundExpr(span) => (
-			"Syntax error: expected a statement, found an expression",
-			span,
-			Some(("consider adding a semi-colon `;` here", span.next_single_width())),
-		),
-		/* CONTROL FLOW */
-		ExpectedParenAfterControlFlowKw(pos) => (
-			"Syntax error: expected opening parenthesis `(`",
-			pos,
-			None
-		),
-		ExpectedParenAfterControlFlowExpr(opening, pos) => (
-			"Syntax error: expected closing parenthesis `)`",
-			pos,
-			opening.map(|span| ("opening delimiter here", span))
-		),
-		ExpectedScopeAfterControlFlowExpr(pos) => (
-			"Syntax error: expected opening brace `{`",
-			pos,
-			None
-		),
-		ExpectedSemiAfterControlFlow(pos) => (
-			"Syntax error: expected a semi-colon `;`",
-			pos,
-			None,
-		),
-		/* IF */
-		ExpectedParenAfterIfKw(pos) => (
-			"Syntax error: expected an opening parenthesis `(` after `if`",
-			pos,
-			None
-		),
-		ExpectedExprInIfHeader(span) => (
-			"Syntax error: expected an expression in the if header",
-			span,
-			None
-		),
-		ExpectedParenAfterIfHeader(opening, pos) => (
-			"Syntax error: expected a closing parenthesis `)`",
-			pos,
-			opening.map(|span| ("opening delimiter here", span))
-		),
-		ExpectedBraceOrStmtAfterIfHeader(pos) => (
-			"Syntax error: expected either a statement or a `{` after the if header",
-			pos,
-			None
-		),
-		ExpectedStmtAfterIfHeader(pos) => (
-			"Syntax error: expected a statement after the if header, found nothing",
-			pos,
-			None
-		),
-		ExpectedIfOrBodyAfterElseKw(pos) => (
-			"Syntax error: expected either a body or `if` after `else`",
-			pos,
-			None
-		),
-		/* SWITCH */
-		ExpectedParenAfterSwitchKw(pos) => (
-			"Syntax error: expected an opening parenthesis `(` after `switch`",
-			pos,
-			None
-		),
-		MissingSwitchHeader(span) => (
-			"Syntax error: expected a switch header `(..)` after `switch`",
-			span,
-			None
-		),
-		ExpectedExprInSwitchHeader(span) => (
-			"Syntax error: expected an expression in the switch header",
-			span,
-			None
-		),
-		ExpectedParenAfterSwitchHeader(opening, pos) => (
-			"Syntax error: expected a closing parenthesis `)` after the switch header",
-			pos,
-			opening.map(|span| ("opening delimiter here", span))
-		),
-		ExpectedBraceAfterSwitchHeader(pos) => (
-			"Syntax error: expected an opening brace `{` after the switch header",
-			pos,
-			None
-		),
-		FoundEmptySwitchBody(span) => (
-			"Syntax error: found an empty switch body",
-			span,
-			None
-		),
-		ExpectedExprAfterCaseKw(pos) => (
-			"Syntax error: expected an expression after `case`",
-			pos,
-			None
-		),
-		ExpectedColonAfterCase(pos) => (
-			"Syntax error: expected a colon `:` after a case",
-			pos,
-			None
-		),
-		InvalidSwitchCaseBegin(span) => (
-			"Syntax error: expected either `case` or `default`",
-			span,
-			None
-		),
-		MissingSwitchBodyClosingBrace(opening, pos) => (
-			"Syntax error: expected a closing brace `}`",
-			pos,
-			opening.map(|span| ("opening delimiter here", span))
-		),
-		/* FOR-LOOP */
-		ExpectedParenAfterForKw(pos) => (
-			"Syntax error: expected an opening parenthesis `(` after `for`",
-			pos,
-			None
-		),
-		MissingForHeader(span) => (
-			"Syntax error: expected a for-loop header `(..)` after `for`",
-			span,
-			None
-		),
-		FoundEmptyForHeader(span) => (
-			"Syntax error: expected expressions in the for-loop header; found nothing",
-			span,
-			None
-		),
-		ExpectedExprInForFoundElse(span) => (
-			"Syntax error: expected an expression",
-			span,
-			None
-		),
-		ExpectedSemiAfterForStmtExpr(pos) => (
-			"Syntax error: expected a semi-colon `;` after the expression",
-			pos,
-			None
-		),
-		FoundTrailingSemiAfter3rdExprInFor(span) => (
-			"Syntax error: found tailing semi-colon `;` which is unnecessary",
-			span,
-			None
-		),
-		Expected3StmtExprInFor(span) => (
-			"Syntax error: expected 3 expressions in the for-loop header; found fewer",
-			span,
-			None
-		),
-		FoundMoreThan3StmtExprInFor(span) => (
-			"Syntax error: found extra expressions in the for-loop header; there should only be 3",
-			span,
-			None
-		),
-		ExpectedParenAfterForHeader(opening, pos ) => (
-			"Syntax error: expected a closing parenthesis `)` after the for-loop header",
-			pos,
-			opening.map(|span| ("opening delimiter here", span))
-		),
-		ExpectedBraceAfterForHeader(pos) => (
-			"Syntax error: expecting an opening brace `{` after the for-loop header",
-			pos,
-			None
-		),
-		/* WHILE-LOOP */
-		ExpectedParenAfterWhileKw(pos) => (
-			"Syntax error: expected an opening parenthesis `(` after `while`",
-			pos,
-			None
-		),
-		ExpectedCondExprAfterWhile(span) => (
-			"Syntax error: expected a condition expression after `while`",
-			span,
-			None
-		),
-		ExpectedParenAfterWhileCond(opening, pos) => (
-			"Syntax error: expected a closing parenthesis `)` after the while condition expression",
-			pos,
-			opening.map(|span| ("opening delimiter here", span))
-		),
-		/* DO-WHILE-LOOP */
-		ExpectedBraceAfterDoKw(pos) => (
-			"Syntax error: expected an opening brace `{` after `do`",
-			pos,
-			None
-		),
-		ExpectedScopeAfterDoKw(pos) => (
-			"Syntax error: expected a body `{..}` after `do`",
-			pos,
-			None
-		),
-		ExpectedWhileKwAfterDoBody(pos) => (
-			"Syntax error: expected the `while` keyword after the do-while loop body",
-			pos,
-			None
-		),
-		ExpectedSemiAfterDoWhileStmt(pos) => (
-			"Syntax error: expected a semi-colon `;` after a do-while loop statement",
-			pos,
-			None
-		),
-		/* SINGLE-WORD */
-		ExpectedSemiOrExprAfterReturnKw(pos) => (
-			"Syntax error: expected either a semi-colon `;` or an expression after `return`",
-			pos,
-			None
-		),
-		ExpectedSemiAfterReturnExpr(pos) => (
-			"Syntax error: expected a semi-colon `;` after the return expression",
-			pos,
-			None
-		),
-		ExpectedSemiAfterBreakKw(pos) => (
-			"Syntax error: expected a semi-colon `;` after `break`",
-			pos,
-			None
-		),
-		ExpectedSemiAfterContinueKw(pos) => (
-			"Syntax error: expected a semi-colon `;` after `continue`",
-			pos,
-			None
-		),
-		ExpectedSemiAfterDiscardKw(pos) => (
-			"Syntax error: expected a semi-colon `;` after `discard`",
-			pos,
-			None
-		),
-		/* VAR DEF/DECL */
-		ExpectedIdentsAfterVarType(pos) => (
-			"Syntax error: expected variable identifier(s)",
-			pos,
-			None,
-		),
-		ExpectedSemiOrEqAfterVarDef(pos) => (
-			"Syntax error: expected either a semi-colon `;` or an equal sign `=`",
-			pos,
-			None
-		),
-		ExpectedSemiAfterVarDeclExpr(pos) => (
-			"Syntax error: expected a semi-colon `;`",
-			pos,
-			None
-		),
-		ExpectedExprAfterVarDeclEq(pos) => (
-			"Syntax error: expected an expression",
-			pos,
-			None
-		),
-		/* FUNCTION DEF/DECL */
-		ExpectedParenAtEndOfParamList(opening, expected) => (
-			"Syntax error: expected a closing delimiter `)`",
-			expected,
-			Some(("opening delimiter here", opening)),
-		),
-		ExpectedParamBetweenParenComma(pos) => (
-			"Syntax error: expected a parameter between the opening parenthesis `(` and the comma `,`",
-			pos,
-			None
-		),
-		ExpectedParamAfterComma(pos) => (
-			"Syntax error: expected a parameter after the comma `,`",
-			pos,
-			None
-		),
-		ExpectedCommaAfterParam(pos) => {
-			("Syntax error: expected a comma `,` after a parameter", pos, None)
-		}
-		MissingTypeInParamList(pos) => {
-			("Syntax error: expected a type", pos, None)
-		}
-		ExpectedSemiOrScopeAfterParamList(pos) => (
-			"Syntax error: expected either a semi-colon `;` or an opening delimiter `{` after the parameter list",
-			pos,
-			None
-		),
-		/* STRUCT DEF/DECL */
-		ExpectedIdentAfterStructKw(pos) => (
-			"Syntax error: expected a struct identifier after `struct`", pos, None
-		),
-		ExpectedScopeAfterStructIdent(pos) => (
-			"Syntax error: expected an opening delimiter `{`", pos, None
-		),
-		ExpectedVarDefInStructBody(stmt) => (
-			"Syntax error: expected a variable definition inside a struct body", stmt, None
-		),
-		ExpectedAtLeastOneMemberInStruct(decl) => (
-			"Syntax error: expected at least one variable definition inside a struct body", decl, None
-		),
-		ExpectedSemiAfterStructBody(pos) => (
-			"Syntax error: expected a semi-colon `;` after the struct body", pos, None
-		),
-		/* ILLEGAL STATEMENTS */
-		StructDefIsIllegal(span) => (
-			"Syntax error: struct definitions are illegal",
-			span,
-			None
-		),
-		FoundIllegalReservedKw(pos) => (
-			"Syntax error: found reserved keyword",
-			pos,
-			None
-		),
-		FoundIllegalChar(pos, _char) => (
-			("Syntax error: found an illegal character"),
-			pos,
-			None
-		),
-		PunctuationCannotStartStmt(pos) => (
-			"Syntax error: punctuation cannot start a statement",
-			pos,
-			None
-		),
-		FoundLonelyRBrace(pos) => (
-			"Syntax error: found un-opened closing brace `}`",
-			pos,
-			None
-		),
-		ExpectedDefDeclAfterQualifiers(pos) => (
-			"Syntax error: expected a variable or function definition/declaration after qualifier(s)",
-			pos,
-			None
-		),
-		/* ILLEGAL STATEMENTS AT TOP-LEVEL */
-		ExprStmtIsIllegalAtTopLevel(span) => (
-			"Syntax error: expression statement is not valid at top-level",
-			span,
-			None
-		),
-		ScopeStmtIsIllegalAtTopLevel(span) => (
-			"Syntax error: scope is not valid at top-level",
-			span,
-			None
-		),
-		IfStmtIsIllegalAtTopLevel(span) => (
-			"Syntax error: if statement is not valid at top-level",
-			span,
-			None
-		),
-		SwitchStmtIsIllegalAtTopLevel(span) => (
-			"Syntax error: switch statement is not valid at top-level",
-			span,
-			None
-		),
-		ForStmtIsIllegalAtTopLevel(span) => (
-			"Syntax error: for statement is not valid at top-level",
-			span,
-			None
-		),
-		WhileStmtIsIllegalAtTopLevel(span) => (
-			"Syntax error: while statement is not valid at top-level",
-			span,
-			None
-		),
-		DoWhileStmtIsIllegalAtTopLevel(span) => (
-			"Syntax error: do-while statement is not valid at top-level",
-			span,
-			None
-		),
-		ReturnStmtIsIllegalAtTopLevel(span) => (
-			"Syntax error: return statement is not valid at top-level",
-			span,
-			None
-		),
-		BreakStmtIsIllegalAtTopLevel(span) => (
-			"Syntax error: break statement is not valid at top-level",
-			span,
-			None
-		),
-		ContinueStmtIsIllegalAtTopLevel(span) => (
-			"Syntax error: continue statement is not valid at top-level",
-			span,
-			None
-		),
-		DiscardStmtIsIllegalAtTopLevel(span) => (
-			"Syntax error: discard statement is not valid at top-level",
-			span,
-			None
-		),
-		/* ILLEGAL STATEMENTS INSIDE OF FUNCTIONS */
-		FnStmtIsIllegalInFn(span) => (
-			"Syntax error: function statement is not valid inside of a function",
-			span,
-			None
-		),
-		StructStmtIsIllegalInFn(span) => (
-			"Syntax error: struct statement is not valid inside of a function",
-			span,
-			None
-		),
-		BreakStmtIsIllegalInFnOutsideLoop(span) => (
-			"Syntax error: break statement is not valid outside of a loop statement",
-			span,
-			None
-		),
-		ContinueStmtIsIllegalInFnOutsideLoop(span) => (
-			"Syntax error: continue statement is not valid outside of a loop statement",
-			span,
-			None
-		),
-		/* TEMPORARY */
-		DirectivesNotSupported(span) => (
-			"Directives are currently not supported",
-			span,
-			None
-		),
-		_ => (
-			"UNIMPLEMENTED SYNTAX ERROR",
-			Span::empty(),
-			None
-		)
-	};
+	for diag in syntax_diags {
+		let (message, span, related) = convert_syntax(diag.clone());
+		diags.push(Diagnostic {
+			range: file.span_to_lsp(span),
+			severity: Some(DiagnosticSeverity::ERROR),
+			code: None,
+			code_description: None,
+			source: Some("glsl".to_owned()),
+			message,
+			// Link to a hint, if there is one.
+			related_information: if supports_related_info {
+				if let Some(ref related) = related {
+					Some(vec![DiagnosticRelatedInformation {
+						location: Location {
+							uri: file.uri.clone(),
+							range: file.span_to_lsp(related.1),
+						},
+						message: related.0.clone(),
+					}])
+				} else {
+					None
+				}
+			} else {
+				None
+			},
+			tags: None,
+			data: None,
+		});
 
+		if supports_related_info {
+			// `related_information` on its own doesn't create underlines in the editor, so we need to push a
+			// separate hint diagnostic as well.
+			if let Some(related) = related {
+				diags.push(Diagnostic {
+					range: file.span_to_lsp(related.1),
+					severity: Some(DiagnosticSeverity::HINT),
+					code: None,
+					code_description: None,
+					source: Some("glsl".into()),
+					message: related.0.into(),
+					// Link to the original error.
+					related_information: Some(vec![
+						DiagnosticRelatedInformation {
+							location: Location {
+								uri: file.uri.clone(),
+								range: file.span_to_lsp(span),
+							},
+							message: "original diagnostic here".into(),
+						},
+					]),
+					tags: None,
+					data: None,
+				});
+			}
+		}
+	}
+
+	for diag in semantic_diags {
+		let (message, span, severity, error_code, related) =
+			convert_semantic(diag.clone());
+		diags.push(Diagnostic {
+			range: file.span_to_lsp(span),
+			severity: Some(match severity {
+				Severity::Error => DiagnosticSeverity::ERROR,
+				Severity::Warning => DiagnosticSeverity::WARNING,
+			}),
+			code: error_code.map(|e| NumberOrString::String(e.to_owned())),
+			code_description: None,
+			source: Some("glsl".to_owned()),
+			message,
+			// Link to a hint, if there is one.
+			related_information: if supports_related_info {
+				if let Some(ref related) = related {
+					Some(vec![DiagnosticRelatedInformation {
+						location: Location {
+							uri: file.uri.clone(),
+							range: file.span_to_lsp(related.1),
+						},
+						message: related.0.clone(),
+					}])
+				} else {
+					None
+				}
+			} else {
+				None
+			},
+			tags: None,
+			data: None,
+		});
+
+		if supports_related_info {
+			// `related_information` on its own doesn't create underlines in the editor, so we need to push a
+			// separate hint diagnostic as well.
+			if let Some(related) = related {
+				diags.push(Diagnostic {
+					range: file.span_to_lsp(related.1),
+					severity: Some(DiagnosticSeverity::HINT),
+					code: None,
+					code_description: None,
+					source: Some("glsl".into()),
+					message: related.0.into(),
+					// Link to the original error.
+					related_information: Some(vec![
+						DiagnosticRelatedInformation {
+							location: Location {
+								uri: file.uri.clone(),
+								range: file.span_to_lsp(span),
+							},
+							message: "original diagnostic here".into(),
+						},
+					]),
+					tags: None,
+					data: None,
+				});
+			}
+		}
+	}
+}
+
+/// Disables a region of code. This is used to grey-out code that is disabled because of conditional compilation.
+pub fn disable_region(
+	span: Span,
+	reason: &crate::file::ConditionalCompilationState,
+	diags: &mut Vec<Diagnostic>,
+	file: &crate::file::File,
+) {
 	diags.push(Diagnostic {
-		range: file.span_to_range(span),
-		severity: Some(DiagnosticSeverity::ERROR),
+		range: file.span_to_lsp(span),
+		severity: Some(DiagnosticSeverity::HINT),
 		code: None,
 		code_description: None,
 		source: Some("glsl".into()),
-		message: message.into(),
-		// Link to the hint if there is one.
-		related_information: if diag_conf.related_information {
-			if let Some(related) = related {
-				Some(vec![DiagnosticRelatedInformation {
-					location: Location {
-						uri: file.uri.clone(),
-						range: file.span_to_range(related.1),
-					},
-					message: related.0.into(),
-				}])
-			} else {
-				None
-			}
-		} else {
-			None
-		},
-		tags: None,
+		message: match reason {
+			crate::file::ConditionalCompilationState::Off => "Code inactive due to conditional directive: conditional compilation is disabled for this file",
+			crate::file::ConditionalCompilationState::Evaluate => "Code inactive due to conditional directive: expression evaluated to `false`",
+			crate::file::ConditionalCompilationState::Key(_) => "Code inactive due to conditional directive: this branch is not part of the chosen evaluated permutation"
+		}.into(),
+		related_information: None,
+		tags: Some(vec![DiagnosticTag::UNNECESSARY]),
 		data: None,
 	});
+}
 
-	if diag_conf.related_information {
-		// `related_information` on its own doesn't create underlines in the editor, so we need to push a hint as well.
-		if let Some(related) = related {
-			diags.push(Diagnostic {
-				range: file.span_to_range(related.1),
-				severity: Some(DiagnosticSeverity::HINT),
-				code: None,
-				code_description: None,
-				source: Some("glsl".into()),
-				message: related.0.into(),
-				// Link to the original error.
-				related_information: Some(vec![DiagnosticRelatedInformation {
-					location: Location {
-						uri: file.uri.clone(),
-						range: file.span_to_range(span),
-					},
-					message: "original diagnostic here".into(),
-				}]),
-				tags: None,
-				data: None,
-			});
-		}
+/* MUST FORMAT THE FOLLOWING FUNCTIONS MANUALLY, Something about them makes rustfmt give up */
+
+#[rustfmt::skip]
+fn convert_semantic(
+	diag: Semantic,
+) -> (
+	String,
+	Span,
+	Severity,
+	Option<&'static str>,
+	Option<(String, Span)>,
+) {
+	let (message, span, related) = match diag {
+		Semantic::EmptyDirective(span) => (
+			format!("Unnecessary preprocessor directive"),
+			span,
+			None
+		),
+		/* MACROS */
+		Semantic::EmptyMacroCallSite(span) => (
+			format!("Unnecessary macro call; expands to nothing"),
+			span,
+			None
+		),
+		Semantic::FunctionMacroMismatchedArgCount(span, definition) => (
+			format!("Number of arguments doesn't match the number of parameters"),
+			span,
+			Some((format!("Macro defined here"), definition))
+		),
+		Semantic::TokenConcatUnnecessary(span) => (
+			format!("Unnecessary token concatenation operator `##`"),
+			span,
+			None
+		),
+		Semantic::UndefMacroNameUnresolved(span) => (
+			format!("Unnecessary `#undef` directive; macro name could not be resolved"),
+			span,
+			None
+		),
+		_ => unreachable!(),
+	};
+	(
+		message,
+		span,
+		diag.get_severity(),
+		diag.get_error_code(),
+		related,
+	)
+}
+
+type DiagReturn = (String, Span, Option<(String, Span)>);
+
+#[rustfmt::skip]
+fn convert_syntax(diag: Syntax) -> DiagReturn {
+	match diag {
+		Syntax::Expr(d) => convert_syntax_expr(d),
+		Syntax::Stmt(d) => convert_syntax_stmt(d),
+		Syntax::FoundIllegalChar(span, char) => (
+			format!("Syntax error: found an illegal character `{char}` that is not part of the GLSL character set"),
+			span,
+			None
+		),
+		Syntax::FoundReservedKw(span, kw) => (
+			format!("Syntax error: found a reserved keyword `{kw}`"),
+			span,
+			None
+		),
+		Syntax::FoundUnmatchedRBrace(span) => (
+			format!("Syntax error: found a trailing closing brace `}}` that doesn't match-up with an opening brace"),
+			span,
+			None
+		),
+		Syntax::FoundLonelyElseKw(span) => (
+			format!("Syntax error: found an `else` keyword outside of an if-statement"),
+			span,
+			None
+		),
+		Syntax::FoundLonelyCaseKw(span) => (
+			format!("Syntax error: found a `case` keyword outside of a switch-statement"),
+			span,
+			None
+		),
+		Syntax::FoundLonelyDefaultKw(span) => (
+			format!("Syntax error: found a `default` keyword outside of a switch-statement"),
+			span,
+			None
+		),
+		Syntax::BlockCommentMissingEnd(pos) => (
+			format!("Syntax error: expected a closing tag `*/` for the block comment"),
+			pos,
+			None
+		),
+		Syntax::PreprocVersion(d) => convert_syntax_version(d),
+		Syntax::PreprocExt(d) => convert_syntax_ext(d),
+		Syntax::PreprocLine(d) => convert_syntax_line(d),
+		Syntax::PreprocDefine(d) => convert_syntax_define(d),
+		Syntax::PreprocConditional(d) => convert_syntax_condition(d),
+		Syntax::PreprocTrailingTokens(span) => (
+			format!("Syntax error: found trailing tokens after the directive"),
+			span,
+			None
+		),
+		Syntax::FoundIllegalPreproc(span, kw) => (
+			if let Some(kw) = kw {
+				format!("Syntax error: found an illegal directive `{}`", kw.0)
+			} else {
+				format!("Syntax error: found an illegal directive")
+			},
+			span,
+			None
+		),
+		_ => unreachable!(),
+	}
+}
+
+#[rustfmt::skip]
+fn convert_syntax_expr(diag: ExprDiag) -> DiagReturn {
+	match diag {
+		/* LITERALS */
+		ExprDiag::InvalidNumber(span) => (
+			format!("Syntax error: found a number with an invalid suffix"),
+			span,
+			None
+		),
+		ExprDiag::EmptyNumber(span) => (
+			format!("Syntax error: found a number that has no digits"),
+			span,
+			None
+		),
+		ExprDiag::UnparsableNumber(span) => (
+			format!("Syntax error: found an un-representable number"),
+			span,
+			None
+		),
+		/* COMPOUND EXPRESSIONS */
+		ExprDiag::FoundOperandAfterOperand(prev, current) => (
+			format!(
+				"Syntax error: expected an operator between the two operands"
+			),
+			Span::new_between(prev, current),
+			None
+		),
+		ExprDiag::InvalidPrefixOperator(span) => (
+			format!("Syntax error: found an invalid prefix operator"),
+			span,
+			None
+		),
+		ExprDiag::InvalidBinOrPostOperator(span) => (
+			format!("Syntax error: found an invalid binary/postfix operator"),
+			span,
+			None
+		),
+		ExprDiag::FoundDotInsteadOfOperand(prev, dot) => {
+			if let Some(prev) = prev {
+				(
+					format!("Syntax error: expected an operand between the operator and dot `.`"),
+					Span::new_between(prev, dot),
+					None
+				)
+			} else {
+				(
+					format!("Syntax error: expected an operand before the dot `.`"),
+					dot.previous_single_width(),
+					None
+				)
+			}
+		},
+		ExprDiag::FoundCommaInsteadOfOperand(prev, comma) => (
+			format!("Syntax error: expected an operand between the operator and comma `,`"),
+			Span::new_between(prev, comma),
+			None
+		),
+		ExprDiag::FoundQuestionInsteadOfOperand(prev, question) => {
+			if let Some(prev) = prev {
+				(
+					format!("Syntax error: expected an operand between the operator and question-mark `?`"),
+					Span::new_between(prev, question),
+					None
+				)
+			} else {
+				(
+					format!("Syntax error: expected an operand before the question-mark `?`"),
+					question.previous_single_width(),
+					None
+				)
+			}
+		},
+		ExprDiag::FoundColonInsteadOfOperand(prev, colon) => {
+			if let Some(prev) = prev {
+				(
+					format!("Syntax error: expected an operand between the operator and colon `:`"),
+					Span::new_between(prev, colon),
+					None
+				)
+			} else {
+				(
+					format!("Syntax error: expected an operand before the colon `:`"),
+					colon.previous_single_width(),
+					None
+				)
+			}
+		},
+		ExprDiag::FoundInvalidToken(span) => (
+			format!("Syntax error: found an invalid expression token"),
+			span,
+			None
+		),
+		/* GROUPS */
+		ExprDiag::FoundEmptyParens(span) => (
+			format!("Syntax error: found an empty set of parenthesis"),
+			span,
+			None
+		),
+		ExprDiag::FoundLBracketInsteadOfOperand(prev, bracket) => {
+			if let Some(prev) = prev {
+				(
+					format!("Syntax error: expected an operand between the operator and opening bracket `[`"),
+					Span::new_between(prev, bracket),
+					None
+				)
+			} else {
+				(
+					format!("Syntax error: expected an operand before the opening bracket `[`"),
+					bracket.previous_single_width(),
+					None
+				)
+			}
+		},
+		ExprDiag::FoundRParenInsteadOfOperand(prev, closing) => (
+			format!("Syntax error: expected an operand between the operator and closing parenthesis `)`"),
+			Span::new_between(prev, closing),
+			None
+		),
+		ExprDiag::FoundRBracketInsteadOfOperand(prev, closing) => (
+			format!("Syntax error: expected an operand between the operator and closing bracket `]`"),
+			Span::new_between(prev, closing),
+			None
+		),
+		ExprDiag::FoundRBraceInsteadOfOperand(prev, closing) => (
+			format!("Syntax error: expected an operand between the operator and closing brace `}}`"),
+			Span::new_between(prev, closing),
+			None
+		),
+		/* ARITY */
+		ExprDiag::ExpectedCommaAfterArg(pos) => (
+			format!("Syntax error: expected a comma after the argument"),
+			pos,
+			None
+		),
+		ExprDiag::ExpectedArgAfterComma(pos) => (
+			format!("Syntax error: expected an argument after the comma `,`"),
+			pos,
+			None
+		),
+		ExprDiag::ExpectedArgBetweenParenComma(span) => (
+			format!("Syntax error: expected an argument between the opening parenthesis `(` and comma `,`"),
+			span,
+			None
+		),
+		ExprDiag::ExpectedArgBetweenBraceComma(span) => (
+			format!("Syntax error: expected an argument between the opening brace `{{` and comma `,`"),
+			span,
+			None
+		),
+		ExprDiag::ExpectedCommaAfterExpr(pos) => (
+			format!("Syntax error: expected a comma `,` after the expression"),
+			pos,
+			None
+		),
+		ExprDiag::ExpectedExprAfterComma(pos) => (
+			format!("Syntax error: expected an expression after the comma `,`"),
+			pos,
+			None
+		),
+		ExprDiag::ExpectedExprBeforeComma(pos) => (
+			format!("Syntax error: expected an expression before the comma `,`"),
+			pos,
+			None
+		),
+		/* UNCLOSED GROUPS */
+		ExprDiag::UnclosedParens(opening, end) => (
+			format!("Syntax error: expected a closing parenthesis `)`"),
+			end,
+			Some((format!("Opening parenthesis here"), opening))
+		),
+		ExprDiag::UnclosedIndexOperator(opening, end) => (
+			format!("Syntax error: expected a closing bracket `]`"),
+			end,
+			Some((format!("Opening bracket here"), opening))
+		),
+		ExprDiag::UnclosedFunctionCall(opening, end) => (
+			format!("Syntax error: expected a closing parenthesis `)`"),
+			end,
+			Some((format!("Opening parenthesis here"), opening))
+		),
+		ExprDiag::UnclosedInitializerList(opening, end) => (
+			format!("Syntax error: expected a closing brace `}}`"),
+			end,
+			Some((format!("Opening brace here"), opening))
+		),
+		ExprDiag::UnclosedArrayConstructor(opening, end) => (
+			format!("Syntax error: expected a closing parenthesis `)`"),
+			end,
+			Some((format!("Opening parenthesis here"), opening))
+		),
+		_ => unreachable!(),
+	}
+}
+
+#[rustfmt::skip]
+fn convert_syntax_stmt(diag: StmtDiag) -> DiagReturn {
+	match diag {
+		StmtDiag::ExprStmtExpectedSemiAfterExpr(pos) => (
+			format!("Syntax error: expected a semi-colon `;` after the expression"),
+			pos,
+			None
+		),
+		StmtDiag::ScopeMissingRBrace(opening, pos) => (
+			format!("Syntax error: expected a closing brace `}}`"),
+			pos,
+			Some((format!("Opening brace here"), opening))
+		),
+		StmtDiag::FoundQualifiersBeforeStmt(span) => (
+			format!("Syntax error: found qualifiers before a statement that doesn't support qualifiers"),
+			span,
+			None
+		),
+		/* QUALIFIERS */
+		StmtDiag::LayoutExpectedLParenAfterKw(pos) => (
+			format!("Syntax error: expected an opening parenthesis `(` after `layout`"),
+			pos,
+			None
+		),
+		StmtDiag::LayoutInvalidIdent(span) => (
+			format!("Syntax error: found an invalid layout identifier"),
+			span,
+			None
+		),
+		StmtDiag::LayoutExpectedEqAfterIdent(pos) => (
+			format!("Syntax error: expected an equal-sign `=` after the identifier"),
+			pos,
+			None
+		),
+		StmtDiag::LayoutExpectedExprAfterEq(pos) => (
+			format!("Syntax error: expected a value expression after the equals-sign `=`"),
+			pos,
+			None
+		),
+		StmtDiag::LayoutMissingRParen(pos) => (
+			format!("Syntax error: expected a closing parenthesis `)` to end the layout qualifier"),
+			pos,
+			None
+		),
+		StmtDiag::LayoutExpectedCommaAfterLayout(pos) => (
+			format!("Syntax error: expected a comma `,` after a layout identifier"),
+			pos,
+			None
+		),
+		StmtDiag::LayoutExpectedLayoutAfterComma(span) => (
+			format!("Syntax error: expected a layout identifier after the comma `,`"),
+			span,
+			None
+		),
+		StmtDiag::LayoutExpectedLayoutBetweenParenComma(span) => (
+			format!("Syntax error: expected a layout identifier between the opening parenthesis `(` and the comma `,`"),
+			span,
+			None
+		),
+		/* VARIABLES */
+		StmtDiag::VarDefExpectedSemiOrEqAfterIdents(pos) => (
+			format!("Syntax error: expected a semi-colon `;` or equal-sign `=` after the variable identifier(s)"),
+			pos,
+			None
+		),
+		StmtDiag::VarDefInitExpectedValueAfterEq(pos) => (
+			format!("Syntax error: expected a value expression after the equal-sign `=`"),
+			pos,
+			None
+		),
+		StmtDiag::VarDefInitExpectedSemiAfterValue(pos) => (
+			format!("Syntax error: expected a semi-colon `;` after the value expression"),
+			pos,
+			None
+		),
+		/* INTERFACE BLOCKS */
+		StmtDiag::InterfaceInvalidStmtInBody(span) => (
+			format!("Syntax error: found an invalid statement within the interface body; only variable definitions are allowed"),
+			span,
+			None
+		),
+		StmtDiag::InterfaceExpectedAtLeastOneStmtInBody(span) => (
+			format!("Syntax error: found an interface body that is empty"),
+			span,
+			None
+		),
+		StmtDiag::InterfaceExpectedInstanceOrSemiAfterBody(pos) => (
+			format!("Syntax error: expected a semi-colon `;` or an instance name after the interface body"),
+			pos,
+			None
+		),
+		StmtDiag::InterfaceExpectedSemiAfterInstance(pos) => (
+			format!("Syntax error: expected a semi-colon `;` after the interface's instance name"),
+			pos,
+			None
+		),
+		/* FUNCTIONS */
+		StmtDiag::ParamsExpectedCommaAfterParam(pos) => (
+			format!("Syntax error: expected a comma `,` after the parameter"),
+			pos,
+			None
+		),
+		StmtDiag::ParamsExpectedParamAfterComma(span) => (
+			format!("Syntax error: expected a parameter after the comma `,`"),
+			span,
+			None
+		),
+		StmtDiag::ParamsExpectedParamBetweenParenComma(span) => (
+			format!("Syntax error: expected a parameter between the opening parenthesis `(` and the comma `,`"),
+			span,
+			None
+		),
+		StmtDiag::ParamsInvalidTypeExpr(span) => (
+			format!("Syntax error: expected a type"),
+			span,
+			None
+		),
+		StmtDiag::ParamsInvalidIdentExpr(span) => (
+			format!("Syntax error: expected type identifier(s)"),
+			span,
+			None
+		),
+		StmtDiag::ParamsExpectedRParen(pos) => (
+			format!("Syntax error: expected a closing parenthesis `)` to end the parameter list"),
+			pos,
+			None
+		),
+		StmtDiag::FnExpectedSemiOrLBraceAfterParams(pos) => (
+			format!("Syntax error: expected a semi-colon `;` or an opening brace `{{` after the parameter list"),
+			pos,
+			None
+		),
+		/* SUBROUTINES */
+		StmtDiag::SubroutineExpectedVarDefAfterUniformKw(pos) => (
+			format!("Syntax error: expected a variable definition after the `uniform` keyword"),
+			pos,
+			None
+		),
+		StmtDiag::SubroutineExpectedTypeFuncUniformAfterKw(pos) => (
+			format!("Syntax error: expected a subroutine type declaration, a subroutine associated function definition, or a subroutine uniform definition after the `subroutine` keyword"),
+			pos,
+			None
+		),
+		StmtDiag::SubroutineAssociatedListExpectedCommaAfterIdent(pos) => (
+			format!("Syntax error: expected a comma `,` after the subroutine name"),
+			pos,
+			None
+		),
+		StmtDiag::SubroutineAssociatedListExpectedIdentAfterComma(span) => (
+			format!("Syntax error: expected a subroutine name after the comma `,`"),
+			span,
+			None
+		),
+		StmtDiag::SubroutineAssociatedListExpectedIdentBetweenParenComma(span) => (
+			format!("Syntax error: expected a subroutine name between the opening parenthesis `(` and the comma `,`"),
+			span,
+			None
+		),
+		StmtDiag::SubroutineAssociatedListExpectedRParen(pos) => (
+			format!("Syntax error: expected a closing parenthesis `)` to end the associated-subroutines list"),
+			pos,
+			None
+		),
+		StmtDiag::SubroutineExpectedFnDefAfterAssociatedList(pos) => (
+			format!("Syntax error: expected a function definition after the associated-subroutines list"),
+			pos,
+			None
+		),
+		StmtDiag::SubroutineExpectedFnDefAfterAssociatedListFoundDecl(span) => (
+			format!("Syntax error: expected a function definition; found a function declaration instead"),
+			span,
+			None
+		),
+		StmtDiag::SubroutineMissingAssociationsForFnDef(span) => (
+			format!("Syntax error: expected an associated-subroutines list after the `subroutine` keyword"),
+			span,
+			None
+		),
+		StmtDiag::SubroutineMissingUniformKwForUniformDef(span) => (
+			format!("Syntax error: expected the `uniform` keyword after the `subroutine` keyword"),
+			span,
+			None
+		),
+		/* STRUCTS */
+		StmtDiag::StructExpectedIdentAfterKw(pos) => (
+			format!("Syntax error: expected an name after the `struct` keyword"),
+			pos,
+			None
+		),
+		StmtDiag::StructExpectedLBraceAfterIdent(pos) => (
+			format!("Syntax error: expected an opening brace `{{` after the struct name"),
+			pos,
+			None
+		),
+		StmtDiag::StructInvalidStmtInBody(span) => (
+			format!("Syntax error: found an invalid statement within the struct body; only variable definitions are allowed"),
+			span,
+			None
+		),
+		StmtDiag::StructExpectedAtLeastOneStmtInBody(span) => (
+			format!("Syntax error: found a struct body that is empty"),
+			span,
+			None
+		),
+		StmtDiag::StructExpectedInstanceOrSemiAfterBody(pos) => (
+			format!("Syntax error: expected a semi-colon `;` or an instance name after the struct body"),
+			pos,
+			None
+		),
+		StmtDiag::StructExpectedSemiAfterInstance(pos) => (
+			format!("Syntax error: expected a semi-colon `;` after the struct's instance name"),
+			pos,
+			None
+		),
+		StmtDiag::StructDeclIsIllegal(span) => (
+			format!("Syntax error: found a struct declaration; this is an illegal GLSL statement"),
+			span,
+			None
+		),
+		/* IF STATEMENTS */
+		StmtDiag::IfExpectedLParenAfterKw(pos) => (
+			format!("Syntax error: expected an opening parenthesis `(` after the `if` keyword"),
+			pos,
+			None
+		),
+		StmtDiag::IfExpectedExprAfterLParen(pos) => (
+			format!("Syntax error: expected a value expression after the opening parenthesis `(`"),
+			pos,
+			None
+		),
+		StmtDiag::IfExpectedRParenAfterExpr(pos) => (
+			format!("Syntax error: expected a closing parenthesis after the value expression"),
+			pos,
+			None
+		),
+		StmtDiag::IfExpectedLBraceOrStmtAfterRParen(pos) => (
+			format!("Syntax error: expected an opening brace `{{` or a statement after the closing parenthesis `)`"),
+			pos,
+			None
+		),
+		StmtDiag::IfExpectedIfOrLBraceOrStmtAfterElseKw(pos) => (
+			format!("Syntax error: expected the `if` keyword or an opening brace `{{` or a statement after the `else` keyword"),
+			pos,
+			None
+		),
+		/* SWITCH STATEMENTS */
+		StmtDiag::SwitchExpectedLParenAfterKw(pos) => (
+			format!("Syntax error: expected an opening parenthesis `(` after the `switch` keyword"),
+			pos,
+			None
+		),
+		StmtDiag::SwitchExpectedExprAfterLParen(pos) => (
+			format!("Syntax error: expected a value expression after the opening parenthesis `(`"),
+			pos,
+			None
+		),
+		StmtDiag::SwitchExpectedRParenAfterExpr(pos) => (
+			format!("Syntax error: expected a closing parenthesis after the value expression"),
+			pos,
+			None
+		),
+		StmtDiag::SwitchExpectedLBraceAfterCond(pos) => (
+			format!("Syntax error: expected an opening brace `{{` after the closing parenthesis `)`"),
+			pos,
+			None
+		),
+		StmtDiag::SwitchFoundEmptyBody(span) => (
+			format!("Syntax error: expected at least one branch within a switch-statement's body"),
+			span,
+			None
+		),
+		StmtDiag::SwitchExpectedCaseOrDefaultKwOrEnd(span) => (
+			format!("Syntax error: expected the `case` or `default` keyword to begin a new branch"),
+			span,
+			None
+		),
+		StmtDiag::SwitchExpectedExprAfterCaseKw(pos) => (
+			format!("Syntax error: expected a value expression after the `case` keyword"),
+			pos,
+			None
+		),
+		StmtDiag::SwitchExpectedColonAfterCaseExpr(pos) => (
+			format!("Syntax error: expected a colon `:` after the value expression"),
+			pos,
+			None
+		),
+		StmtDiag::SwitchExpectedColonAfterDefaultKw(pos) => (
+			format!("Syntax error: expected a colon `:` after the `default` keyword"),
+			pos,
+			None
+		),
+		StmtDiag::SwitchExpectedRBrace(pos) => (
+			format!("Syntax error: expected a closing brace `}}`"),
+			pos,
+			None
+		),
+		/* FOR LOOPS */
+		StmtDiag::ForExpectedLParenAfterKw(pos) => (
+			format!("Syntax error: expected an opening parenthesis `(` after the `for` keyword"),
+			pos,
+			None
+		),
+		StmtDiag::ForExpectedInitStmt(pos) => (
+			format!("Syntax error: expected an initialization statement after the opening parenthesis `(`"),
+			pos,
+			None
+		),
+		StmtDiag::ForExpectedCondStmt(pos) => (
+			format!("Syntax error: expected a condition statement after the initialization statement"),
+			pos,
+			None
+		),
+		StmtDiag::ForExpectedIncStmt(pos) => (
+			format!("Syntax error: expected an increment statement after the condition statement"),
+			pos,
+			None
+		),
+		StmtDiag::ForExpected3Stmts(pos) => (
+			format!("Syntax error: expected an initialization, a condition, and an increment statement"),
+			pos,
+			None
+		),
+		StmtDiag::ForExpectedRParenAfterStmts(pos) => (
+			format!("Syntax error: expected a closing parenthesis `)` after the increment statement"),
+			pos,
+			None
+		),
+		StmtDiag::ForExpectedLBraceAfterHeader(pos) => (
+			format!("Syntax error: expected an opening brace `{{` after the closing parenthesis `)`"),
+			pos,
+			None
+		),
+		/* WHILE/DO-WHILE LOOPS */
+		StmtDiag::WhileExpectedLParenAfterKw(pos) => (
+			format!("Syntax error: expected an opening parenthesis `(` after `while`"),
+			pos,
+			None
+		),
+		StmtDiag::WhileExpectedExprAfterLParen(pos) => (
+			format!("Syntax error: expected a conditional expression after the opening parenthesis `(`"),
+			pos,
+			None
+		),
+		StmtDiag::WhileExpectedRParenAfterExpr(pos) => (
+			format!("Syntax error: expected a closing parenthesis `)` after the conditional expression"),
+			pos,
+			None
+		),
+		StmtDiag::WhileExpectedLBraceAfterCond(pos) => (
+			format!("Syntax error: expected an opening brace `{{` after the closing parenthesis `)`"),
+			pos,
+			None
+		),
+		StmtDiag::DoWhileExpectedLBraceAfterKw(pos) => (
+			format!("Syntax error: expected an opening brace `{{` after `do`"),
+			pos,
+			None
+		),
+		StmtDiag::DoWhileExpectedWhileAfterBody(pos) => (
+			format!("Syntax error: expected the `while` keyword after the body of a do-while-loop"),
+			pos,
+			None
+		),
+		StmtDiag::DoWhileExpectedSemiAfterRParen(pos) => (
+			format!("Syntax error: expected a semi-colon `;` after the closing parenthesis `)`"),
+			pos,
+			None
+		),
+		/* SINGLE-KEYWORD CONTROL FLOW */
+		StmtDiag::BreakExpectedSemiAfterKw(pos) => (
+			format!("Syntax error: expected a semi-colon `;` after `break`"),
+			pos,
+			None
+		),
+		StmtDiag::ContinueExpectedSemiAfterKw(pos) => (
+			format!("Syntax error: expected a semi-colon `;` after `continue`"),
+			pos,
+			None
+		),
+		StmtDiag::DiscardExpectedSemiAfterKw(pos) => (
+			format!("Syntax error: expected a semi-colon `;` after `discard`"),
+			pos,
+			None
+		),
+		StmtDiag::ReturnExpectedSemiOrExprAfterKw(pos) => (
+			format!("Syntax error: expected a semi-colon `;` or a value expression after `return`"),
+			pos,
+			None
+		),
+		StmtDiag::ReturnExpectedSemiAfterExpr(pos) => (
+			format!("Syntax error: expected a semi-colon `;` after the return value expression"),
+			pos,
+			None
+		),
+		_ => unreachable!(),
+	}
+}
+
+#[rustfmt::skip]
+fn convert_syntax_version(diag: PreprocVersionDiag) -> DiagReturn {
+	match diag {
+		PreprocVersionDiag::ExpectedNumber(span) => (
+			format!("Syntax error: expected a GLSL version number"),
+			span,
+			None
+		),
+		PreprocVersionDiag::MissingNumberBetweenKwAndProfile(span) => (
+			format!("Syntax error: expected a GLSL version number between `version` and `{{profile}}`"),
+			span,
+			None
+		),
+		PreprocVersionDiag::InvalidNumber(span) => (
+			format!("Syntax error: found an un-representable number"),
+			span,
+			None
+		),
+		PreprocVersionDiag::InvalidVersion(span, num) => (
+			format!("Syntax error: `{num}` is not a valid GLSL version number"),
+			span,
+			None
+		),
+		PreprocVersionDiag::UnsupportedVersion(span, version) => (
+			format!("Error: this extension currently doesn't support GLSL {version}"),
+			span,
+			None
+		),
+		PreprocVersionDiag::ExpectedProfile(span) => (
+			format!("Syntax error: expected a GLSL profile"),
+			span,
+			None
+		),
+		PreprocVersionDiag::InvalidProfile(span) => (
+			format!("Syntax error: found an invalid GLSL profile"),
+			span,
+			None
+		),
+		PreprocVersionDiag::InvalidProfileCasing(span, correction) => (
+			format!("Syntax error: found an invalid GLSL profile; did you mean `{correction}`?"),
+			span,
+			None
+		),
+		_ => unreachable!(),
+	}
+}
+
+#[rustfmt::skip]
+fn convert_syntax_ext(diag: PreprocExtDiag) -> DiagReturn {
+	match diag {
+		PreprocExtDiag::ExpectedName(span) => (
+			format!("Syntax error: expected a GLSL extension name"),
+			span,
+			None
+		),
+		PreprocExtDiag::MissingNameBetweenKwAndColon(span) => (
+			format!("Syntax error: expected a GLSL extension name between `extension` and `:`"),
+			span,
+			None
+		),
+		PreprocExtDiag::MissingNameBetweenKwAndBehaviour(span) => (
+			format!("Syntax error: expected a GLSL extension name between `extension` and `{{behaviour}}`"),
+			span,
+			None
+		),
+		PreprocExtDiag::MissingColonBetweenNameAndBehaviour(span) => (
+			format!("Syntax error: expected a colon between `{{extension_name}}` and `{{behaviour}}`"),
+			span,
+			None
+		),
+		PreprocExtDiag::ExpectedColon(span) => (
+			format!("Syntax error: expected a colon `:`"),
+			span,
+			None
+		),
+		PreprocExtDiag::ExpectedBehaviour(span) => (
+			format!("Syntax error: expected a GLSL extension behaviour"),
+			span,
+			None
+		),
+		PreprocExtDiag::InvalidBehaviour(span) => (
+			format!("Syntax error: found an invalid GLSL extension behaviour"),
+			span,
+			None
+		),
+		PreprocExtDiag::InvalidBehaviourCasing(span, correction) => (
+			format!("Syntax error: found an invalid GLSL extension behaviour; did you mean `{correction}`?"),
+			span,
+			None
+		),
+		_ => unreachable!(),
+	}
+}
+
+#[rustfmt::skip]
+fn convert_syntax_line(diag: PreprocLineDiag) -> DiagReturn {
+	match diag {
+		PreprocLineDiag::ExpectedNumber(span) => (
+			format!("Syntax error: expected a line number"),
+			span,
+			None
+		),
+		PreprocLineDiag::InvalidNumber(span) => (
+			format!("Syntax error: found an un-representable number"),
+			span,
+			None
+		),
+		_ => unreachable!(),
+	}
+}
+
+#[rustfmt::skip]
+fn convert_syntax_define(diag: PreprocDefineDiag) -> DiagReturn {
+	match diag {
+		/* DEFINE */
+		PreprocDefineDiag::DefineExpectedMacroName(pos) => (
+			format!("Syntax error: expected a macro name"),
+			pos,
+			None
+		),
+		PreprocDefineDiag::ParamsExpectedParam(span) => (
+			format!("Syntax error: expected a parameter"),
+			span,
+			None
+		),
+		PreprocDefineDiag::ParamsExpectedCommaAfterParam(pos) => (
+			format!("Syntax error: expected a comma `,` after a parameter"),
+			pos,
+			None
+		),
+		PreprocDefineDiag::ParamsExpectedParamAfterComma(span) => (
+			format!("Syntax error: expected a parameter after the comma `,`"),
+			span,
+			None
+		),
+		PreprocDefineDiag::ParamsExpectedParamBetweenParenComma(span) => (
+			format!("Syntax error: expected a parameter between the opening parenthesis `(` and comma `,`"),
+			span,
+			None
+		),
+		PreprocDefineDiag::ParamsExpectedRParen(pos) => (
+			format!("Syntax error: expected a closing parenthesis `)` to end the parameter list"),
+			pos,
+			None
+		),
+		/* TOKEN CONCAT */
+		PreprocDefineDiag::TokenConcatMissingLHS(span) => (
+			format!("Syntax error: token concatenation operator is missing a left-hand side"),
+			span,
+			None
+		),
+		PreprocDefineDiag::TokenConcatMissingRHS(span) => (
+			format!("Syntax error: token concatenation operator is missing a right-hand side"),
+			span,
+			None
+		),
+		/* UNDEF */
+		PreprocDefineDiag::UndefExpectedMacroName(span) => (
+			format!("Syntax error: expected a macro name"),
+			span,
+			None
+		),
+		_ => unreachable!(),
+	}
+}
+
+#[rustfmt::skip]
+fn convert_syntax_condition(diag: PreprocConditionalDiag) -> DiagReturn {
+	match diag {
+		PreprocConditionalDiag::ExpectedNameAfterIfDef(pos) => (
+			format!("Syntax error: expected a macro name after `#ifdef`"),
+			pos,
+			None
+		),
+		PreprocConditionalDiag::ExpectedNameAfterIfNotDef(pos) => (
+			format!("Syntax error: expected a macro name after `#ifndef`"),
+			pos,
+			None
+		),
+		PreprocConditionalDiag::ExpectedExprAfterIf(pos) => (
+			format!("Syntax error: expected an expression after `#if`"),
+			pos,
+			None
+		),
+		PreprocConditionalDiag::ExpectedExprAfterElseIf(pos) => (
+			format!("Syntax error: expected an expression after `#elif`"),
+			pos,
+			None
+		),
+		PreprocConditionalDiag::UnclosedBlock(opening, pos) => (
+			format!("Syntax error: expected a closing `#endif` directive"),
+			pos,
+			Some((format!("Opening conditional directive here"), opening))
+		),
+		PreprocConditionalDiag::UnmatchedElseIf(span) => (
+			format!("Syntax error: found a trailing `#elif` directive"),
+			span,
+			None
+		),
+		PreprocConditionalDiag::UnmatchedElse(span) => (
+			format!("Syntax error: found a trailing `#else` directive"),
+			span,
+			None
+		),
+		PreprocConditionalDiag::UnmatchedEndIf(span) => (
+			format!("Syntax error: found a trailing `#endif` directive"),
+			span,
+			None
+		),
+		_ => unreachable!(),
 	}
 }

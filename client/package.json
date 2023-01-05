@@ -72,6 +72,11 @@
 				"command": "glsl.showAst",
 				"category": "GLSL (debug command)",
 				"title": "Show AST"
+			},
+			{
+				"command": "glsl.showVersion",
+				"category": "GLSL (debug command)",
+				"title": "Show version"
 			}
 		],
 		"menus": {

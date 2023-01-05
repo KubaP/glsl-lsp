@@ -25,6 +25,20 @@
 			"processId": "${command:pickProcess}"
 		},
 		{
+			"name": "Extension release",
+			"type": "extensionHost",
+			"request": "launch",
+			"args": ["--extensionDevelopmentPath=${workspaceFolder}"],
+			"env": {
+				"RUST_BACKTRACE": "1",
+				"__GLSL_DEBUG_SERVER_PATH": "${workspaceFolder}/server/target/release/glsl-lsp.exe"
+			},
+			"sourceMaps": true,
+			"smartStep": true,
+			"outFiles": ["${workspaceFolder}/client/out/**/*.js"],
+			"preLaunchTask": "npm build client release"
+		},
+		{
 			"name": "Lib tests",
 			"type": "lldb",
 			"request": "launch",

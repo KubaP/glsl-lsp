@@ -1,0 +1,104 @@
+name: publish-server
+
+on:
+    push:
+        branches:
+            - "release/glsl-lsp"
+
+    # Allows running this workflow manually from the Actions tab
+    workflow_dispatch:
+
+env:
+    CARGO_INCREMENTAL: 0
+
+jobs:
+    test:
+        name: "Run test suite"
+        strategy:
+            matrix:
+                os: [windows-latest, macos-latest, ubuntu-latest]
+        runs-on: ${{ matrix.os }}
+        timeout-minutes: 10
+
+        steps:
+            - name: Checkout repository
+              uses: actions/checkout@v3
+
+            - name: Install rust toolchain
+              run: rustup update
+
+            - name: Run tests
+              run: cargo test
+              working-directory: server
+
+    build:
+        name: "Build server"
+        strategy:
+            matrix:
+                include:
+                  - os: windows-latest
+                    target: x86_64-pc-windows-msvc
+                  - os: ubuntu-latest
+                    target: x86_64-unknown-linux-gnu
+                  - os: macos-latest
+                    target: x86_64-apple-darwin
+        outputs:
+            VERSION: ${{ steps.build-script.outputs.VERSION }}
+        runs-on: ${{ matrix.os }}
+        timeout-minutes: 10
+        needs: test
+        defaults:
+            run:
+                shell: pwsh
+
+        steps:
+            - name: Checkout repository
+              uses: actions/checkout@v3
+
+            - name: Install rust toolchain
+              run: rustup update
+
+            - name: Build server
+              run: cargo build --release --target=${{ matrix.target }}
+              working-directory: server
+
+            - name: Build script
+              id: build-script
+              run: /build/release-server.ps1 -Target ${{ matrix.target }}
+
+            - name: Upload artifact for later github release
+              uses: actions/upload-artifact@v3
+              with:
+                name: glsl-lsp-${{ matrix.target }}
+                path: /publish/glsl-lsp-${{ matrix.target }}-${{ steps.build-script.outputs.VERSION }}.zip
+
+    gh-release:
+        name: "Create github release"
+        runs-on: ubuntu-latest
+        timeout-minutes: 5
+        needs: build
+        defaults:
+            run:
+                shell: pwsh
+        permissions:
+            contents: write
+
+        steps:
+            - name: Checkout repository
+              uses: actions/checkout@v3
+
+            - name: Download artifacts
+              uses: actions/download-artifact@v3
+
+            - name: Publish release
+              uses: softprops/action-gh-release@v0.1.14
+              with:
+                  name: "glsl-lsp v${{ needs.build.outputs.VERSION }}"
+                  body: "PASTE CHANGELOG HERE"
+                  tag_name: "glsl-lsp/v${{ needs.build.outputs.VERSION }}"
+                  target_commitish: ${{ github.sha }}
+                  files:
+                    "/glsl-lsp-x86_64-pc-windows-msvc/glsl-lsp-x86_64-pc-windows-msvc-${{ needs.build.outputs.VERSION }}.zip"
+                    "/glsl-lsp-x86_64-unknown-linux-gnu/glsl-lsp-x86_64-unknown-linux-gnu-${{ needs.build.outputs.VERSION }}.zip"
+                    "/glsl-lsp-x86_64-apple-darwin/glsl-lsp-x86_64-apple-darwin-${{ needs.build.outputs.VERSION }}.zip"
+                  fail_on_unmatched_files: true

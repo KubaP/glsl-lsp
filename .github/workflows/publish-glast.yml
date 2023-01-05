@@ -8,6 +8,9 @@ on:
     # Allows running this workflow manually from the Actions tab
     workflow_dispatch:
 
+env:
+    CARGO_INCREMENTAL: 0
+
 jobs:
     test:
         name: "Run test suite"
@@ -16,12 +19,8 @@ jobs:
                 os: [windows-latest, macos-latest, ubuntu-latest]
         runs-on: ${{ matrix.os }}
         timeout-minutes: 10
-        defaults:
-            run:
-                working-directory: glast
 
         steps:
-            # Checks-out your repository under $GITHUB_WORKSPACE
             - name: Checkout repository
               uses: actions/checkout@v3
 
@@ -30,6 +29,7 @@ jobs:
 
             - name: Run tests
               run: cargo test
+              working-directory: glast
 
     publish:
         name: "Build and publish to crates.io"
@@ -41,7 +41,6 @@ jobs:
                 shell: pwsh
 
         steps:
-            # Checks-out your repository under $GITHUB_WORKSPACE
             - name: Checkout repository
               uses: actions/checkout@v3
 
@@ -66,20 +65,19 @@ jobs:
             contents: write
 
         steps:
-            # Checks-out your repository under $GITHUB_WORKSPACE
             - name: Checkout repository
               uses: actions/checkout@v3
 
-            - name: Package release
-              id: release-script
-              run: .\build\release-glast.ps1
+            - name: Build script
+              id: build-script
+              run: /build/release-glast.ps1
 
             - name: Publish release
               uses: softprops/action-gh-release@v0.1.14
               with:
-                  name: "glast v${{ steps.release-script.outputs.VERSION }}"
+                  name: "glast v${{ steps.build-script.outputs.VERSION }}"
                   body: "PASTE CHANGELOG HERE"
-                  tag_name: "glast/v${{ steps.release-script.outputs.VERSION }}"
+                  tag_name: "glast/v${{ steps.build-script.outputs.VERSION }}"
                   target_commitish: ${{ github.sha }}
-                  files: "out/glast-v${{ steps.release-script.outputs.VERSION }}.zip"
+                  files: "/publish/glast-${{ steps.build-script.outputs.VERSION }}.zip"
                   fail_on_unmatched_files: true

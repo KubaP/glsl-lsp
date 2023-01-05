@@ -70,7 +70,7 @@ jobs:
 
             - name: Build script
               id: build-script
-              run: /build/release-glast.ps1
+              run: ./build/release-glast.ps1
 
             - name: Publish release
               uses: softprops/action-gh-release@v0.1.14
@@ -79,5 +79,5 @@ jobs:
                   body: "PASTE CHANGELOG HERE"
                   tag_name: "glast/v${{ steps.build-script.outputs.VERSION }}"
                   target_commitish: ${{ github.sha }}
-                  files: "/publish/glast-${{ steps.build-script.outputs.VERSION }}.zip"
+                  files: "./publish/glast-${{ steps.build-script.outputs.VERSION }}.zip"
                   fail_on_unmatched_files: true

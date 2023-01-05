@@ -507,8 +507,13 @@ impl Server {
 					}
 				};
 
-				new_settings.conditional_comp_state =
-					ConditionalCompilationState::Key(new_key);
+				if !new_key.is_empty() {
+					new_settings.conditional_comp_state =
+						ConditionalCompilationState::Key(new_key);
+				} else {
+					new_settings.conditional_comp_state =
+						ConditionalCompilationState::Off;
+				}
 			}
 		}
 

@@ -64,13 +64,13 @@ jobs:
 
             - name: Build script
               id: build-script
-              run: /build/release-server.ps1 -Target ${{ matrix.target }}
+              run: ./build/release-server.ps1 -Target ${{ matrix.target }}
 
             - name: Upload artifact for later github release
               uses: actions/upload-artifact@v3
               with:
                 name: glsl-lsp-${{ matrix.target }}
-                path: /publish/glsl-lsp-${{ matrix.target }}-${{ steps.build-script.outputs.VERSION }}.zip
+                path: ./publish/glsl-lsp-${{ matrix.target }}-${{ steps.build-script.outputs.VERSION }}.zip
 
     gh-release:
         name: "Create github release"
@@ -97,8 +97,8 @@ jobs:
                   body: "PASTE CHANGELOG HERE"
                   tag_name: "glsl-lsp/v${{ needs.build.outputs.VERSION }}"
                   target_commitish: ${{ github.sha }}
-                  files:
-                    "/glsl-lsp-x86_64-pc-windows-msvc/glsl-lsp-x86_64-pc-windows-msvc-${{ needs.build.outputs.VERSION }}.zip"
-                    "/glsl-lsp-x86_64-unknown-linux-gnu/glsl-lsp-x86_64-unknown-linux-gnu-${{ needs.build.outputs.VERSION }}.zip"
-                    "/glsl-lsp-x86_64-apple-darwin/glsl-lsp-x86_64-apple-darwin-${{ needs.build.outputs.VERSION }}.zip"
+                  files: |
+                      ./glsl-lsp-x86_64-pc-windows-msvc/glsl-lsp-x86_64-pc-windows-msvc-${{ needs.build.outputs.VERSION }}.zip
+                      ./glsl-lsp-x86_64-unknown-linux-gnu/glsl-lsp-x86_64-unknown-linux-gnu-${{ needs.build.outputs.VERSION }}.zip
+                      ./glsl-lsp-x86_64-apple-darwin/glsl-lsp-x86_64-apple-darwin-${{ needs.build.outputs.VERSION }}.zip
                   fail_on_unmatched_files: true

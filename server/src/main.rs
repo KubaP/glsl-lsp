@@ -260,6 +260,12 @@ impl Lsp {
 
 #[tokio::main]
 async fn main() {
+	// The binary accepts a `--version` flag which just prints the current version to stdout and exits. This is
+	// useful for the language client to query the version of the server without hardcoding it in.
+	let _ = clap::Command::new(SERVER_NAME)
+		.version(SERVER_VERSION)
+		.get_matches();
+
 	let stdin = tokio::io::stdin();
 	let stdout = tokio::io::stdout();
 

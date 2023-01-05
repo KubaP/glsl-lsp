@@ -49,7 +49,7 @@ jobs:
 
             - name: Copy client to publish directory
               id: build-script
-              run: /build/release-vscode-1.ps1 -Target ${{ matrix.target }}
+              run: ./build/release-vscode-1.ps1 -Target ${{ matrix.target }}
 
             - name: Install client dependencies
               run: npm install
@@ -57,23 +57,23 @@ jobs:
 
             - name: Build client src
               run: npm run build
-              working-directory: /publish/kuba-p.glsl/${{ steps.build-script.outputs.EXT_VERSION }}
+              working-directory: ./publish/kuba-p.glsl/${{ steps.build-script.outputs.EXT_VERSION }}
 
             - name: Build client grammar files
               run: npm run buildGrammar
-              working-directory: /publish/kuba-p.glsl/${{ steps.build-script.outputs.EXT_VERSION }}
+              working-directory: ./publish/kuba-p.glsl/${{ steps.build-script.outputs.EXT_VERSION }}
               
             - name: Publish
               env:
                   VSCE_PAT: ${{ secrets.VSCE_PAT }}
               run: vsce publish --target ${{ matrix.vsce_target }} -p
-              working-directory: /publish/kuba-p.glsl/${{ steps.build-client.outputs.EXT_VERSION }}
+              working-directory: ./publish/kuba-p.glsl/${{ steps.build-client.outputs.EXT_VERSION }}
 
             - name: Upload artifact for later github release
               uses: actions/upload-artifact@v3
               with:
                 name: glsl-${{ matrix.vsce_target }}
-                path: /publish/kuba-p.glsl/${{ steps.build-script.outputs.EXT_VERSION }}/glsl-${{ matrix.vsce_target }}-${{ steps.build-script.outputs.EXT_VERSION }}.vsix
+                path: ./publish/kuba-p.glsl/${{ steps.build-script.outputs.EXT_VERSION }}/glsl-${{ matrix.vsce_target }}-${{ steps.build-script.outputs.EXT_VERSION }}.vsix
 
     gh-release:
         name: "Create github release"
@@ -101,7 +101,7 @@ jobs:
                   tag_name: "vscode/v${{ needs.deploy.outputs.EXT_VERSION }}"
                   target_commitish: ${{ github.sha }}
                   files:
-                    "glsl-win32-x64/glsl-win32-x64-${{ needs.deploy.outputs.EXT_VERSION }}.vsix"
-                    "glsl-linux-x64/glsl-linux-x64-${{ needs.deploy.outputs.EXT_VERSION }}.vsix"
-                    "glsl-darwin-x64/glsl-darwin-x64-${{ needs.deploy.outputs.EXT_VERSION }}.vsix"
+                    "./glsl-win32-x64/glsl-win32-x64-${{ needs.deploy.outputs.EXT_VERSION }}.vsix"
+                    "./glsl-linux-x64/glsl-linux-x64-${{ needs.deploy.outputs.EXT_VERSION }}.vsix"
+                    "./glsl-darwin-x64/glsl-darwin-x64-${{ needs.deploy.outputs.EXT_VERSION }}.vsix"
                   fail_on_unmatched_files: true

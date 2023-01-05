@@ -4,7 +4,7 @@
 $ErrorActionPreference = "Stop"
 
 # Output the version number which is used in the release action.
-$metadata = Get-Content -Path (Join-Path $script:ROOT "server" "Cargo.toml")
+$metadata = Get-Content -Path (Join-Path $script:ROOT "glast" "Cargo.toml")
 $match = [regex]::Matches($metadata, 'version = "(.*?)"')
 $version = $match.Groups[1].Value
 "::set-output name=VERSION::$version"

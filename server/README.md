@@ -1,5 +1,7 @@
 # glsl-lsp
-This is a [Language Server Protocol](https://microsoft.github.io/language-server-protocol/specification) implementation for the OpenGL Shading Language.
+This is an implementation of the [Language Server Protocol](https://microsoft.github.io/language-server-protocol/specification) for the OpenGL Shading Language.
+
+For detailed information about the implementation, see [/docs/Extension.md](/docs/Extension.md).
 
 ## License
 This project is licensed under the **MIT** license - see [LICENSE](LICENSE) for details.

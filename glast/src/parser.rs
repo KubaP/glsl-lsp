@@ -312,17 +312,18 @@ pub fn parse_from_token_stream(
 						span: kw_span,
 					};
 
-					// We are expecting an identifier as the first token.
-					let span = if tokens.is_empty() {
+					let conditional_content_span = if tokens.is_empty() {
 						syntax_diags.push(Syntax::PreprocConditional(
 							PreprocConditionalDiag::ExpectedNameAfterIfDef(
 								kw_span.next_single_width(),
 							),
 						));
 						kw_span.next_single_width()
+					} else if tokens.len() == 1 {
+						Span::new(tokens[0].1.start, tokens[0].1.end)
 					} else {
-						// Check for any trailing tokens.
-						let start = tokens.first().unwrap().1.start;
+						// We have trailing tokens.
+						let start = tokens[1].1.start;
 						let end = tokens.last().unwrap().1.end;
 						syntax_diags.push(Syntax::PreprocTrailingTokens(
 							Span::new(start, end),
@@ -351,7 +352,7 @@ pub fn parse_from_token_stream(
 								Conditional::IfDef,
 								token_span,
 								tokens,
-								span,
+								conditional_content_span,
 								idx,
 								hash_syntax,
 								name_syntax,
@@ -377,17 +378,18 @@ pub fn parse_from_token_stream(
 						span: kw_span,
 					};
 
-					// We are expecting an identifier as the first token.
-					let span = if tokens.is_empty() {
+					let conditional_content_span = if tokens.is_empty() {
 						syntax_diags.push(Syntax::PreprocConditional(
-							PreprocConditionalDiag::ExpectedNameAfterIfNotDef(
+							PreprocConditionalDiag::ExpectedNameAfterIfDef(
 								kw_span.next_single_width(),
 							),
 						));
 						kw_span.next_single_width()
+					} else if tokens.len() == 1 {
+						Span::new(tokens[0].1.start, tokens[0].1.end)
 					} else {
-						// Check for any trailing tokens.
-						let start = tokens.first().unwrap().1.start;
+						// We have trailing tokens.
+						let start = tokens[1].1.start;
 						let end = tokens.last().unwrap().1.end;
 						syntax_diags.push(Syntax::PreprocTrailingTokens(
 							Span::new(start, end),
@@ -416,7 +418,7 @@ pub fn parse_from_token_stream(
 								Conditional::IfNotDef,
 								token_span,
 								tokens,
-								span,
+								conditional_content_span,
 								idx,
 								hash_syntax,
 								name_syntax,
@@ -442,7 +444,7 @@ pub fn parse_from_token_stream(
 						span: kw_span,
 					};
 
-					let span = if tokens.is_empty() {
+					let conditional_content_span = if tokens.is_empty() {
 						syntax_diags.push(Syntax::PreprocConditional(
 							PreprocConditionalDiag::ExpectedExprAfterIf(
 								kw_span.next_single_width(),
@@ -477,7 +479,7 @@ pub fn parse_from_token_stream(
 								Conditional::If,
 								token_span,
 								tokens,
-								span,
+								conditional_content_span,
 								idx,
 								hash_syntax,
 								name_syntax,
@@ -503,7 +505,7 @@ pub fn parse_from_token_stream(
 						span: kw_span,
 					};
 
-					let span = if tokens.is_empty() {
+					let conditional_content_span = if tokens.is_empty() {
 						syntax_diags.push(Syntax::PreprocConditional(
 							PreprocConditionalDiag::ExpectedExprAfterElseIf(
 								kw_span.next_single_width(),
@@ -544,7 +546,7 @@ pub fn parse_from_token_stream(
 							Conditional::ElseIf,
 							token_span,
 							tokens,
-							span,
+							conditional_content_span,
 							idx,
 							hash_syntax,
 							name_syntax,
@@ -573,7 +575,7 @@ pub fn parse_from_token_stream(
 					};
 
 					// We are not expecting anything after `#else`.
-					let span = if tokens.is_empty() {
+					let conditional_content_span = if tokens.is_empty() {
 						kw_span.next_single_width()
 					} else {
 						let span = Span::new(
@@ -611,7 +613,7 @@ pub fn parse_from_token_stream(
 							Conditional::Else,
 							token_span,
 							tokens,
-							span,
+							conditional_content_span,
 							idx,
 							hash_syntax,
 							name_syntax,
@@ -640,7 +642,7 @@ pub fn parse_from_token_stream(
 					};
 
 					// We are not expecting anything after `#endif`.
-					let span_of_tokens = if tokens.is_empty() {
+					let conditional_content_span = if tokens.is_empty() {
 						kw_span.next_single_width()
 					} else {
 						let span = Span::new(
@@ -674,7 +676,7 @@ pub fn parse_from_token_stream(
 							Conditional::End,
 							token_span,
 							tokens,
-							span_of_tokens,
+							conditional_content_span,
 							hash_syntax,
 							name_syntax,
 						));

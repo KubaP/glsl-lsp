@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.0.2 - 2023-01-05
+### Fixed
+- Use of incorrect prefix in workspace configuration requests, which resulted in broken behaviour.
+
 ## 0.0.1 - 2023-01-05
 ### Added
 - Handling of the basic text document open/change/save/close notifications. Currently only full syncing is supported.

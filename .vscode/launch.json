@@ -16,7 +16,7 @@
 			"sourceMaps": true,
 			"smartStep": true,
 			"outFiles": ["${workspaceFolder}/client/out/**/*.js"],
-			"preLaunchTask": "npm build client"
+			"preLaunchTask": "z_ launch"
 		},
 		{
 			"name": "Attach server",
@@ -36,7 +36,7 @@
 			"sourceMaps": true,
 			"smartStep": true,
 			"outFiles": ["${workspaceFolder}/client/out/**/*.js"],
-			"preLaunchTask": "npm build client release"
+			"preLaunchTask": "z_ launch release"
 		},
 		{
 			"name": "Lib tests",

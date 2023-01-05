@@ -14,9 +14,9 @@ The `workspace/didChangeConfiguration` notification from the client to the serve
 
 #### Per-file configuration
 Any modification to: 
-- `glsl.conditionalCompilation.state`
-- `glsl.conditionalCompilation.codeLens`
-- `glsl.syntaxHighlighting.highlightEntireFile`
+- `glsl-lsp.conditionalCompilation.state`
+- `glsl-lsp.conditionalCompilation.codeLens`
+- `glsl-lsp.syntaxHighlighting.highlightEntireFile`
 
 at any uri scope will return:
 ```typescript

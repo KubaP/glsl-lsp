@@ -170,25 +170,7 @@
 				"focus": false,
 				"panel": "dedicated"
 			},
-			"problemMatcher": "$tsc-watch",
-			"dependsOn": ["Cargo build server"]
-		},
-		{
-			"label": "npm build client release",
-			"type": "npm",
-			"script": "build",
-			"options": {
-				"cwd": "${workspaceFolder}/client"
-			},
-			"group": "build",
-			"presentation": {
-				"echo": true,
-				"reveal": "silent",
-				"focus": false,
-				"panel": "dedicated"
-			},
-			"problemMatcher": "$tsc-watch",
-			"dependsOn": ["Cargo build server release"]
+			"problemMatcher": "$tsc"
 		},
 		{
 			"label": "npm build grammar",
@@ -205,6 +187,17 @@
 				"panel": "dedicated"
 			},
 			"problemMatcher": "$tsc"
+		},
+		{
+			// These are necessary because we can't define two npm tasks that execute the same npm command for some
+			// stupid reason, i.e. we can't copy `npm build client`, add a `release` in the title and depends-on
+			// cargo task, and call it done.
+			"label": "z_ launch",
+			"dependsOn": ["npm build client", "Cargo build server"]
+		},
+		{
+			"label": "z_ launch release",
+			"dependsOn": ["npm build client", "Cargo build server release"]
 		}
 	]
 }

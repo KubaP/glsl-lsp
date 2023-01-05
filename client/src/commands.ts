@@ -1,13 +1,45 @@
 import * as vscode from "vscode";
 import { window, workspace } from "vscode";
+import * as os from "os";
 
 import { getActiveGLSLEditor, Context, isGLSLDocument, isGLSLEditor, getAstEditor } from "./context";
 import * as lsp_extensions from "./lsp_extensions";
+import * as main from "./main";
 
 export type Cmd = (...args: any[]) => unknown;
 
 // Note that these functions are command "factories"; i.e. they can perform arbitrary set-up logic which may
 // require the global context, and then they return the actual function which runs upon the command invocation.
+
+export function evaluateConditionals(ctx: Context): Cmd {
+	// The command logic.
+	return async () => {
+		const activeEditor = getActiveGLSLEditor();
+		if (!activeEditor) {
+			return;
+		}
+		await vscode.commands.executeCommand(
+			"glsl-lsp.evalConditional",
+			activeEditor.document.uri.toString(),
+			"eval"
+		);
+	};
+}
+
+export function disableConditionals(ctx: Context): Cmd {
+	// The command logic.
+	return async () => {
+		const activeEditor = getActiveGLSLEditor();
+		if (!activeEditor) {
+			return;
+		}
+		await vscode.commands.executeCommand(
+			"glsl-lsp.evalConditional",
+			activeEditor.document.uri.toString(),
+			"off"
+		);
+	};
+}
 
 export function showAst(ctx: Context): Cmd {
 	class AstProvider implements vscode.TextDocumentContentProvider {
@@ -93,24 +125,16 @@ export function showAst(ctx: Context): Cmd {
 	};
 }
 
-export function evaluateConditionals(ctx: Context): Cmd {
+export function showVersion(_ctx: Context): Cmd {
 	// The command logic.
 	return async () => {
-		const activeEditor = getActiveGLSLEditor();
-		if (!activeEditor) {
-			return;
-		}
-		await vscode.commands.executeCommand("glsl.evalConditional", activeEditor.document.uri.toString(), "eval");
-	};
-}
-
-export function disableConditionals(ctx: Context): Cmd {
-	// The command logic.
-	return async () => {
-		const activeEditor = getActiveGLSLEditor();
-		if (!activeEditor) {
-			return;
-		}
-		await vscode.commands.executeCommand("glsl.evalConditional", activeEditor.document.uri.toString(), "off");
+		const msg = `vscode extension version: ${main.EXTENSION_VERSION}\r\nglsl-lsp version: ${
+			main.serverVersion
+		}\r\nOS: ${os.type()} ${os.arch()} ${os.release()}`;
+		window.showInformationMessage(msg, "Copy to clipboard").then((button) => {
+			if (button === "Copy to clipboard") {
+				vscode.env.clipboard.writeText(msg);
+			}
+		});
 	};
 }

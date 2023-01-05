@@ -9,4 +9,4 @@ assignees: ''
 
 **glast version:** (Fill me out, if relevant)
 
-(Describe the issue/bug/feature request.)
+(Describe the issue/bug/feature request)

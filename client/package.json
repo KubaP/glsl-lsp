@@ -1,18 +1,38 @@
 {
-	"name": "glsl",
+	"name": "glsl-lsp",
 	"displayName": "GLSL",
-	"description": "",
-	"version": "0.1.0",
+	"description": "OpenGL Shading Language support for Visual Studio Code.",
+	"version": "0.0.1",
+	"preview": true,
+	"publisher": "kuba-p",
+	"author": {
+		"name": "kuba_p"
+	},
+	"license": "MIT",
+	"homepage": "https://github.com/KubaP/glsl-lsp/tree/master/client",
+	"repository": {
+		"type": "git",
+		"url": "https://github.com/KubaP/glsl-lsp"
+	},
+	"bugs": {
+		"url": "https://github.com/KubaP/glsl-lsp/issues"
+	},
+	"markdown": "github",
 	"engines": {
 		"vscode": "^1.69.0"
 	},
 	"categories": [
 		"Programming Languages"
 	],
-	"activationEvents": [
-		"onLanguage:glsl"
+	"keywords": [
+		"glsl",
+		"opengl"
 	],
-	"main": "./out/main",
+	"activationEvents": [
+		"onLanguage:glsl",
+		"onCommand:glsl-lsp.showVersion"
+	],
+	"main": "./out/main.js",
 	"contributes": {
 		"languages": [
 			{
@@ -59,33 +79,38 @@
 		],
 		"commands": [
 			{
-				"command": "glsl.evaluateConditionals",
+				"command": "glsl-lsp.evaluateConditionals",
 				"category": "GLSL",
 				"title": "Evaluate conditional compilation for this file"
 			},
 			{
-				"command": "glsl.disableConditionals",
+				"command": "glsl-lsp.disableConditionals",
 				"category": "GLSL",
 				"title": "Disable conditional compilation for this file"
 			},
 			{
-				"command": "glsl.showAst",
+				"command": "glsl-lsp.showAst",
 				"category": "GLSL (debug command)",
 				"title": "Show AST"
+			},
+			{
+				"command": "glsl-lsp.showVersion",
+				"category": "GLSL (debug command)",
+				"title": "Show version"
 			}
 		],
 		"menus": {
 			"commandPalette": [
 				{
-					"command": "glsl.evaluateConditionals",
+					"command": "glsl-lsp.evaluateConditionals",
 					"when": "editorLangId == glsl"
 				},
 				{
-					"command": "glsl.disableConditionals",
+					"command": "glsl-lsp.disableConditionals",
 					"when": "editorLangId == glsl"
 				},
 				{
-					"command": "glsl.showAst",
+					"command": "glsl-lsp.showAst",
 					"when": "editorLangId == glsl"
 				}
 			]
@@ -94,7 +119,7 @@
 			"type": "object",
 			"title": "GLSL",
 			"properties": {
-				"glsl.trace.server": {
+				"glsl-lsp.trace.server": {
 					"scope": "window",
 					"type": "string",
 					"enum": [
@@ -105,7 +130,7 @@
 					"default": "off",
 					"description": "Traces the communication between VS Code and the language server. This is a debug setting for developing the extension itself."
 				},
-				"glsl.conditionalCompilation.state": {
+				"glsl-lsp.conditionalCompilation.state": {
 					"scope": "resource",
 					"type": "string",
 					"enum": [
@@ -123,146 +148,159 @@
 					],
 					"description": "The default state for conditional compilation when opening a new file. This setting can be overridden on a per-file basis using either a relevant CodeLens or an appropriate command."
 				},
-				"glsl.conditionalCompilation.codeLens": {
+				"glsl-lsp.conditionalCompilation.codeLens": {
 					"scope": "resource",
 					"type": "boolean",
 					"default": true,
-					"description": "Whether to show CodeLens above controlling conditional compilation directives, allowing you to include/exclude them from the evaluation."
+					"description": "Whether to show CodeLens above controlling conditional compilation directives, allowing you to include/exclude them from the compilation."
 				},
-				"glsl.syntaxHighlighting.highlightEntireFile": {
+				"glsl-lsp.syntaxHighlighting.highlightEntireFile": {
 					"scope": "resource",
 					"type": "boolean",
 					"default": true,
-					"description": "Whether to syntax highlight the entire file, as opposed to just the chosen code depending on the `glsl.conditionalCompilation.state` setting. Because of the fact that conditional compilation is implemented through the preprocessor, this setting will require a file to be parsed more than once to fully parse and color every bit of text. Under certain complex conditional branching, this setting set to `true` can cause performance issues.",
-					"markdownDescription": "Whether to syntax highlight the entire file, as opposed to just the chosen code depending on the `#glsl.conditionalCompilation.state#` setting. Because of the fact that conditional compilation is implemented through the preprocessor, this setting will require a file to be parsed more than once to fully parse and color every bit of text. Under certain complex conditional branching, this setting set to `true` can cause performance issues."
+					"description": "Whether to syntax highlight the entire file, as opposed to just the chosen code depending on the `glsl-lsp.conditionalCompilation.state` setting. Because of the fact that conditional compilation is implemented through the preprocessor, this setting will require a file to be parsed more than once to fully parse and color every bit of text. Under certain complex conditional branching, this setting set to `true` can cause performance issues.",
+					"markdownDescription": "Whether to syntax highlight the entire file, as opposed to just the chosen code depending on the `#glsl-lsp.conditionalCompilation.state#` setting. Because of the fact that conditional compilation is implemented through the preprocessor, this setting will require a file to be parsed more than once to fully parse and color every bit of text. Under certain complex conditional branching, this setting set to `true` can cause performance issues."
 				}
 			}
 		},
 		"semanticTokenTypes": [
 			{
-				"id": "builtInType",
-				"superType": "keyword",
-				"description": "Style for built-in types"
-			},
-			{
 				"id": "punctuation",
-				"superType": "operator",
-				"description": "Style for punctuation symbols that are not operators"
-			},
-			{
-				"id": "layout",
-				"superType": "variable",
-				"description": "Style for a valid layout qualifier identifier"
+				"description": "A punctuation symbol."
 			},
 			{
 				"id": "boolean",
 				"superType": "keyword",
-				"description": "Style for boolean literals"
+				"description": "A boolean."
+			},
+			{
+				"id": "builtInType",
+				"superType": "keyword",
+				"description": "A primitive type."
+			},
+			{
+				"id": "subroutine",
+				"superType": "function",
+				"description": "A subroutine."
+			},
+			{
+				"id": "layoutQualifier",
+				"superType": "variable",
+				"description": "A valid layout qualifier identifier."
+			},
+			{
+				"id": "ident",
+				"superType": "variable",
+				"description": "An identifier which has not gone through name resolution and never will. This token is only used for any identifiers within macro bodies."
+			},
+			{
+				"id": "unresolvedReference",
+				"description": "An unresolved identifier. This could be an unresolved variable identifier, an unresolved type name, or an illegal layout qualifier identifier."
+			},
+			{
+				"id": "invalid",
+				"superType": "unresolvedReference",
+				"description": "An invalid character."
 			},
 			{
 				"id": "lineContinuator",
 				"superType": "escapeSequence",
-				"description": "Style for escape sequence characters"
+				"description": "A line-continuator character (``)."
 			},
 			{
 				"id": "escapeSequence",
 				"superType": "string",
-				"description": "Style for escape sequence characters"
-			},
-			{
-				"id": "unresolvedReference",
-				"description": "Style for unresolved identifiers"
-			},
-			{
-				"id": "invalid",
-				"description": "Style for invalid tokens",
-				"superType": "unresolvedReference"
+				"description": "An escape sequence character."
 			},
 			{
 				"id": "objectMacro",
 				"superType": "macro",
-				"description": "Style for object-like macro identifiers"
+				"description": "An object-like macro identifier. This is used at the macro definition site, and at any call sites."
 			},
 			{
 				"id": "functionMacro",
 				"superType": "macro",
-				"description": "Style for function-like macro identifiers"
+				"description": "A function-like macro identifier. This is used at the macro definition site, and at any call sites."
 			},
 			{
 				"id": "directive",
 				"superType": "keyword",
-				"description": "General style for all preprocessor directive text"
+				"description": "A general bit of text in a directive."
 			},
 			{
 				"id": "directiveConcat",
 				"superType": "directive",
-				"description": "Style for the token concatenator `##`"
+				"description": "The macro concatenation operator (`##`)."
 			},
 			{
 				"id": "directiveHash",
 				"superType": "directive",
-				"description": "Style for the `#` symbol in a preprocessor directive"
+				"description": "The hash `#` symbol in a directive."
 			},
 			{
 				"id": "directiveName",
 				"superType": "directive",
-				"description": "Style for the name of the preprocessor directive, e.g. `version`"
+				"description": "The name of the directive, e.g. `version` or `ifdef`."
 			},
 			{
 				"id": "directiveVersion",
 				"superType": "number",
-				"description": "Style for the GLSL version in a #version directive"
+				"description": "The GLSL version in a `#version` directive."
 			},
 			{
 				"id": "directiveProfile",
 				"superType": "directive",
-				"description": "Style for the GLSL profile in a #version directive"
+				"description": "The GLSL profile in a `#version` directive."
 			},
 			{
 				"id": "directiveExtName",
 				"superType": "variable",
-				"description": "Style for the extension name in a #extension directive"
+				"description": "The extension name in a `#extension` directive."
 			},
 			{
 				"id": "directiveExtBehaviour",
 				"superType": "directive",
-				"description": "Style for the extension behaviour in a #extension directive"
+				"description": "The extension behaviour in a `#extension` directive."
 			},
 			{
 				"id": "directiveLineNumber",
 				"superType": "number",
-				"description": "Style for the numbers in a #line directive"
+				"description": "The line number in a `#line` directive."
 			},
 			{
 				"id": "directiveError",
 				"superType": "directive",
-				"description": "Style for the message in an #error directive"
+				"description": "The message in an `#error` directive."
+			},
+			{
+				"id": "directivePragma",
+				"superType": "directive",
+				"description": "The compiler option in a `#pragma` directive."
 			}
 		],
 		"semanticTokenModifiers": [
 			{
-				"id": "macroDefinition",
-				"description": "Normal tokens within a macro definition"
+				"id": "macroSignature",
+				"description": "Tokens within the macro signature, e.g. the `BAR(A, B)` within `#define BAR(A, B) foo`."
 			},
 			{
 				"id": "macroBody",
-				"description": "Normal tokens within a macro body"
+				"description": "Tokens within the macro body, e.g. the `foo + bar` within `#define FOO foo + bar`."
 			},
 			{
 				"id": "undefine",
-				"description": "Normal tokens within a `#undef` directive"
+				"description": "Tokens within the `#undef` directive; not applied to the `#undef` part."
 			},
 			{
 				"id": "conditional",
-				"description": "Normal tokens within a conditional directive"
+				"description": "Tokens within a conditional directive; not applied to the `#if`/`#elif`/etc. part."
 			}
 		]
 	},
 	"scripts": {
-		"vscode:prepublish": "npm run build",
 		"build": "tsc -b",
-		"watch": "tsc -b -w",
-		"buildGrammar": "npx js-yaml syntaxes/glsl.tmLanguage.yaml > syntaxes/glsl.tmLanguage.json"
+		"buildGrammar": "npx js-yaml syntaxes/glsl.tmLanguage.yaml > syntaxes/glsl.tmLanguage.json",
+		"watch": "tsc -b -w"
 	},
 	"dependencies": {
 		"vscode-languageclient": "^8.0.2"

@@ -1,6 +1,6 @@
 [package]
 name = "glsl-lsp"
-version = "0.0.1"
+version = "0.0.2"
 edition = "2021"
 authors = ["KubaP"]
 description = "An implementation of the Language Server Protocol for the OpenGL Shading Language."

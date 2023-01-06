@@ -17,15 +17,15 @@ jobs:
         strategy:
             matrix:
                 include:
-                  - os: windows-latest
-                    target: x86_64-pc-windows-msvc
-                    vsce_target: win32-x64
-                  - os: ubuntu-latest
-                    target: x86_64-unknown-linux-gnu
-                    vsce_target: linux-x64
-                  - os: macos-latest
-                    target: x86_64-apple-darwin
-                    vsce_target: darwin-x64
+                    - os: windows-latest
+                      target: x86_64-pc-windows-msvc
+                      vsce_target: win32-x64
+                    - os: ubuntu-latest
+                      target: x86_64-unknown-linux-gnu
+                      vsce_target: linux-x64
+                    - os: macos-latest
+                      target: x86_64-apple-darwin
+                      vsce_target: darwin-x64
         outputs:
             EXT_VERSION: ${{ steps.build-script.outputs.EXT_VERSION }}
         runs-on: ${{ matrix.os }}
@@ -53,6 +53,10 @@ jobs:
               run: npm install
               working-directory: ./publish/kuba-p.glsl-lsp/${{ steps.build-script.outputs.EXT_VERSION }}
 
+            - name: Install vsce
+              run: npm install --global @vscode/vsce
+              working-directory: ./publish/kuba-p.glsl-lsp/${{ steps.build-script.outputs.EXT_VERSION }}
+
             - name: Build client src
               run: npm run build
               working-directory: ./publish/kuba-p.glsl-lsp/${{ steps.build-script.outputs.EXT_VERSION }}
@@ -60,7 +64,7 @@ jobs:
             - name: Build client grammar files
               run: npm run buildGrammar
               working-directory: ./publish/kuba-p.glsl-lsp/${{ steps.build-script.outputs.EXT_VERSION }}
-              
+
             - name: Package
               run: vsce package --target ${{ matrix.vsce_target }}
               working-directory: ./publish/kuba-p.glsl-lsp/${{ steps.build-client.outputs.EXT_VERSION }}
@@ -74,8 +78,8 @@ jobs:
             - name: Upload artifact for later github release
               uses: actions/upload-artifact@v3
               with:
-                name: glsl-lsp-${{ matrix.vsce_target }}
-                path: ./publish/kuba-p.glsl-lsp/${{ steps.build-script.outputs.EXT_VERSION }}/glsl-lsp-${{ matrix.vsce_target }}-${{ steps.build-script.outputs.EXT_VERSION }}.vsix
+                  name: glsl-lsp-${{ matrix.vsce_target }}
+                  path: ./publish/kuba-p.glsl-lsp/${{ steps.build-script.outputs.EXT_VERSION }}/glsl-lsp-${{ matrix.vsce_target }}-${{ steps.build-script.outputs.EXT_VERSION }}.vsix
 
     gh-release:
         name: "Create github release"

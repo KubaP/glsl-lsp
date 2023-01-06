@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.0.2 - 2023-01-06
+### Fixed
+- Language server not starting because of incorrect path.
+
 ## 0.0.1 - 2023-01-05
 ### Added
 - **GLSL**: Support for parsing all GLSL 450 & 460 language constructs.

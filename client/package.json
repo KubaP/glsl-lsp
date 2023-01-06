@@ -2,7 +2,7 @@
 	"name": "glsl-lsp",
 	"displayName": "GLSL",
 	"description": "OpenGL Shading Language support for Visual Studio Code.",
-	"version": "0.0.1",
+	"version": "0.0.2",
 	"preview": true,
 	"publisher": "kuba-p",
 	"author": {

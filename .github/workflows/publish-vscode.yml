@@ -72,7 +72,7 @@ jobs:
             - name: Publish
               env:
                   VSCE_PAT: ${{ secrets.VSCE_PAT }}
-              run: vsce publish --packagePath glsl-lsp-${{ matrix.vsce_target }}-${{ steps.build-script.outputs.EXT_VERSION }}.vsix -p
+              run: vsce publish --packagePath glsl-lsp-${{ matrix.vsce_target }}-${{ steps.build-script.outputs.EXT_VERSION }}.vsix
               working-directory: ./publish/kuba-p.glsl-lsp/${{ steps.build-script.outputs.EXT_VERSION }}
 
             - name: Upload artifact for later github release

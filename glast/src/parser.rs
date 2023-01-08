@@ -45,7 +45,7 @@ pub mod conditional_eval;
 mod conditional_expression;
 mod expression;
 mod grammar;
-mod printing;
+//mod printing;
 #[cfg(test)]
 mod walker_tests;
 
@@ -67,7 +67,7 @@ use std::collections::{HashMap, HashSet};
 pub struct ParseResult {
 	/// The abstract syntax tree. By nature of this tree being parsed after having applied conditional compilation,
 	/// it will not contain any conditional compilation directives.
-	pub ast: Vec<ast::Node>,
+	pub ast: Ast,
 	/// All syntax diagnostics.
 	pub syntax_diags: Vec<Syntax>,
 	/// All semantic diagnostics. Since the parser only creates an AST and doesn't perform any further analysis
@@ -781,8 +781,9 @@ pub fn parse_from_token_stream(
 ///     )
 /// )
 /// ```
-pub fn print_ast(ast: &[ast::Node]) -> String {
-	printing::print_ast(ast)
+pub fn print_ast(_ast: &[ast::Node]) -> String {
+	//printing::print_ast(ast)
+	todo!()
 }
 
 /// The error type for parsing operations.
@@ -1071,13 +1072,13 @@ impl TokenTree {
 			RootTokenStreamProvider::new(streams, self.end_position),
 			self.span_encoding,
 		);
-		let mut nodes = Vec::new();
+		let mut ctx = Ctx::new();
 		while !walker.is_done() {
-			grammar::parse_stmt(&mut walker, &mut nodes);
+			grammar::parse_stmt(&mut walker, &mut ctx);
 		}
 		walker.syntax_diags.append(&mut self.syntax_diags.clone());
 		let (ast, syntax_diags, semantic_diags, mut root_tokens) = (
-			nodes,
+			ctx.to_ast(),
 			walker.syntax_diags,
 			walker.semantic_diags,
 			walker.syntax_tokens,
@@ -1222,16 +1223,16 @@ impl TokenTree {
 			),
 			self.span_encoding,
 		);
-		let mut nodes = Vec::new();
+		let mut ctx = Ctx::new();
 		while !walker.is_done() {
-			grammar::parse_stmt(&mut walker, &mut nodes);
+			grammar::parse_stmt(&mut walker, &mut ctx);
 		}
 		walker.syntax_diags.append(&mut self.syntax_diags.clone());
 
 		let eval_key = walker.token_provider.chosen_key;
 		let eval_regions = walker.token_provider.chosen_regions;
 		let (ast, syntax_diags, semantic_diags, eval_tokens) = (
-			nodes,
+			ctx.to_ast(),
 			walker.syntax_diags,
 			walker.semantic_diags,
 			walker.syntax_tokens,
@@ -1511,15 +1512,15 @@ impl TokenTree {
 			),
 			self.span_encoding,
 		);
-		let mut nodes = Vec::new();
+		let mut ctx = Ctx::new();
 		while !walker.is_done() {
-			grammar::parse_stmt(&mut walker, &mut nodes);
+			grammar::parse_stmt(&mut walker, &mut ctx);
 		}
 		walker.syntax_diags.append(&mut self.syntax_diags.clone());
 
 		(
 			ParseResult {
-				ast: nodes,
+				ast: ctx.to_ast(),
 				syntax_diags: walker.syntax_diags,
 				semantic_diags: walker.semantic_diags,
 				syntax_tokens: walker.syntax_tokens,
@@ -3093,5 +3094,118 @@ impl<'a, Provider: TokenStreamProvider<'a>> Walker<'a, Provider> {
 	/// Appends a collection of syntax highlighting tokens.
 	fn append_colours(&mut self, colours: &mut Vec<SyntaxToken>) {
 		self.syntax_tokens.append(colours);
+	}
+}
+
+/// An abstract syntax tree.
+#[derive(Debug)]
+pub struct Ast {
+	#[allow(unused)]
+	arena: generational_arena::Arena<ast::Node>,
+}
+
+/// Context object to pushing nodes into.
+#[derive(Debug)]
+pub struct Ctx {
+	/// Arena of nodes.
+	arena: generational_arena::Arena<ast::Node>,
+	/// The stack of active scopes.
+	///
+	/// # Invariants
+	/// `self[0]` always exists and points to a `NodeTy::TranslationUnit`.
+	scope_stack: Vec<NodeHandle>,
+}
+
+/// A handle to a node stored within the [`Ctx`] during parsing.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct NodeHandle(generational_arena::Index);
+
+impl Ctx {
+	/// Constructs a new context.
+	fn new() -> Self {
+		let mut arena = generational_arena::Arena::new();
+		let mut scope_stack = Vec::new();
+		scope_stack.push(NodeHandle(arena.insert(ast::Node {
+			span: Span::new(0, 0),
+			ty: ast::NodeTy::TranslationUnit(ast::Scope {
+				span: Span::new(0, 0),
+				contents: Vec::new(),
+			}),
+		})));
+
+		Self { arena, scope_stack }
+	}
+
+	/// Pushes a node into the current scope.
+	fn push_node(&mut self, node: ast::Node) -> NodeHandle {
+		let node_end = node.span.end;
+		let new_handle = NodeHandle(self.arena.insert(node));
+
+		// Push the handle into the current scope.
+		let scope = self.__get_current_scope();
+		scope.contents.push(new_handle);
+		scope.span.end = node_end;
+
+		new_handle
+	}
+
+	/// Creates a new temporary scope.
+	fn new_temp_scope(&mut self, opening_delim: Span) -> NodeHandle {
+		// We create a temporary block node into which child nodes will go into. Later, this block node will be
+		// removed and its scope used in a different node, that will be subsequently inserted back in.
+		let new_handle = NodeHandle(self.arena.insert(ast::Node {
+			span: opening_delim,
+			ty: ast::NodeTy::Block(ast::Scope {
+				span: opening_delim,
+				contents: Vec::new(),
+			}),
+		}));
+		self.scope_stack.push(new_handle);
+		new_handle
+	}
+
+	/// Takes the temporary scope, to be used in an actual node.
+	fn take_temp_scope(&mut self, handle: NodeHandle) -> ast::Scope {
+		let h = self.scope_stack.pop();
+		assert_eq!(h.unwrap(), handle);
+
+		let block_node = self.arena.remove(handle.0).unwrap();
+		match block_node.ty {
+			ast::NodeTy::Block(scope) => scope,
+			_ => unreachable!(),
+		}
+	}
+
+	/// Sets the ending position of the current scope.
+	fn set_scope_end(&mut self, ending_delim: Span) {
+		match &mut self.arena[self.scope_stack.last().unwrap().0].ty {
+			ast::NodeTy::Block(scope) => scope.span.end = ending_delim.end,
+			_ => {}
+		}
+	}
+
+	/// Converts this context into the abstract syntax tree. This is done once parsing has finished in order to
+	/// remove fields that were only necessary during the parsing process itself, such as any stacks/state
+	/// variables.
+	fn to_ast(self) -> Ast {
+		Ast { arena: self.arena }
+	}
+
+	fn __get_current_scope(&mut self) -> &mut ast::Scope {
+		use ast::NodeTy;
+		let scope_node = &mut self.arena[self.scope_stack.last().unwrap().0];
+		match &mut scope_node.ty {
+			NodeTy::TranslationUnit(scope) => scope,
+			NodeTy::Block(scope) => scope,
+			NodeTy::FnDef { body, .. } => body,
+			NodeTy::SubroutineFnDef { .. } => todo!(),
+			NodeTy::StructDef { body, .. } => body,
+			NodeTy::If(_) => todo!(),
+			NodeTy::Switch { .. } => todo!(),
+			NodeTy::For { .. } => todo!(),
+			NodeTy::While { body, .. } => body,
+			NodeTy::DoWhile { body, .. } => body,
+			_ => unreachable!(),
+		}
 	}
 }

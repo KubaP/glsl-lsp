@@ -25,6 +25,7 @@
 //! Since conditional compilation is resolved before the AST is generated, conditional compilation directives are
 //! not part of the AST.
 
+use super::NodeHandle;
 use crate::{
 	diag::Syntax,
 	lexer::{NumType, Token},
@@ -61,8 +62,11 @@ pub struct Node {
 	pub span: Span,
 }
 
+// FIXME: Idents only used at definition/declaration sites. Everything else uses TypeId, FnId, VarId, etc.
 #[derive(Debug, Clone, PartialEq)]
 pub enum NodeTy {
+	/// A translation unit, i.e. the entire abstract syntax tree.
+	TranslationUnit(Scope),
 	/// An empty statement, e.g. `;`.
 	Empty,
 	/// An expression statement, e.g. `5 + 1;` or `i++;`.
@@ -140,9 +144,9 @@ pub enum NodeTy {
 	},
 	/// A for loop, e.g. `for (int i = 0; i<5; i++) {/*...*/}`.
 	For {
-		init: Option<Box<Node>>,
-		cond: Option<Box<Node>>,
-		inc: Option<Box<Node>>,
+		init: Option<NodeHandle>,
+		cond: Option<NodeHandle>,
+		inc: Option<NodeHandle>,
 		body: Option<Scope>,
 	},
 	/// A while loop, e.g `while (true) {/*...*/}`.
@@ -193,7 +197,7 @@ pub enum NodeTy {
 /// A scope of nodes.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Scope {
-	pub contents: Vec<Node>,
+	pub contents: Vec<NodeHandle>,
 	pub span: Span,
 }
 

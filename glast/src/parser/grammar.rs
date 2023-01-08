@@ -4,7 +4,7 @@ use super::{
 	ast,
 	ast::*,
 	expression::{expr_parser, Mode},
-	Macro, TokenStreamProvider, Walker,
+	Ctx, Macro, TokenStreamProvider, Walker,
 };
 use crate::{
 	diag::{
@@ -69,7 +69,7 @@ fn invalidate_qualifiers<'a, P: TokenStreamProvider<'a>>(
 /// Parses an individual statement at the current position.
 pub(super) fn parse_stmt<'a, P: TokenStreamProvider<'a>>(
 	walker: &mut Walker<'a, P>,
-	nodes: &mut Vec<ast::Node>,
+	ctx: &mut Ctx,
 ) {
 	let qualifiers = try_parse_qualifiers(walker);
 
@@ -79,20 +79,24 @@ pub(super) fn parse_stmt<'a, P: TokenStreamProvider<'a>>(
 
 	match token {
 		Token::LBrace => {
+			let l_brace_span = token_span;
 			invalidate_qualifiers(walker, qualifiers);
-			walker.push_colour(token_span, SyntaxType::Punctuation);
+			walker.push_colour(l_brace_span, SyntaxType::Punctuation);
 			walker.advance();
-			let block = parse_scope(walker, brace_scope, token_span);
-			nodes.push(Node {
-				span: block.span,
-				ty: NodeTy::Block(block),
+			let scope_handle = ctx.new_temp_scope(l_brace_span);
+			parse_scope(walker, ctx, brace_scope, l_brace_span);
+			let scope = ctx.take_temp_scope(scope_handle);
+			ctx.push_node(Node {
+				span: l_brace_span,
+				ty: NodeTy::Block(scope),
 			});
 		}
 		Token::Semi => {
-			walker.push_colour(token_span, SyntaxType::Punctuation);
+			let semi_span = token_span;
+			walker.push_colour(semi_span, SyntaxType::Punctuation);
 			walker.advance();
 			if !qualifiers.is_empty() {
-				nodes.push(Node {
+				ctx.push_node(Node {
 					span: Span::new(
 						qualifiers.first().unwrap().span.start,
 						qualifiers.last().unwrap().span.end,
@@ -100,28 +104,28 @@ pub(super) fn parse_stmt<'a, P: TokenStreamProvider<'a>>(
 					ty: NodeTy::Qualifiers(qualifiers),
 				});
 			} else {
-				nodes.push(Node {
-					span: token_span,
+				ctx.push_node(Node {
+					span: semi_span,
 					ty: NodeTy::Empty,
 				});
 			}
 		}
-		Token::Struct => parse_struct(walker, nodes, qualifiers, token_span),
+		Token::Struct => parse_struct(walker, ctx, qualifiers, token_span),
 		Token::Directive(stream) => {
 			invalidate_qualifiers(walker, qualifiers);
-			parse_directive(walker, nodes, stream, token_span);
+			parse_directive(walker, ctx, stream, token_span);
 			walker.advance();
 		}
-		Token::If => parse_if(walker, nodes, token_span),
-		Token::Switch => parse_switch(walker, nodes, token_span),
-		Token::For => parse_for_loop(walker, nodes, token_span),
-		Token::While => parse_while_loop(walker, nodes, token_span),
-		Token::Do => parse_do_while_loop(walker, nodes, token_span),
+		Token::If => parse_if(walker, ctx, token_span),
+		Token::Switch => parse_switch(walker, ctx, token_span),
+		Token::For => parse_for_loop(walker, ctx, token_span),
+		Token::While => parse_while_loop(walker, ctx, token_span),
+		Token::Do => parse_do_while_loop(walker, ctx, token_span),
 		Token::Break => {
 			invalidate_qualifiers(walker, qualifiers);
 			parse_break_continue_discard(
 				walker,
-				nodes,
+				ctx,
 				token_span,
 				|| NodeTy::Break,
 				|span| Syntax::Stmt(StmtDiag::BreakExpectedSemiAfterKw(span)),
@@ -131,7 +135,7 @@ pub(super) fn parse_stmt<'a, P: TokenStreamProvider<'a>>(
 			invalidate_qualifiers(walker, qualifiers);
 			parse_break_continue_discard(
 				walker,
-				nodes,
+				ctx,
 				token_span,
 				|| NodeTy::Continue,
 				|span| {
@@ -143,7 +147,7 @@ pub(super) fn parse_stmt<'a, P: TokenStreamProvider<'a>>(
 			invalidate_qualifiers(walker, qualifiers);
 			parse_break_continue_discard(
 				walker,
-				nodes,
+				ctx,
 				token_span,
 				|| NodeTy::Discard,
 				|span| Syntax::Stmt(StmtDiag::DiscardExpectedSemiAfterKw(span)),
@@ -151,7 +155,7 @@ pub(super) fn parse_stmt<'a, P: TokenStreamProvider<'a>>(
 		}
 		Token::Return => {
 			invalidate_qualifiers(walker, qualifiers);
-			parse_return(walker, nodes, token_span);
+			parse_return(walker, ctx, token_span);
 		}
 		Token::RBrace => {
 			invalidate_qualifiers(walker, qualifiers);
@@ -179,7 +183,7 @@ pub(super) fn parse_stmt<'a, P: TokenStreamProvider<'a>>(
 		}
 		Token::Subroutine => {
 			invalidate_qualifiers(walker, qualifiers);
-			parse_subroutine(walker, nodes, token_span);
+			parse_subroutine(walker, ctx, token_span);
 		}
 		Token::Reserved(str) => {
 			invalidate_qualifiers(walker, qualifiers);
@@ -194,7 +198,7 @@ pub(super) fn parse_stmt<'a, P: TokenStreamProvider<'a>>(
 			walker.advance();
 		}
 		_ => try_parse_definition_declaration_expr(
-			walker, nodes, qualifiers, false,
+			walker, ctx, qualifiers, false,
 		),
 	}
 }
@@ -204,21 +208,17 @@ pub(super) fn parse_stmt<'a, P: TokenStreamProvider<'a>>(
 /// This function assumes that the opening delimiter is already consumed.
 fn parse_scope<'a, P: TokenStreamProvider<'a>>(
 	walker: &mut Walker<'a, P>,
+	ctx: &mut Ctx,
 	exit_condition: ScopeEnd<'a, P>,
 	opening_span: Span,
-) -> Scope {
-	let mut nodes = Vec::new();
-	let ending_span = loop {
+) {
+	loop {
 		// Check if we have reached the closing delimiter.
 		if let Some(span) = exit_condition(walker, opening_span) {
-			break span;
+			ctx.set_scope_end(span);
+			return;
 		}
-		parse_stmt(walker, &mut nodes);
-	};
-
-	Scope {
-		contents: nodes,
-		span: Span::new(opening_span.start, ending_span.end),
+		parse_stmt(walker, ctx);
 	}
 }
 
@@ -824,7 +824,7 @@ fn try_parse_qualifiers<'a, P: TokenStreamProvider<'a>>(
 ///   for loop header.
 fn try_parse_definition_declaration_expr<'a, P: TokenStreamProvider<'a>>(
 	walker: &mut Walker<'a, P>,
-	nodes: &mut Vec<Node>,
+	ctx: &mut Ctx,
 	qualifiers: Vec<Qualifier>,
 	parsing_last_for_stmt: bool,
 ) {
@@ -872,7 +872,7 @@ fn try_parse_definition_declaration_expr<'a, P: TokenStreamProvider<'a>>(
 						),
 					));
 				}
-				nodes.push(Node {
+				ctx.push_node(Node {
 					span: start.span,
 					ty: NodeTy::Expr(start),
 				});
@@ -914,13 +914,7 @@ fn try_parse_definition_declaration_expr<'a, P: TokenStreamProvider<'a>>(
 						walker.advance();
 						walker.push_colour(next.1, SyntaxType::Punctuation);
 						walker.advance();
-						parse_function(
-							walker,
-							nodes,
-							type_,
-							ident,
-							l_paren_span,
-						);
+						parse_function(walker, ctx, type_, ident, l_paren_span);
 						return;
 					}
 					_ => {}
@@ -941,7 +935,7 @@ fn try_parse_definition_declaration_expr<'a, P: TokenStreamProvider<'a>>(
 						StmtDiag::ForExpectedRParenAfterStmts(semi_span),
 					));
 				}
-				nodes.push(Node {
+				ctx.push_node(Node {
 					span: Span::new(start.span.start, semi_span.end),
 					ty: NodeTy::Expr(start),
 				});
@@ -953,7 +947,7 @@ fn try_parse_definition_declaration_expr<'a, P: TokenStreamProvider<'a>>(
 				walker.append_colours(&mut start_colours);
 				walker.append_syntax_diags(&mut start_syntax);
 				walker.append_semantic_diags(&mut start_semantic);
-				nodes.push(Node {
+				ctx.push_node(Node {
 					span: start.span,
 					ty: NodeTy::Expr(start),
 				});
@@ -995,7 +989,7 @@ fn try_parse_definition_declaration_expr<'a, P: TokenStreamProvider<'a>>(
 							walker.advance();
 							parse_interface_block(
 								walker,
-								nodes,
+								ctx,
 								qualifiers,
 								start,
 								l_brace_span,
@@ -1033,7 +1027,7 @@ fn try_parse_definition_declaration_expr<'a, P: TokenStreamProvider<'a>>(
 							walker.advance();
 							parse_interface_block(
 								walker,
-								nodes,
+								ctx,
 								qualifiers,
 								start,
 								l_brace_span,
@@ -1079,7 +1073,7 @@ fn try_parse_definition_declaration_expr<'a, P: TokenStreamProvider<'a>>(
 							walker.advance();
 							parse_interface_block(
 								walker,
-								nodes,
+								ctx,
 								qualifiers,
 								start,
 								l_brace_span,
@@ -1126,7 +1120,7 @@ fn try_parse_definition_declaration_expr<'a, P: TokenStreamProvider<'a>>(
 						),
 					));
 				}
-				nodes.push(Node {
+				ctx.push_node(Node {
 					span: start.span,
 					ty: NodeTy::Expr(start),
 				});
@@ -1159,7 +1153,7 @@ fn try_parse_definition_declaration_expr<'a, P: TokenStreamProvider<'a>>(
 					),
 				));
 			}
-			nodes.push(Node {
+			ctx.push_node(Node {
 				span: start.span,
 				ty: NodeTy::Expr(start),
 			});
@@ -1249,7 +1243,7 @@ fn try_parse_definition_declaration_expr<'a, P: TokenStreamProvider<'a>>(
 						ident_span.next_single_width(),
 					),
 				));
-				nodes.push(var_def(type_, ident_info, ident_span.end));
+				ctx.push_node(var_def(type_, ident_info, ident_span.end));
 				return;
 			}
 		};
@@ -1258,7 +1252,7 @@ fn try_parse_definition_declaration_expr<'a, P: TokenStreamProvider<'a>>(
 			let semi_span = token_span;
 			walker.push_colour(semi_span, SyntaxType::Punctuation);
 			walker.advance();
-			nodes.push(var_def(type_, ident_info, semi_span.end));
+			ctx.push_node(var_def(type_, ident_info, semi_span.end));
 			return;
 		} else if *token == Token::Op(OpTy::Eq) {
 			// We have a variable definition with initialization.
@@ -1281,7 +1275,7 @@ fn try_parse_definition_declaration_expr<'a, P: TokenStreamProvider<'a>>(
 								eq_span.next_single_width(),
 							),
 						));
-						nodes.push(var_def_init(
+						ctx.push_node(var_def_init(
 							type_,
 							ident_info,
 							None,
@@ -1302,7 +1296,7 @@ fn try_parse_definition_declaration_expr<'a, P: TokenStreamProvider<'a>>(
 							value_span.next_single_width(),
 						),
 					));
-					nodes.push(var_def_init(
+					ctx.push_node(var_def_init(
 						type_,
 						ident_info,
 						Some(value_expr),
@@ -1315,7 +1309,7 @@ fn try_parse_definition_declaration_expr<'a, P: TokenStreamProvider<'a>>(
 				let semi_span = token_span;
 				walker.push_colour(semi_span, SyntaxType::Punctuation);
 				walker.advance();
-				nodes.push(var_def_init(
+				ctx.push_node(var_def_init(
 					type_,
 					ident_info,
 					Some(value_expr),
@@ -1329,7 +1323,7 @@ fn try_parse_definition_declaration_expr<'a, P: TokenStreamProvider<'a>>(
 						end_span.next_single_width(),
 					),
 				));
-				nodes.push(var_def_init(
+				ctx.push_node(var_def_init(
 					type_,
 					ident_info,
 					Some(value_expr),
@@ -1346,7 +1340,7 @@ fn try_parse_definition_declaration_expr<'a, P: TokenStreamProvider<'a>>(
 					ident_span.next_single_width(),
 				),
 			));
-			nodes.push(var_def(type_, ident_info, ident_span.end));
+			ctx.push_node(var_def(type_, ident_info, ident_span.end));
 			seek_next_stmt(walker);
 			return;
 		}
@@ -1382,7 +1376,7 @@ fn try_parse_definition_declaration_expr<'a, P: TokenStreamProvider<'a>>(
 		seek_next_stmt(walker);
 	}
 
-	nodes.push(Node {
+	ctx.push_node(Node {
 		span: if let Some(semi_span) = semi_span {
 			Span::new(expr.span.start, semi_span.end)
 		} else {
@@ -1397,7 +1391,7 @@ fn try_parse_definition_declaration_expr<'a, P: TokenStreamProvider<'a>>(
 /// This function assumes that the return type, ident, and opening parenthesis have been consumed.
 fn parse_function<'a, P: TokenStreamProvider<'a>>(
 	walker: &mut Walker<'a, P>,
-	nodes: &mut Vec<Node>,
+	ctx: &mut Ctx,
 	return_type: Type,
 	ident: Ident,
 	l_paren_span: Span,
@@ -1425,7 +1419,7 @@ fn parse_function<'a, P: TokenStreamProvider<'a>>(
 						prev_span.next_single_width(),
 					),
 				));
-				nodes.push(Node {
+				ctx.push_node(Node {
 					span,
 					ty: NodeTy::FnDecl {
 						return_type,
@@ -1480,7 +1474,7 @@ fn parse_function<'a, P: TokenStreamProvider<'a>>(
 						prev_span.next_single_width(),
 					),
 				));
-				nodes.push(Node {
+				ctx.push_node(Node {
 					span: Span::new(return_type.span.start, token_span.end),
 					ty: NodeTy::FnDecl {
 						return_type,
@@ -1654,7 +1648,7 @@ fn parse_function<'a, P: TokenStreamProvider<'a>>(
 					param_end_span.next_single_width(),
 				),
 			));
-			nodes.push(Node {
+			ctx.push_node(Node {
 				span: Span::new(return_type.span.start, param_end_span.end),
 				ty: NodeTy::FnDecl {
 					return_type,
@@ -1669,7 +1663,7 @@ fn parse_function<'a, P: TokenStreamProvider<'a>>(
 		// We have a declaration.
 		walker.push_colour(token_span, SyntaxType::Punctuation);
 		walker.advance();
-		nodes.push(Node {
+		ctx.push_node(Node {
 			span: Span::new(return_type.span.start, param_end_span.end),
 			ty: NodeTy::FnDecl {
 				return_type,
@@ -1682,8 +1676,11 @@ fn parse_function<'a, P: TokenStreamProvider<'a>>(
 		let l_brace_span = token_span;
 		walker.push_colour(l_brace_span, SyntaxType::Punctuation);
 		walker.advance();
-		let body = parse_scope(walker, brace_scope, l_brace_span);
-		nodes.push(Node {
+
+		let scope_handle = ctx.new_temp_scope(l_brace_span);
+		parse_scope(walker, ctx, brace_scope, l_brace_span);
+		let body = ctx.take_temp_scope(scope_handle);
+		ctx.push_node(Node {
 			span: Span::new(return_type.span.start, body.span.end),
 			ty: NodeTy::FnDef {
 				return_type,
@@ -1699,7 +1696,7 @@ fn parse_function<'a, P: TokenStreamProvider<'a>>(
 				param_end_span.next_single_width(),
 			),
 		));
-		nodes.push(Node {
+		ctx.push_node(Node {
 			span: Span::new(return_type.span.start, param_end_span.end),
 			ty: NodeTy::FnDecl {
 				return_type,
@@ -1716,10 +1713,11 @@ fn parse_function<'a, P: TokenStreamProvider<'a>>(
 /// This function assumes that the `subroutine` keyword is not yet consumed.
 fn parse_subroutine<'a, P: TokenStreamProvider<'a>>(
 	walker: &mut Walker<'a, P>,
-	nodes: &mut Vec<Node>,
+	ctx: &mut Ctx,
 	kw_span: Span,
 ) {
-	walker.push_colour(kw_span, SyntaxType::Keyword);
+	return;
+	/* walker.push_colour(kw_span, SyntaxType::Keyword);
 	walker.advance();
 
 	let (token, token_span) = match walker.peek() {
@@ -2005,6 +2003,7 @@ fn parse_subroutine<'a, P: TokenStreamProvider<'a>>(
 			inner.into_iter().for_each(|n| nodes.push(n));
 		}
 	}
+	*/
 }
 
 /// Parses an interface block.
@@ -2015,7 +2014,7 @@ fn parse_subroutine<'a, P: TokenStreamProvider<'a>>(
 /// `qualifiers` is not empty.
 fn parse_interface_block<'a, P: TokenStreamProvider<'a>>(
 	walker: &mut Walker<'a, P>,
-	nodes: &mut Vec<Node>,
+	ctx: &mut Ctx,
 	qualifiers: Vec<Qualifier>,
 	ident_expr: Expr,
 	l_brace_span: Span,
@@ -2047,13 +2046,15 @@ fn parse_interface_block<'a, P: TokenStreamProvider<'a>>(
 	let interface_span_start = qualifiers.first().unwrap().span.start;
 
 	// Parse the contents of the body.
-	let body = parse_scope(walker, brace_scope, l_brace_span);
+	let scope_handle = ctx.new_temp_scope(l_brace_span);
+	parse_scope(walker, ctx, brace_scope, l_brace_span);
+	let body = ctx.take_temp_scope(scope_handle);
 	if body.contents.is_empty() {
 		walker.push_syntax_diag(Syntax::Stmt(
 			StmtDiag::InterfaceExpectedAtLeastOneStmtInBody(body.span),
 		))
 	}
-	for stmt in &body.contents {
+	/* for stmt in &body.contents {
 		match &stmt.ty {
 			NodeTy::VarDef { .. }
 			| NodeTy::VarDefInit { .. }
@@ -2065,7 +2066,7 @@ fn parse_interface_block<'a, P: TokenStreamProvider<'a>>(
 				));
 			}
 		}
-	}
+	} */
 
 	// Look for an optional instance definition.
 	let instance = match expr_parser(walker, Mode::TakeOneUnit, [Token::Semi]) {
@@ -2081,7 +2082,7 @@ fn parse_interface_block<'a, P: TokenStreamProvider<'a>>(
 				walker.push_syntax_diag(Syntax::Stmt(
 					StmtDiag::InterfaceExpectedInstanceOrSemiAfterBody(e.span),
 				));
-				nodes.push(Node {
+				ctx.push_node(Node {
 					span: Span::new(interface_span_start, body.span.end),
 					ty: NodeTy::InterfaceDef {
 						qualifiers,
@@ -2125,7 +2126,7 @@ fn parse_interface_block<'a, P: TokenStreamProvider<'a>>(
 		}
 	}
 
-	nodes.push(Node {
+	ctx.push_node(Node {
 		span: Span::new(
 			interface_span_start,
 			if let Some(semi_span) = semi_span {
@@ -2152,7 +2153,7 @@ fn parse_interface_block<'a, P: TokenStreamProvider<'a>>(
 /// This function assumes that the keyword is not yet consumed.
 fn parse_struct<'a, P: TokenStreamProvider<'a>>(
 	walker: &mut Walker<'a, P>,
-	nodes: &mut Vec<Node>,
+	ctx: &mut Ctx,
 	qualifiers: Vec<Qualifier>,
 	kw_span: Span,
 ) {
@@ -2221,7 +2222,7 @@ fn parse_struct<'a, P: TokenStreamProvider<'a>>(
 			span,
 		)));
 		walker.advance();
-		nodes.push(Node {
+		ctx.push_node(Node {
 			span,
 			ty: NodeTy::StructDecl { qualifiers, ident },
 		});
@@ -2237,13 +2238,16 @@ fn parse_struct<'a, P: TokenStreamProvider<'a>>(
 	};
 
 	// Parse the contents of the body.
-	let body = parse_scope(walker, brace_scope, l_brace_span);
+	let scope_handle = ctx.new_temp_scope(l_brace_span);
+	parse_scope(walker, ctx, brace_scope, l_brace_span);
+	let body = ctx.take_temp_scope(scope_handle);
+
 	if body.contents.is_empty() {
 		walker.push_syntax_diag(Syntax::Stmt(
 			StmtDiag::StructExpectedAtLeastOneStmtInBody(body.span),
 		));
 	}
-	for stmt in &body.contents {
+	/* for stmt in &body.contents {
 		match &stmt.ty {
 			NodeTy::VarDef { .. }
 			| NodeTy::VarDefInit { .. }
@@ -2255,7 +2259,7 @@ fn parse_struct<'a, P: TokenStreamProvider<'a>>(
 				));
 			}
 		}
-	}
+	} */
 
 	// Look for an optional instance identifier.
 	let instance = match expr_parser(walker, Mode::TakeOneUnit, [Token::Semi]) {
@@ -2270,7 +2274,8 @@ fn parse_struct<'a, P: TokenStreamProvider<'a>>(
 				walker.push_syntax_diag(Syntax::Stmt(
 					StmtDiag::StructExpectedInstanceOrSemiAfterBody(e.span),
 				));
-				nodes.push(Node {
+
+				ctx.push_node(Node {
 					span: Span::new(struct_span_start, body.span.end),
 					ty: NodeTy::StructDef {
 						qualifiers,
@@ -2314,7 +2319,7 @@ fn parse_struct<'a, P: TokenStreamProvider<'a>>(
 		}
 	}
 
-	nodes.push(Node {
+	ctx.push_node(Node {
 		span: Span::new(
 			struct_span_start,
 			if let Some(semi_span) = semi_span {
@@ -2341,7 +2346,7 @@ fn parse_struct<'a, P: TokenStreamProvider<'a>>(
 /// This function assumes that the keyword is not yet consumed.
 fn parse_if<'a, P: TokenStreamProvider<'a>>(
 	walker: &mut Walker<'a, P>,
-	nodes: &mut Vec<Node>,
+	ctx: &mut Ctx,
 	kw_span: Span,
 ) {
 	let mut branches = Vec::new();
@@ -2351,7 +2356,7 @@ fn parse_if<'a, P: TokenStreamProvider<'a>>(
 		let (token, token_span) = match walker.peek() {
 			Some(t) => t,
 			None => {
-				nodes.push(Node {
+				ctx.push_node(Node {
 					span: Span::new(kw_span.start, walker.get_last_span().end),
 					ty: NodeTy::If(branches),
 				});
@@ -2361,7 +2366,7 @@ fn parse_if<'a, P: TokenStreamProvider<'a>>(
 
 		let else_kw_span = if *token != Token::Else && !first_iter {
 			// We've found a token that is not `else`, which means we've finished the current if statement.
-			nodes.push(Node {
+			ctx.push_node(Node {
 				span: Span::new(
 					kw_span.start,
 					if let Some(branch) = branches.last() {
@@ -2393,7 +2398,7 @@ fn parse_if<'a, P: TokenStreamProvider<'a>>(
 						walker.get_last_span().next_single_width(),
 					),
 				));
-				nodes.push(Node {
+				ctx.push_node(Node {
 					span: Span::new(kw_span.start, walker.get_last_span().end),
 					ty: NodeTy::If(branches),
 				});
@@ -2444,7 +2449,7 @@ fn parse_if<'a, P: TokenStreamProvider<'a>>(
 						},
 						body: None,
 					});
-					nodes.push(Node {
+					ctx.push_node(Node {
 						span: Span::new(
 							kw_span.start,
 							walker.get_last_span().end,
@@ -2531,7 +2536,7 @@ fn parse_if<'a, P: TokenStreamProvider<'a>>(
 						),
 						body: None,
 					});
-					nodes.push(Node {
+					ctx.push_node(Node {
 						span: Span::new(
 							kw_span.start,
 							walker.get_last_span().end,
@@ -2549,7 +2554,10 @@ fn parse_if<'a, P: TokenStreamProvider<'a>>(
 						// We have a multi-line body.
 						walker.push_colour(token_span, SyntaxType::Punctuation);
 						walker.advance();
-						let body = parse_scope(walker, brace_scope, token_span);
+						let scope_handle = ctx.new_temp_scope(token_span);
+						parse_scope(walker, ctx, brace_scope, token_span);
+						let body = ctx.take_temp_scope(scope_handle);
+
 						let span = Span::new(
 							if first_iter {
 								if_kw_span.start
@@ -2580,26 +2588,9 @@ fn parse_if<'a, P: TokenStreamProvider<'a>>(
 						});
 					} else {
 						// We don't have a multi-line body, so we attempt to parse a single statement.
-						let mut stmts = Vec::new();
-						parse_stmt(walker, &mut stmts);
-
-						let body = if stmts.is_empty() {
-							if let Some(r_paren_span) = r_paren_span {
-								walker.push_syntax_diag(Syntax::Stmt(
-									StmtDiag::IfExpectedLBraceOrStmtAfterRParen(
-										r_paren_span,
-									),
-								));
-							}
-							None
-						} else {
-							let stmt = stmts.remove(0);
-							let body = Scope {
-								span: stmt.span,
-								contents: vec![stmt],
-							};
-							Some(body)
-						};
+						let scope_handle = ctx.new_temp_scope(token_span);
+						parse_stmt(walker, ctx);
+						let body = ctx.take_temp_scope(scope_handle);
 
 						let span = Span::new(
 							if first_iter {
@@ -2618,14 +2609,7 @@ fn parse_if<'a, P: TokenStreamProvider<'a>>(
 							},
 						);
 						branches.push(IfBranch {
-							span: Span::new(
-								if_kw_span.start,
-								if let Some(ref body) = body {
-									body.span.end
-								} else {
-									span.end
-								},
-							),
+							span: Span::new(if_kw_span.start, body.span.end),
 							condition: (
 								if first_iter {
 									IfCondition::If(cond_expr)
@@ -2634,7 +2618,7 @@ fn parse_if<'a, P: TokenStreamProvider<'a>>(
 								},
 								span,
 							),
-							body,
+							body: Some(body),
 						});
 					}
 				}
@@ -2673,7 +2657,7 @@ fn parse_if<'a, P: TokenStreamProvider<'a>>(
 						),
 						body: None,
 					});
-					nodes.push(Node {
+					ctx.push_node(Node {
 						span: Span::new(
 							kw_span.start,
 							walker.get_last_span().end,
@@ -2691,7 +2675,9 @@ fn parse_if<'a, P: TokenStreamProvider<'a>>(
 						// We have a multi-line body.
 						walker.push_colour(token_span, SyntaxType::Punctuation);
 						walker.advance();
-						let body = parse_scope(walker, brace_scope, token_span);
+						let scope_handle = ctx.new_temp_scope(token_span);
+						parse_scope(walker, ctx, brace_scope, token_span);
+						let body = ctx.take_temp_scope(scope_handle);
 						branches.push(IfBranch {
 							span: Span::new(else_kw_span.start, body.span.end),
 							condition: (IfCondition::Else, else_kw_span),
@@ -2713,7 +2699,7 @@ fn parse_if<'a, P: TokenStreamProvider<'a>>(
 						condition: (IfCondition::Else, else_kw_span),
 						body: None,
 					});
-					nodes.push(Node {
+					ctx.push_node(Node {
 						span: Span::new(
 							kw_span.start,
 							walker.get_last_span().end,
@@ -2734,7 +2720,7 @@ fn parse_if<'a, P: TokenStreamProvider<'a>>(
 /// This function assumes that the keyword is not yet consumed.
 fn parse_switch<'a, P: TokenStreamProvider<'a>>(
 	walker: &mut Walker<'a, P>,
-	nodes: &mut Vec<Node>,
+	ctx: &mut Ctx,
 	kw_span: Span,
 ) {
 	walker.push_colour(kw_span, SyntaxType::Keyword);
@@ -2835,7 +2821,7 @@ fn parse_switch<'a, P: TokenStreamProvider<'a>>(
 						),
 					));
 				}
-				nodes.push(Node {
+				ctx.push_node(Node {
 					span: Span::new(
 						kw_span.start,
 						if let Some(r_paren_span) = r_paren_span {
@@ -2864,7 +2850,7 @@ fn parse_switch<'a, P: TokenStreamProvider<'a>>(
 					),
 				));
 			}
-			nodes.push(Node {
+			ctx.push_node(Node {
 				span: Span::new(kw_span.start, walker.get_last_span().end),
 				ty: NodeTy::Switch {
 					cond: cond_expr,
@@ -2885,7 +2871,7 @@ fn parse_switch<'a, P: TokenStreamProvider<'a>>(
 						token_span.end,
 					)),
 				));
-				nodes.push(Node {
+				ctx.push_node(Node {
 					span: Span::new(kw_span.start, token_span.end),
 					ty: NodeTy::Switch {
 						cond: cond_expr,
@@ -2902,7 +2888,7 @@ fn parse_switch<'a, P: TokenStreamProvider<'a>>(
 					walker.get_last_span().next_single_width(),
 				),
 			));
-			nodes.push(Node {
+			ctx.push_node(Node {
 				span: Span::new(kw_span.start, walker.get_last_span().end),
 				ty: NodeTy::Switch {
 					cond: cond_expr,
@@ -2925,7 +2911,7 @@ fn parse_switch<'a, P: TokenStreamProvider<'a>>(
 						walker.get_last_span().next_single_width(),
 					),
 				));
-				nodes.push(Node {
+				ctx.push_node(Node {
 					span: Span::new(kw_span.start, walker.get_last_span().end),
 					ty: NodeTy::Switch {
 						cond: cond_expr,
@@ -2999,7 +2985,7 @@ fn parse_switch<'a, P: TokenStreamProvider<'a>>(
 							expr: Either::Left(expr),
 							body: None,
 						});
-						nodes.push(Node {
+						ctx.push_node(Node {
 							span: Span::new(
 								kw_span.start,
 								walker.get_last_span().end,
@@ -3014,8 +3000,16 @@ fn parse_switch<'a, P: TokenStreamProvider<'a>>(
 				};
 
 				// Consume the body of the case.
-				let body = parse_scope(
+				let scope_handle = ctx.new_temp_scope(colon_span.unwrap_or(
+					if let Some(ref expr) = expr {
+						expr.span
+					} else {
+						case_kw_span
+					},
+				));
+				parse_scope(
 					walker,
+					ctx,
 					switch_case_scope,
 					colon_span.unwrap_or(if let Some(ref expr) = expr {
 						expr.span
@@ -3023,6 +3017,7 @@ fn parse_switch<'a, P: TokenStreamProvider<'a>>(
 						case_kw_span
 					}),
 				);
+				let body = ctx.take_temp_scope(scope_handle);
 				cases.push(SwitchCase {
 					span: Span::new(case_kw_span.start, body.span.end),
 					expr: Either::Left(expr),
@@ -3065,7 +3060,7 @@ fn parse_switch<'a, P: TokenStreamProvider<'a>>(
 							expr: Either::Right(()),
 							body: None,
 						});
-						nodes.push(Node {
+						ctx.push_node(Node {
 							span: Span::new(
 								kw_span.start,
 								walker.get_last_span().end,
@@ -3080,11 +3075,16 @@ fn parse_switch<'a, P: TokenStreamProvider<'a>>(
 				};
 
 				// Consume the body of the case.
-				let body = parse_scope(
+				let scope_handle = ctx.new_temp_scope(
+					colon_span.unwrap_or(default_kw_span.end_zero_width()),
+				);
+				parse_scope(
 					walker,
+					ctx,
 					switch_case_scope,
 					colon_span.unwrap_or(default_kw_span.end_zero_width()),
 				);
+				let body = ctx.take_temp_scope(scope_handle);
 				cases.push(SwitchCase {
 					span: Span::new(default_kw_span.start, body.span.end),
 					expr: Either::Right(()),
@@ -3113,7 +3113,7 @@ fn parse_switch<'a, P: TokenStreamProvider<'a>>(
 				// consumed by this branch.
 				walker.push_colour(token_span, SyntaxType::Punctuation);
 				walker.advance();
-				nodes.push(Node {
+				ctx.push_node(Node {
 					span: Span::new(kw_span.start, token_span.end),
 					ty: NodeTy::Switch {
 						cond: cond_expr,
@@ -3159,7 +3159,7 @@ fn parse_switch<'a, P: TokenStreamProvider<'a>>(
 									),
 								),
 							));
-							nodes.push(Node {
+							ctx.push_node(Node {
 								span: Span::new(
 									kw_span.start,
 									walker.get_last_span().end,
@@ -3183,7 +3183,7 @@ fn parse_switch<'a, P: TokenStreamProvider<'a>>(
 /// This function assumes that the keyword is not yet consumed.
 fn parse_for_loop<'a, P: TokenStreamProvider<'a>>(
 	walker: &mut Walker<'a, P>,
-	nodes: &mut Vec<Node>,
+	ctx: &mut Ctx,
 	kw_span: Span,
 ) {
 	walker.push_colour(kw_span, SyntaxType::Keyword);
@@ -3252,12 +3252,15 @@ fn parse_for_loop<'a, P: TokenStreamProvider<'a>>(
 						kw_span.end
 					},
 				);
-				nodes.push(Node {
+				let init = init.map(|n| ctx.push_node(n));
+				let cond = cond.map(|n| ctx.push_node(n));
+				let inc = inc.map(|n| ctx.push_node(n));
+				ctx.push_node(Node {
 					span,
 					ty: NodeTy::For {
-						init: init.map(|n| Box::from(n)),
-						cond: cond.map(|n| Box::from(n)),
-						inc: inc.map(|n| Box::from(n)),
+						init,
+						cond,
+						inc,
 						body: None,
 					},
 				});
@@ -3308,16 +3311,16 @@ fn parse_for_loop<'a, P: TokenStreamProvider<'a>>(
 							None => break,
 						}
 					}
-
-					nodes.push(Node {
-						span: Span::new(
-							kw_span.start,
-							inc.as_ref().unwrap().span.end,
-						),
+					let span_end = inc.as_ref().unwrap().span.end;
+					let init = init.map(|n| ctx.push_node(n));
+					let cond = cond.map(|n| ctx.push_node(n));
+					let inc = inc.map(|n| ctx.push_node(n));
+					ctx.push_node(Node {
+						span: Span::new(kw_span.start, span_end),
 						ty: NodeTy::For {
-							init: init.map(|n| Box::from(n)),
-							cond: cond.map(|n| Box::from(n)),
-							inc: inc.map(|n| Box::from(n)),
+							init,
+							cond,
+							inc,
 							body: None,
 						},
 					});
@@ -3330,7 +3333,7 @@ fn parse_for_loop<'a, P: TokenStreamProvider<'a>>(
 		let mut stmt = Vec::new();
 		try_parse_definition_declaration_expr(
 			walker,
-			&mut stmt,
+			ctx,
 			qualifiers,
 			counter == 2,
 		);
@@ -3360,12 +3363,15 @@ fn parse_for_loop<'a, P: TokenStreamProvider<'a>>(
 						r_paren_span.next_single_width(),
 					),
 				));
-				nodes.push(Node {
+				let init = init.map(|n| ctx.push_node(n));
+				let cond = cond.map(|n| ctx.push_node(n));
+				let inc = inc.map(|n| ctx.push_node(n));
+				ctx.push_node(Node {
 					span: Span::new(kw_span.start, r_paren_span.end),
 					ty: NodeTy::For {
-						init: init.map(|n| Box::from(n)),
-						cond: cond.map(|n| Box::from(n)),
-						inc: inc.map(|n| Box::from(n)),
+						init,
+						cond,
+						inc,
 						body: None,
 					},
 				});
@@ -3378,12 +3384,15 @@ fn parse_for_loop<'a, P: TokenStreamProvider<'a>>(
 					r_paren_span.next_single_width(),
 				),
 			));
-			nodes.push(Node {
+			let init = init.map(|n| ctx.push_node(n));
+			let cond = cond.map(|n| ctx.push_node(n));
+			let inc = inc.map(|n| ctx.push_node(n));
+			ctx.push_node(Node {
 				span: Span::new(kw_span.start, r_paren_span.end),
 				ty: NodeTy::For {
-					init: init.map(|n| Box::from(n)),
-					cond: cond.map(|n| Box::from(n)),
-					inc: inc.map(|n| Box::from(n)),
+					init,
+					cond,
+					inc,
 					body: None,
 				},
 			});
@@ -3392,13 +3401,18 @@ fn parse_for_loop<'a, P: TokenStreamProvider<'a>>(
 	};
 
 	// Consume the body.
-	let body = parse_scope(walker, brace_scope, l_brace_span);
-	nodes.push(Node {
+	let scope_handle = ctx.new_temp_scope(l_brace_span);
+	parse_scope(walker, ctx, brace_scope, l_brace_span);
+	let body = ctx.take_temp_scope(scope_handle);
+	let init = init.map(|n| ctx.push_node(n));
+	let cond = cond.map(|n| ctx.push_node(n));
+	let inc = inc.map(|n| ctx.push_node(n));
+	ctx.push_node(Node {
 		span: Span::new(kw_span.start, body.span.end),
 		ty: NodeTy::For {
-			init: init.map(|n| Box::from(n)),
-			cond: cond.map(|n| Box::from(n)),
-			inc: inc.map(|n| Box::from(n)),
+			init,
+			cond,
+			inc,
 			body: Some(body),
 		},
 	});
@@ -3409,7 +3423,7 @@ fn parse_for_loop<'a, P: TokenStreamProvider<'a>>(
 /// This function assumes that the keyword is not yet consumed.
 fn parse_while_loop<'a, P: TokenStreamProvider<'a>>(
 	walker: &mut Walker<'a, P>,
-	nodes: &mut Vec<Node>,
+	ctx: &mut Ctx,
 	kw_span: Span,
 ) {
 	walker.push_colour(kw_span, SyntaxType::Keyword);
@@ -3526,8 +3540,10 @@ fn parse_while_loop<'a, P: TokenStreamProvider<'a>>(
 	};
 
 	// Parse the body.
-	let body = parse_scope(walker, brace_scope, l_brace_span);
-	nodes.push(Node {
+	let scope_handle = ctx.new_temp_scope(l_brace_span);
+	parse_scope(walker, ctx, brace_scope, l_brace_span);
+	let body = ctx.take_temp_scope(scope_handle);
+	ctx.push_node(Node {
 		span: Span::new(kw_span.start, body.span.end),
 		ty: NodeTy::While {
 			cond: cond_expr,
@@ -3541,7 +3557,7 @@ fn parse_while_loop<'a, P: TokenStreamProvider<'a>>(
 /// This function assumes that the keyword is not yet consumed.
 fn parse_do_while_loop<'a, P: TokenStreamProvider<'a>>(
 	walker: &mut Walker<'a, P>,
-	nodes: &mut Vec<Node>,
+	ctx: &mut Ctx,
 	kw_span: Span,
 ) {
 	walker.push_colour(kw_span, SyntaxType::Keyword);
@@ -3574,7 +3590,9 @@ fn parse_do_while_loop<'a, P: TokenStreamProvider<'a>>(
 	};
 
 	// Parse the body.
-	let body = parse_scope(walker, brace_scope, l_brace_span);
+	let scope_handle = ctx.new_temp_scope(l_brace_span);
+	parse_scope(walker, ctx, brace_scope, l_brace_span);
+	let body = ctx.take_temp_scope(scope_handle);
 
 	// Consume the `while` keyword.
 	let while_kw_span = match walker.peek() {
@@ -3589,7 +3607,7 @@ fn parse_do_while_loop<'a, P: TokenStreamProvider<'a>>(
 						body.span.next_single_width(),
 					),
 				));
-				nodes.push(Node {
+				ctx.push_node(Node {
 					span: Span::new(kw_span.start, body.span.end),
 					ty: NodeTy::DoWhile { body, cond: None },
 				});
@@ -3602,7 +3620,7 @@ fn parse_do_while_loop<'a, P: TokenStreamProvider<'a>>(
 					body.span.next_single_width(),
 				),
 			));
-			nodes.push(Node {
+			ctx.push_node(Node {
 				span: Span::new(kw_span.start, body.span.end),
 				ty: NodeTy::DoWhile { body, cond: None },
 			});
@@ -3632,7 +3650,7 @@ fn parse_do_while_loop<'a, P: TokenStreamProvider<'a>>(
 					while_kw_span.next_single_width(),
 				),
 			));
-			nodes.push(Node {
+			ctx.push_node(Node {
 				span: Span::new(kw_span.start, while_kw_span.end),
 				ty: NodeTy::DoWhile { body, cond: None },
 			});
@@ -3690,7 +3708,7 @@ fn parse_do_while_loop<'a, P: TokenStreamProvider<'a>>(
 					),
 				));
 			}
-			nodes.push(Node {
+			ctx.push_node(Node {
 				span: Span::new(kw_span.start, while_kw_span.end),
 				ty: NodeTy::DoWhile {
 					body,
@@ -3723,7 +3741,7 @@ fn parse_do_while_loop<'a, P: TokenStreamProvider<'a>>(
 						span.next_single_width(),
 					),
 				));
-				nodes.push(Node {
+				ctx.push_node(Node {
 					span,
 					ty: NodeTy::DoWhile {
 						body,
@@ -3748,7 +3766,7 @@ fn parse_do_while_loop<'a, P: TokenStreamProvider<'a>>(
 					span.next_single_width(),
 				),
 			));
-			nodes.push(Node {
+			ctx.push_node(Node {
 				span,
 				ty: NodeTy::DoWhile {
 					body,
@@ -3759,7 +3777,7 @@ fn parse_do_while_loop<'a, P: TokenStreamProvider<'a>>(
 		}
 	};
 
-	nodes.push(Node {
+	ctx.push_node(Node {
 		span: Span::new(kw_span.start, semi_span.end),
 		ty: NodeTy::DoWhile {
 			cond: cond_expr,
@@ -3773,7 +3791,7 @@ fn parse_do_while_loop<'a, P: TokenStreamProvider<'a>>(
 /// This function assumes that the keyword is not yet consumed.
 fn parse_break_continue_discard<'a, P: TokenStreamProvider<'a>>(
 	walker: &mut Walker<'a, P>,
-	nodes: &mut Vec<Node>,
+	ctx: &mut Ctx,
 	kw_span: Span,
 	ty: impl FnOnce() -> NodeTy,
 	error: impl FnOnce(Span) -> Syntax,
@@ -3798,7 +3816,7 @@ fn parse_break_continue_discard<'a, P: TokenStreamProvider<'a>>(
 		walker.push_syntax_diag(error(kw_span.next_single_width()));
 	}
 
-	nodes.push(Node {
+	ctx.push_node(Node {
 		span: Span::new(
 			kw_span.start,
 			if let Some(s) = semi_span {
@@ -3816,7 +3834,7 @@ fn parse_break_continue_discard<'a, P: TokenStreamProvider<'a>>(
 /// This function assumes that the keyword is not yet consumed.
 fn parse_return<'a, P: TokenStreamProvider<'a>>(
 	walker: &mut Walker<'a, P>,
-	nodes: &mut Vec<Node>,
+	ctx: &mut Ctx,
 	kw_span: Span,
 ) {
 	walker.push_colour(kw_span, SyntaxType::Keyword);
@@ -3862,7 +3880,7 @@ fn parse_return<'a, P: TokenStreamProvider<'a>>(
 		}
 	}
 
-	nodes.push(Node {
+	ctx.push_node(Node {
 		span: Span::new(
 			kw_span.start,
 			if let Some(s) = semi_span {
@@ -3880,7 +3898,7 @@ fn parse_return<'a, P: TokenStreamProvider<'a>>(
 /// This function assumes that the directive has not yet been consumed.
 fn parse_directive<'a, P: TokenStreamProvider<'a>>(
 	walker: &mut Walker<'a, P>,
-	nodes: &mut Vec<Node>,
+	ctx: &mut Ctx,
 	stream: PreprocStream,
 	dir_span: Span,
 ) {
@@ -3890,7 +3908,7 @@ fn parse_directive<'a, P: TokenStreamProvider<'a>>(
 		PreprocStream::Empty => {
 			walker.push_colour(dir_span, SyntaxType::DirectiveHash);
 			walker.push_semantic_diag(Semantic::EmptyDirective(dir_span));
-			nodes.push(Node {
+			ctx.push_node(Node {
 				span: dir_span,
 				ty: NodeTy::EmptyDirective,
 			});
@@ -3915,13 +3933,13 @@ fn parse_directive<'a, P: TokenStreamProvider<'a>>(
 				.push_syntax_diag(Syntax::FoundIllegalPreproc(dir_span, None));
 		}
 		PreprocStream::Version { kw, tokens } => {
-			parse_version_directive(walker, nodes, dir_span, kw, tokens)
+			parse_version_directive(walker, ctx, dir_span, kw, tokens)
 		}
 		PreprocStream::Extension { kw, tokens } => {
-			parse_extension_directive(walker, nodes, dir_span, kw, tokens)
+			parse_extension_directive(walker, ctx, dir_span, kw, tokens)
 		}
 		PreprocStream::Line { kw, tokens } => {
-			parse_line_directive(walker, nodes, dir_span, kw, tokens)
+			parse_line_directive(walker, ctx, dir_span, kw, tokens)
 		}
 		PreprocStream::Define {
 			kw: kw_span,
@@ -3984,7 +4002,7 @@ fn parse_directive<'a, P: TokenStreamProvider<'a>>(
 					ident.1,
 					Macro::Object(body_tokens.clone()),
 				);
-				nodes.push(Node {
+				ctx.push_node(Node {
 					span: dir_span,
 					ty: NodeTy::DefineDirective {
 						macro_: ast::Macro::Object {
@@ -4044,7 +4062,7 @@ fn parse_directive<'a, P: TokenStreamProvider<'a>>(
 								prev_span.next_single_width(),
 							),
 						));
-						nodes.push(Node {
+						ctx.push_node(Node {
 							span: dir_span,
 							ty: NodeTy::DefineDirective {
 								macro_: ast::Macro::Function {
@@ -4178,7 +4196,7 @@ fn parse_directive<'a, P: TokenStreamProvider<'a>>(
 						body: body_tokens.clone(),
 					},
 				);
-				nodes.push(Node {
+				ctx.push_node(Node {
 					span: dir_span,
 					ty: NodeTy::DefineDirective {
 						macro_: ast::Macro::Function {
@@ -4244,7 +4262,7 @@ fn parse_directive<'a, P: TokenStreamProvider<'a>>(
 				ident
 			};
 
-			nodes.push(Node {
+			ctx.push_node(Node {
 				span: Span::new(
 					dir_span.start,
 					if let Omittable::Some(ref ident) = ident {
@@ -4257,10 +4275,10 @@ fn parse_directive<'a, P: TokenStreamProvider<'a>>(
 			});
 		}
 		PreprocStream::Error { kw, message } => {
-			parse_error_directive(walker, nodes, dir_span, kw, message)
+			parse_error_directive(walker, ctx, dir_span, kw, message)
 		}
 		PreprocStream::Pragma { kw, options } => {
-			parse_pragma_directive(walker, nodes, dir_span, kw, options)
+			parse_pragma_directive(walker, ctx, dir_span, kw, options)
 		}
 		_ => {}
 	}
@@ -4269,7 +4287,7 @@ fn parse_directive<'a, P: TokenStreamProvider<'a>>(
 /// Parses a `#version` directive.
 fn parse_version_directive<'a, P: TokenStreamProvider<'a>>(
 	walker: &mut Walker<'a, P>,
-	nodes: &mut Vec<Node>,
+	ctx: &mut Ctx,
 	dir_span: Span,
 	kw_span: Span,
 	tokens: Vec<(VersionToken, Span)>,
@@ -4437,7 +4455,7 @@ fn parse_version_directive<'a, P: TokenStreamProvider<'a>>(
 								Span::new_between(kw_span, token_span)
 							)));
 						seek_end(walker, tokens, true);
-						nodes.push(Node {
+						ctx.push_node(Node {
 							span: Span::new(dir_span.start, token_span.end),
 							ty: NodeTy::VersionDirective {
 								version: None,
@@ -4470,7 +4488,7 @@ fn parse_version_directive<'a, P: TokenStreamProvider<'a>>(
 							PreprocVersionDiag::InvalidProfile(token_span),
 						));
 						seek_end(walker, tokens, false);
-						nodes.push(Node {
+						ctx.push_node(Node {
 							span: Span::new(dir_span.start, version.1.end),
 							ty: NodeTy::VersionDirective {
 								version: Some(version),
@@ -4486,7 +4504,7 @@ fn parse_version_directive<'a, P: TokenStreamProvider<'a>>(
 					PreprocVersionDiag::ExpectedProfile(token_span),
 				));
 				seek_end(walker, tokens, false);
-				nodes.push(Node {
+				ctx.push_node(Node {
 					span: Span::new(dir_span.start, version.1.end),
 					ty: NodeTy::VersionDirective {
 						version: Some(version),
@@ -4500,7 +4518,7 @@ fn parse_version_directive<'a, P: TokenStreamProvider<'a>>(
 	};
 
 	seek_end(walker, tokens, true);
-	nodes.push(Node {
+	ctx.push_node(Node {
 		span: Span::new(
 			dir_span.start,
 			if let Omittable::Some(ref profile) = profile {
@@ -4519,7 +4537,7 @@ fn parse_version_directive<'a, P: TokenStreamProvider<'a>>(
 /// Parses an `#extension` directive.
 fn parse_extension_directive<'a, P: TokenStreamProvider<'a>>(
 	walker: &mut Walker<'a, P>,
-	nodes: &mut Vec<Node>,
+	ctx: &mut Ctx,
 	dir_span: Span,
 	kw_span: Span,
 	tokens: Vec<(ExtensionToken, Span)>,
@@ -4631,7 +4649,7 @@ fn parse_extension_directive<'a, P: TokenStreamProvider<'a>>(
 							),
 						));
 						seek_end(walker, tokens, false);
-						nodes.push(Node {
+						ctx.push_node(Node {
 							span: Span::new(dir_span.start, token_span.end),
 							ty: NodeTy::ExtensionDirective {
 								name: None,
@@ -4657,7 +4675,7 @@ fn parse_extension_directive<'a, P: TokenStreamProvider<'a>>(
 					),
 				));
 				seek_end(walker, tokens, false);
-				nodes.push(Node {
+				ctx.push_node(Node {
 					span: Span::new(dir_span.start, kw_span.end),
 					ty: NodeTy::ExtensionDirective {
 						name: None,
@@ -4697,7 +4715,7 @@ fn parse_extension_directive<'a, P: TokenStreamProvider<'a>>(
 							),
 						));
 						seek_end(walker, tokens, false);
-						nodes.push(Node {
+						ctx.push_node(Node {
 							span: Span::new(dir_span.start, token_span.end),
 							ty: NodeTy::ExtensionDirective {
 								name: Some(name),
@@ -4712,7 +4730,7 @@ fn parse_extension_directive<'a, P: TokenStreamProvider<'a>>(
 							PreprocExtDiag::ExpectedColon(token_span),
 						));
 						seek_end(walker, tokens, false);
-						nodes.push(Node {
+						ctx.push_node(Node {
 							span: Span::new(dir_span.start, name.1.end),
 							ty: NodeTy::ExtensionDirective {
 								name: Some(name),
@@ -4729,7 +4747,7 @@ fn parse_extension_directive<'a, P: TokenStreamProvider<'a>>(
 					PreprocExtDiag::ExpectedColon(token_span),
 				));
 				seek_end(walker, tokens, false);
-				nodes.push(Node {
+				ctx.push_node(Node {
 					span: Span::new(dir_span.start, name.1.end),
 					ty: NodeTy::ExtensionDirective {
 						name: Some(name),
@@ -4743,7 +4761,7 @@ fn parse_extension_directive<'a, P: TokenStreamProvider<'a>>(
 			walker.push_syntax_diag(Syntax::PreprocExt(
 				PreprocExtDiag::ExpectedColon(name.1.next_single_width()),
 			));
-			nodes.push(Node {
+			ctx.push_node(Node {
 				span: Span::new(dir_span.start, name.1.end),
 				ty: NodeTy::ExtensionDirective {
 					name: Some(name),
@@ -4775,7 +4793,7 @@ fn parse_extension_directive<'a, P: TokenStreamProvider<'a>>(
 							PreprocExtDiag::InvalidBehaviour(token_span),
 						));
 						seek_end(walker, tokens, false);
-						nodes.push(Node {
+						ctx.push_node(Node {
 							span: Span::new(dir_span.start, colon_span.end),
 							ty: NodeTy::ExtensionDirective {
 								name: Some(name),
@@ -4792,7 +4810,7 @@ fn parse_extension_directive<'a, P: TokenStreamProvider<'a>>(
 					PreprocExtDiag::ExpectedBehaviour(token_span),
 				));
 				seek_end(walker, tokens, false);
-				nodes.push(Node {
+				ctx.push_node(Node {
 					span: Span::new(dir_span.start, colon_span.end),
 					ty: NodeTy::ExtensionDirective {
 						name: Some(name),
@@ -4807,7 +4825,7 @@ fn parse_extension_directive<'a, P: TokenStreamProvider<'a>>(
 					PreprocExtDiag::ExpectedBehaviour(token_span),
 				));
 				seek_end(walker, tokens, false);
-				nodes.push(Node {
+				ctx.push_node(Node {
 					span: Span::new(dir_span.start, colon_span.end),
 					ty: NodeTy::ExtensionDirective {
 						name: Some(name),
@@ -4821,7 +4839,7 @@ fn parse_extension_directive<'a, P: TokenStreamProvider<'a>>(
 			walker.push_syntax_diag(Syntax::PreprocExt(
 				PreprocExtDiag::ExpectedBehaviour(name.1.next_single_width()),
 			));
-			nodes.push(Node {
+			ctx.push_node(Node {
 				span: Span::new(dir_span.start, colon_span.end),
 				ty: NodeTy::ExtensionDirective {
 					name: Some(name),
@@ -4833,7 +4851,7 @@ fn parse_extension_directive<'a, P: TokenStreamProvider<'a>>(
 	};
 
 	seek_end(walker, tokens, true);
-	nodes.push(Node {
+	ctx.push_node(Node {
 		span: Span::new(dir_span.start, behaviour.1.end),
 		ty: NodeTy::ExtensionDirective {
 			name: Some(name),
@@ -4845,7 +4863,7 @@ fn parse_extension_directive<'a, P: TokenStreamProvider<'a>>(
 /// Parses a `#line` directive.
 fn parse_line_directive<'a, P: TokenStreamProvider<'a>>(
 	walker: &mut Walker<'a, P>,
-	nodes: &mut Vec<Node>,
+	ctx: &mut Ctx,
 	dir_span: Span,
 	kw_span: Span,
 	tokens: Vec<(LineToken, Span)>,
@@ -4910,7 +4928,7 @@ fn parse_line_directive<'a, P: TokenStreamProvider<'a>>(
 				let src_str_num = Omittable::None;
 				if src_str_num.is_some() {
 					seek_end(walker, tokens, true);
-					nodes.push(Node {
+					ctx.push_node(Node {
 						span: Span::new(dir_span.start, kw_span.end),
 						ty: NodeTy::LineDirective { line, src_str_num },
 					});
@@ -4925,7 +4943,7 @@ fn parse_line_directive<'a, P: TokenStreamProvider<'a>>(
 					PreprocLineDiag::ExpectedNumber(token_span),
 				));
 				seek_end(walker, tokens, false);
-				nodes.push(Node {
+				ctx.push_node(Node {
 					span: Span::new(dir_span.start, kw_span.end),
 					ty: NodeTy::LineDirective {
 						line: None,
@@ -4957,7 +4975,7 @@ fn parse_line_directive<'a, P: TokenStreamProvider<'a>>(
 					PreprocLineDiag::ExpectedNumber(token_span),
 				));
 				seek_end(walker, tokens, false);
-				nodes.push(Node {
+				ctx.push_node(Node {
 					span: Span::new(
 						dir_span.start,
 						if let Some(line) = line {
@@ -4978,7 +4996,7 @@ fn parse_line_directive<'a, P: TokenStreamProvider<'a>>(
 	};
 
 	seek_end(walker, tokens, true);
-	nodes.push(Node {
+	ctx.push_node(Node {
 		span: Span::new(
 			dir_span.start,
 			if let Omittable::Some(src_str_num) = src_str_num {
@@ -4996,7 +5014,7 @@ fn parse_line_directive<'a, P: TokenStreamProvider<'a>>(
 /// Parses an `#error` directive.
 fn parse_error_directive<'a, P: TokenStreamProvider<'a>>(
 	walker: &mut Walker<'a, P>,
-	nodes: &mut Vec<Node>,
+	ctx: &mut Ctx,
 	dir_span: Span,
 	kw_span: Span,
 	message: Option<Spanned<String>>,
@@ -5006,7 +5024,7 @@ fn parse_error_directive<'a, P: TokenStreamProvider<'a>>(
 	if let Some(ref message) = message {
 		walker.push_colour(message.1, SyntaxType::DirectiveError);
 	}
-	nodes.push(Node {
+	ctx.push_node(Node {
 		span: Span::new(
 			dir_span.start,
 			if let Some(ref message) = message {
@@ -5024,7 +5042,7 @@ fn parse_error_directive<'a, P: TokenStreamProvider<'a>>(
 /// Parses a `#pragma` directive.
 fn parse_pragma_directive<'a, P: TokenStreamProvider<'a>>(
 	walker: &mut Walker<'a, P>,
-	nodes: &mut Vec<Node>,
+	ctx: &mut Ctx,
 	dir_span: Span,
 	kw_span: Span,
 	options: Option<Spanned<String>>,
@@ -5034,7 +5052,7 @@ fn parse_pragma_directive<'a, P: TokenStreamProvider<'a>>(
 	if let Some(ref options) = options {
 		walker.push_colour(options.1, SyntaxType::DirectivePragma);
 	}
-	nodes.push(Node {
+	ctx.push_node(Node {
 		span: Span::new(
 			dir_span.start,
 			if let Some(ref options) = options {

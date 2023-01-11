@@ -1,3 +1,4 @@
+#![allow(unused)]
 //! Types and functionality related to the parser.
 //!
 //! This module contains the structs and enums used to represent the AST (in the [`ast`] submodule), and the
@@ -1078,7 +1079,7 @@ impl TokenTree {
 		}
 		walker.syntax_diags.append(&mut self.syntax_diags.clone());
 		let (ast, syntax_diags, semantic_diags, mut root_tokens) = (
-			ctx.to_ast(),
+			ctx.into_ast(),
 			walker.syntax_diags,
 			walker.semantic_diags,
 			walker.syntax_tokens,
@@ -1232,7 +1233,7 @@ impl TokenTree {
 		let eval_key = walker.token_provider.chosen_key;
 		let eval_regions = walker.token_provider.chosen_regions;
 		let (ast, syntax_diags, semantic_diags, eval_tokens) = (
-			ctx.to_ast(),
+			ctx.into_ast(),
 			walker.syntax_diags,
 			walker.semantic_diags,
 			walker.syntax_tokens,
@@ -1520,7 +1521,7 @@ impl TokenTree {
 
 		(
 			ParseResult {
-				ast: ctx.to_ast(),
+				ast: ctx.into_ast(),
 				syntax_diags: walker.syntax_diags,
 				semantic_diags: walker.semantic_diags,
 				syntax_tokens: walker.syntax_tokens,
@@ -3100,40 +3101,183 @@ impl<'a, Provider: TokenStreamProvider<'a>> Walker<'a, Provider> {
 /// An abstract syntax tree.
 #[derive(Debug)]
 pub struct Ast {
-	#[allow(unused)]
 	arena: generational_arena::Arena<ast::Node>,
+	structs: Vec<StructSymbol>,
+	functions: Vec<FunctionSymbol>,
+	variables: Vec<Vec<VariableSymbol>>,
 }
 
-/// Context object to pushing nodes into.
+/// Context object for managing the parser state and pushing nodes into.
 #[derive(Debug)]
 pub struct Ctx {
 	/// Arena of nodes.
 	arena: generational_arena::Arena<ast::Node>,
 	/// The stack of active scopes.
 	///
+	/// - `0` - Handle to the `ast::Node::Block` scope.
+	/// - `1` - Index of the variable symbol table for this scope.
+	///
 	/// # Invariants
 	/// `self[0]` always exists and points to a `NodeTy::TranslationUnit`.
-	scope_stack: Vec<NodeHandle>,
+	scope_stack: Vec<(NodeHandle, VariableTableHandle)>,
+
+	/// All uses of primitives.
+	primitive_uses: HashMap<ast::Primitive, Span>,
+	/// All defined struct symbols.
+	structs: Vec<StructSymbol>,
+
+	/// All built-in function symbols.
+	built_in_functions: Vec<FunctionSymbol>,
+	/// All user-defined function symbols.
+	functions: Vec<FunctionSymbol>,
+	/// All defined function symbols. Each unique function name can have multiple overloads; each combination of
+	/// different return type and parameters constitutes a unique overload.
+	function_lookup: HashMap<String, Vec<FunctionHandle>>,
+	/// All variable symbol tables, each containing all variable symbols for that given table.
+	variables: Vec<Vec<VariableSymbol>>,
+	// TODO: keep a list of unresolved names, and when we add a new symbol we can check if it was previously
+	// referenced to produce a nice error message: unresolved_names: Vec<Ident>
 }
 
-/// A handle to a node stored within the [`Ctx`] during parsing.
+/// A struct symbol.
+#[derive(Debug)]
+pub struct StructSymbol {
+	/// Handle to the `StructDecl` or `StructDef` node.
+	def_node: NodeHandle,
+	/// The name.
+	name: String,
+	/// The fields. Unlike the node itself, which can contain any child nodes within, this only contains field
+	/// information and nothing else.
+	fields: Vec<StructField>,
+	/// All references to this struct. This includes the struct decl/def name itself.
+	refs: Vec<Span>,
+}
+
+/// A field within a struct symbol.
+#[derive(Debug)]
+pub struct StructField {
+	/// The type.
+	type_: ast::Type,
+	/// The name. A field can lack a name, in which case it is un-referencable and really just in the struct
+	/// definition for padding purposes.
+	name: ast::Omittable<String>, // FIXME: Parser type refactor.
+	/// All references to this field. This includes the field name itself.
+	refs: Vec<Span>,
+}
+
+/// A function symbol.
+#[derive(Debug)]
+pub struct FunctionSymbol {
+	/// Handles to any `FnDecl` nodes.
+	decl_nodes: Vec<NodeHandle>,
+	/// Handle to an `FnDef` node. Only one definition is allowed per (overloaded) function.
+	def_nodes: Option<NodeHandle>,
+	/// The name.
+	name: String,
+	/// The parameters for this overload.
+	params: Vec<FunctionParam>,
+	/// The return type for this overload.
+	return_type: ast::Type,
+	/// All uses of this function. Doesn't
+	refs: Vec<Span>,
+}
+
+/// A parameter within a function symbol.
+#[derive(Debug, PartialEq)]
+pub struct FunctionParam {
+	/// The type.
+	type_: ast::Type,
+	/// The name. A parameter can lack a name, in which case it is un-referencable.
+	name: ast::Omittable<String>,
+	/// All references to this parameter. This includes the parameter name itself.
+	refs: Vec<Span>,
+}
+
+/// A variable symbol.
+#[derive(Debug)]
+pub struct VariableSymbol {
+	/// Handle to a `VarDef*` node.
+	def_node: NodeHandle,
+	/// The type.
+	type_: ast::Type,
+	/// The name.
+	name: String,
+	/// All references to this variable. This includes the variable decl/def name itself.
+	refs: Vec<Span>,
+}
+
+impl From<ast::Param> for FunctionParam {
+	fn from(p: ast::Param) -> Self {
+		let (name, refs) = if let ast::Omittable::Some(ident) = p.ident {
+			(ast::Omittable::Some(ident.name), vec![ident.span])
+		} else {
+			(ast::Omittable::None, Vec::new())
+		};
+		Self {
+			type_: p.type_,
+			name,
+			refs,
+		}
+	}
+}
+
+/// A handle to a node stored within the [`Ast`]/[`Ctx`].
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct NodeHandle(generational_arena::Index);
+
+/// A handle to a struct symbol stored within the [`Ast`]/[`Ctx`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct StructHandle(usize);
+
+/// A handle to a function symbol stored within the [`Ast`]/[`Ctx`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct FunctionHandle(
+	usize,
+	/// `false` = built-in; `true` = user-defined.
+	bool,
+);
+
+/// A handle to a variable table.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct VariableTableHandle(usize);
+
+/// A handle to a variable symbol, (stored within a variable table), stored within the [`Ast`]/[`Ctx`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct VariableHandle(
+	/// Index of table.
+	usize,
+	/// Index of symbol in table.
+	usize,
+);
 
 impl Ctx {
 	/// Constructs a new context.
 	fn new() -> Self {
 		let mut arena = generational_arena::Arena::new();
+		let variables = vec![vec![]];
 		let mut scope_stack = Vec::new();
-		scope_stack.push(NodeHandle(arena.insert(ast::Node {
-			span: Span::new(0, 0),
-			ty: ast::NodeTy::TranslationUnit(ast::Scope {
+		scope_stack.push((
+			NodeHandle(arena.insert(ast::Node {
 				span: Span::new(0, 0),
-				contents: Vec::new(),
-			}),
-		})));
+				ty: ast::NodeTy::TranslationUnit(ast::Scope {
+					span: Span::new(0, 0),
+					contents: Vec::new(),
+					variable_table: VariableTableHandle(0),
+				}),
+			})),
+			VariableTableHandle(0),
+		));
 
-		Self { arena, scope_stack }
+		Self {
+			arena,
+			scope_stack,
+			primitive_uses: HashMap::new(),
+			structs: Vec::new(),
+			built_in_functions: Vec::new(),
+			functions: Vec::new(),
+			function_lookup: HashMap::new(),
+			variables,
+		}
 	}
 
 	/// Pushes a node into the current scope.
@@ -3149,25 +3293,217 @@ impl Ctx {
 		new_handle
 	}
 
+	/// Pushes a struct node into the current scope, and registers a new struct symbol.
+	fn push_new_struct(
+		&mut self,
+		ident: ast::Ident,
+		fields: Vec<StructField>,
+		node: ast::Node,
+	) {
+		// TODO: Produce syntax error if not in the global scope.
+		let handle = self.push_node(node);
+		self.structs.push(StructSymbol {
+			def_node: handle,
+			name: ident.name,
+			fields,
+			refs: vec![ident.span],
+		});
+	}
+
+	/// Pushes a function declaration into the current scope, and registers a new function symbol, or if a function
+	/// with this name already exists, a new overloaded function symbol.
+	fn push_new_function_decl(
+		&mut self,
+		ident: ast::Ident,
+		params: Vec<FunctionParam>,
+		return_type: ast::Type,
+		node: ast::Node,
+	) {
+		// TODO: Syntax errors for overloading.
+		let handle = self.push_node(node);
+		match self.function_lookup.get_mut(&ident.name) {
+			Some(symbols) => {
+				// One or more functions with this name already exist. If any match, that means we have a new
+				// decl/def, otherwise that means we have a new overload.
+				let mut existing = None;
+				'outer: for handle in symbols.iter() {
+					if !handle.1 {
+						// TODO: Error about not allowing to overload built-in function.
+					}
+					let symbol = &self.functions[handle.0];
+
+					if symbol.params.len() == params.len() {
+						let mut eq = true;
+						for (a, b) in symbol.params.iter().zip(params.iter()) {
+							if *a != *b {
+								eq = false;
+								break;
+							}
+						}
+
+						if eq && symbol.return_type == return_type {
+							existing = Some(handle);
+							break 'outer;
+						}
+					}
+				}
+
+				match existing {
+					Some(existing) => {
+						self.functions[existing.0].decl_nodes.push(handle);
+					}
+					None => {
+						let fn_handle =
+							FunctionHandle(self.functions.len(), true);
+						self.functions.push(FunctionSymbol {
+							decl_nodes: vec![handle],
+							def_nodes: None,
+							name: ident.name,
+							params,
+							return_type,
+							refs: vec![ident.span],
+						});
+						symbols.push(fn_handle);
+					}
+				}
+			}
+			None => {
+				// We haven't come across a function with this name yet.
+				let fn_handle = FunctionHandle(self.functions.len(), true);
+				self.functions.push(FunctionSymbol {
+					decl_nodes: vec![handle],
+					def_nodes: None,
+					name: ident.name.clone(),
+					params,
+					return_type,
+					refs: vec![ident.span],
+				});
+				self.function_lookup.insert(ident.name, vec![fn_handle]);
+			}
+		}
+	}
+
+	/// Pushes a function definition into the current scope, and registers a new function symbol, or if a function
+	/// with this name already exists, a new overloaded function symbol.
+	fn push_new_function_def(
+		&mut self,
+		ident: ast::Ident,
+		params: Vec<FunctionParam>,
+		return_type: ast::Type,
+		node: ast::Node,
+	) {
+		let handle = self.push_node(node);
+		match self.function_lookup.get_mut(&ident.name) {
+			Some(symbols) => {
+				// One or more functions with this name already exist. If any match, that means we have a new
+				// decl/def, otherwise that means we have a new overload.
+				let mut existing = None;
+				'outer: for handle in symbols.iter() {
+					if !handle.1 {
+						// TODO: Error about not allowing to overload built-in function.
+					}
+					let symbol = &self.functions[handle.0];
+
+					if symbol.params.len() == params.len() {
+						let mut eq = true;
+						for (a, b) in symbol.params.iter().zip(params.iter()) {
+							if *a != *b {
+								eq = false;
+								break;
+							}
+						}
+
+						if eq && symbol.return_type == return_type {
+							existing = Some(handle);
+							break 'outer;
+						}
+					}
+				}
+
+				match existing {
+					Some(existing) => {
+						// TODO: Error for re-defining a function.
+					}
+					None => {
+						let fn_handle =
+							FunctionHandle(self.functions.len(), true);
+						self.functions.push(FunctionSymbol {
+							decl_nodes: Vec::new(),
+							def_nodes: Some(handle),
+							name: ident.name,
+							params,
+							return_type,
+							refs: vec![ident.span],
+						});
+						symbols.push(fn_handle);
+					}
+				}
+			}
+			None => {
+				// We haven't come across a function with this name yet.
+				let fn_handle = FunctionHandle(self.functions.len(), true);
+				self.functions.push(FunctionSymbol {
+					decl_nodes: Vec::new(),
+					def_nodes: Some(handle),
+					name: ident.name.clone(),
+					params,
+					return_type,
+					refs: vec![ident.span],
+				});
+				self.function_lookup.insert(ident.name, vec![fn_handle]);
+			}
+		}
+	}
+
+	/// Pushes one or more variable definitions into the current scope, and registers new variable
+	/// symbols in the current scope.
+	fn push_new_variables(
+		&mut self,
+		(pairs, node): (Vec<(ast::Type, ast::Ident)>, ast::Node),
+	) {
+		let node_end = node.span.end;
+		let new_handle = NodeHandle(self.arena.insert(node));
+
+		// Push the handle into the current scope.
+		let scope = self.__get_current_scope();
+		scope.contents.push(new_handle);
+		scope.span.end = node_end;
+
+		// Register symbols.
+		let h = scope.variable_table;
+		for (type_, ident) in pairs {
+			// TODO: Error if variable name already taken.
+			self.variables[h.0].push(VariableSymbol {
+				def_node: new_handle,
+				type_,
+				name: ident.name,
+				refs: vec![ident.span],
+			});
+		}
+	}
+
 	/// Creates a new temporary scope.
 	fn new_temp_scope(&mut self, opening_delim: Span) -> NodeHandle {
 		// We create a temporary block node into which child nodes will go into. Later, this block node will be
 		// removed and its scope used in a different node, that will be subsequently inserted back in.
+		let new_table_handle = VariableTableHandle(self.variables.len());
+		self.variables.push(Vec::new());
 		let new_handle = NodeHandle(self.arena.insert(ast::Node {
 			span: opening_delim,
 			ty: ast::NodeTy::Block(ast::Scope {
 				span: opening_delim,
 				contents: Vec::new(),
+				variable_table: new_table_handle,
 			}),
 		}));
-		self.scope_stack.push(new_handle);
+		self.scope_stack.push((new_handle, new_table_handle));
 		new_handle
 	}
 
 	/// Takes the temporary scope, to be used in an actual node.
 	fn take_temp_scope(&mut self, handle: NodeHandle) -> ast::Scope {
 		let h = self.scope_stack.pop();
-		assert_eq!(h.unwrap(), handle);
+		assert_eq!(h.unwrap().0, handle);
 
 		let block_node = self.arena.remove(handle.0).unwrap();
 		match block_node.ty {
@@ -3178,33 +3514,38 @@ impl Ctx {
 
 	/// Sets the ending position of the current scope.
 	fn set_scope_end(&mut self, ending_delim: Span) {
-		match &mut self.arena[self.scope_stack.last().unwrap().0].ty {
+		match &mut self.arena[self.scope_stack.last().unwrap().0 .0].ty {
 			ast::NodeTy::Block(scope) => scope.span.end = ending_delim.end,
 			_ => {}
 		}
 	}
 
+	/// Returns a reference to the node represented by the handle.
+	fn get_node(&self, handle: NodeHandle) -> &ast::Node {
+		self.arena.get(handle.0).unwrap()
+	}
+
 	/// Converts this context into the abstract syntax tree. This is done once parsing has finished in order to
-	/// remove fields that were only necessary during the parsing process itself, such as any stacks/state
-	/// variables.
-	fn to_ast(self) -> Ast {
-		Ast { arena: self.arena }
+	/// remove fields that were only necessary during the parsing process itself, such as any stacks or
+	/// state-tracking variables.
+	fn into_ast(self) -> Ast {
+		Ast {
+			arena: self.arena,
+			structs: self.structs,
+			functions: self.functions,
+			variables: self.variables,
+		}
 	}
 
 	fn __get_current_scope(&mut self) -> &mut ast::Scope {
 		use ast::NodeTy;
-		let scope_node = &mut self.arena[self.scope_stack.last().unwrap().0];
+		let scope_node = &mut self.arena[self.scope_stack.last().unwrap().0 .0];
 		match &mut scope_node.ty {
-			NodeTy::TranslationUnit(scope) => scope,
+			// We only push the real node once we've finished parsing it, so until that point, any symbols are
+			// pushed into a temporary block scope. The only exception is the translation unit scope created in the
+			// constructor.
 			NodeTy::Block(scope) => scope,
-			NodeTy::FnDef { body, .. } => body,
-			NodeTy::SubroutineFnDef { .. } => todo!(),
-			NodeTy::StructDef { body, .. } => body,
-			NodeTy::If(_) => todo!(),
-			NodeTy::Switch { .. } => todo!(),
-			NodeTy::For { .. } => todo!(),
-			NodeTy::While { body, .. } => body,
-			NodeTy::DoWhile { body, .. } => body,
+			NodeTy::TranslationUnit(scope) => scope,
 			_ => unreachable!(),
 		}
 	}

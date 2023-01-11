@@ -25,7 +25,7 @@
 //! Since conditional compilation is resolved before the AST is generated, conditional compilation directives are
 //! not part of the AST.
 
-use super::NodeHandle;
+use super::{NodeHandle, StructHandle, VariableTableHandle};
 use crate::{
 	diag::Syntax,
 	lexer::{NumType, Token},
@@ -81,7 +81,7 @@ pub enum NodeTy {
 	VarDefInit {
 		type_: Type,
 		ident: Ident,
-		value: Option<Expr>,
+		init_expr: Option<Expr>,
 	},
 	/// A variable definition with initialization, containing multiple variables, e.g. `int i, j, k = 0;`.
 	VarDefInits(Vec<(Type, Ident)>, Option<Expr>),
@@ -123,7 +123,8 @@ pub enum NodeTy {
 	},
 	/// A subroutine uniform definition, e.g. `subroutine uniform foo my_foo;`.
 	SubroutineUniformDef { type_: Type, ident: Ident },
-	/// A struct declaration, e.g. `struct FooBar;`. This is an illegal GLSL statement.
+	/// A struct declaration, e.g. `struct FooBar;`. This is an illegal GLSL statement, however it is modelled here
+	/// for completeness sake.
 	StructDecl {
 		qualifiers: Vec<Qualifier>,
 		ident: Ident,
@@ -133,7 +134,7 @@ pub enum NodeTy {
 		qualifiers: Vec<Qualifier>,
 		ident: Ident,
 		body: Scope,
-		instance: Omittable<Ident>,
+		instance: Omittable<Ident>, // FIXME: register variable
 	},
 	/// An if statement, e.g. `if (true) {/*...*/} else {/*...*/}`.
 	If(Vec<IfBranch>),
@@ -198,6 +199,7 @@ pub enum NodeTy {
 #[derive(Debug, Clone, PartialEq)]
 pub struct Scope {
 	pub contents: Vec<NodeHandle>,
+	pub variable_table: VariableTableHandle,
 	pub span: Span,
 }
 
@@ -244,124 +246,139 @@ pub struct Type {
 #[derive(Debug, Clone, PartialEq)]
 pub enum TypeTy {
 	/// A type which has only a single value.
-	Single(Primitive),
+	Single(Either<Primitive, StructHandle>),
 	/// An array type which contains zero or more values.
-	Array(Primitive, ArrSize),
+	Array(Either<Primitive, StructHandle>, ArrSize),
 	/// A 2D array type which contains zero or more values.
 	///
 	/// - `1` - Size of the outer array.
 	/// - `2` - Size of each inner array.
-	Array2D(Primitive, ArrSize, ArrSize),
+	Array2D(Either<Primitive, StructHandle>, ArrSize, ArrSize),
 	/// An n-dimensional array type which contains zero or more values.
 	///
 	/// - `1` - Vec containing the sizes of arrays, starting with the outer-most array.
-	ArrayND(Primitive, Vec<ArrSize>),
+	ArrayND(Either<Primitive, StructHandle>, Vec<ArrSize>),
 }
 
 /// An array size.
 pub type ArrSize = Omittable<Expr>;
 
 /// A primitive language type.
-///
-/// The reason for the separation of this enum and the [`Fundamental`] enum is that all fundamental types (aside
-/// from `void`) can be either a scalar or an n-dimensional vector. Furthermore, any of the types in this enum can
-/// be on their own or as part of a n-dimensional array.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Primitive {
-	/// A scalar primitive type.
-	Scalar(Fundamental),
-	/// A n-dimensional primitive type, where `2 <= n <= 4`.
-	Vector(Fundamental, usize),
-	/// A float matrix type.
-	///
-	/// - `0` - Column count.
-	/// - `1` - Row count.
-	Matrix(usize, usize),
-	/// A double matrix type.
-	///
-	/// - `0` - Column count.
-	/// - `1` - Row count.
-	DMatrix(usize, usize),
-	/// A struct type.
-	Struct(Ident),
-	/// A sampler type.
-	///
-	/// - `0` - Data type.
-	/// - `1` - Texture type.
-	///
-	/// # Invariants
-	/// - The data type is guaranteed to be one of `Fundamental::Float|Int|UInt`.
-	Sampler(Fundamental, TexType),
-	/// An image type.
-	///
-	/// - `0` - Data type.
-	/// - `1` - Texture type.
-	///
-	/// # Invariants
-	/// - The data type is guaranteed to be one of `Fundamental::Float|Int|UInt`.
-	/// - The texture type is guaranteed to be none of the `TexType::Shadow*` variants.
-	Image(Fundamental, TexType),
-	/// An atomic counter type.
-	Atomic,
-}
-
-/// A fundamental type.
-///
-/// These are the most fundamental types in the language, on which all other types are composed.
-#[derive(Debug, Clone, Copy, PartialEq)]
-pub enum Fundamental {
 	Void,
 	Bool,
 	Int,
-	UInt,
+	Uint,
 	Float,
 	Double,
-}
-
-/// The texture type of a `sampler_`/`isampler_`/`usampler_` or `image_`/`iimage_` primitive type.
-///
-/// The names of the variants match the type name suffixes, but any 1D/2D/3D letters are flipped because Rust
-/// typenames cannot begin with a digit.
-#[derive(Debug, Clone, PartialEq)]
-pub enum TexType {
-	/// `_1D`
-	D1,
-	/// `_2D`
-	D2,
-	/// `_3D`
-	D3,
-	/// `_Cube`
-	Cube,
-	/// `_2DRect`
-	D2Rect,
-	/// `_1DArray`
-	D1Array,
-	/// `_2DArray`
-	D2Array,
-	/// `_CubeArray`
-	CubeArray,
-	/// `_Buffer`
-	Buffer,
-	/// `_2DMS`
-	D2Multisample,
-	/// `_2DMSArray`
-	D2MultisampleArray,
-	/// `_1DShadow`
-	D1Shadow,
-	/// `_2DShadow`
-	D2Shadow,
-	/// `_3DShadow`
-	D3Shadow,
-	/// `_CubeShadow`
-	CubeShadow,
-	/// `_2DRectShadow`
-	D2RectShadow,
-	/// `_1DArrayShadow`
-	D1ArrayShadow,
-	/// `_2DArrayShadow`
-	D2ArrayShadow,
-	/// `_CubeArrayShadow`
-	CubeArrayShadow,
+	Vec2,
+	Vec3,
+	Vec4,
+	BVec2,
+	BVec3,
+	BVec4,
+	IVec2,
+	IVec3,
+	IVec4,
+	UVec2,
+	UVec3,
+	UVec4,
+	DVec2,
+	DVec3,
+	DVec4,
+	Mat2x2,
+	Mat2x3,
+	Mat2x4,
+	Mat3x2,
+	Mat3x3,
+	Mat3x4,
+	Mat4x2,
+	Mat4x3,
+	Mat4x4,
+	DMat2x2,
+	DMat2x3,
+	DMat2x4,
+	DMat3x2,
+	DMat3x3,
+	DMat3x4,
+	DMat4x2,
+	DMat4x3,
+	DMat4x4,
+	Sampler1d,
+	Sampler2d,
+	Sampler3d,
+	SamplerCube,
+	Sampler2dRect,
+	Sampler1dArray,
+	Sampler2dArray,
+	SamplerCubeArray,
+	SamplerBuffer,
+	Sampler2dms,
+	Sampler2dmsArray,
+	ISampler1d,
+	ISampler2d,
+	ISampler3d,
+	ISamplerCube,
+	ISampler2dRect,
+	ISampler1dArray,
+	ISampler2dArray,
+	ISamplerCubeArray,
+	ISamplerBuffer,
+	ISampler2dms,
+	ISampler2dmsArray,
+	USampler1d,
+	USampler2d,
+	USampler3d,
+	USamplerCube,
+	USampler2dRect,
+	USampler1dArray,
+	USampler2dArray,
+	USamplerCubeArray,
+	USamplerBuffer,
+	USampler2dms,
+	USampler2dmsArray,
+	Sampler1dShadow,
+	Sampler2dShadow,
+	SamplerCubeShadow,
+	Sampler2dRectShadow,
+	Sampler1dArrayShadow,
+	Sampler2dArrayShadow,
+	SamplerCubeArrayShadow,
+	Image1d,
+	Image2d,
+	Image3d,
+	ImageCube,
+	Image2dRect,
+	Image1dArray,
+	Image2dArray,
+	ImageCubeArray,
+	ImageBuffer,
+	Image2dms,
+	Image2dmsArray,
+	IImage1d,
+	IImage2d,
+	IImage3d,
+	IImageCube,
+	IImage2dRect,
+	IImage1dArray,
+	IImage2dArray,
+	IImageCubeArray,
+	IImageBuffer,
+	IImage2dms,
+	IImage2dmsArray,
+	UImage1d,
+	UImage2d,
+	UImage3d,
+	UImageCube,
+	UImage2dRect,
+	UImage1dArray,
+	UImage2dArray,
+	UImageCubeArray,
+	UImageBuffer,
+	UImage2dms,
+	UImage2dmsArray,
+	AtomicUint,
 }
 
 /// A type qualifier.
@@ -531,7 +548,7 @@ impl Type {
 		match &expr.ty {
 			ExprTy::Ident(i) => Some(Self {
 				span: expr.span,
-				ty: TypeTy::Single(Primitive::parse(i)),
+				ty: TypeTy::Single(Either::Left(Primitive::parse(i).unwrap())),
 				qualifiers: vec![],
 			}),
 			ExprTy::Index { item, i } => {
@@ -542,7 +559,9 @@ impl Type {
 				// Recursively look into any nested index operators until we hit an identifier.
 				let primitive = loop {
 					match &current_item.ty {
-						ExprTy::Ident(i) => break Primitive::parse(i),
+						ExprTy::Ident(i) => {
+							break Either::Left(Primitive::parse(i).unwrap())
+						}
 						ExprTy::Index { item, i } => {
 							stack.push(i.as_deref().cloned().into());
 							current_item = item;
@@ -640,237 +659,129 @@ impl Type {
 }
 
 impl Primitive {
-	/// Parses an identifier into a primitive type.
-	pub fn parse(ident: &Ident) -> Self {
+	/// Tries to parse an identifier into a primitive type.
+	pub fn parse(ident: &Ident) -> Option<Self> {
 		match ident.name.as_ref() {
-			"void" => Primitive::Scalar(Fundamental::Void),
-			"bool" => Primitive::Scalar(Fundamental::Bool),
-			"int" => Primitive::Scalar(Fundamental::Int),
-			"uint" => Primitive::Scalar(Fundamental::UInt),
-			"float" => Primitive::Scalar(Fundamental::Float),
-			"double" => Primitive::Scalar(Fundamental::Double),
-			"vec2" => Primitive::Vector(Fundamental::Float, 2),
-			"vec3" => Primitive::Vector(Fundamental::Float, 3),
-			"vec4" => Primitive::Vector(Fundamental::Float, 4),
-			"bvec2" => Primitive::Vector(Fundamental::Bool, 2),
-			"bvec3" => Primitive::Vector(Fundamental::Bool, 3),
-			"bvec4" => Primitive::Vector(Fundamental::Bool, 4),
-			"ivec2" => Primitive::Vector(Fundamental::Int, 2),
-			"ivec3" => Primitive::Vector(Fundamental::Int, 3),
-			"ivec4" => Primitive::Vector(Fundamental::Int, 4),
-			"uvec2" => Primitive::Vector(Fundamental::UInt, 2),
-			"uvec3" => Primitive::Vector(Fundamental::UInt, 3),
-			"uvec4" => Primitive::Vector(Fundamental::UInt, 4),
-			"dvec2" => Primitive::Vector(Fundamental::Double, 2),
-			"dvec3" => Primitive::Vector(Fundamental::Double, 3),
-			"dvec4" => Primitive::Vector(Fundamental::Double, 4),
-			"mat2" => Primitive::Matrix(2, 2),
-			"mat2x2" => Primitive::Matrix(2, 2),
-			"mat2x3" => Primitive::Matrix(2, 3),
-			"mat2x4" => Primitive::Matrix(2, 4),
-			"mat3x2" => Primitive::Matrix(3, 2),
-			"mat3" => Primitive::Matrix(3, 3),
-			"mat3x3" => Primitive::Matrix(3, 3),
-			"mat3x4" => Primitive::Matrix(3, 4),
-			"mat4x2" => Primitive::Matrix(4, 2),
-			"mat4x3" => Primitive::Matrix(4, 3),
-			"mat4" => Primitive::Matrix(4, 4),
-			"mat4x4" => Primitive::Matrix(4, 4),
-			"dmat2" => Primitive::DMatrix(2, 2),
-			"dmat2x2" => Primitive::DMatrix(2, 2),
-			"dmat2x3" => Primitive::DMatrix(2, 3),
-			"dmat2x4" => Primitive::DMatrix(2, 4),
-			"dmat3x2" => Primitive::DMatrix(3, 2),
-			"dmat3" => Primitive::DMatrix(3, 3),
-			"dmat3x3" => Primitive::DMatrix(3, 3),
-			"dmat3x4" => Primitive::DMatrix(3, 4),
-			"dmat4x2" => Primitive::DMatrix(4, 2),
-			"dmat4x3" => Primitive::DMatrix(4, 3),
-			"dmat4" => Primitive::DMatrix(4, 4),
-			"dmat4x4" => Primitive::DMatrix(4, 4),
-			"sampler1D" => Primitive::Sampler(Fundamental::Float, TexType::D1),
-			"sampler2D" => Primitive::Sampler(Fundamental::Float, TexType::D2),
-			"sampler3D" => Primitive::Sampler(Fundamental::Float, TexType::D3),
-			"samplerCube" => {
-				Primitive::Sampler(Fundamental::Float, TexType::Cube)
-			}
-			"sampler2DRect" => {
-				Primitive::Sampler(Fundamental::Float, TexType::D2Rect)
-			}
-			"sampler1DArray" => {
-				Primitive::Sampler(Fundamental::Float, TexType::D1Array)
-			}
-			"sampler2DArray" => {
-				Primitive::Sampler(Fundamental::Float, TexType::D2Array)
-			}
-			"samplerCubeArray" => {
-				Primitive::Sampler(Fundamental::Float, TexType::CubeArray)
-			}
-			"samplerBuffer" => {
-				Primitive::Sampler(Fundamental::Float, TexType::Buffer)
-			}
-			"sampler2DMS" => {
-				Primitive::Sampler(Fundamental::Float, TexType::D2Multisample)
-			}
-			"sampler2DMSArray" => Primitive::Sampler(
-				Fundamental::Float,
-				TexType::D2MultisampleArray,
-			),
-			"isampler1D" => Primitive::Sampler(Fundamental::Int, TexType::D1),
-			"isampler2D" => Primitive::Sampler(Fundamental::Int, TexType::D2),
-			"isampler3D" => Primitive::Sampler(Fundamental::Int, TexType::D3),
-			"isamplerCube" => {
-				Primitive::Sampler(Fundamental::Int, TexType::Cube)
-			}
-			"isampler2DRect" => {
-				Primitive::Sampler(Fundamental::Int, TexType::D2Rect)
-			}
-			"isampler1DArray" => {
-				Primitive::Sampler(Fundamental::Int, TexType::D1Array)
-			}
-			"isampler2DArray" => {
-				Primitive::Sampler(Fundamental::Int, TexType::D2Array)
-			}
-			"isamplerCubeArray" => {
-				Primitive::Sampler(Fundamental::Int, TexType::CubeArray)
-			}
-			"isamplerBuffer" => {
-				Primitive::Sampler(Fundamental::Int, TexType::Buffer)
-			}
-			"isampler2DMS" => {
-				Primitive::Sampler(Fundamental::Int, TexType::D2Multisample)
-			}
-			"isampler2DMSArray" => Primitive::Sampler(
-				Fundamental::Int,
-				TexType::D2MultisampleArray,
-			),
-			"usampler1D" => Primitive::Sampler(Fundamental::UInt, TexType::D1),
-			"usampler2D" => Primitive::Sampler(Fundamental::UInt, TexType::D2),
-			"usampler3D" => Primitive::Sampler(Fundamental::UInt, TexType::D3),
-			"usamplerCube" => {
-				Primitive::Sampler(Fundamental::UInt, TexType::Cube)
-			}
-			"usampler2DRect" => {
-				Primitive::Sampler(Fundamental::UInt, TexType::D2Rect)
-			}
-			"usampler1DArray" => {
-				Primitive::Sampler(Fundamental::UInt, TexType::D1Array)
-			}
-			"usampler2DArray" => {
-				Primitive::Sampler(Fundamental::UInt, TexType::D2Array)
-			}
-			"usamplerCubeArray" => {
-				Primitive::Sampler(Fundamental::UInt, TexType::CubeArray)
-			}
-			"usamplerBuffer" => {
-				Primitive::Sampler(Fundamental::UInt, TexType::Buffer)
-			}
-			"usampler2DMS" => {
-				Primitive::Sampler(Fundamental::UInt, TexType::D2Multisample)
-			}
-			"usampler2DMSArray" => Primitive::Sampler(
-				Fundamental::UInt,
-				TexType::D2MultisampleArray,
-			),
-			"sampler1DShadow" => {
-				Primitive::Sampler(Fundamental::Float, TexType::D1Shadow)
-			}
-			"sampler2DShadow" => {
-				Primitive::Sampler(Fundamental::Float, TexType::D2Shadow)
-			}
-			"samplerCubeShadow" => {
-				Primitive::Sampler(Fundamental::Float, TexType::CubeShadow)
-			}
-			"sampler2DRectShadow" => {
-				Primitive::Sampler(Fundamental::Float, TexType::D2RectShadow)
-			}
-			"sampler1DArrayShadow" => {
-				Primitive::Sampler(Fundamental::Float, TexType::D1ArrayShadow)
-			}
-			"sampler2DArrayShadow" => {
-				Primitive::Sampler(Fundamental::Float, TexType::D2ArrayShadow)
-			}
-			"samplerCubeArrayShadow" => {
-				Primitive::Sampler(Fundamental::Float, TexType::CubeArrayShadow)
-			}
-			"image1D" => Primitive::Image(Fundamental::Float, TexType::D1),
-			"image2D" => Primitive::Image(Fundamental::Float, TexType::D2),
-			"image3D" => Primitive::Image(Fundamental::Float, TexType::D3),
-			"imageCube" => Primitive::Image(Fundamental::Float, TexType::Cube),
-			"image2DRect" => {
-				Primitive::Image(Fundamental::Float, TexType::D2Rect)
-			}
-			"image1DArray" => {
-				Primitive::Image(Fundamental::Float, TexType::D1Array)
-			}
-			"image2DArray" => {
-				Primitive::Image(Fundamental::Float, TexType::D2Array)
-			}
-			"imageCubeArray" => {
-				Primitive::Image(Fundamental::Float, TexType::CubeArray)
-			}
-			"imageBuffer" => {
-				Primitive::Image(Fundamental::Float, TexType::Buffer)
-			}
-			"image2DMS" => {
-				Primitive::Image(Fundamental::Float, TexType::D2Multisample)
-			}
-			"image2DMSArray" => Primitive::Image(
-				Fundamental::Float,
-				TexType::D2MultisampleArray,
-			),
-			"iimage1D" => Primitive::Image(Fundamental::Int, TexType::D1),
-			"iimage2D" => Primitive::Image(Fundamental::Int, TexType::D2),
-			"iimage3D" => Primitive::Image(Fundamental::Int, TexType::D3),
-			"iimageCube" => Primitive::Image(Fundamental::Int, TexType::Cube),
-			"iimage2DRect" => {
-				Primitive::Image(Fundamental::Int, TexType::D2Rect)
-			}
-			"iimage1DArray" => {
-				Primitive::Image(Fundamental::Int, TexType::D1Array)
-			}
-			"iimage2DArray" => {
-				Primitive::Image(Fundamental::Int, TexType::D2Array)
-			}
-			"iimageCubeArray" => {
-				Primitive::Image(Fundamental::Int, TexType::CubeArray)
-			}
-			"iimageBuffer" => {
-				Primitive::Image(Fundamental::Int, TexType::Buffer)
-			}
-			"iimage2DMS" => {
-				Primitive::Image(Fundamental::Int, TexType::D2Multisample)
-			}
-			"iimage2DMSArray" => {
-				Primitive::Image(Fundamental::Int, TexType::D2MultisampleArray)
-			}
-			"uimage1D" => Primitive::Image(Fundamental::UInt, TexType::D1),
-			"uimage2D" => Primitive::Image(Fundamental::UInt, TexType::D2),
-			"uimage3D" => Primitive::Image(Fundamental::UInt, TexType::D3),
-			"uimageCube" => Primitive::Image(Fundamental::UInt, TexType::Cube),
-			"uimage2DRect" => {
-				Primitive::Image(Fundamental::UInt, TexType::D2Rect)
-			}
-			"uimage1DArray" => {
-				Primitive::Image(Fundamental::UInt, TexType::D1Array)
-			}
-			"uimage2DArray" => {
-				Primitive::Image(Fundamental::UInt, TexType::D2Array)
-			}
-			"uimageCubeArray" => {
-				Primitive::Image(Fundamental::UInt, TexType::CubeArray)
-			}
-			"uimageBuffer" => {
-				Primitive::Image(Fundamental::UInt, TexType::Buffer)
-			}
-			"uimage2DMS" => {
-				Primitive::Image(Fundamental::UInt, TexType::D2Multisample)
-			}
-			"uimage2DMSArray" => {
-				Primitive::Image(Fundamental::UInt, TexType::D2MultisampleArray)
-			}
-			"atomic_uint" => Primitive::Atomic,
-			_ => Primitive::Struct(ident.clone()),
+			"void" => Some(Primitive::Void),
+			"bool" => Some(Primitive::Bool),
+			"int" => Some(Primitive::Int),
+			"uint" => Some(Primitive::Uint),
+			"float" => Some(Primitive::Float),
+			"double" => Some(Primitive::Double),
+			"vec2" => Some(Primitive::Vec2),
+			"vec3" => Some(Primitive::Vec3),
+			"vec4" => Some(Primitive::Vec4),
+			"bvec2" => Some(Primitive::BVec2),
+			"bvec3" => Some(Primitive::BVec3),
+			"bvec4" => Some(Primitive::BVec4),
+			"ivec2" => Some(Primitive::IVec2),
+			"ivec3" => Some(Primitive::IVec3),
+			"ivec4" => Some(Primitive::IVec4),
+			"uvec2" => Some(Primitive::UVec2),
+			"uvec3" => Some(Primitive::UVec3),
+			"uvec4" => Some(Primitive::UVec4),
+			"dvec2" => Some(Primitive::DVec2),
+			"dvec3" => Some(Primitive::DVec3),
+			"dvec4" => Some(Primitive::DVec4),
+			"mat2" => Some(Primitive::Mat2x2),
+			"mat2x2" => Some(Primitive::Mat2x2),
+			"mat2x3" => Some(Primitive::Mat2x3),
+			"mat2x4" => Some(Primitive::Mat2x4),
+			"mat3x2" => Some(Primitive::Mat3x2),
+			"mat3" => Some(Primitive::Mat3x3),
+			"mat3x3" => Some(Primitive::Mat3x3),
+			"mat3x4" => Some(Primitive::Mat3x4),
+			"mat4x2" => Some(Primitive::Mat4x2),
+			"mat4x3" => Some(Primitive::Mat4x3),
+			"mat4" => Some(Primitive::Mat4x4),
+			"mat4x4" => Some(Primitive::Mat4x4),
+			"dmat2" => Some(Primitive::DMat2x2),
+			"dmat2x2" => Some(Primitive::DMat2x2),
+			"dmat2x3" => Some(Primitive::DMat2x3),
+			"dmat2x4" => Some(Primitive::DMat2x4),
+			"dmat3x2" => Some(Primitive::DMat3x2),
+			"dmat3" => Some(Primitive::DMat3x3),
+			"dmat3x3" => Some(Primitive::DMat3x3),
+			"dmat3x4" => Some(Primitive::DMat3x4),
+			"dmat4x2" => Some(Primitive::DMat4x2),
+			"dmat4x3" => Some(Primitive::DMat4x3),
+			"dmat4" => Some(Primitive::DMat4x4),
+			"dmat4x4" => Some(Primitive::DMat4x4),
+			"sampler1D" => Some(Primitive::Sampler1d),
+			"sampler2D" => Some(Primitive::Sampler2d),
+			"sampler3D" => Some(Primitive::Sampler3d),
+			"samplerCube" => Some(Primitive::SamplerCube),
+			"sampler2DRect" => Some(Primitive::Sampler2dRect),
+			"sampler1DArray" => Some(Primitive::Sampler1dArray),
+			"sampler2DArray" => Some(Primitive::Sampler2dArray),
+			"samplerCubeArray" => Some(Primitive::SamplerCubeArray),
+			"samplerBuffer" => Some(Primitive::SamplerBuffer),
+			"sampler2DMS" => Some(Primitive::Sampler2dms),
+			"sampler2DMSArray" => Some(Primitive::Sampler2dmsArray),
+			"isampler1D" => Some(Primitive::ISampler1d),
+			"isampler2D" => Some(Primitive::ISampler2d),
+			"isampler3D" => Some(Primitive::ISampler3d),
+			"isamplerCube" => Some(Primitive::ISamplerCube),
+			"isampler2DRect" => Some(Primitive::ISampler2dRect),
+			"isampler1DArray" => Some(Primitive::ISampler1dArray),
+			"isampler2DArray" => Some(Primitive::ISampler2dArray),
+			"isamplerCubeArray" => Some(Primitive::ISamplerCubeArray),
+			"isamplerBuffer" => Some(Primitive::ISamplerBuffer),
+			"isampler2DMS" => Some(Primitive::ISampler2dms),
+			"isampler2DMSArray" => Some(Primitive::ISampler2dmsArray),
+			"usampler1D" => Some(Primitive::USampler1d),
+			"usampler2D" => Some(Primitive::USampler2d),
+			"usampler3D" => Some(Primitive::USampler3d),
+			"usamplerCube" => Some(Primitive::USamplerCube),
+			"usampler2DRect" => Some(Primitive::USampler2dRect),
+			"usampler1DArray" => Some(Primitive::USampler1dArray),
+			"usampler2DArray" => Some(Primitive::USampler2dArray),
+			"usamplerCubeArray" => Some(Primitive::USamplerCubeArray),
+			"usamplerBuffer" => Some(Primitive::USamplerBuffer),
+			"usampler2DMS" => Some(Primitive::USampler2dms),
+			"usampler2DMSArray" => Some(Primitive::USampler2dmsArray),
+			"sampler1DShadow" => Some(Primitive::Sampler1dShadow),
+			"sampler2DShadow" => Some(Primitive::Sampler2dShadow),
+			"samplerCubeShadow" => Some(Primitive::SamplerCubeShadow),
+			"sampler2DRectShadow" => Some(Primitive::Sampler2dRectShadow),
+			"sampler1DArrayShadow" => Some(Primitive::Sampler1dArrayShadow),
+			"sampler2DArrayShadow" => Some(Primitive::Sampler2dArrayShadow),
+			"samplerCubeArrayShadow" => Some(Primitive::SamplerCubeArrayShadow),
+			"image1D" => Some(Primitive::Image1d),
+			"image2D" => Some(Primitive::Image2d),
+			"image3D" => Some(Primitive::Image3d),
+			"imageCube" => Some(Primitive::ImageCube),
+			"image2DRect" => Some(Primitive::Image2dRect),
+			"image1DArray" => Some(Primitive::Image1dArray),
+			"image2DArray" => Some(Primitive::Image2dArray),
+			"imageCubeArray" => Some(Primitive::ImageCubeArray),
+			"imageBuffer" => Some(Primitive::ImageBuffer),
+			"image2DMS" => Some(Primitive::Image2dms),
+			"image2DMSArray" => Some(Primitive::Image2dmsArray),
+			"iimage1D" => Some(Primitive::IImage1d),
+			"iimage2D" => Some(Primitive::IImage2d),
+			"iimage3D" => Some(Primitive::IImage3d),
+			"iimageCube" => Some(Primitive::IImageCube),
+			"iimage2DRect" => Some(Primitive::IImage2dRect),
+			"iimage1DArray" => Some(Primitive::IImage1dArray),
+			"iimage2DArray" => Some(Primitive::IImage2dArray),
+			"iimageCubeArray" => Some(Primitive::IImageCubeArray),
+			"iimageBuffer" => Some(Primitive::IImageBuffer),
+			"iimage2DMS" => Some(Primitive::IImage2dms),
+			"iimage2DMSArray" => Some(Primitive::IImage2dmsArray),
+			"uimage1D" => Some(Primitive::UImage1d),
+			"uimage2D" => Some(Primitive::UImage2d),
+			"uimage3D" => Some(Primitive::UImage3d),
+			"uimageCube" => Some(Primitive::UImageCube),
+			"uimage2DRect" => Some(Primitive::UImage2dRect),
+			"uimage1DArray" => Some(Primitive::UImage1dArray),
+			"uimage2DArray" => Some(Primitive::UImage2dArray),
+			"uimageCubeArray" => Some(Primitive::UImageCubeArray),
+			"uimageBuffer" => Some(Primitive::UImageBuffer),
+			"uimage2DMS" => Some(Primitive::UImage2dms),
+			"uimage2DMSArray" => Some(Primitive::UImage2dmsArray),
+			"atomic_uint" => Some(Primitive::AtomicUint),
+			_ => None,
 		}
 	}
 }

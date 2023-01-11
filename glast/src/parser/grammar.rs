@@ -1186,21 +1186,27 @@ fn try_parse_definition_declaration_expr<'a, P: TokenStreamProvider<'a>>(
 			type_: Type,
 			idents: Vec<(Ident, Vec<ArrSize>)>,
 			end_pos: usize,
-		) -> Node {
+		) -> (Vec<(Type, Ident)>, Node) {
 			let span = Span::new(type_.span.start, end_pos);
 			let mut vars = combine_type_with_idents(type_, idents);
 			match vars.len() {
 				1 => {
 					let (type_, ident) = vars.remove(0);
+					(
+						vec![(type_.clone(), ident.clone())],
+						Node {
+							span,
+							ty: NodeTy::VarDef { type_, ident },
+						},
+					)
+				}
+				_ => (
+					vars.clone(),
 					Node {
 						span,
-						ty: NodeTy::VarDef { type_, ident },
-					}
-				}
-				_ => Node {
-					span,
-					ty: NodeTy::VarDefs(vars),
-				},
+						ty: NodeTy::VarDefs(vars),
+					},
+				),
 			}
 		}
 
@@ -1209,25 +1215,31 @@ fn try_parse_definition_declaration_expr<'a, P: TokenStreamProvider<'a>>(
 			idents: Vec<(Ident, Vec<ArrSize>)>,
 			value: Option<Expr>,
 			end_pos: usize,
-		) -> Node {
+		) -> (Vec<(Type, Ident)>, Node) {
 			let span = Span::new(type_.span.start, end_pos);
 			let mut vars = combine_type_with_idents(type_, idents);
 			match vars.len() {
 				1 => {
 					let (type_, ident) = vars.remove(0);
+					(
+						vec![(type_.clone(), ident.clone())],
+						Node {
+							span,
+							ty: NodeTy::VarDefInit {
+								type_,
+								ident,
+								init_expr: value,
+							},
+						},
+					)
+				}
+				_ => (
+					vars.clone(),
 					Node {
 						span,
-						ty: NodeTy::VarDefInit {
-							type_,
-							ident,
-							value,
-						},
-					}
-				}
-				_ => Node {
-					span,
-					ty: NodeTy::VarDefInits(vars, value),
-				},
+						ty: NodeTy::VarDefInits(vars, value),
+					},
+				),
 			}
 		}
 
@@ -1243,7 +1255,11 @@ fn try_parse_definition_declaration_expr<'a, P: TokenStreamProvider<'a>>(
 						ident_span.next_single_width(),
 					),
 				));
-				ctx.push_node(var_def(type_, ident_info, ident_span.end));
+				ctx.push_new_variables(var_def(
+					type_,
+					ident_info,
+					ident_span.end,
+				));
 				return;
 			}
 		};
@@ -1252,7 +1268,7 @@ fn try_parse_definition_declaration_expr<'a, P: TokenStreamProvider<'a>>(
 			let semi_span = token_span;
 			walker.push_colour(semi_span, SyntaxType::Punctuation);
 			walker.advance();
-			ctx.push_node(var_def(type_, ident_info, semi_span.end));
+			ctx.push_new_variables(var_def(type_, ident_info, semi_span.end));
 			return;
 		} else if *token == Token::Op(OpTy::Eq) {
 			// We have a variable definition with initialization.
@@ -1275,7 +1291,7 @@ fn try_parse_definition_declaration_expr<'a, P: TokenStreamProvider<'a>>(
 								eq_span.next_single_width(),
 							),
 						));
-						ctx.push_node(var_def_init(
+						ctx.push_new_variables(var_def_init(
 							type_,
 							ident_info,
 							None,
@@ -1296,7 +1312,7 @@ fn try_parse_definition_declaration_expr<'a, P: TokenStreamProvider<'a>>(
 							value_span.next_single_width(),
 						),
 					));
-					ctx.push_node(var_def_init(
+					ctx.push_new_variables(var_def_init(
 						type_,
 						ident_info,
 						Some(value_expr),
@@ -1309,7 +1325,7 @@ fn try_parse_definition_declaration_expr<'a, P: TokenStreamProvider<'a>>(
 				let semi_span = token_span;
 				walker.push_colour(semi_span, SyntaxType::Punctuation);
 				walker.advance();
-				ctx.push_node(var_def_init(
+				ctx.push_new_variables(var_def_init(
 					type_,
 					ident_info,
 					Some(value_expr),
@@ -1323,7 +1339,7 @@ fn try_parse_definition_declaration_expr<'a, P: TokenStreamProvider<'a>>(
 						end_span.next_single_width(),
 					),
 				));
-				ctx.push_node(var_def_init(
+				ctx.push_new_variables(var_def_init(
 					type_,
 					ident_info,
 					Some(value_expr),
@@ -1340,7 +1356,7 @@ fn try_parse_definition_declaration_expr<'a, P: TokenStreamProvider<'a>>(
 					ident_span.next_single_width(),
 				),
 			));
-			ctx.push_node(var_def(type_, ident_info, ident_span.end));
+			ctx.push_new_variables(var_def(type_, ident_info, ident_span.end));
 			seek_next_stmt(walker);
 			return;
 		}
@@ -1648,14 +1664,19 @@ fn parse_function<'a, P: TokenStreamProvider<'a>>(
 					param_end_span.next_single_width(),
 				),
 			));
-			ctx.push_node(Node {
-				span: Span::new(return_type.span.start, param_end_span.end),
-				ty: NodeTy::FnDecl {
-					return_type,
-					ident,
-					params,
+			ctx.push_new_function_decl(
+				ident.clone(),
+				params.iter().cloned().map(|p| p.into()).collect(),
+				return_type.clone(),
+				Node {
+					span: Span::new(return_type.span.start, param_end_span.end),
+					ty: NodeTy::FnDecl {
+						return_type,
+						ident,
+						params,
+					},
 				},
-			});
+			);
 			return;
 		}
 	};
@@ -1663,14 +1684,19 @@ fn parse_function<'a, P: TokenStreamProvider<'a>>(
 		// We have a declaration.
 		walker.push_colour(token_span, SyntaxType::Punctuation);
 		walker.advance();
-		ctx.push_node(Node {
-			span: Span::new(return_type.span.start, param_end_span.end),
-			ty: NodeTy::FnDecl {
-				return_type,
-				ident,
-				params,
+		ctx.push_new_function_decl(
+			ident.clone(),
+			params.iter().cloned().map(|p| p.into()).collect(),
+			return_type.clone(),
+			Node {
+				span: Span::new(return_type.span.start, param_end_span.end),
+				ty: NodeTy::FnDecl {
+					return_type,
+					ident,
+					params,
+				},
 			},
-		});
+		);
 	} else if *token == Token::LBrace {
 		// We have a definition.
 		let l_brace_span = token_span;
@@ -1680,15 +1706,20 @@ fn parse_function<'a, P: TokenStreamProvider<'a>>(
 		let scope_handle = ctx.new_temp_scope(l_brace_span);
 		parse_scope(walker, ctx, brace_scope, l_brace_span);
 		let body = ctx.take_temp_scope(scope_handle);
-		ctx.push_node(Node {
-			span: Span::new(return_type.span.start, body.span.end),
-			ty: NodeTy::FnDef {
-				return_type,
-				ident,
-				params,
-				body,
+		ctx.push_new_function_def(
+			ident.clone(),
+			params.iter().cloned().map(|p| p.into()).collect(),
+			return_type.clone(),
+			Node {
+				span: Span::new(return_type.span.start, body.span.end),
+				ty: NodeTy::FnDef {
+					return_type,
+					ident,
+					params,
+					body,
+				},
 			},
-		});
+		);
 	} else {
 		// We are missing a `;` for a declaration. We treat this as a declaration since that's the closest match.
 		walker.push_syntax_diag(Syntax::Stmt(
@@ -1696,14 +1727,19 @@ fn parse_function<'a, P: TokenStreamProvider<'a>>(
 				param_end_span.next_single_width(),
 			),
 		));
-		ctx.push_node(Node {
-			span: Span::new(return_type.span.start, param_end_span.end),
-			ty: NodeTy::FnDecl {
-				return_type,
-				ident,
-				params,
+		ctx.push_new_function_def(
+			ident.clone(),
+			params.iter().cloned().map(|p| p.into()).collect(),
+			return_type.clone(),
+			Node {
+				span: Span::new(return_type.span.start, param_end_span.end),
+				ty: NodeTy::FnDecl {
+					return_type,
+					ident,
+					params,
+				},
 			},
-		});
+		);
 		seek_next_stmt(walker);
 	}
 }
@@ -2222,10 +2258,14 @@ fn parse_struct<'a, P: TokenStreamProvider<'a>>(
 			span,
 		)));
 		walker.advance();
-		ctx.push_node(Node {
-			span,
-			ty: NodeTy::StructDecl { qualifiers, ident },
-		});
+		ctx.push_new_struct(
+			ident.clone(),
+			Vec::new(),
+			Node {
+				span,
+				ty: NodeTy::StructDecl { qualifiers, ident },
+			},
+		);
 		return;
 	} else {
 		// We don't create a struct declaration because it would result in two errors that would reduce clarity.
@@ -2247,19 +2287,55 @@ fn parse_struct<'a, P: TokenStreamProvider<'a>>(
 			StmtDiag::StructExpectedAtLeastOneStmtInBody(body.span),
 		));
 	}
-	/* for stmt in &body.contents {
-		match &stmt.ty {
-			NodeTy::VarDef { .. }
-			| NodeTy::VarDefInit { .. }
-			| NodeTy::VarDefs(_)
-			| NodeTy::VarDefInits(_, _) => {}
+	let mut fields = Vec::new();
+	for handle in body.contents.iter() {
+		let node = ctx.get_node(*handle);
+		match &node.ty {
+			NodeTy::VarDef { type_, ident } => {
+				fields.push(super::StructField {
+					type_: type_.clone(),
+					name: Omittable::Some(ident.name.clone()),
+					refs: vec![ident.span],
+				});
+			}
+			NodeTy::VarDefs(defs) => {
+				for def in defs {
+					fields.push(super::StructField {
+						type_: def.0.clone(),
+						name: Omittable::Some(def.1.name.clone()),
+						refs: vec![ident.span],
+					});
+				}
+			}
+			NodeTy::VarDefInit {
+				type_,
+				ident,
+				init_expr: _,
+			} => {
+				// TODO: Produce syntax error about default initialization not being allowed.
+				fields.push(super::StructField {
+					type_: type_.clone(),
+					name: Omittable::Some(ident.name.clone()),
+					refs: vec![ident.span],
+				});
+			}
+			NodeTy::VarDefInits(defs, _init_expr) => {
+				// TODO: Produce syntax error about default initialization not being allowed.
+				for def in defs {
+					fields.push(super::StructField {
+						type_: def.0.clone(),
+						name: Omittable::Some(def.1.name.clone()),
+						refs: vec![ident.span],
+					});
+				}
+			}
 			_ => {
 				walker.push_syntax_diag(Syntax::Stmt(
-					StmtDiag::StructInvalidStmtInBody(stmt.span),
+					StmtDiag::StructInvalidStmtInBody(node.span),
 				));
 			}
 		}
-	} */
+	}
 
 	// Look for an optional instance identifier.
 	let instance = match expr_parser(walker, Mode::TakeOneUnit, [Token::Semi]) {
@@ -2275,15 +2351,19 @@ fn parse_struct<'a, P: TokenStreamProvider<'a>>(
 					StmtDiag::StructExpectedInstanceOrSemiAfterBody(e.span),
 				));
 
-				ctx.push_node(Node {
-					span: Span::new(struct_span_start, body.span.end),
-					ty: NodeTy::StructDef {
-						qualifiers,
-						ident,
-						body,
-						instance: Omittable::None,
+				ctx.push_new_struct(
+					ident.clone(),
+					fields,
+					Node {
+						span: Span::new(struct_span_start, body.span.end),
+						ty: NodeTy::StructDef {
+							qualifiers,
+							ident,
+							body,
+							instance: Omittable::None,
+						},
 					},
-				});
+				);
 				return;
 			}
 		},
@@ -2319,26 +2399,30 @@ fn parse_struct<'a, P: TokenStreamProvider<'a>>(
 		}
 	}
 
-	ctx.push_node(Node {
-		span: Span::new(
-			struct_span_start,
-			if let Some(semi_span) = semi_span {
-				semi_span.end
-			} else {
-				if let Omittable::Some(ref i) = instance {
-					i.span.end
+	ctx.push_new_struct(
+		ident.clone(),
+		fields,
+		Node {
+			span: Span::new(
+				struct_span_start,
+				if let Some(semi_span) = semi_span {
+					semi_span.end
 				} else {
-					body.span.end
-				}
+					if let Omittable::Some(ref i) = instance {
+						i.span.end
+					} else {
+						body.span.end
+					}
+				},
+			),
+			ty: NodeTy::StructDef {
+				qualifiers,
+				ident,
+				body,
+				instance,
 			},
-		),
-		ty: NodeTy::StructDef {
-			qualifiers,
-			ident,
-			body,
-			instance,
 		},
-	});
+	);
 }
 
 /// Parses an if statement.

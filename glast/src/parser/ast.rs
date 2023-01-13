@@ -543,59 +543,6 @@ impl<T> From<Option<T>> for Omittable<T> {
 }
 
 impl Type {
-	/// Tries to parse an expression into a type.
-	pub fn parse(expr: &Expr) -> Option<Self> {
-		match &expr.ty {
-			ExprTy::Ident(i) => Some(Self {
-				span: expr.span,
-				ty: TypeTy::Single(Either::Left(Primitive::parse(i).unwrap())),
-				qualifiers: vec![],
-			}),
-			ExprTy::Index { item, i } => {
-				let mut current_item = item;
-				let mut stack = Vec::new();
-				stack.push(i.as_deref().cloned().into());
-
-				// Recursively look into any nested index operators until we hit an identifier.
-				let primitive = loop {
-					match &current_item.ty {
-						ExprTy::Ident(i) => {
-							break Either::Left(Primitive::parse(i).unwrap())
-						}
-						ExprTy::Index { item, i } => {
-							stack.push(i.as_deref().cloned().into());
-							current_item = item;
-						}
-						_ => {
-							// TODO: Is this possible to reach?
-							return None;
-						}
-					}
-				};
-
-				// In the expression parser, the index operator is right-associated so the outer-most is at the top
-				// and the inner-most is at the bottom. We want to reverse this so that the type array notation is
-				// in line with our intuition.
-				stack.reverse();
-
-				Some(Self {
-					span: expr.span,
-					ty: if stack.len() == 1 {
-						TypeTy::Array(primitive, stack.remove(0))
-					} else if stack.len() == 2 {
-						let one = stack.remove(0);
-						let two = stack.remove(0);
-						TypeTy::Array2D(primitive, one, two)
-					} else {
-						TypeTy::ArrayND(primitive, stack)
-					},
-					qualifiers: vec![],
-				})
-			}
-			_ => None,
-		}
-	}
-
 	/// Tries to parse an expression into information required for variable definitions/declarations.
 	///
 	/// If successful, this function returns `Some` where each entry in the vector is:

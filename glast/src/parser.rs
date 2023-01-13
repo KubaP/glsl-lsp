@@ -3525,6 +3525,16 @@ impl Ctx {
 		self.arena.get(handle.0).unwrap()
 	}
 
+	/// Returns a handle to a struct symbol if a struct with the provided name exists.
+	fn lookup_struct(&self, name: &str) -> Option<StructHandle> {
+		for (i, symbol) in self.structs.iter().enumerate() {
+			if name == &symbol.name {
+				return Some(StructHandle(i));
+			}
+		}
+		return None;
+	}
+
 	/// Converts this context into the abstract syntax tree. This is done once parsing has finished in order to
 	/// remove fields that were only necessary during the parsing process itself, such as any stacks or
 	/// state-tracking variables.

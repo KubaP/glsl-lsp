@@ -360,6 +360,11 @@ pub enum StmtDiag {
 	///
 	/// - `0` - The span of the qualifier(s).
 	FoundQualifiersBeforeStmt(Span),
+	/// ERROR - Did not find an identifier after a type, (this could be for a variable, function, etc.). E.g.
+	/// `mat4x4[4]`.
+	///
+	/// - `0` - The position where the identifier is expected.
+	TypeExpectedIdentAfterType(Span),
 
 	/* QUALIFIERS */
 	/// ERROR - Did not find an opening parenthesis after the `layout` keyword.

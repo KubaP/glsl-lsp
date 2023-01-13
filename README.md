@@ -1,9 +1,11 @@
 # glsl-lsp
 This repository contains a heavily **work-in-progress** project aiming to provide a language extension for the OpenGL Shading Language.
 
-This is targetting GLSL `450` & `460` initially, but there are plans to support older versions in the future, including but not limited to `110`, `300 es`, `330` and `410`.
+This project is targeting GLSL `450` & `460` initially, but there are plans to support older versions in the future, including but not limited to `110`, `300 es`, `330` and `410`.
 
-⚠ **Current state of functionality**: Basic semantic highlighting and syntax diagnostics reporting. Full support for macro expansion and conditional compilation. Currently not packaged so you have to build from source.
+**An extension for Visual Studio Code is available on the [marketplace](https://marketplace.visualstudio.com/items?itemName=kuba-p.glsl-lsp).**
+
+⚠ Current state of functionality: Basic semantic highlighting and syntax diagnostics reporting. Advanced support for macro expansion and conditional compilation.
 
 ## Structure
 |Folder|Contents|

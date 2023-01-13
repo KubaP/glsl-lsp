@@ -7,7 +7,7 @@ The aims of this crate are to allow for parsing and analysis of the OpenGL Shadi
 
 Unlike other similar crates and libraries, *glast* is designed to be 100% specification compliant. That means it correctly handles complex behaviours such as macro expansion and conditional compilation, even under some extremely unusual edge-cases.
 
-*glast* is also made for IDEs in mind, meaning it handles syntax errors gracefully and has excellent error recovery strategies to produce "best effort" results. It also produces syntax and semantic diagnostics, as well as information for syntax highlighting purposes.
+*glast* is also made for IDEs in mind, meaning it handles syntax errors gracefully and has excellent error recovery strategies to produce "best effort" results. It also produces excellent syntax and semantic diagnostics.
 
 ## Current status
 #### Lexer
@@ -36,7 +36,7 @@ Unlike other similar crates and libraries, *glast* is designed to be 100% specif
 
 [2]: Only GLSL 450 & 460 are currently supported.
 
-[3]: Not enough tests to validate with great certainty.
+[3]: Certain behaviours not fully compliant.
 
 #### Analyzer
 ❌ Work not started yet.

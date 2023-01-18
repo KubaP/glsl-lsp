@@ -5,7 +5,7 @@ use super::{
 		BinOp, BinOpTy, Expr, ExprTy, Ident, Lit, PostOp, PostOpTy, PreOp,
 		PreOpTy,
 	},
-	SyntaxModifiers, SyntaxToken, SyntaxType, Walker,
+	Ctx, SyntaxModifiers, SyntaxToken, SyntaxType, TokenStreamProvider, Walker,
 };
 use crate::{
 	diag::{ExprDiag, Semantic, Syntax},
@@ -32,39 +32,164 @@ https://matklad.github.io/2020/04/15/from-pratt-to-dijkstra.html
 	  different approach
 */
 
-/// Tries to parse an expression beginning at the current position.
-///
-/// - `end_tokens` - Any tokens which, when encountered, will immediately stop the parser without producing syntax
-///   errors.
-pub(super) fn expr_parser<'a, P: super::TokenStreamProvider<'a>>(
+/// Tries to parse a general expression beginning at the current position.
+pub(super) fn parse_general_expr<'a, P: TokenStreamProvider<'a>>(
 	walker: &mut Walker<'a, P>,
 	mode: Mode,
 	end_tokens: impl AsRef<[Token]>,
 ) -> (Option<Expr>, Vec<Syntax>, Vec<Semantic>, Vec<SyntaxToken>) {
-	let start_position = match walker.peek() {
-		Some((_, span)) => span.start,
-		// If we are at the end of the token stream, we can return early with nothing.
-		None => return (None, vec![], vec![], vec![]),
-	};
-
-	let mut parser = ShuntingYard {
-		stack: VecDeque::new(),
-		operators: VecDeque::new(),
-		groups: Vec::new(),
-		start_position,
+	let mut yard = ShuntingYard::new(
+		match walker.peek() {
+			Some((_, span)) => span.start,
+			None => return (None, Vec::new(), Vec::new(), Vec::new()),
+		},
 		mode,
-		syntax_diags: Vec::new(),
-		semantic_diags: Vec::new(),
-		syntax_tokens: Vec::new(),
-	};
-	parser.parse(walker, end_tokens.as_ref());
+	);
+	yard.parse(walker, end_tokens.as_ref());
 
 	(
-		parser.create_ast(),
-		parser.syntax_diags,
-		parser.semantic_diags,
-		parser.syntax_tokens,
+		yard.create_ast(),
+		yard.syntax_diags,
+		yard.semantic_diags,
+		yard.syntax_tokens,
 	)
+}
+
+/// Tries to parse an identifier for a new declaration/definition of some kind, i.e. the symbol doesn't exist yet.
+/// If this fails, an error resulting of a normal expression and all its extra information is returned.
+///
+/// **If this function succeeds, it will have pushed the appropriate syntax token already.**
+pub(super) fn try_parse_new_ident<'a, P: TokenStreamProvider<'a>>(
+	walker: &mut Walker<'a, P>,
+	end_tokens: impl AsRef<[Token]>,
+	new_token: fn() -> SyntaxType,
+) -> Result<
+	(Ident, Vec<Semantic>),
+	(Option<Expr>, Vec<Syntax>, Vec<Semantic>, Vec<SyntaxToken>),
+> {
+	let mut yard = ShuntingYard::new(
+		match walker.peek() {
+			Some((_, span)) => span.start,
+			None => return Err((None, Vec::new(), Vec::new(), Vec::new())),
+		},
+		Mode::Default,
+	);
+	yard.parse(walker, end_tokens.as_ref());
+
+	match yard.try_create_new_ident(walker, new_token) {
+		Ok(ident) => Ok((ident, yard.semantic_diags)),
+		Err(expr) => Err((
+			expr,
+			yard.syntax_diags,
+			yard.semantic_diags,
+			yard.syntax_tokens,
+		)),
+	}
+}
+
+/// Tries to parse one or more identifiers (with optional type information) for a new declaration/definition, i.e.
+/// the symbol(s) don't exist yet. If this fails, an error resulting of a normal expression and all its extra
+/// information is returned.
+///
+/// Examples of what will succeed:
+/// - `foo`
+/// - `foo, bar`
+/// - `foo[]`
+/// - `foo[3]`
+/// - `foo[const]`
+/// - `foo[const], bar[][]`
+pub(super) fn try_parse_new_decl_def_idents_with_type_info<
+	'a,
+	P: TokenStreamProvider<'a>,
+>(
+	walker: &mut Walker<'a, P>,
+	ctx: &mut Ctx,
+	end_tokens: impl AsRef<[Token]>,
+	only_one: bool,
+) -> Result<
+	(
+		Vec<(Ident, Vec<super::ast::ArrSize>)>,
+		Vec<Syntax>,
+		Vec<Semantic>,
+		Vec<SyntaxToken>,
+	),
+	(Option<Expr>, Vec<Syntax>, Vec<Semantic>, Vec<SyntaxToken>),
+> {
+	let mut yard = ShuntingYard::new(
+		match walker.peek() {
+			Some((_, span)) => span.start,
+			None => return Err((None, Vec::new(), Vec::new(), Vec::new())),
+		},
+		if only_one {
+			Mode::TakeOneUnit
+		} else {
+			Mode::BreakAtEq
+		},
+	);
+	yard.parse(walker, end_tokens.as_ref());
+
+	match yard.try_create_new_decl_def_idents(walker, ctx) {
+		Ok(idents) => Ok((
+			idents,
+			yard.syntax_diags,
+			yard.semantic_diags,
+			yard.syntax_tokens,
+		)),
+		Err(expr) => Err((
+			expr,
+			yard.syntax_diags,
+			yard.semantic_diags,
+			yard.syntax_tokens,
+		)),
+	}
+}
+
+/// Tries to parse a type specifier. This function correctly colours the type name itself through symbol lookup. If
+/// this fails, an error resulting of a normal expression and all its extra information is returned.
+///
+/// Examples of what will succeed:
+/// - `type_name`
+/// - `type_name[]`
+/// - `type_name[3]`
+/// - `type_name[const]`
+/// - `type_name[const + 1]`
+/// - `type_name[const[0]]`
+///
+/// In all of these cases, `type_name` will receive either the `Primitive` or `Struct` syntax token, whilst all
+/// other identifiers will be looked up against variable symbols.
+pub(super) fn try_parse_type_specifier<'a, P: TokenStreamProvider<'a>>(
+	walker: &mut Walker<'a, P>,
+	ctx: &mut Ctx,
+	end_tokens: impl AsRef<[Token]>,
+) -> Result<
+	(
+		super::ast::Type,
+		Vec<Syntax>,
+		Vec<Semantic>,
+		Vec<SyntaxToken>,
+	),
+	(Option<Expr>, Vec<Syntax>, Vec<Semantic>, Vec<SyntaxToken>),
+> {
+	let mut yard = ShuntingYard::new(
+		match walker.peek() {
+			Some((_, span)) => span.start,
+			None => return Err((None, Vec::new(), Vec::new(), Vec::new())),
+		},
+		Mode::TakeOneUnit,
+	);
+	yard.parse(walker, end_tokens.as_ref());
+
+	match yard.try_create_type_specifier(walker, ctx) {
+		Ok((type_, syntax)) => {
+			Ok((type_, vec![], yard.semantic_diags, yard.syntax_tokens))
+		}
+		Err(expr) => Err((
+			expr,
+			yard.syntax_diags,
+			yard.semantic_diags,
+			yard.syntax_tokens,
+		)),
+	}
 }
 
 /// Configures the behaviour of the expression parser.
@@ -104,6 +229,8 @@ pub(super) enum Mode {
 	/// Note that this mode still composes with `end_tokens`, so if that, for example, contains `[Token::LBrace]`,
 	/// then `{1} 2` would immediately break and return no expression.
 	TakeOneUnit,
+
+	NewIdents,
 }
 
 /// A node; used in the parser stack.
@@ -424,6 +551,20 @@ struct ShuntingYard {
 }
 
 impl ShuntingYard {
+	/// Constructs a new shunting yard parser.
+	fn new(start_position: usize, mode: Mode) -> Self {
+		Self {
+			stack: VecDeque::new(),
+			operators: VecDeque::new(),
+			groups: Vec::new(),
+			start_position,
+			mode,
+			syntax_diags: Vec::new(),
+			semantic_diags: Vec::new(),
+			syntax_tokens: Vec::new(),
+		}
+	}
+
 	/// Pushes an operator onto the stack, potentially popping any operators which have a greater precedence than
 	/// the operator being pushed.
 	fn push_operator(&mut self, op: Op) {
@@ -1288,7 +1429,7 @@ impl ShuntingYard {
 	}
 
 	/// Pushes a syntax highlighting token over the given span.
-	fn colour<'a, P: super::TokenStreamProvider<'a>>(
+	fn colour<'a, P: TokenStreamProvider<'a>>(
 		&mut self,
 		walker: &Walker<'a, P>,
 		span: Span,
@@ -1305,7 +1446,7 @@ impl ShuntingYard {
 	}
 
 	/// Parses a list of tokens. Populates the internal `stack` with a RPN output.
-	fn parse<'a, P: super::TokenStreamProvider<'a>>(
+	fn parse<'a, P: TokenStreamProvider<'a>>(
 		&mut self,
 		walker: &mut Walker<'a, P>,
 		end_tokens: &[Token],
@@ -2164,7 +2305,7 @@ impl ShuntingYard {
 					// We switch state since after an object access we are execting an operand, such as:
 					// `foo. bar()`.
 					state = State::Operand;
-					
+
 					can_start = Start::None;
 
 					arity_state = Arity::Operator;
@@ -2781,6 +2922,254 @@ impl ShuntingYard {
 
 		// Return the one root expression.
 		Some(stack.pop_back().unwrap())
+	}
+
+	/// Tries to convert the internal RPN stack into a singular new identifier. If that fails, a general expression
+	/// is returned.
+	fn try_create_new_ident<'a, P: TokenStreamProvider<'a>>(
+		&mut self,
+		walker: &mut Walker<'a, P>,
+		new_token: fn() -> SyntaxType,
+	) -> Result<Ident, Option<Expr>> {
+		if self.stack.is_empty() {
+			return Err(None);
+		}
+
+		let Some(item) = self.stack.pop_front() else { unreachable!(); };
+		match item {
+			Either::Left(node) => match node.ty {
+				NodeTy::Ident(ident) => {
+					walker.push_colour(ident.span, new_token());
+					return Ok(ident);
+				}
+				_ => {}
+			},
+			Either::Right(_) => {}
+		}
+
+		Err(self.create_ast())
+	}
+
+	/// Tries to convert the internal RPN stack into one or more idents for a new declaration/definition. If that
+	/// fails, a general expression is returned.
+	fn try_create_new_decl_def_idents<'a, P: TokenStreamProvider<'a>>(
+		&mut self,
+		walker: &mut Walker<'a, P>,
+		ctx: &mut Ctx,
+	) -> Result<(Vec<(Ident, Vec<super::ast::ArrSize>)>), Option<Expr>> {
+		use super::ast::ArrSize;
+
+		if self.stack.is_empty() {
+			return Err(None);
+		}
+
+		let Some(expr) = self.create_ast() else { return Err(None); };
+
+		fn convert(expr: &Expr) -> Result<(Ident, Vec<ArrSize>), ()> {
+			match &expr.ty {
+				ExprTy::Ident(i) => Ok((i.clone(), Vec::new())),
+				ExprTy::Index { item, i } => {
+					let mut current_item = item;
+					let mut stack = Vec::new();
+					stack.push(i.as_deref().cloned().into());
+
+					let ident = loop {
+						match &&current_item.ty {
+							ExprTy::Ident(i) => break i.clone(),
+							ExprTy::Index { item, i } => {
+								stack.push(i.as_deref().cloned().into());
+								current_item = item;
+							}
+							_ => return Err(()),
+						}
+					};
+
+					// In the expression parser, the index operator is right-associated so the outer-most is at the
+					// top and the inner-most is at the bottom. We want to reverse this so that the type array
+					// notation is in line with our intuition.
+					stack.reverse();
+					Ok((ident, stack))
+				}
+				_ => unreachable!(),
+			}
+		}
+
+		let idents = match &expr.ty {
+			ExprTy::Ident(_) | ExprTy::Index { .. } => match convert(&expr) {
+				Ok(i) => vec![i],
+				Err(_) => return Err(Some(expr)),
+			},
+			ExprTy::List { items } => {
+				let mut v = Vec::new();
+				for item in items {
+					match &item.ty {
+						ExprTy::Ident(_) | ExprTy::Index { .. } => {
+							match convert(item) {
+								Ok(i) => v.push(i),
+								Err(_) => return Err(Some(expr)),
+							}
+						}
+						_ => return Err(Some(expr)),
+					}
+				}
+				v
+			}
+			_ => return Err(Some(expr)),
+		};
+
+		// We know we have something like:
+		// - `foo`
+		// - `foo, bar`
+		// - `foo[]`
+		// - `foo[3]`
+		// - `foo[const]`
+		// - `foo[const], bar[][]`
+
+		// TODO: Errors for ident with the same name. Will require knowing whether we are doing new
+		// functions/variables/structs.
+
+		// We know that the entire expression produced by the shunting yard is one or more valid identifiers, (but
+		// with potentially an unresolved name). This means all of the syntax highlighting tokens are also correct,
+		// apart from the one at the beginning of each individual ident. All other identifiers though will have
+		// been correctly coloured by the `create_ast()` method which performs function & variable lookup, since by
+		// default the expression parser is used for general expressions.
+
+		// Invariant: `info[0]` guaranteed to exist.
+		let mut i = 0;
+		for token in self.syntax_tokens.iter_mut() {
+			// The original tokens are chronologically ordered, and so are the individual identifiers.
+			if token.span == idents[i].0.span {
+				token.ty = SyntaxType::Variable;
+				i += 1;
+				if idents.len() == i {
+					break;
+				}
+			}
+		}
+
+		Ok(idents)
+	}
+
+	/// Tries to convert the internal RPN stack into a singular type specifier. If that fails, a general expression
+	/// is returned.
+	fn try_create_type_specifier<'a, P: TokenStreamProvider<'a>>(
+		&mut self,
+		walker: &mut Walker<'a, P>,
+		ctx: &mut Ctx,
+	) -> Result<(super::ast::Type, Vec<Syntax>), Option<Expr>> {
+		use super::{
+			ast::{Type, TypeTy},
+			StructHandle,
+		};
+
+		if self.stack.is_empty() {
+			return Err(None);
+		}
+
+		let Some(expr) = self.create_ast() else { return Err(None); };
+
+		let (ident, arr) = match &expr.ty {
+			ExprTy::Ident(i) => (i, None),
+			ExprTy::Index { item, i } => {
+				let mut current_item = item;
+				let mut stack = Vec::new();
+				stack.push(i.as_deref());
+
+				// Recursively look into any nested index operators until we hit an identifier.
+				let ident = loop {
+					match &current_item.ty {
+						ExprTy::Ident(i) => break i,
+						ExprTy::Index { item, i } => {
+							stack.push(i.as_deref());
+							current_item = item;
+						}
+						_ => return Err(Some(expr)),
+					}
+				};
+
+				// In the expression parser, the index operator is right-associated so the outer-most is at the top
+				// and the inner-most is at the bottom. We want to reverse this so that the type array notation is
+				// in line with our intuition.
+				stack.reverse();
+
+				(ident, Some(stack))
+			}
+			_ => return Err(Some(expr)),
+		};
+
+		// We know we have a type specifier expression, i.e. something like:
+		// - type_name
+		// - type_name[]
+		// - type_name[0]
+		// - type_name[const]
+		// - type_name[const + 1]
+		// - type_name[const[0]]
+
+		let mut syntax_diags = Vec::new();
+
+		let (type_ty, new_syntax_type) =
+			match super::ast::Primitive::parse(ident) {
+				Some(p) => (Either::Left(p), SyntaxType::Primitive),
+				None => match ctx.lookup_struct(&ident.name) {
+					Some(handle) => (Either::Right(handle), SyntaxType::Struct),
+					None => {
+						// TODO: Unresolved type error.
+						//syntax_diags.push();
+						(
+							Either::Right(StructHandle(usize::MAX)),
+							SyntaxType::UnresolvedIdent,
+						)
+					}
+				},
+			};
+
+		// We know that the entire expression produced by the shunting yard is a valid type specifier, (but with
+		// potentially an unresolved name). This means all of the syntax highlighting tokens are also correct,
+		// apart from the one at the beginning which names the type. All other identifiers though will have been
+		// correctly coloured by the `create_ast()` method which performs function & variable lookup, since by
+		// default the expression parser is used for general expressions which cannot contain type names.
+		for token in self.syntax_tokens.iter_mut() {
+			if token.span == ident.span {
+				token.ty = new_syntax_type;
+				break;
+			}
+		}
+
+		self.syntax_diags.retain(|e| {
+			if let Syntax::Expr(ExprDiag::FoundOperandAfterOperand(_, _)) = e {
+				false
+			} else {
+				true
+			}
+		});
+
+		Ok((
+			Type {
+				ty: if let Some(mut arr) = arr {
+					if arr.len() == 1 {
+						TypeTy::Array(type_ty, arr.remove(0).cloned().into())
+					} else if arr.len() == 2 {
+						TypeTy::Array2D(
+							type_ty,
+							arr.remove(0).cloned().into(),
+							arr.remove(0).cloned().into(),
+						)
+					} else {
+						TypeTy::ArrayND(
+							type_ty,
+							arr.into_iter()
+								.map(|o| o.cloned().into())
+								.collect(),
+						)
+					}
+				} else {
+					TypeTy::Single(type_ty)
+				},
+				qualifiers: Vec::new(),
+				span: expr.span,
+			},
+			syntax_diags,
+		))
 	}
 }
 

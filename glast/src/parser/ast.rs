@@ -542,69 +542,6 @@ impl<T> From<Option<T>> for Omittable<T> {
 	}
 }
 
-impl Type {
-	/// Tries to parse an expression into information required for variable definitions/declarations.
-	///
-	/// If successful, this function returns `Some` where each entry in the vector is:
-	/// - `0` - The variable identifier,
-	/// - `1` - Any array size specifiers for that variable.
-	///
-	/// If the expression cannot be parsed, this function returns `None`.
-	pub(crate) fn parse_var_idents(
-		expr: &Expr,
-	) -> Option<Vec<(Ident, Vec<ArrSize>)>> {
-		fn convert(expr: &Expr) -> Option<(Ident, Vec<ArrSize>)> {
-			match &expr.ty {
-				ExprTy::Ident(i) => Some((i.clone(), vec![])),
-				ExprTy::Index { item, i } => {
-					let mut current_item = item;
-					let mut stack = Vec::new();
-					stack.push(i.as_deref().cloned().into());
-
-					// Recursively look into any nested index operators until we hit an identifier.
-					let ident = loop {
-						match &current_item.ty {
-							ExprTy::Ident(i) => break i.clone(),
-							ExprTy::Index { item, i } => {
-								stack.push(i.as_deref().cloned().into());
-								current_item = item;
-							}
-							_ => {
-								// TODO: Is this possible to reach?
-								return None;
-							}
-						}
-					};
-
-					// In the expression parser, the index operator is right-associated so the outer-most is at the top
-					// and the inner-most is at the bottom. We want to reverse this so that the type array notation is
-					// in line with our intuition.
-					stack.reverse();
-					Some((ident, stack))
-				}
-				_ => unreachable!(),
-			}
-		}
-
-		match &expr.ty {
-			ExprTy::Ident(_) | ExprTy::Index { .. } => {
-				convert(expr).map(|i| vec![i])
-			}
-			ExprTy::List { items } => {
-				let mut v = Vec::new();
-				for item in items {
-					v.push(match convert(item) {
-						Some(i) => i,
-						None => return None,
-					})
-				}
-				Some(v)
-			}
-			_ => None,
-		}
-	}
-}
-
 impl Primitive {
 	/// Tries to parse an identifier into a primitive type.
 	pub fn parse(ident: &Ident) -> Option<Self> {

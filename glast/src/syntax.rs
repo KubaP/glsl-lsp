@@ -35,15 +35,15 @@ pub enum SyntaxType {
 	/// A comment.
 	Comment,
 	///// A primitive type.
-	//Primitive,
+	Primitive,
 	///// A struct.
-	//Struct,
+	Struct,
 	///// A function.
-	//Function,
+	Function,
 	///// A subroutine.
-	//Subroutine,
+	Subroutine,
 	///// A variable.
-	//Variable,
+	Variable,
 	/// A function or function-like macro parameter.
 	Parameter,
 	/// A valid layout qualifier identifier.

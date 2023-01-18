@@ -1,10 +1,7 @@
 //! Parsing functions for GLSL language constructs.
 
 use super::{
-	ast,
-	ast::*,
-	expression::{expr_parser, Mode},
-	Ctx, Macro, TokenStreamProvider, Walker,
+	ast, ast::*, expression::*, Ctx, Macro, TokenStreamProvider, Walker,
 };
 use crate::{
 	diag::{
@@ -764,7 +761,7 @@ fn try_parse_qualifiers<'a, P: TokenStreamProvider<'a>>(
 					};
 
 					// Consume the expression.
-					let value_expr = match expr_parser(
+					let value_expr = match parse_general_expr(
 						walker,
 						Mode::DisallowTopLevelList,
 						[Token::RParen],
@@ -828,285 +825,258 @@ fn try_parse_definition_declaration_expr<'a, P: TokenStreamProvider<'a>>(
 	qualifiers: Vec<Qualifier>,
 	parsing_last_for_stmt: bool,
 ) {
-	// We attempt to parse an expression at the current position.
-	let (start, mut start_syntax, mut start_semantic, mut start_colours) =
-		match expr_parser(walker, Mode::Default, [Token::Semi]) {
-			(Some(expr), syntax, semantic, colours) => {
-				(expr, syntax, semantic, colours)
-			}
-			(None, _, _, _) => {
-				// The current token cannot begin any sort of expression. Since this function gets called if all
-				// other statement branches have failed to match, it means that whatever we have cannot be a valid
-				// statement at all.
-				invalidate_qualifiers(walker, qualifiers);
-				seek_next_stmt(walker);
-				return;
-			}
-		};
+	// We attempt to parse a type specifier at the current position.
+	let e = match try_parse_type_specifier(walker, ctx, [Token::Semi]) {
+		Ok((mut type_, mut syntax, mut semantic, mut colours)) => {
+			// This must be a variable definition or function declaration/definition.
+			walker.append_colours(&mut colours);
+			walker.append_syntax_diags(&mut syntax);
+			walker.append_semantic_diags(&mut semantic);
 
-	// We test if the expression can be converted into a type.
-	if let Ok(mut type_) = try_parse_type(ctx, &start) {
-		// We definitely have a type. Therefore, this can't be an expression statement anymore, it must be a
-		// variable definition or function declaration/definition.
-
-		walker.append_colours(&mut start_colours);
-		start_syntax.retain(|e| {
-			if let Syntax::Expr(ExprDiag::FoundOperandAfterOperand(_, _)) = e {
-				false
-			} else {
-				true
-			}
-		});
-		walker.append_syntax_diags(&mut start_syntax);
-		walker.append_semantic_diags(&mut start_semantic);
-
-		let (token, token_span) = match walker.peek() {
-			Some(t) => t,
-			None => {
-				// We are lacking an identifier after the type.
-				invalidate_qualifiers(walker, qualifiers);
-				if parsing_last_for_stmt {
-					walker.push_syntax_diag(Syntax::Stmt(
-						StmtDiag::ForExpectedRParenAfterStmts(
-							type_.span.next_single_width(),
-						),
-					))
-				} else {
-					walker.push_syntax_diag(Syntax::Stmt(
-						StmtDiag::TypeExpectedIdentAfterType(
-							type_.span.next_single_width(),
-						),
-					));
-				}
-				return;
-			}
-		};
-
-		// Check whether we have a function declaration/definition.
-		match token {
-			Token::Ident(i) => match walker.lookahead_1() {
-				Some(next) => match next.0 {
-					Token::LParen => {
-						// We have a function declaration/definition.
-						type_.qualifiers = qualifiers;
-						let l_paren_span = next.1;
-						let ident = Ident {
-							name: i.clone(),
-							span: token_span,
-						};
-						walker.push_colour(
-							token_span,
-							SyntaxType::UncheckedIdent,
-						);
-						walker.advance();
-						walker.push_colour(next.1, SyntaxType::Punctuation);
-						walker.advance();
-						parse_function(walker, ctx, type_, ident, l_paren_span);
-						return;
+			let (token, token_span) = match walker.peek() {
+				Some(t) => t,
+				None => {
+					// We are lacking an identifier after the type.
+					invalidate_qualifiers(walker, qualifiers);
+					if parsing_last_for_stmt {
+						walker.push_syntax_diag(Syntax::Stmt(
+							StmtDiag::ForExpectedRParenAfterStmts(
+								type_.span.next_single_width(),
+							),
+						))
+					} else {
+						walker.push_syntax_diag(Syntax::Stmt(
+							StmtDiag::TypeExpectedIdentAfterType(
+								type_.span.next_single_width(),
+							),
+						));
 					}
-					_ => {}
-				},
-				None => {}
-			},
-			Token::RParen if parsing_last_for_stmt => {
-				// We are lacking an identifier.
-				invalidate_qualifiers(walker, qualifiers);
-				if parsing_last_for_stmt {
-					walker.push_syntax_diag(Syntax::Stmt(
-						StmtDiag::ForExpectedRParenAfterStmts(
-							type_.span.next_single_width(),
-						),
-					))
-				} else {
-					walker.push_syntax_diag(Syntax::Stmt(
-						StmtDiag::TypeExpectedIdentAfterType(
-							type_.span.next_single_width(),
-						),
-					));
+					return;
 				}
-				return;
-			}
-			_ => {}
-		}
+			};
 
-		// We don't have a function declaration/definition, so this must be a variable definition (with possibly an
-		// initialization).
-
-		// We attempt to parse an expression for the identifier(s).
-		let (
-			ident_expr,
-			mut ident_syntax,
-			mut ident_semantic,
-			mut ident_colours,
-		) = match expr_parser(walker, Mode::BreakAtEq, [Token::Semi]) {
-			(Some(e), syntax, semantic, colours) => {
-				(e, syntax, semantic, colours)
-			}
-			(None, _, _, _) => {
-				// We have a type, followed by something that's not an expression.
-				invalidate_qualifiers(walker, qualifiers);
-				if parsing_last_for_stmt {
-					walker.push_syntax_diag(Syntax::Stmt(
-						StmtDiag::ForExpectedRParenAfterStmts(
-							start.span.next_single_width(),
-						),
-					))
-				} else {
-					walker.push_syntax_diag(Syntax::Stmt(
-						StmtDiag::TypeExpectedIdentAfterType(
-							type_.span.next_single_width(),
-						),
-					));
-				}
-				return;
-			}
-		};
-		let ident_span = ident_expr.span;
-
-		// We test if the identifier(s) expression can be converted into one or more variable identifiers.
-		let ident_info = if let Some(i) = Type::parse_var_idents(&ident_expr) {
-			i
-		} else {
-			// We have a type, followed by a second expression but the second expression isn't one or more
-			// identifiers suitable for a variable definition. We treat the first expression as an incomplete type
-			// grammar and the second expression as a standalone expression.
-			invalidate_qualifiers(walker, qualifiers);
-			if parsing_last_for_stmt {
-				walker.push_syntax_diag(Syntax::Stmt(
-					StmtDiag::ForExpectedRParenAfterStmts(
-						start.span.next_single_width(),
-					),
-				))
-			} else {
-				walker.push_syntax_diag(Syntax::Stmt(
-					StmtDiag::TypeExpectedIdentAfterType(
-						type_.span.next_single_width(),
-					),
-				));
-			}
-			walker.append_colours(&mut ident_colours);
-			walker.append_syntax_diags(&mut ident_syntax);
-			walker.append_semantic_diags(&mut ident_semantic);
-			ctx.push_node(Node {
-				span: ident_expr.span,
-				ty: NodeTy::Expr(ident_expr),
-			});
-			seek_next_stmt(walker);
-			return;
-		};
-
-		// We have one expression which can be converted to a type, and a second expression which can be converted
-		// to one or more identifiers. That means the first expression will have a syntax error about a missing
-		// operator between the two; we remove that error since in this case it's not applicable.
-		start_syntax.retain(|e| {
-			if let Syntax::Expr(ExprDiag::FoundOperandAfterOperand(_, _)) = e {
-				false
-			} else {
-				true
-			}
-		});
-		type_.qualifiers = qualifiers;
-		walker.append_colours(&mut ident_colours);
-		walker.append_syntax_diags(&mut ident_syntax);
-		walker.append_semantic_diags(&mut ident_semantic);
-
-		fn var_def(
-			type_: Type,
-			idents: Vec<(Ident, Vec<ArrSize>)>,
-			end_pos: usize,
-		) -> (Vec<(Type, Ident)>, Node) {
-			let span = Span::new(type_.span.start, end_pos);
-			let mut vars = combine_type_with_idents(type_, idents);
-			match vars.len() {
-				1 => {
-					let (type_, ident) = vars.remove(0);
-					(
-						vec![(type_.clone(), ident.clone())],
-						Node {
-							span,
-							ty: NodeTy::VarDef { type_, ident },
-						},
-					)
-				}
-				_ => (
-					vars.clone(),
-					Node {
-						span,
-						ty: NodeTy::VarDefs(vars),
-					},
-				),
-			}
-		}
-
-		fn var_def_init(
-			type_: Type,
-			idents: Vec<(Ident, Vec<ArrSize>)>,
-			value: Option<Expr>,
-			end_pos: usize,
-		) -> (Vec<(Type, Ident)>, Node) {
-			let span = Span::new(type_.span.start, end_pos);
-			let mut vars = combine_type_with_idents(type_, idents);
-			match vars.len() {
-				1 => {
-					let (type_, ident) = vars.remove(0);
-					(
-						vec![(type_.clone(), ident.clone())],
-						Node {
-							span,
-							ty: NodeTy::VarDefInit {
+			// Check whether we have a function declaration/definition.
+			match token {
+				Token::Ident(i) => match walker.lookahead_1() {
+					Some(next) => match next.0 {
+						Token::LParen => {
+							// We have a function declaration/definition.
+							type_.qualifiers = qualifiers;
+							let l_paren_span = next.1;
+							let ident = Ident {
+								name: i.clone(),
+								span: token_span,
+							};
+							walker
+								.push_colour(token_span, SyntaxType::Function);
+							walker.advance();
+							walker.push_colour(next.1, SyntaxType::Punctuation);
+							walker.advance();
+							parse_function(
+								walker,
+								ctx,
 								type_,
 								ident,
-								init_expr: value,
-							},
-						},
-					)
-				}
-				_ => (
-					vars.clone(),
-					Node {
-						span,
-						ty: NodeTy::VarDefInits(vars, value),
+								l_paren_span,
+							);
+							return;
+						}
+						_ => {}
 					},
-				),
+					None => {}
+				},
+				Token::RParen if parsing_last_for_stmt => {
+					// We are lacking an identifier.
+					invalidate_qualifiers(walker, qualifiers);
+					if parsing_last_for_stmt {
+						walker.push_syntax_diag(Syntax::Stmt(
+							StmtDiag::ForExpectedRParenAfterStmts(
+								type_.span.next_single_width(),
+							),
+						))
+					} else {
+						walker.push_syntax_diag(Syntax::Stmt(
+							StmtDiag::TypeExpectedIdentAfterType(
+								type_.span.next_single_width(),
+							),
+						));
+					}
+					return;
+				}
+				_ => {}
 			}
-		}
 
-		// Consume the `;` for a definition, or a `=` for a definition with initialization.
-		let (token, token_span) = match walker.peek() {
-			Some(t) => t,
-			None => {
-				// We have something that matches the start of a variable definition. Since we have neither the `;`
-				// or `=`, we assume that this is a definition without initialization that is missing the
-				// semi-colon.
-				walker.push_syntax_diag(Syntax::Stmt(
-					StmtDiag::VarDefExpectedSemiOrEqAfterIdents(
-						ident_span.next_single_width(),
+			// We don't have a function declaration/definition, so this must be a variable definition (with
+			// possibly an initialization).
+
+			let ident_info = match try_parse_new_decl_def_idents_with_type_info(
+				walker,
+				ctx,
+				[Token::Semi],
+				false,
+			) {
+				Ok((i, mut syntax, mut semantic, mut colours)) => {
+					walker.append_colours(&mut colours);
+					walker.append_syntax_diags(&mut syntax);
+					walker.append_semantic_diags(&mut semantic);
+					i
+				}
+				Err((expr, mut syntax, mut semantic, mut colours)) => {
+					walker.append_colours(&mut colours);
+					walker.append_syntax_diags(&mut syntax);
+					walker.append_semantic_diags(&mut semantic);
+
+					if let Some(expr) = expr {
+						// We have a type specifier, followed by a second expression but the second expression
+						// isn't one or more identifiers suitable for a variable definition. We treat the first
+						// expression as an incomplete type grammar and the second expression as a standalone
+						// expression.
+						invalidate_qualifiers(walker, qualifiers);
+						if parsing_last_for_stmt {
+							walker.push_syntax_diag(Syntax::Stmt(
+								StmtDiag::ForExpectedRParenAfterStmts(
+									expr.span.next_single_width(),
+								),
+							))
+						} else {
+							walker.push_syntax_diag(Syntax::Stmt(
+								StmtDiag::TypeExpectedIdentAfterType(
+									type_.span.next_single_width(),
+								),
+							));
+						}
+						ctx.push_node(Node {
+							span: expr.span,
+							ty: NodeTy::Expr(expr),
+						});
+						seek_next_stmt(walker);
+					} else {
+						// We have a type specifier followed by something that can't be parsed as any expression.
+						invalidate_qualifiers(walker, qualifiers);
+						if parsing_last_for_stmt {
+							walker.push_syntax_diag(Syntax::Stmt(
+								StmtDiag::ForExpectedRParenAfterStmts(
+									type_.span.next_single_width(),
+								),
+							))
+						} else {
+							walker.push_syntax_diag(Syntax::Stmt(
+								StmtDiag::TypeExpectedIdentAfterType(
+									type_.span.next_single_width(),
+								),
+							));
+						}
+					}
+					return;
+				}
+			};
+			let ident_span = ident_info.last().unwrap().0.span;
+			type_.qualifiers = qualifiers;
+
+			fn var_def(
+				type_: Type,
+				idents: Vec<(Ident, Vec<ArrSize>)>,
+				end_pos: usize,
+			) -> (Vec<(Type, Ident)>, Node) {
+				let span = Span::new(type_.span.start, end_pos);
+				let mut vars = combine_type_with_idents(type_, idents);
+				match vars.len() {
+					1 => {
+						let (type_, ident) = vars.remove(0);
+						(
+							vec![(type_.clone(), ident.clone())],
+							Node {
+								span,
+								ty: NodeTy::VarDef { type_, ident },
+							},
+						)
+					}
+					_ => (
+						vars.clone(),
+						Node {
+							span,
+							ty: NodeTy::VarDefs(vars),
+						},
 					),
-				));
+				}
+			}
+
+			fn var_def_init(
+				type_: Type,
+				idents: Vec<(Ident, Vec<ArrSize>)>,
+				value: Option<Expr>,
+				end_pos: usize,
+			) -> (Vec<(Type, Ident)>, Node) {
+				let span = Span::new(type_.span.start, end_pos);
+				let mut vars = combine_type_with_idents(type_, idents);
+				match vars.len() {
+					1 => {
+						let (type_, ident) = vars.remove(0);
+						(
+							vec![(type_.clone(), ident.clone())],
+							Node {
+								span,
+								ty: NodeTy::VarDefInit {
+									type_,
+									ident,
+									init_expr: value,
+								},
+							},
+						)
+					}
+					_ => (
+						vars.clone(),
+						Node {
+							span,
+							ty: NodeTy::VarDefInits(vars, value),
+						},
+					),
+				}
+			}
+
+			// Consume the `;` for a definition, or a `=` for a definition with initialization.
+			let (token, token_span) = match walker.peek() {
+				Some(t) => t,
+				None => {
+					// We have something that matches the start of a variable definition. Since we have neither the
+					// `;` or `=`, we assume that this is a definition without initialization that is missing the
+					// semi-colon.
+					walker.push_syntax_diag(Syntax::Stmt(
+						StmtDiag::VarDefExpectedSemiOrEqAfterIdents(
+							ident_span.next_single_width(),
+						),
+					));
+					ctx.push_new_variables(var_def(
+						type_,
+						ident_info,
+						ident_span.end,
+					));
+					return;
+				}
+			};
+			if *token == Token::Semi {
+				// We have a variable definition without initialization.
+				let semi_span = token_span;
+				walker.push_colour(semi_span, SyntaxType::Punctuation);
+				walker.advance();
 				ctx.push_new_variables(var_def(
 					type_,
 					ident_info,
-					ident_span.end,
+					semi_span.end,
 				));
 				return;
-			}
-		};
-		if *token == Token::Semi {
-			// We have a variable definition without initialization.
-			let semi_span = token_span;
-			walker.push_colour(semi_span, SyntaxType::Punctuation);
-			walker.advance();
-			ctx.push_new_variables(var_def(type_, ident_info, semi_span.end));
-			return;
-		} else if *token == Token::Op(OpTy::Eq) {
-			// We have a variable definition with initialization.
-			let eq_span = token_span;
-			walker.push_colour(eq_span, SyntaxType::Operator);
-			walker.advance();
+			} else if *token == Token::Op(OpTy::Eq) {
+				// We have a variable definition with initialization.
+				let eq_span = token_span;
+				walker.push_colour(eq_span, SyntaxType::Operator);
+				walker.advance();
 
-			// Consume the value expression.
-			let value_expr =
-				match expr_parser(walker, Mode::Default, [Token::Semi]) {
+				// Consume the value expression.
+				let value_expr = match parse_general_expr(
+					walker,
+					Mode::Default,
+					[Token::Semi],
+				) {
 					(Some(e), mut syntax, mut semantic, mut colours) => {
 						walker.append_colours(&mut colours);
 						walker.append_syntax_diags(&mut syntax);
@@ -1130,161 +1100,177 @@ fn try_parse_definition_declaration_expr<'a, P: TokenStreamProvider<'a>>(
 					}
 				};
 
-			// Consume the semi-colon.
-			let (token, token_span) = match walker.peek() {
-				Some(t) => t,
-				None => {
-					let value_span = value_expr.span;
+				// Consume the semi-colon.
+				let (token, token_span) = match walker.peek() {
+					Some(t) => t,
+					None => {
+						let value_span = value_expr.span;
+						walker.push_syntax_diag(Syntax::Stmt(
+							StmtDiag::VarDefInitExpectedSemiAfterValue(
+								value_span.next_single_width(),
+							),
+						));
+						ctx.push_new_variables(var_def_init(
+							type_,
+							ident_info,
+							Some(value_expr),
+							value_span.end,
+						));
+						return;
+					}
+				};
+				if *token == Token::Semi {
+					let semi_span = token_span;
+					walker.push_colour(semi_span, SyntaxType::Punctuation);
+					walker.advance();
+					ctx.push_new_variables(var_def_init(
+						type_,
+						ident_info,
+						Some(value_expr),
+						semi_span.end,
+					));
+					return;
+				} else {
+					let end_span = token_span;
 					walker.push_syntax_diag(Syntax::Stmt(
 						StmtDiag::VarDefInitExpectedSemiAfterValue(
-							value_span.next_single_width(),
+							end_span.next_single_width(),
 						),
 					));
 					ctx.push_new_variables(var_def_init(
 						type_,
 						ident_info,
 						Some(value_expr),
-						value_span.end,
+						end_span.end,
 					));
+					seek_next_stmt(walker);
 					return;
 				}
-			};
-			if *token == Token::Semi {
-				let semi_span = token_span;
-				walker.push_colour(semi_span, SyntaxType::Punctuation);
-				walker.advance();
-				ctx.push_new_variables(var_def_init(
-					type_,
-					ident_info,
-					Some(value_expr),
-					semi_span.end,
-				));
-				return;
 			} else {
-				let end_span = token_span;
+				// We have something that matches the start of a variable definition. Since we have neither the `;`
+				// or `=`, we assume that this is a definition without initialization which is missing the
+				// semi-colon.
 				walker.push_syntax_diag(Syntax::Stmt(
-					StmtDiag::VarDefInitExpectedSemiAfterValue(
-						end_span.next_single_width(),
+					StmtDiag::VarDefExpectedSemiOrEqAfterIdents(
+						ident_span.next_single_width(),
 					),
 				));
-				ctx.push_new_variables(var_def_init(
+				ctx.push_new_variables(var_def(
 					type_,
 					ident_info,
-					Some(value_expr),
-					end_span.end,
+					ident_span.end,
 				));
 				seek_next_stmt(walker);
 				return;
 			}
-		} else {
-			// We have something that matches the start of a variable definition. Since we have neither the `;` or
-			// `=`, we assume that this is a definition without initialization which is missing the semi-colon.
-			walker.push_syntax_diag(Syntax::Stmt(
-				StmtDiag::VarDefExpectedSemiOrEqAfterIdents(
-					ident_span.next_single_width(),
-				),
-			));
-			ctx.push_new_variables(var_def(type_, ident_info, ident_span.end));
-			seek_next_stmt(walker);
+
 			return;
 		}
-	}
+		Err(e) => e,
+	};
 
-	// We have an expression which cannot be parsed as a type, so this cannot start a declaration/definition; it
-	// must therefore be a standalone expression statement or an interface block.
-	match walker.peek() {
-		Some((token, token_span)) => match token {
-			Token::LBrace => {
-				// We have an interface block.
+	let (Some(expr), mut syntax, mut semantic, mut colours) = e else {
+		// Could not parse any expression, so this cannot be a valid statement at all.
+		invalidate_qualifiers(walker, qualifiers);
+		seek_next_stmt(walker);
+		return;
+	};
 
-				// Interface blocks can begin with one of the following:
-				// in
-				// out
-				// patch in
-				// patch out
-				// uniform
-				// buffer
-				// A layout() qualifier may precede any of these.
-				let valid_qualifiers = if qualifiers.len() == 1 {
-					match &qualifiers[0].ty {
-						QualifierTy::In
-						| QualifierTy::Out
-						| QualifierTy::Uniform
-						| QualifierTy::Buffer => true,
-						_ => false,
-					}
-				} else if qualifiers.len() == 2 {
-					match (&qualifiers[0].ty, &qualifiers[1].ty) {
-						(QualifierTy::Patch, QualifierTy::In)
-						| (QualifierTy::Patch, QualifierTy::Out)
-						| (QualifierTy::Layout(_), QualifierTy::In)
-						| (QualifierTy::Layout(_), QualifierTy::Out)
-						| (QualifierTy::Layout(_), QualifierTy::Uniform)
-						| (QualifierTy::Layout(_), QualifierTy::Buffer) => true,
-						(_, _) => false,
-					}
-				} else if qualifiers.len() == 3 {
-					match (
-						&qualifiers[0].ty,
-						&qualifiers[1].ty,
-						&qualifiers[2].ty,
-					) {
-						(
-							QualifierTy::Layout(_),
-							QualifierTy::Patch,
-							QualifierTy::In,
-						)
-						| (
-							QualifierTy::Layout(_),
-							QualifierTy::Patch,
-							QualifierTy::Out,
-						) => true,
-						(_, _, _) => false,
-					}
-				} else {
-					false
-				};
-				if !valid_qualifiers {
-					// TODO: Syntax error for invalid qualifiers before interface block.
-					return;
-				}
-				let l_brace_span = token_span;
-				walker.append_colours(&mut start_colours);
-				start_syntax.retain(|e| {
-					if let Syntax::Expr(ExprDiag::FoundOperandAfterOperand(
-						_,
-						_,
-					)) = e
-					{
-						false
-					} else {
-						true
-					}
-				});
-				walker.append_syntax_diags(&mut start_syntax);
-				walker.append_semantic_diags(&mut start_semantic);
-				walker.push_colour(l_brace_span, SyntaxType::Punctuation);
-				walker.advance();
-				parse_interface_block(
-					walker,
-					ctx,
-					qualifiers,
-					start,
-					l_brace_span,
-				);
-				return;
-			}
-			_ => {}
-		},
-		None => {}
-	}
+	// FIXME: if expr == ident, and next is `{` We have an expression which cannot be parsed as a type specifier,
+	// so this cannot start a variable definition nor a function declaration or definition; it must therefore be a
+	// standalone expression statement or an interface block.
+	/* match walker.peek() {
+		   Some((token, token_span)) => match token {
+			   Token::LBrace => {
+				   // We have an interface block.
 
+				   // Interface blocks can begin with one of the following:
+				   // in
+				   // out
+				   // patch in
+				   // patch out
+				   // uniform
+				   // buffer
+				   // A layout() qualifier may precede any of these.
+				   let valid_qualifiers = if qualifiers.len() == 1 {
+					   match &qualifiers[0].ty {
+						   QualifierTy::In
+						   | QualifierTy::Out
+						   | QualifierTy::Uniform
+						   | QualifierTy::Buffer => true,
+						   _ => false,
+					   }
+				   } else if qualifiers.len() == 2 {
+					   match (&qualifiers[0].ty, &qualifiers[1].ty) {
+						   (QualifierTy::Patch, QualifierTy::In)
+						   | (QualifierTy::Patch, QualifierTy::Out)
+						   | (QualifierTy::Layout(_), QualifierTy::In)
+						   | (QualifierTy::Layout(_), QualifierTy::Out)
+						   | (QualifierTy::Layout(_), QualifierTy::Uniform)
+						   | (QualifierTy::Layout(_), QualifierTy::Buffer) => true,
+						   (_, _) => false,
+					   }
+				   } else if qualifiers.len() == 3 {
+					   match (
+						   &qualifiers[0].ty,
+						   &qualifiers[1].ty,
+						   &qualifiers[2].ty,
+					   ) {
+						   (
+							   QualifierTy::Layout(_),
+							   QualifierTy::Patch,
+							   QualifierTy::In,
+						   )
+						   | (
+							   QualifierTy::Layout(_),
+							   QualifierTy::Patch,
+							   QualifierTy::Out,
+						   ) => true,
+						   (_, _, _) => false,
+					   }
+				   } else {
+					   false
+				   };
+				   if !valid_qualifiers {
+					   // TODO: Syntax error for invalid qualifiers before interface block.
+					   return;
+				   }
+				   let l_brace_span = token_span;
+				   walker.append_colours(&mut start_colours);
+				   start_syntax.retain(|e| {
+					   if let Syntax::Expr(ExprDiag::FoundOperandAfterOperand(
+						   _,
+						   _,
+					   )) = e
+					   {
+						   false
+					   } else {
+						   true
+					   }
+				   });
+				   walker.append_syntax_diags(&mut start_syntax);
+				   walker.append_semantic_diags(&mut start_semantic);
+				   walker.push_colour(l_brace_span, SyntaxType::Punctuation);
+				   walker.advance();
+				   parse_interface_block(
+					   walker,
+					   ctx,
+					   qualifiers,
+					   start,
+					   l_brace_span,
+				   );
+				   return;
+			   }
+			   _ => {}
+		   },
+		   None => {}
+	   }
+	*/
 	// We have a standalone expression statement.
 	invalidate_qualifiers(walker, qualifiers);
-	let expr = start;
-	walker.append_colours(&mut start_colours);
-	walker.append_syntax_diags(&mut start_syntax);
-	walker.append_semantic_diags(&mut start_semantic);
+	walker.append_colours(&mut colours);
+	walker.append_syntax_diags(&mut syntax);
+	walker.append_semantic_diags(&mut semantic);
 
 	// Consume the `;` to end the statement.
 	let semi_span = match walker.peek() {
@@ -1443,119 +1429,113 @@ fn parse_function<'a, P: TokenStreamProvider<'a>>(
 
 		let qualifiers = try_parse_qualifiers(walker);
 
-		// Consume the type.
-		let mut type_ = match expr_parser(
+		// Consume the type specifier.
+		let mut type_ = match try_parse_type_specifier(
 			walker,
-			Mode::TakeOneUnit,
+			ctx,
 			[Token::Semi, Token::LBrace],
 		) {
-			(Some(e), _, mut semantic, mut colours) => {
-				if let Ok((type_)) = try_parse_type(ctx, &e) {
-					walker.append_colours(&mut colours);
-					walker.append_semantic_diags(&mut semantic);
-					type_
-				} else {
+			Ok((type_, mut syntax, mut semantic, mut colours)) => {
+				walker.append_colours(&mut colours);
+				walker.append_syntax_diags(&mut syntax);
+				walker.append_semantic_diags(&mut semantic);
+				type_
+			}
+			Err((expr, mut syntax, mut semantic, mut colours)) => {
+				if let Some(expr) = expr {
 					// We have an expression which cannot be parsed into a type. We ignore this and continue
 					// searching for the next parameter.
-					for SyntaxToken { span, .. } in colours {
-						walker.push_colour(span, SyntaxType::Invalid);
-					}
 					walker.push_syntax_diag(Syntax::Stmt(
-						StmtDiag::ParamsInvalidTypeExpr(e.span),
+						StmtDiag::ParamsInvalidTypeExpr(expr.span),
 					));
 					prev = Prev::Invalid;
-					prev_span = Span::new(param_span_start, e.span.end);
+					prev_span = Span::new(param_span_start, expr.span.end);
+					continue;
+				} else {
+					// We immediately have a token that is not an expression. We ignore this and loop until we hit
+					// something recognizable.
+					let end_span = loop {
+						match walker.peek() {
+							Some((token, span)) => {
+								if *token == Token::Comma
+									|| *token == Token::RParen || *token
+									== Token::Semi || *token == Token::LBrace
+								{
+									break span;
+								} else {
+									walker.advance();
+									continue;
+								}
+							}
+							None => break walker.get_last_span(),
+						}
+					};
+					walker.push_syntax_diag(Syntax::Stmt(
+						StmtDiag::ParamsInvalidTypeExpr(Span::new(
+							param_span_start,
+							end_span.end,
+						)),
+					));
+					prev = Prev::Invalid;
+					prev_span = token_span;
 					continue;
 				}
-			}
-			(None, _, _, _) => {
-				// We immediately have a token that is not an expression. We ignore this and loop until we hit
-				// something recognizable.
-				let end_span = loop {
-					match walker.peek() {
-						Some((token, span)) => {
-							if *token == Token::Comma
-								|| *token == Token::RParen || *token
-								== Token::Semi || *token == Token::LBrace
-							{
-								break span;
-							} else {
-								walker.push_colour(span, SyntaxType::Invalid);
-								walker.advance();
-								continue;
-							}
-						}
-						None => break walker.get_last_span(),
-					}
-				};
-				walker.push_syntax_diag(Syntax::Stmt(
-					StmtDiag::ParamsInvalidTypeExpr(Span::new(
-						param_span_start,
-						end_span.end,
-					)),
-				));
-				prev = Prev::Invalid;
-				prev_span = token_span;
-				continue;
 			}
 		};
 
 		// Look for the optional ident.
-		let (ident_expr, ident_colours) = match expr_parser(
+		let ident = match try_parse_new_decl_def_idents_with_type_info(
 			walker,
-			Mode::TakeOneUnit,
+			ctx,
 			[Token::Semi, Token::LBrace],
+			true,
 		) {
-			(Some(e), _, mut semantic, colours) => {
+			Ok((i, mut syntax, mut semantic, mut colours)) => {
+				walker.append_colours(&mut colours);
+				walker.append_syntax_diags(&mut syntax);
 				walker.append_semantic_diags(&mut semantic);
-				(e, colours)
+				i
 			}
-			(None, _, _, _) => {
-				// We have a first expression and then something that is not an expression. We treat this as an
-				// anonymous parameter, whatever the current token is will be dealt with in the next iteration.
-				type_.qualifiers = qualifiers;
-				let param_span = Span::new(param_span_start, type_.span.end);
-				params.push(Param {
-					span: param_span,
-					type_,
-					ident: Omittable::None,
-				});
-				prev = Prev::Param;
-				prev_span = param_span;
-				continue;
+			Err((expr, mut syntax, mut semantic, mut colours)) => {
+				if let Some(expr) = expr {
+					// We have a second expression after the first expression, but the second expression can't be
+					// converted to an identifier for the parameter. We treat the first type expression as an
+					// anonymous parameter, and the second expression as invalid.
+					let param_span =
+						Span::new(param_span_start, type_.span.end);
+					type_.qualifiers = qualifiers;
+					params.push(Param {
+						span: Span::new(param_span_start, type_.span.end),
+						type_,
+						ident: Omittable::None,
+					});
+					walker.push_syntax_diag(Syntax::Stmt(
+						StmtDiag::ParamsInvalidIdentExpr(expr.span),
+					));
+					prev = Prev::Param;
+					prev_span = param_span;
+					continue;
+				} else {
+					// We have a first expression and then something that is not an expression. We treat this as an
+					// anonymous parameter, whatever the current token is will be dealt with in the next iteration.
+					type_.qualifiers = qualifiers;
+					let param_span =
+						Span::new(param_span_start, type_.span.end);
+					params.push(Param {
+						span: param_span,
+						type_,
+						ident: Omittable::None,
+					});
+					prev = Prev::Param;
+					prev_span = param_span;
+					continue;
+				}
 			}
 		};
-		let ident_span = ident_expr.span;
-
-		// Invariant: This vector is guaranteed to have a length of 1 because the `ident_expr` was parsed with the
-		// `TakeOneUnit` mode which prevents lists.
-		let ident_info = if let Some(i) = Type::parse_var_idents(&ident_expr) {
-			i
-		} else {
-			// We have a second expression after the first expression, but the second expression can't be converted
-			// to an identifier for the parameter. We treat the first type expression as an anonymous parameter,
-			// and the second expression as invalid.
-			let param_span = Span::new(param_span_start, type_.span.end);
-			type_.qualifiers = qualifiers;
-			params.push(Param {
-				span: Span::new(param_span_start, type_.span.end),
-				type_,
-				ident: Omittable::None,
-			});
-			walker.push_syntax_diag(Syntax::Stmt(
-				StmtDiag::ParamsInvalidIdentExpr(ident_expr.span),
-			));
-			for SyntaxToken { span, .. } in ident_colours {
-				walker.push_colour(span, SyntaxType::Invalid);
-			}
-			prev = Prev::Param;
-			prev_span = param_span;
-			continue;
-		};
+		let ident_span = ident[0].0.span;
 
 		type_.qualifiers = qualifiers;
-		let (type_, ident) =
-			combine_type_with_idents(type_, ident_info).remove(0);
+		let (type_, ident) = combine_type_with_idents(type_, ident).remove(0);
 		let param_span = Span::new(param_span_start, ident_span.end);
 		params.push(Param {
 			span: param_span,
@@ -2022,7 +2002,7 @@ fn parse_interface_block<'a, P: TokenStreamProvider<'a>>(
 
 	// Look for an optional instance definition.
 	let instance: Omittable<Expr> =
-		match expr_parser(walker, Mode::TakeOneUnit, [Token::Semi]) {
+		match parse_general_expr(walker, Mode::TakeOneUnit, [Token::Semi]) {
 			(Some(e), mut syntax, mut semantic, mut colours) => {
 				/* if let Some(_) = Type::parse(&e) {
 					// This expression can be a valid instance definition.
@@ -2115,34 +2095,23 @@ fn parse_struct<'a, P: TokenStreamProvider<'a>>(
 	walker.advance();
 
 	// Consume the identifier.
-	let ident = match expr_parser(
-		walker,
-		Mode::TakeOneUnit,
-		[Token::LBrace, Token::Semi],
-	) {
-		(Some(e), _, mut semantic, mut colours) => match e.ty {
-			ExprTy::Ident(i) => {
-				walker.append_colours(&mut colours);
-				walker.append_semantic_diags(&mut semantic);
+	let ident =
+		match try_parse_new_ident(walker, [Token::LBrace, Token::Semi], || {
+			SyntaxType::Struct
+		}) {
+			Ok((i, mut s)) => {
+				walker.semantic_diags.append(&mut s);
 				i
 			}
-			_ => {
-				walker.append_colours(&mut colours);
+			Err(_) => {
 				walker.push_syntax_diag(Syntax::Stmt(
-					StmtDiag::StructExpectedIdentAfterKw(e.span),
+					StmtDiag::StructExpectedIdentAfterKw(
+						kw_span.next_single_width(),
+					),
 				));
 				return;
 			}
-		},
-		(None, _, _, _) => {
-			walker.push_syntax_diag(Syntax::Stmt(
-				StmtDiag::StructExpectedIdentAfterKw(
-					kw_span.next_single_width(),
-				),
-			));
-			return;
-		}
-	};
+		};
 
 	let struct_span_start = if let Some(q) = qualifiers.first() {
 		q.span.start
@@ -2256,37 +2225,38 @@ fn parse_struct<'a, P: TokenStreamProvider<'a>>(
 	}
 
 	// Look for an optional instance identifier.
-	let instance = match expr_parser(walker, Mode::TakeOneUnit, [Token::Semi]) {
-		(Some(e), _, mut semantic, mut colours) => match e.ty {
-			ExprTy::Ident(i) => {
-				walker.append_colours(&mut colours);
-				walker.append_semantic_diags(&mut semantic);
-				Omittable::Some(i)
-			}
-			_ => {
-				walker.append_colours(&mut colours);
-				walker.push_syntax_diag(Syntax::Stmt(
-					StmtDiag::StructExpectedInstanceOrSemiAfterBody(e.span),
-				));
+	let instance =
+		match parse_general_expr(walker, Mode::TakeOneUnit, [Token::Semi]) {
+			(Some(e), _, mut semantic, mut colours) => match e.ty {
+				ExprTy::Ident(i) => {
+					walker.push_colour(i.span, SyntaxType::Variable);
+					walker.append_semantic_diags(&mut semantic);
+					Omittable::Some(i)
+				}
+				_ => {
+					walker.append_colours(&mut colours);
+					walker.push_syntax_diag(Syntax::Stmt(
+						StmtDiag::StructExpectedInstanceOrSemiAfterBody(e.span),
+					));
 
-				ctx.push_new_struct(
-					ident.clone(),
-					fields,
-					Node {
-						span: Span::new(struct_span_start, body.span.end),
-						ty: NodeTy::StructDef {
-							qualifiers,
-							ident,
-							body,
-							instance: Omittable::None,
+					ctx.push_new_struct(
+						ident.clone(),
+						fields,
+						Node {
+							span: Span::new(struct_span_start, body.span.end),
+							ty: NodeTy::StructDef {
+								qualifiers,
+								ident,
+								body,
+								instance: Omittable::None,
+							},
 						},
-					},
-				);
-				return;
-			}
-		},
-		_ => Omittable::None,
-	};
+					);
+					return;
+				}
+			},
+			_ => Omittable::None,
+		};
 
 	// Consume the `;` to end the statement.
 	let semi_span = match walker.peek() {
@@ -2463,7 +2433,7 @@ fn parse_if<'a, P: TokenStreamProvider<'a>>(
 			};
 
 			// Consume the condition expression.
-			let cond_expr = match expr_parser(
+			let cond_expr = match parse_general_expr(
 				walker,
 				Mode::Default,
 				[Token::RParen, Token::LBrace],
@@ -2755,7 +2725,7 @@ fn parse_switch<'a, P: TokenStreamProvider<'a>>(
 	};
 
 	// Consume the condition expression.
-	let cond_expr = match expr_parser(
+	let cond_expr = match parse_general_expr(
 		walker,
 		Mode::Default,
 		[Token::RParen, Token::LBrace],
@@ -2931,23 +2901,26 @@ fn parse_switch<'a, P: TokenStreamProvider<'a>>(
 				walker.advance();
 
 				// Consume the expression.
-				let expr =
-					match expr_parser(walker, Mode::Default, [Token::Colon]) {
-						(Some(e), mut syntax, mut semantic, mut colours) => {
-							walker.append_colours(&mut colours);
-							walker.append_syntax_diags(&mut syntax);
-							walker.append_semantic_diags(&mut semantic);
-							Some(e)
-						}
-						(None, _, _, _) => {
-							walker.push_syntax_diag(Syntax::Stmt(
-								StmtDiag::SwitchExpectedExprAfterCaseKw(
-									case_kw_span.next_single_width(),
-								),
-							));
-							None
-						}
-					};
+				let expr = match parse_general_expr(
+					walker,
+					Mode::Default,
+					[Token::Colon],
+				) {
+					(Some(e), mut syntax, mut semantic, mut colours) => {
+						walker.append_colours(&mut colours);
+						walker.append_syntax_diags(&mut syntax);
+						walker.append_semantic_diags(&mut semantic);
+						Some(e)
+					}
+					(None, _, _, _) => {
+						walker.push_syntax_diag(Syntax::Stmt(
+							StmtDiag::SwitchExpectedExprAfterCaseKw(
+								case_kw_span.next_single_width(),
+							),
+						));
+						None
+					}
+				};
 
 				// Consume the `:`.
 				let colon_span = match walker.peek() {
@@ -3458,7 +3431,7 @@ fn parse_while_loop<'a, P: TokenStreamProvider<'a>>(
 	};
 
 	// Consume the condition expression.
-	let cond_expr = match expr_parser(
+	let cond_expr = match parse_general_expr(
 		walker,
 		Mode::Default,
 		[Token::RParen, Token::Semi],
@@ -3661,7 +3634,7 @@ fn parse_do_while_loop<'a, P: TokenStreamProvider<'a>>(
 	};
 
 	// Consume the condition expression.
-	let cond_expr = match expr_parser(
+	let cond_expr = match parse_general_expr(
 		walker,
 		Mode::Default,
 		[Token::RParen, Token::Semi],
@@ -3843,15 +3816,16 @@ fn parse_return<'a, P: TokenStreamProvider<'a>>(
 	walker.advance();
 
 	// Look for the optional return value expression.
-	let return_expr = match expr_parser(walker, Mode::Default, [Token::Semi]) {
-		(Some(expr), mut syntax, mut semantic, mut colours) => {
-			walker.append_colours(&mut colours);
-			walker.append_syntax_diags(&mut syntax);
-			walker.append_semantic_diags(&mut semantic);
-			Omittable::Some(expr)
-		}
-		(None, _, _, _) => Omittable::None,
-	};
+	let return_expr =
+		match parse_general_expr(walker, Mode::Default, [Token::Semi]) {
+			(Some(expr), mut syntax, mut semantic, mut colours) => {
+				walker.append_colours(&mut colours);
+				walker.append_syntax_diags(&mut syntax);
+				walker.append_semantic_diags(&mut semantic);
+				Omittable::Some(expr)
+			}
+			(None, _, _, _) => Omittable::None,
+		};
 
 	// Consume the `;` to end the statement.
 	let semi_span = match walker.peek() {
@@ -5067,69 +5041,6 @@ fn parse_pragma_directive<'a, P: TokenStreamProvider<'a>>(
 			options: options.into(),
 		},
 	});
-}
-
-/// Tries to parse a type.
-fn try_parse_type(ctx: &super::Ctx, expr: &Expr) -> Result<Type, ()> {
-	let (ident, arr) = match &expr.ty {
-		ExprTy::Ident(i) => (i, None),
-		ExprTy::Index { item, i } => {
-			let mut current_item = item;
-			let mut stack = Vec::new();
-			stack.push(i.as_deref());
-
-			// Recursively look into any nested index operators until we hit an identifier.
-			let ident = loop {
-				match &current_item.ty {
-					ExprTy::Ident(i) => break i,
-					ExprTy::Index { item, i } => {
-						stack.push(i.as_deref());
-						current_item = item;
-					}
-					_ => return Err(()),
-				}
-			};
-
-			// In the expression parser, the index operator is right-associated so the outer-most is at the top
-			// and the inner-most is at the bottom. We want to reverse this so that the type array notation is
-			// in line with our intuition.
-			stack.reverse();
-
-			(ident, Some(stack))
-		}
-		_ => return Err(()),
-	};
-
-	let type_ty = match Primitive::parse(ident) {
-		Some(p) => Either::Left(p),
-		None => match ctx.lookup_struct(&ident.name) {
-			Some(handle) => Either::Right(handle),
-			None => return Err(()),
-		},
-	};
-
-	Ok(Type {
-		ty: if let Some(mut arr) = arr {
-			if arr.len() == 1 {
-				TypeTy::Array(type_ty, arr.remove(0).cloned().into())
-			} else if arr.len() == 2 {
-				TypeTy::Array2D(
-					type_ty,
-					arr.remove(0).cloned().into(),
-					arr.remove(0).cloned().into(),
-				)
-			} else {
-				TypeTy::ArrayND(
-					type_ty,
-					arr.into_iter().map(|o| o.cloned().into()).collect(),
-				)
-			}
-		} else {
-			TypeTy::Single(type_ty)
-		},
-		qualifiers: Vec::new(),
-		span: expr.span,
-	})
 }
 
 /// Combines the ident information with the type to create one or more type-ident pairs. This step is necessary

@@ -127,14 +127,14 @@ pub enum NodeTy {
 	/// for completeness sake.
 	StructDecl {
 		qualifiers: Vec<Qualifier>,
-		ident: Ident,
+		name: Ident,
 	},
 	/// A struct definition, e.g. `struct FooBar { mat4 m; };`.
 	StructDef {
 		qualifiers: Vec<Qualifier>,
-		ident: Ident,
+		name: Ident,
 		body: Scope,
-		instance: Omittable<Ident>, // FIXME: register variable
+		instances: Vec<Type>,
 	},
 	/// An if statement, e.g. `if (true) {/*...*/} else {/*...*/}`.
 	If(Vec<IfBranch>),

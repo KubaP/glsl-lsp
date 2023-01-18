@@ -106,9 +106,10 @@ pub(super) fn try_parse_new_decl_def_idents_with_type_info<
 	ctx: &mut Ctx,
 	end_tokens: impl AsRef<[Token]>,
 	only_one: bool,
+	colour_as_member: bool,
 ) -> Result<
 	(
-		Vec<(Ident, Vec<super::ast::ArrSize>)>,
+		Vec<(Ident, Vec<super::ast::ArrSize>, Span)>,
 		Vec<Syntax>,
 		Vec<Semantic>,
 		Vec<SyntaxToken>,
@@ -128,7 +129,7 @@ pub(super) fn try_parse_new_decl_def_idents_with_type_info<
 	);
 	yard.parse(walker, end_tokens.as_ref());
 
-	match yard.try_create_new_decl_def_idents(walker, ctx) {
+	match yard.try_create_new_decl_def_idents(walker, ctx, colour_as_member) {
 		Ok(idents) => Ok((
 			idents,
 			yard.syntax_diags,
@@ -2956,7 +2957,8 @@ impl ShuntingYard {
 		&mut self,
 		walker: &mut Walker<'a, P>,
 		ctx: &mut Ctx,
-	) -> Result<(Vec<(Ident, Vec<super::ast::ArrSize>)>), Option<Expr>> {
+		colour_as_member: bool,
+	) -> Result<(Vec<(Ident, Vec<super::ast::ArrSize>, Span)>), Option<Expr>> {
 		use super::ast::ArrSize;
 
 		if self.stack.is_empty() {
@@ -2965,9 +2967,9 @@ impl ShuntingYard {
 
 		let Some(expr) = self.create_ast() else { return Err(None); };
 
-		fn convert(expr: &Expr) -> Result<(Ident, Vec<ArrSize>), ()> {
+		fn convert(expr: &Expr) -> Result<(Ident, Vec<ArrSize>, Span), ()> {
 			match &expr.ty {
-				ExprTy::Ident(i) => Ok((i.clone(), Vec::new())),
+				ExprTy::Ident(i) => Ok((i.clone(), Vec::new(), i.span)),
 				ExprTy::Index { item, i } => {
 					let mut current_item = item;
 					let mut stack = Vec::new();
@@ -2988,7 +2990,7 @@ impl ShuntingYard {
 					// top and the inner-most is at the bottom. We want to reverse this so that the type array
 					// notation is in line with our intuition.
 					stack.reverse();
-					Ok((ident, stack))
+					Ok((ident, stack, expr.span))
 				}
 				_ => unreachable!(),
 			}
@@ -3039,7 +3041,11 @@ impl ShuntingYard {
 		for token in self.syntax_tokens.iter_mut() {
 			// The original tokens are chronologically ordered, and so are the individual identifiers.
 			if token.span == idents[i].0.span {
-				token.ty = SyntaxType::Variable;
+				if colour_as_member {
+					token.ty = SyntaxType::Member;
+				} else {
+					token.ty = SyntaxType::Variable;
+				}
 				i += 1;
 				if idents.len() == i {
 					break;

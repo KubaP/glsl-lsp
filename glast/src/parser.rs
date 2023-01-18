@@ -2456,6 +2456,12 @@ struct Walker<'a, Provider: TokenStreamProvider<'a>> {
 	syntax_tokens: Vec<SyntaxToken>,
 	/// The type of encoding of spans.
 	span_encoding: SpanEncoding,
+
+	/// Whether we are parsing a struct body. This is necessary to switch between colouring variable definitions
+	/// as variables vs as members. If the parser only parsed member definitions within a struct body this wouldn't
+	/// be necessary, but in order to deal with broken syntax more gracefully the parser parses any valid statement
+	/// within a struct body and only validates afterwards.
+	parsing_struct: bool,
 }
 
 /// Data for a macro.
@@ -2502,6 +2508,7 @@ impl<'a, Provider: TokenStreamProvider<'a>> Walker<'a, Provider> {
 			semantic_diags: Vec::new(),
 			syntax_tokens,
 			span_encoding,
+			parsing_struct: false,
 		}
 	}
 
@@ -3196,7 +3203,9 @@ pub struct FunctionParam {
 /// A variable symbol.
 #[derive(Debug)]
 pub struct VariableSymbol {
-	/// Handle to a `VarDef*` node.
+	/// Handle to one of the following:
+	/// - `VarDef*`
+	/// - `StructDef`; in this case it means that at least `node.instances[0]` exists.
 	def_node: NodeHandle,
 	/// The type.
 	type_: ast::Type,
@@ -3226,6 +3235,9 @@ impl From<ast::Param> for FunctionParam {
 pub struct NodeHandle(generational_arena::Index);
 
 /// A handle to a struct symbol stored within the [`Ast`]/[`Ctx`].
+///
+/// A value of `usize::MAX` means that the handle is unresolved.
+/// FIXME: Check for this invariant.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct StructHandle(usize);
 
@@ -3299,15 +3311,35 @@ impl Ctx {
 		ident: ast::Ident,
 		fields: Vec<StructField>,
 		node: ast::Node,
+		var_instances: Vec<(ast::Ident, ast::Type)>,
 	) {
 		// TODO: Produce syntax error if not in the global scope.
-		let handle = self.push_node(node);
+		let new_handle = self.push_node(node);
 		self.structs.push(StructSymbol {
-			def_node: handle,
+			def_node: new_handle,
 			name: ident.name,
 			fields,
 			refs: vec![ident.span],
 		});
+
+		// Register any instances within the current scope.
+		let scope = self.__get_current_scope();
+		let h = scope.variable_table;
+		for (ident, type_) in var_instances.into_iter() {
+			// TODO: Error if variable name already taken.
+			self.variables[h.0].push(VariableSymbol {
+				def_node: new_handle,
+				type_,
+				name: ident.name,
+				refs: vec![ident.span],
+			});
+		}
+	}
+
+	/// Returns a handle that will be allocated for the next struct to be pushed in. Once this handle is retrieved,
+	/// a new struct should be pushed immediately following.
+	fn get_handle_for_next_struct(&self) -> StructHandle {
+		StructHandle(self.structs.len())
 	}
 
 	/// Pushes a function declaration into the current scope, and registers a new function symbol, or if a function
@@ -3525,7 +3557,7 @@ impl Ctx {
 		self.arena.get(handle.0).unwrap()
 	}
 
-	/// Returns a handle to a struct symbol if a struct with the provided name exists.
+	/// Returns a handle to a struct symbol if a struct with the specified name exists.
 	fn lookup_struct(&self, name: &str) -> Option<StructHandle> {
 		for (i, symbol) in self.structs.iter().enumerate() {
 			if name == &symbol.name {
@@ -3533,6 +3565,20 @@ impl Ctx {
 			}
 		}
 		return None;
+	}
+
+	/// Returns whether a function with the specified name exists. Currently, this doesn't return a handle because
+	/// a handle currently points to a specific overload, and within the expression parser we are not performing
+	/// type checking so we wouldn't know which overload to select.
+	/// FIXME: Change function handles to point to the name rather than the specific overload. If we need pointers
+	/// to specific overload, we can leave that information empty for now and resolve it in the analyzer.
+	fn lookup_function(&self, name: &str) -> bool {
+		todo!()
+	}
+
+	/// Returns a handle to a variable symbol if a variable with the specified name exists.
+	fn lookup_variable(&self, name: &str) -> Option<VariableHandle> {
+		todo!()
 	}
 
 	/// Converts this context into the abstract syntax tree. This is done once parsing has finished in order to

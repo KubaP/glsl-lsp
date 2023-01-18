@@ -914,6 +914,7 @@ fn try_parse_definition_declaration_expr<'a, P: TokenStreamProvider<'a>>(
 				ctx,
 				[Token::Semi],
 				false,
+				walker.parsing_struct,
 			) {
 				Ok((i, mut syntax, mut semantic, mut colours)) => {
 					walker.append_colours(&mut colours);
@@ -975,7 +976,7 @@ fn try_parse_definition_declaration_expr<'a, P: TokenStreamProvider<'a>>(
 
 			fn var_def(
 				type_: Type,
-				idents: Vec<(Ident, Vec<ArrSize>)>,
+				idents: Vec<(Ident, Vec<ArrSize>, Span)>,
 				end_pos: usize,
 			) -> (Vec<(Type, Ident)>, Node) {
 				let span = Span::new(type_.span.start, end_pos);
@@ -1003,7 +1004,7 @@ fn try_parse_definition_declaration_expr<'a, P: TokenStreamProvider<'a>>(
 
 			fn var_def_init(
 				type_: Type,
-				idents: Vec<(Ident, Vec<ArrSize>)>,
+				idents: Vec<(Ident, Vec<ArrSize>, Span)>,
 				value: Option<Expr>,
 				end_pos: usize,
 			) -> (Vec<(Type, Ident)>, Node) {
@@ -1489,6 +1490,7 @@ fn parse_function<'a, P: TokenStreamProvider<'a>>(
 			ctx,
 			[Token::Semi, Token::LBrace],
 			true,
+			false,
 		) {
 			Ok((i, mut syntax, mut semantic, mut colours)) => {
 				walker.append_colours(&mut colours);
@@ -2094,8 +2096,8 @@ fn parse_struct<'a, P: TokenStreamProvider<'a>>(
 	walker.push_colour(kw_span, SyntaxType::Keyword);
 	walker.advance();
 
-	// Consume the identifier.
-	let ident =
+	// Consume the struct name.
+	let name =
 		match try_parse_new_ident(walker, [Token::LBrace, Token::Semi], || {
 			SyntaxType::Struct
 		}) {
@@ -2105,7 +2107,7 @@ fn parse_struct<'a, P: TokenStreamProvider<'a>>(
 			}
 			Err(_) => {
 				walker.push_syntax_diag(Syntax::Stmt(
-					StmtDiag::StructExpectedIdentAfterKw(
+					StmtDiag::StructExpectedNameAfterKw(
 						kw_span.next_single_width(),
 					),
 				));
@@ -2126,8 +2128,8 @@ fn parse_struct<'a, P: TokenStreamProvider<'a>>(
 			// We don't create a struct declaration because it would result in two errors that would reduce
 			// clarity.
 			walker.push_syntax_diag(Syntax::Stmt(
-				StmtDiag::StructExpectedLBraceAfterIdent(
-					ident.span.next_single_width(),
+				StmtDiag::StructExpectedLBraceAfterName(
+					name.span.next_single_width(),
 				),
 			));
 			return;
@@ -2146,19 +2148,21 @@ fn parse_struct<'a, P: TokenStreamProvider<'a>>(
 		)));
 		walker.advance();
 		ctx.push_new_struct(
-			ident.clone(),
+			name.clone(),
 			Vec::new(),
 			Node {
 				span,
-				ty: NodeTy::StructDecl { qualifiers, ident },
+				ty: NodeTy::StructDecl { qualifiers, name },
 			},
+			Vec::new(),
 		);
 		return;
 	} else {
-		// We don't create a struct declaration because it would result in two errors that would reduce clarity.
+		// We have something else entirely. We don't create a struct declaration because it would just create a
+		// second error over the first, and that would be less clear.
 		walker.push_syntax_diag(Syntax::Stmt(
-			StmtDiag::StructExpectedLBraceAfterIdent(
-				ident.span.next_single_width(),
+			StmtDiag::StructExpectedLBraceAfterName(
+				name.span.next_single_width(),
 			),
 		));
 		return;
@@ -2166,12 +2170,14 @@ fn parse_struct<'a, P: TokenStreamProvider<'a>>(
 
 	// Parse the contents of the body.
 	let scope_handle = ctx.new_temp_scope(l_brace_span);
+	walker.parsing_struct = true;
 	parse_scope(walker, ctx, brace_scope, l_brace_span);
+	walker.parsing_struct = false;
 	let body = ctx.take_temp_scope(scope_handle);
 
 	if body.contents.is_empty() {
 		walker.push_syntax_diag(Syntax::Stmt(
-			StmtDiag::StructExpectedAtLeastOneStmtInBody(body.span),
+			StmtDiag::StructExpectedAtLeastOneMemberInBody(body.span),
 		));
 	}
 	let mut fields = Vec::new();
@@ -2190,7 +2196,7 @@ fn parse_struct<'a, P: TokenStreamProvider<'a>>(
 					fields.push(super::StructField {
 						type_: def.0.clone(),
 						name: Omittable::Some(def.1.name.clone()),
-						refs: vec![ident.span],
+						refs: vec![name.span],
 					});
 				}
 			}
@@ -2199,7 +2205,9 @@ fn parse_struct<'a, P: TokenStreamProvider<'a>>(
 				ident,
 				init_expr: _,
 			} => {
-				// TODO: Produce syntax error about default initialization not being allowed.
+				walker.push_syntax_diag(Syntax::Stmt(
+					StmtDiag::StructMemberCannotBeInitialized(node.span),
+				));
 				fields.push(super::StructField {
 					type_: type_.clone(),
 					name: Omittable::Some(ident.name.clone()),
@@ -2207,12 +2215,14 @@ fn parse_struct<'a, P: TokenStreamProvider<'a>>(
 				});
 			}
 			NodeTy::VarDefInits(defs, _init_expr) => {
-				// TODO: Produce syntax error about default initialization not being allowed.
+				walker.push_syntax_diag(Syntax::Stmt(
+					StmtDiag::StructMemberCannotBeInitialized(node.span),
+				));
 				for def in defs {
 					fields.push(super::StructField {
 						type_: def.0.clone(),
 						name: Omittable::Some(def.1.name.clone()),
-						refs: vec![ident.span],
+						refs: vec![name.span],
 					});
 				}
 			}
@@ -2224,39 +2234,48 @@ fn parse_struct<'a, P: TokenStreamProvider<'a>>(
 		}
 	}
 
-	// Look for an optional instance identifier.
-	let instance =
-		match parse_general_expr(walker, Mode::TakeOneUnit, [Token::Semi]) {
-			(Some(e), _, mut semantic, mut colours) => match e.ty {
-				ExprTy::Ident(i) => {
-					walker.push_colour(i.span, SyntaxType::Variable);
-					walker.append_semantic_diags(&mut semantic);
-					Omittable::Some(i)
-				}
-				_ => {
-					walker.append_colours(&mut colours);
-					walker.push_syntax_diag(Syntax::Stmt(
-						StmtDiag::StructExpectedInstanceOrSemiAfterBody(e.span),
-					));
-
-					ctx.push_new_struct(
-						ident.clone(),
-						fields,
-						Node {
-							span: Span::new(struct_span_start, body.span.end),
-							ty: NodeTy::StructDef {
-								qualifiers,
-								ident,
-								body,
-								instance: Omittable::None,
-							},
+	// Look for optional instances.
+	let instances = match try_parse_new_decl_def_idents_with_type_info(
+		walker,
+		ctx,
+		[Token::Semi],
+		false,
+		false,
+	) {
+		Ok((i, mut syntax, mut semantic, mut colours)) => {
+			walker.append_colours(&mut colours);
+			walker.append_syntax_diags(&mut syntax);
+			walker.append_semantic_diags(&mut semantic);
+			Some(i)
+		}
+		Err((expr, mut syntax, mut semantic, mut colours)) => {
+			if let Some(expr) = expr {
+				walker.append_colours(&mut colours);
+				walker.append_syntax_diags(&mut syntax);
+				walker.append_semantic_diags(&mut semantic);
+				walker.push_syntax_diag(Syntax::Stmt(
+					StmtDiag::StructExpectedInstanceOrSemiAfterBody(expr.span),
+				));
+				ctx.push_new_struct(
+					name.clone(),
+					fields,
+					Node {
+						span: Span::new(struct_span_start, body.span.end),
+						ty: NodeTy::StructDef {
+							qualifiers,
+							name,
+							body,
+							instances: Vec::new(),
 						},
-					);
-					return;
-				}
-			},
-			_ => Omittable::None,
-		};
+					},
+					Vec::new(),
+				);
+				seek_next_stmt(walker);
+				return;
+			}
+			None
+		}
+	};
 
 	// Consume the `;` to end the statement.
 	let semi_span = match walker.peek() {
@@ -2272,10 +2291,10 @@ fn parse_struct<'a, P: TokenStreamProvider<'a>>(
 		None => None,
 	};
 	if semi_span.is_none() {
-		if let Omittable::Some(ref i) = instance {
+		if let Some(ref i) = instances {
 			walker.push_syntax_diag(Syntax::Stmt(
 				StmtDiag::StructExpectedSemiAfterInstance(
-					i.span.next_single_width(),
+					i.last().unwrap().0.span.next_single_width(),
 				),
 			));
 		} else {
@@ -2287,29 +2306,56 @@ fn parse_struct<'a, P: TokenStreamProvider<'a>>(
 		}
 	}
 
+	let struct_span_end = if let Some(semi_span) = semi_span {
+		semi_span.end
+	} else {
+		if let Some(ref i) = instances {
+			i.last().unwrap().2.end
+		} else {
+			body.span.end
+		}
+	};
+
+	let handle = ctx.get_handle_for_next_struct();
+	let (instances, var_instances) = if let Some(instances) = instances {
+		let (mut a, mut b) = (Vec::new(), Vec::new());
+		for (ident, mut arr, span) in instances.into_iter() {
+			let type_ = Type {
+				span,
+				qualifiers: Vec::new(),
+				ty: match arr.len() {
+					0 => TypeTy::Single(Either::Right(handle)),
+					1 => TypeTy::Array(Either::Right(handle), arr.remove(0)),
+					2 => TypeTy::Array2D(
+						Either::Right(handle),
+						arr.remove(0),
+						arr.remove(0),
+					),
+					_ => TypeTy::ArrayND(Either::Right(handle), arr),
+				},
+			};
+			a.push(type_.clone());
+			b.push((ident, type_));
+		}
+
+		(a, b)
+	} else {
+		(Vec::new(), Vec::new())
+	};
+
 	ctx.push_new_struct(
-		ident.clone(),
+		name.clone(),
 		fields,
 		Node {
-			span: Span::new(
-				struct_span_start,
-				if let Some(semi_span) = semi_span {
-					semi_span.end
-				} else {
-					if let Omittable::Some(ref i) = instance {
-						i.span.end
-					} else {
-						body.span.end
-					}
-				},
-			),
+			span: Span::new(struct_span_start, struct_span_end),
 			ty: NodeTy::StructDef {
 				qualifiers,
-				ident,
+				name,
 				body,
-				instance,
+				instances,
 			},
 		},
+		var_instances,
 	);
 }
 
@@ -5047,10 +5093,10 @@ fn parse_pragma_directive<'a, P: TokenStreamProvider<'a>>(
 /// because the idents themselves can contain type information, e.g. `int[3] i[9]`.
 fn combine_type_with_idents(
 	type_: Type,
-	ident_info: Vec<(Ident, Vec<ArrSize>)>,
+	ident_info: Vec<(Ident, Vec<ArrSize>, Span)>,
 ) -> Vec<(Type, Ident)> {
 	let mut vars = Vec::new();
-	for (ident, sizes) in ident_info {
+	for (ident, sizes, _) in ident_info {
 		if sizes.is_empty() {
 			vars.push((type_.clone(), ident));
 		} else {

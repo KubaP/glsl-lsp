@@ -44,6 +44,8 @@ pub enum SyntaxType {
 	Subroutine,
 	///// A variable.
 	Variable,
+	/// A struct member.
+	Member,
 	/// A function or function-like macro parameter.
 	Parameter,
 	/// A valid layout qualifier identifier.

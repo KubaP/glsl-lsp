@@ -513,24 +513,29 @@ pub enum StmtDiag {
 	SubroutineMissingUniformKwForUniformDef(Span),
 
 	/* STRUCTS */
-	/// ERROR - Did not find an identifier after the `struct` keyword.
+	/// ERROR - Did not find a name after the `struct` keyword. E.g. `struct foo - 3`.
 	///
 	/// - `0` - The span of the invalid token(s) or the position where the ident should be inserted.
-	StructExpectedIdentAfterKw(Span),
-	/// ERROR - Did not find an opening brace after the ident.
+	StructExpectedNameAfterKw(Span),
+	/// ERROR - Did not find an opening brace after the name. E.g. `struct Foo [`.
 	///
 	/// - `0` - The position where the opening brace should be inserted.
-	StructExpectedLBraceAfterIdent(Span),
+	StructExpectedLBraceAfterName(Span),
 	/// ERROR - Found a statement within the struct body that is invalid. E.g. `struct Foo { return; };`.
 	///
 	/// - `0` - The span of the statement.
 	StructInvalidStmtInBody(Span),
-	/// ERROR - Found a struct body that has no statements. E.g. `struct Foo { };`.
+	/// ERROR - Found a member definition within the struct body that has an initializer. E.g. `struct Foo { int i
+	/// = 5; };
+	///
+	/// - `0` - The span of the member.
+	StructMemberCannotBeInitialized(Span),
+	/// ERROR - Found a struct body that has no members. E.g. `struct Foo { };`.
 	///
 	/// - `0` - The span of the body.
-	StructExpectedAtLeastOneStmtInBody(Span),
+	StructExpectedAtLeastOneMemberInBody(Span),
 	/// ERROR - Did not find an instance identifier or a semi-colon after the struct body. E.g. `struct Foo { int
-	/// i; }`.
+	/// i; } }`.
 	///
 	/// - `0` - The span of the invalid token(s), or the position where the semi-colon should be inserted.
 	StructExpectedInstanceOrSemiAfterBody(Span),

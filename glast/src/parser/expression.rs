@@ -68,7 +68,7 @@ pub(super) fn try_parse_new_ident<'a, P: TokenStreamProvider<'a>>(
 	walker: &mut Walker<'a, P>,
 	ctx: &mut Ctx,
 	end_tokens: impl AsRef<[Token]>,
-	new_token: fn() -> SyntaxType,
+	new_syntax: fn() -> SyntaxType,
 ) -> Result<
 	(Ident, Vec<Semantic>),
 	(
@@ -87,7 +87,7 @@ pub(super) fn try_parse_new_ident<'a, P: TokenStreamProvider<'a>>(
 	);
 	yard.parse(walker, end_tokens.as_ref());
 
-	match yard.try_create_new_ident(walker, ctx, new_token) {
+	match yard.try_create_new_ident(walker, ctx, new_syntax) {
 		Ok(ident) => Ok((ident, yard.semantic_diags)),
 		Err(expr) => Err((
 			expr,
@@ -2958,7 +2958,6 @@ impl ShuntingYard {
 		let mut new_colours = Vec::new();
 		let expr = expr.convert(ctx, &mut new_colours);
 
-		dbg!(&new_colours);
 		if !new_colours.is_empty() {
 			let mut current_new = new_colours.remove(0);
 			for token in self.syntax_tokens.iter_mut() {
@@ -2982,7 +2981,7 @@ impl ShuntingYard {
 		&mut self,
 		walker: &mut Walker<'a, P>,
 		ctx: &mut Ctx,
-		new_token: fn() -> SyntaxType,
+		new_syntax: fn() -> SyntaxType,
 	) -> Result<Ident, Option<ast::Expr>> {
 		if self.stack.is_empty() {
 			return Err(None);
@@ -2992,7 +2991,7 @@ impl ShuntingYard {
 		match item {
 			Either::Left(node) => match node.ty {
 				NodeTy::Ident(ident) => {
-					walker.push_colour(ident.span, new_token());
+					walker.push_colour(ident.span, new_syntax());
 					return Ok(ident);
 				}
 				_ => {}
@@ -3180,18 +3179,26 @@ impl ShuntingYard {
 
 		let (type_ty, new_syntax_type) =
 			match super::ast::Primitive::parse(ident) {
-				Some(p) => (Either::Left(p), SyntaxType::Primitive),
-				None => match ctx.lookup_struct(&ident.name) {
-					Some(handle) => (Either::Right(handle), SyntaxType::Struct),
-					None => {
-						// TODO: Unresolved type error.
-						//syntax_diags.push();
-						(
-							Either::Right(StructHandle(usize::MAX)),
-							SyntaxType::UnresolvedIdent,
-						)
+				Some(p) => {
+					match ctx.primitive_refs.get_mut(&p) {
+						Some(v) => v.push(ident.span),
+						None => {
+							ctx.primitive_refs.insert(p, vec![ident.span]);
+						}
 					}
-				},
+					(Either::Left(p), SyntaxType::Primitive)
+				}
+				None => {
+					let handle = ctx.resolve_struct(&ident);
+					(
+						Either::Right(handle),
+						if handle.is_resolved() {
+							SyntaxType::Struct
+						} else {
+							SyntaxType::UnresolvedIdent
+						},
+					)
+				}
 			};
 
 		// We know that the entire expression produced by the shunting yard is a valid type specifier, (but with
@@ -3509,21 +3516,21 @@ impl Expr {
 				span: self.span,
 				ty: ast::ExprTy::Lit(l),
 			},
-			ExprTy::Ident(i) => match ctx.lookup_variable(&i.name) {
-				Some(handle) => {
+			ExprTy::Ident(ident) => {
+				let handle = ctx.resolve_variable(&ident);
+				if handle.is_resolved() {
 					new_colours.push((self.span, SyntaxType::Variable));
 					ast::Expr {
 						span: self.span,
-						ty: ast::ExprTy::Local(Either::Left(handle)),
+						ty: ast::ExprTy::Local(handle),
+					}
+				} else {
+					ast::Expr {
+						span: self.span,
+						ty: ast::ExprTy::Local(handle),
 					}
 				}
-				None => ast::Expr {
-					span: self.span,
-					ty: ast::ExprTy::Local(Either::Left(
-						super::VariableHandle(usize::MAX, usize::MAX),
-					)),
-				},
-			},
+			}
 			ExprTy::Prefix { op, expr } => {
 				if let Some(expr) = expr {
 					ast::Expr {
@@ -3608,24 +3615,33 @@ impl Expr {
 				},
 			},
 			ExprTy::FnCall { ident, args } => {
-				// TODO: Resolve types of arguments so that handles point to overload instead of general function?
-				let handle = match ctx.lookup_function(&ident.name) {
-					Some(handle) => {
+				match ctx.resolve_function(&ident) {
+					Either::Left(handle) => {
 						new_colours.push((ident.span, SyntaxType::Function));
-						Some(handle)
+						ast::Expr {
+							span: self.span,
+							ty: ast::ExprTy::FnCall {
+								handle,
+								args: args
+									.into_iter()
+									.map(|arg| arg.convert(ctx, new_colours))
+									.collect(),
+							},
+						}
 					}
-					None => None,
-				};
-				ast::Expr {
-					span: self.span,
-					ty: ast::ExprTy::FnCall {
-						handle: handle
-							.unwrap_or(super::FunctionHandle(usize::MAX, true)),
-						args: args
-							.into_iter()
-							.map(|arg| arg.convert(ctx, new_colours))
-							.collect(),
-					},
+					Either::Right(handle) => {
+						new_colours.push((ident.span, SyntaxType::Struct));
+						ast::Expr {
+							span: self.span,
+							ty: ast::ExprTy::StructConstructor {
+								handle,
+								args: args
+									.into_iter()
+									.map(|arg| arg.convert(ctx, new_colours))
+									.collect(),
+							},
+						}
+					}
 				}
 			}
 			ExprTy::InitList { args } => ast::Expr {
@@ -3667,19 +3683,15 @@ impl Expr {
 
 		let var_handle = match obj.ty {
 			ExprTy::Ident(ident) => {
-				match ctx.lookup_variable(&ident.name) {
-					Some(handle) => {
-						new_colours.push((ident.span, SyntaxType::Variable));
-						handle
-					}
-					None => {
-						// The first ident already cannot be resolved.
-						return ast::Expr {
-							span: self.span,
-							ty: ast::ExprTy::Invalid,
-						};
-					}
+				let handle = ctx.resolve_variable(&ident);
+				if handle.is_unresolved() {
+					return ast::Expr {
+						span: self.span,
+						ty: ast::ExprTy::Invalid,
+					};
 				}
+				new_colours.push((self.span, SyntaxType::Variable));
+				handle
 			}
 			_ => {
 				// TODO: Syntax error.
@@ -3800,6 +3812,7 @@ impl Expr {
 								usize::MAX,
 							)));
 							new_colours.push((ident.span, SyntaxType::Member));
+							ctx.swizzle_refs.push(ident.span);
 							previous_type = ast::Type {
 								span: Span::new(0, 0),
 								ty: ast::TypeTy::Single(Either::Left(

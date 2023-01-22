@@ -59,7 +59,7 @@ use crate::{
 	},
 	parser::conditional_expression::cond_parser,
 	syntax::*,
-	Either, GlslVersion, Span, SpanEncoding, Spanned,
+	Either, Either3, GlslVersion, Span, SpanEncoding, Spanned,
 };
 use std::collections::{HashMap, HashSet};
 
@@ -3115,6 +3115,28 @@ pub struct Ast {
 }
 
 /// Context object for managing the parser state and pushing nodes into.
+///
+/// # New struct symbols
+/// If the new name matches the name of a primitive, no symbol is created. A new struct symbol is always created,
+/// even if the name is already taken. Any later lookup of this name for type or function purposes will point to
+/// this new struct.
+///
+/// # New function symbols
+/// If the new name matches the name of a built-in function, no symbol is created. If the specific signature
+/// (overload) doesn't exist yet, a new signature is created. If the specific signature already exists, a new
+/// declaration is added. If the specific signature exists and contains a definition, the new definition is
+/// ignored. Any later lookup of this name for function purposes will point to this (new) function.
+///
+/// # New variable symbols
+/// If the new name matches the name of a primitive, no symbol is created. A new variable symbol is always created,
+/// even if the name is already taken by a variable or by a function/struct if in the top-level scope. Any later
+/// lookup of this name for variable purposes will point to this new variable.
+///
+/// # Name resolution in general expressions
+/// If we are resolving a variable, we always resolve to a variable even if the latest symbol with the name is a
+/// function or struct.
+///
+/// If we are resolving a function, ???
 #[derive(Debug)]
 pub struct Ctx {
 	/// Arena of nodes.
@@ -3122,26 +3144,27 @@ pub struct Ctx {
 	/// The stack of active scopes.
 	///
 	/// - `0` - Handle to the `ast::Node::Block` scope.
-	/// - `1` - Index of the variable symbol table for this scope.
+	/// - `1` - Handle to the variable symbol table for this scope.
 	///
 	/// # Invariants
 	/// `self[0]` always exists and points to a `NodeTy::TranslationUnit`.
 	scope_stack: Vec<(NodeHandle, VariableTableHandle)>,
 
-	/// All uses of primitives.
-	primitive_uses: HashMap<ast::Primitive, Span>,
-	/// All defined struct symbols.
+	/// All references to primitives.
+	primitive_refs: HashMap<ast::Primitive, Vec<Span>>,
+	/// All references to vector swizzles.
+	swizzle_refs: Vec<Span>,
+	/// All user-defined struct symbols.
 	structs: Vec<StructSymbol>,
-
-	/// All built-in function symbols.
-	built_in_functions: Vec<FunctionSymbol>,
-	/// All user-defined function symbols.
+	/// All built-in and user-defined function symbols.
 	functions: Vec<FunctionSymbol>,
-	/// All defined function symbols. Each unique function name can have multiple overloads; each combination of
-	/// different return type and parameters constitutes a unique overload.
-	function_lookup: HashMap<String, Vec<FunctionHandle>>,
 	/// All variable symbol tables, each containing all variable symbols for that given table.
 	variables: Vec<Vec<VariableSymbol>>,
+	/// Currently active symbols, i.e. the most recent symbol for a given name.
+	///
+	/// All handles are always resolved.
+	current_active_symbols:
+		HashMap<String, Either3<StructHandle, FunctionHandle, VariableHandle>>,
 	// TODO: keep a list of unresolved names, and when we add a new symbol we can check if it was previously
 	// referenced to produce a nice error message: unresolved_names: Vec<Ident>
 }
@@ -3156,7 +3179,7 @@ pub struct StructSymbol {
 	/// The fields. Unlike the node itself, which can contain any child nodes within, this only contains field
 	/// information and nothing else.
 	fields: Vec<StructField>,
-	/// All references to this struct. This includes the struct decl/def name itself.
+	/// All references to this struct. This includes the name in the struct declaration/definition itself.
 	refs: Vec<Span>,
 }
 
@@ -3167,7 +3190,7 @@ pub struct StructField {
 	type_: ast::Type,
 	/// The name. A field can lack a name, in which case it is un-referencable and really just in the struct
 	/// definition for padding purposes.
-	name: ast::Omittable<String>, // FIXME: Parser type refactor.
+	name: ast::Omittable<String>,
 	/// All references to this field. This includes the field name itself.
 	refs: Vec<Span>,
 }
@@ -3175,18 +3198,32 @@ pub struct StructField {
 /// A function symbol.
 #[derive(Debug)]
 pub struct FunctionSymbol {
+	/// Whether this function is built-in.
+	built_in: bool,
+	/// The name.
+	name: String,
+	/// All function signatures that share this name. If there is more than one signature, that means this function
+	/// is overloaded.
+	signatures: Vec<FunctionSignature>,
+	/// All references of this function. This includes the name in all signature declarations/definitions
+	/// themselves.
+	refs: Vec<Span>,
+}
+
+/// A function signature. There can be more than one function signature for a given function symbol if that symbol
+/// is overloaded.
+#[derive(Debug)]
+pub struct FunctionSignature {
 	/// Handles to any `FnDecl` nodes.
 	decl_nodes: Vec<NodeHandle>,
-	/// Handle to an `FnDef` node. Only one definition is allowed per (overloaded) function.
-	def_nodes: Option<NodeHandle>,
+	/// Handle to a `FnDef` node. Only one definition is allowed per function signature.
+	def_node: Option<NodeHandle>,
 	/// The name.
 	name: String,
 	/// The parameters for this overload.
 	params: Vec<FunctionParam>,
 	/// The return type for this overload.
 	return_type: ast::Type,
-	/// All uses of this function. Doesn't
-	refs: Vec<Span>,
 }
 
 /// A parameter within a function symbol.
@@ -3204,14 +3241,14 @@ pub struct FunctionParam {
 #[derive(Debug)]
 pub struct VariableSymbol {
 	/// Handle to one of the following:
-	/// - `VarDef*`
+	/// - `VarDef`/`VarDefs`/`VarDefInit`/`VarDefsInit`,
 	/// - `StructDef`; in this case it means that at least `node.instances[0]` exists.
 	def_node: NodeHandle,
 	/// The type.
 	type_: ast::Type,
 	/// The name.
 	name: String,
-	/// All references to this variable. This includes the variable decl/def name itself.
+	/// All references to this variable. This includes the name in the variable declaration/definition itself.
 	refs: Vec<Span>,
 }
 
@@ -3240,40 +3277,76 @@ pub struct NodeHandle(generational_arena::Index);
 ///
 /// A value of `usize::MAX` means that the handle is unresolved.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct StructHandle(usize);
+pub struct StructHandle(
+	/// Index into `ctx.structs`.
+	usize,
+);
+
+impl StructHandle {
+	#[inline]
+	pub fn is_resolved(self) -> bool {
+		self.0 != usize::MAX
+	}
+
+	#[inline]
+	pub fn is_unresolved(self) -> bool {
+		self.0 == usize::MAX
+	}
+}
 
 /// A handle to a struct field stored within the [`Ast`]/[`Ctx`].
 ///
 /// Values of `usize::MAX` means that the handle is unresolved.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct StructFieldHandle(usize, usize);
+pub struct StructFieldHandle(
+	/// Index into `ctx.structs`.
+	usize,
+	/// Index into `struct.fields`.
+	usize,
+);
 
 /// A handle to a function symbol stored within the [`Ast`]/[`Ctx`].
 ///
-/// A value of `usize::MAX` means that the handle is unresolved.
+/// Values of `usize::MAX` means that the handle is unresolved.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct FunctionHandle(
+	/// Index into `ctx.functions`.
 	usize,
-	/// `false` = built-in; `true` = user-defined.
-	bool,
+	/// Index into `function.signatures`.
+	usize,
 );
 
 /// A handle to a variable table.
 ///
 /// A value of `usize::MAX` means that the handle is unresolved.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct VariableTableHandle(usize);
+pub struct VariableTableHandle(
+	/// Index into `ctx.variables`.
+	usize,
+);
 
 /// A handle to a variable symbol, (stored within a variable table), stored within the [`Ast`]/[`Ctx`].
 ///
 /// Values of `usize::MAX` means that the handle is unresolved.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct VariableHandle(
-	/// Index of table.
+	/// Index into `ctx.variables`.
 	usize,
-	/// Index of symbol in table.
+	/// Index into `variables`.
 	usize,
 );
+
+impl VariableHandle {
+	#[inline]
+	pub fn is_resolved(self) -> bool {
+		!self.is_unresolved()
+	}
+
+	#[inline]
+	pub fn is_unresolved(self) -> bool {
+		self.0 == usize::MAX && self.0 == usize::MAX
+	}
+}
 
 impl Ctx {
 	/// Constructs a new context.
@@ -3296,12 +3369,12 @@ impl Ctx {
 		Self {
 			arena,
 			scope_stack,
-			primitive_uses: HashMap::new(),
+			primitive_refs: HashMap::new(),
+			swizzle_refs: Vec::new(),
 			structs: Vec::new(),
-			built_in_functions: Vec::new(),
 			functions: Vec::new(),
-			function_lookup: HashMap::new(),
 			variables,
+			current_active_symbols: HashMap::new(),
 		}
 	}
 
@@ -3326,26 +3399,75 @@ impl Ctx {
 		node: ast::Node,
 		var_instances: Vec<(ast::Ident, ast::Type)>,
 	) {
-		// TODO: Produce syntax error if not in the global scope.
-		let new_handle = self.push_node(node);
+		if let Some(_) = ast::Primitive::parse(&ident) {
+			// TODO: Syntax error; struct cannot have name of primitive.
+			return;
+		}
+		if self.scope_stack.len() > 1 {
+			// TODO: Syntax error for node not in the top-level scope.
+		}
+		match self.current_active_symbols.get(&ident.name) {
+			Some(_handle) => {
+				if self.scope_stack.len() == 1 { // Prevent overlapping errors.
+					 // TODO: Semantic error because name already taken.
+				}
+			}
+			None => {}
+		}
+
+		let node_handle = self.push_node(node);
+		let new_struct_handle = StructHandle(self.structs.len());
 		self.structs.push(StructSymbol {
-			def_node: new_handle,
-			name: ident.name,
+			def_node: node_handle,
+			name: ident.name.clone(),
 			fields,
 			refs: vec![ident.span],
 		});
+
+		match self.current_active_symbols.get_mut(&ident.name) {
+			Some(h) => *h = Either3::A(new_struct_handle),
+			None => {
+				self.current_active_symbols
+					.insert(ident.name.clone(), Either3::A(new_struct_handle));
+			}
+		}
 
 		// Register any instances within the current scope.
 		let scope = self.__get_current_scope();
 		let h = scope.variable_table;
 		for (ident, type_) in var_instances.into_iter() {
-			// TODO: Error if variable name already taken.
+			match self.current_active_symbols.get(&ident.name) {
+				Some(handle) => match handle {
+					Either3::A(_) | Either3::B(_) => {}
+					Either3::A(_) | Either3::B(_)
+						if self.scope_stack.len() == 1 =>
+					{
+						// Variables can't shadow functions/structs in the top-level scope.
+						// TODO: Semantic error.
+					}
+					Either3::C(_) => {
+						// Variables can't shadow other variables at all.
+						// TODO: Semantic error because name already taken.
+					}
+				},
+				None => {}
+			}
+
+			let new_var_handle = VariableHandle(h.0, self.variables.len());
 			self.variables[h.0].push(VariableSymbol {
-				def_node: new_handle,
+				def_node: node_handle,
 				type_,
-				name: ident.name,
+				name: ident.name.clone(),
 				refs: vec![ident.span],
 			});
+
+			match self.current_active_symbols.get_mut(&ident.name) {
+				Some(h) => *h = Either3::C(new_var_handle),
+				None => {
+					self.current_active_symbols
+						.insert(ident.name.clone(), Either3::C(new_var_handle));
+				}
+			}
 		}
 	}
 
@@ -3364,66 +3486,76 @@ impl Ctx {
 		return_type: ast::Type,
 		node: ast::Node,
 	) {
-		// TODO: Syntax errors for overloading.
-		let handle = self.push_node(node);
-		match self.function_lookup.get_mut(&ident.name) {
-			Some(symbols) => {
-				// One or more functions with this name already exist. If any match, that means we have a new
-				// decl/def, otherwise that means we have a new overload.
-				let mut existing = None;
-				'outer: for handle in symbols.iter() {
-					if !handle.1 {
-						// TODO: Error about not allowing to overload built-in function.
-					}
-					let symbol = &self.functions[handle.0];
-
-					if symbol.params.len() == params.len() {
-						let mut eq = true;
-						for (a, b) in symbol.params.iter().zip(params.iter()) {
-							if *a != *b {
-								eq = false;
-								break;
-							}
-						}
-
-						if eq && symbol.return_type == return_type {
-							existing = Some(handle);
-							break 'outer;
-						}
-					}
+		if self.scope_stack.len() > 1 {
+			// TODO: Syntax error for node not in the top-level scope.
+		}
+		match self.current_active_symbols.get(&ident.name) {
+			Some(_handle) => {
+				if self.scope_stack.len() == 1 { // Prevent overlapping errors.
+					 // TODO: Semantic error because name already taken.
 				}
+			}
+			None => {}
+		}
 
-				match existing {
-					Some(existing) => {
-						self.functions[existing.0].decl_nodes.push(handle);
+		let node_handle = self.push_node(node);
+		let fn_handle = FunctionHandle(self.functions.len(), 0);
+		match self
+			.functions
+			.iter_mut()
+			.rev()
+			.find(|symbol| &ident.name == &symbol.name)
+		{
+			Some(fn_) => {
+				// A function with this name already exists. If the function is built-in, declaring a new signature
+				// is not allowed. If the signature already exists, declaring a second (or third...) signature is
+				// allowed.
+				if fn_.built_in {
+					// TODO: Semantic error.
+					return;
+				}
+				match fn_.signatures.iter_mut().find(|sig| {
+					&sig.params == &params && &sig.return_type == &return_type
+				}) {
+					Some(signature) => {
+						// We already have a matching signature.
+						signature.decl_nodes.push(node_handle);
 					}
 					None => {
-						let fn_handle =
-							FunctionHandle(self.functions.len(), true);
-						self.functions.push(FunctionSymbol {
-							decl_nodes: vec![handle],
-							def_nodes: None,
-							name: ident.name,
+						// We don't have this specific signature yet.
+						fn_.signatures.push(FunctionSignature {
+							decl_nodes: vec![node_handle],
+							def_node: None,
+							name: ident.name.clone(),
 							params,
 							return_type,
-							refs: vec![ident.span],
 						});
-						symbols.push(fn_handle);
 					}
 				}
+				fn_.refs.push(ident.span);
 			}
 			None => {
 				// We haven't come across a function with this name yet.
-				let fn_handle = FunctionHandle(self.functions.len(), true);
 				self.functions.push(FunctionSymbol {
-					decl_nodes: vec![handle],
-					def_nodes: None,
+					built_in: false,
 					name: ident.name.clone(),
-					params,
-					return_type,
+					signatures: vec![FunctionSignature {
+						decl_nodes: vec![node_handle],
+						def_node: None,
+						name: ident.name.clone(),
+						params,
+						return_type,
+					}],
 					refs: vec![ident.span],
 				});
-				self.function_lookup.insert(ident.name, vec![fn_handle]);
+			}
+		}
+
+		match self.current_active_symbols.get_mut(&ident.name) {
+			Some(h) => *h = Either3::B(fn_handle),
+			None => {
+				self.current_active_symbols
+					.insert(ident.name.clone(), Either3::B(fn_handle));
 			}
 		}
 	}
@@ -3437,65 +3569,81 @@ impl Ctx {
 		return_type: ast::Type,
 		node: ast::Node,
 	) {
-		let handle = self.push_node(node);
-		match self.function_lookup.get_mut(&ident.name) {
-			Some(symbols) => {
-				// One or more functions with this name already exist. If any match, that means we have a new
-				// decl/def, otherwise that means we have a new overload.
-				let mut existing = None;
-				'outer: for handle in symbols.iter() {
-					if !handle.1 {
-						// TODO: Error about not allowing to overload built-in function.
-					}
-					let symbol = &self.functions[handle.0];
-
-					if symbol.params.len() == params.len() {
-						let mut eq = true;
-						for (a, b) in symbol.params.iter().zip(params.iter()) {
-							if *a != *b {
-								eq = false;
-								break;
-							}
-						}
-
-						if eq && symbol.return_type == return_type {
-							existing = Some(handle);
-							break 'outer;
-						}
-					}
+		if self.scope_stack.len() > 1 {
+			// TODO: Syntax error for node not in the top-level scope.
+		}
+		match self.current_active_symbols.get(&ident.name) {
+			Some(_handle) => {
+				if self.scope_stack.len() == 1 { // Prevent overlapping errors.
+					 // TODO: Semantic error because name already taken.
 				}
+			}
+			None => {}
+		}
 
-				match existing {
-					Some(existing) => {
-						// TODO: Error for re-defining a function.
+		let node_handle = self.push_node(node);
+		let fn_handle = FunctionHandle(self.functions.len(), 0);
+		match self
+			.functions
+			.iter_mut()
+			.rev()
+			.find(|symbol| &ident.name == &symbol.name)
+		{
+			Some(fn_) => {
+				// A function with this name already exists. If the function is built-in, defining a new signature
+				// is not allowed. If the signature already exists, defining a second (or third...) signature is
+				// not allowed.
+				if fn_.built_in {
+					// TODO: Semantic error.
+					return;
+				}
+				match fn_.signatures.iter_mut().find(|sig| {
+					&sig.params == &params && &sig.return_type == &return_type
+				}) {
+					Some(signature) => {
+						// We already have a matching signature.
+
+						if signature.def_node.is_some() {
+							// TODO: Semantic error.
+							return;
+						}
+						signature.def_node = Some(node_handle);
 					}
 					None => {
-						let fn_handle =
-							FunctionHandle(self.functions.len(), true);
-						self.functions.push(FunctionSymbol {
+						// We don't have this specific signature yet.
+						fn_.signatures.push(FunctionSignature {
 							decl_nodes: Vec::new(),
-							def_nodes: Some(handle),
-							name: ident.name,
+							def_node: Some(node_handle),
+							name: ident.name.clone(),
 							params,
 							return_type,
-							refs: vec![ident.span],
 						});
-						symbols.push(fn_handle);
 					}
 				}
+				fn_.refs.push(ident.span);
 			}
 			None => {
 				// We haven't come across a function with this name yet.
-				let fn_handle = FunctionHandle(self.functions.len(), true);
 				self.functions.push(FunctionSymbol {
-					decl_nodes: Vec::new(),
-					def_nodes: Some(handle),
+					built_in: false,
 					name: ident.name.clone(),
-					params,
-					return_type,
+					signatures: vec![FunctionSignature {
+						decl_nodes: Vec::new(),
+						def_node: Some(node_handle),
+						name: ident.name.clone(),
+						params,
+						return_type,
+					}],
 					refs: vec![ident.span],
 				});
-				self.function_lookup.insert(ident.name, vec![fn_handle]);
+			}
+		}
+
+		match self.current_active_symbols.get_mut(&ident.name) {
+			Some(h) => *h = Either3::B(fn_handle),
+			None => {
+				self.current_active_symbols
+					.insert(ident.name.clone(), Either3::B(fn_handle));
 			}
 		}
 	}
@@ -3517,13 +3665,44 @@ impl Ctx {
 		// Register symbols.
 		let h = scope.variable_table;
 		for (type_, ident) in pairs {
-			// TODO: Error if variable name already taken.
+			if let Some(_) = ast::Primitive::parse(&ident) {
+				// TODO: Syntax error; variable cannot have name of primitive.
+				continue;
+			}
+
+			match self.current_active_symbols.get(&ident.name) {
+				Some(handle) => match handle {
+					Either3::A(_) | Either3::B(_) => {}
+					Either3::A(_) | Either3::B(_)
+					    // Prevent overlapping errors.
+						if self.scope_stack.len() == 1 =>
+					{
+						// Variables can't shadow functions/structs in the top-level scope.
+						// TODO: Semantic error.
+					}
+					Either3::C(_) => {
+						// Variables can't shadow other variables at all.
+						// TODO: Semantic error because name already taken.
+					}
+				},
+				None => {}
+			}
+
+			let new_var_handle = VariableHandle(h.0, self.variables.len());
 			self.variables[h.0].push(VariableSymbol {
 				def_node: new_handle,
 				type_,
-				name: ident.name,
+				name: ident.name.clone(),
 				refs: vec![ident.span],
 			});
+
+			match self.current_active_symbols.get_mut(&ident.name) {
+				Some(h) => *h = Either3::C(new_var_handle),
+				None => {
+					self.current_active_symbols
+						.insert(ident.name.clone(), Either3::C(new_var_handle));
+				}
+			}
 		}
 	}
 
@@ -3570,34 +3749,27 @@ impl Ctx {
 		self.arena.get(handle.0).unwrap()
 	}
 
-	/// Returns a handle to a struct symbol if a struct with the specified name exists.
-	fn lookup_struct(&self, name: &str) -> Option<StructHandle> {
-		for (i, symbol) in self.structs.iter().enumerate() {
-			if name == &symbol.name {
-				return Some(StructHandle(i));
+	/// Returns a handle to a struct symbol, and registers the use site.
+	fn resolve_struct(&mut self, ident: &ast::Ident) -> StructHandle {
+		for (i, symbol) in self.structs.iter_mut().enumerate() {
+			if &ident.name == &symbol.name {
+				symbol.refs.push(ident.span);
+				return StructHandle(i);
 			}
 		}
-		return None;
+		StructHandle(usize::MAX)
 	}
 
-	/// Returns whether a function with the specified name exists. Currently, this doesn't return a handle because
-	/// a handle currently points to a specific overload, and within the expression parser we are not performing
-	/// type checking so we wouldn't know which overload to select.
-	/// FIXME: Change function handles to point to the name rather than the specific overload. If we need pointers
-	/// to specific overload, we can leave that information empty for now and resolve it in the analyzer.
-	fn lookup_function(&self, name: &str) -> Option<FunctionHandle> {
-		Some(FunctionHandle(usize::MAX, true))
-	}
-
-	/// Returns a handle to a variable symbol if a variable with the specified name exists.
-	fn lookup_variable(&self, name: &str) -> Option<VariableHandle> {
+	/// Returns a handle to a variable symbol, and registers the use site.
+	fn resolve_variable(&mut self, ident: &ast::Ident) -> VariableHandle {
 		let mut i = self.scope_stack.len() - 1;
 		loop {
 			let table_handle = self.scope_stack[i].1;
-			let variables = &self.variables[table_handle.0];
-			for (i, variable) in variables.iter().enumerate() {
-				if name == &variable.name {
-					return Some(VariableHandle(table_handle.0, i));
+			let variables = &mut self.variables[table_handle.0];
+			for (i, symbol) in variables.iter_mut().enumerate() {
+				if &ident.name == &symbol.name {
+					symbol.refs.push(ident.span);
+					return VariableHandle(table_handle.0, i);
 				}
 			}
 			if i > 0 {
@@ -3606,7 +3778,62 @@ impl Ctx {
 				break;
 			}
 		}
-		None
+		VariableHandle(usize::MAX, usize::MAX)
+	}
+
+	/// Returns a handle either to a function symbol or a struct symbol (for struct constructors), and registers
+	/// the use site.
+	fn resolve_function(
+		&mut self,
+		ident: &ast::Ident,
+	) -> Either<FunctionHandle, StructHandle> {
+		// A function can either be an actual function (built-in or user-defined), or a struct constructor, so we
+		// to check the if either match. If both match, we want to select the latest one to be declared/defined.
+		let fn_ = self
+			.functions
+			.iter_mut()
+			.enumerate()
+			.rev()
+			.find(|(_, symbol)| &ident.name == &symbol.name);
+		let struct_ = self
+			.structs
+			.iter_mut()
+			.enumerate()
+			.rev()
+			.find(|(_, symbol)| &ident.name == &symbol.name);
+
+		match (fn_, struct_) {
+			(Some((fn_i, fn_)), Some((struct_i, struct_))) => {
+				// Find the last declared/defined signature of this function.
+				let fn_span = {
+					let sig = fn_.signatures.last().unwrap();
+					if let Some(def_node) = sig.def_node {
+						self.arena[def_node.0].span
+					} else {
+						self.arena[sig.decl_nodes.last().unwrap().0].span
+					}
+				};
+
+				let struct_span = self.arena[struct_.def_node.0].span;
+
+				if struct_span.is_after(&fn_span) {
+					struct_.refs.push(ident.span);
+					Either::Right(StructHandle(struct_i))
+				} else {
+					fn_.refs.push(ident.span);
+					Either::Left(FunctionHandle(fn_i, usize::MAX))
+				}
+			}
+			(Some((i, fn_)), _) => {
+				fn_.refs.push(ident.span);
+				Either::Left(FunctionHandle(i, usize::MAX))
+			}
+			(_, Some((i, struct_))) => {
+				struct_.refs.push(ident.span);
+				Either::Right(StructHandle(i))
+			}
+			_ => Either::Left(FunctionHandle(usize::MAX, usize::MAX)),
+		}
 	}
 
 	/// Converts this context into the abstract syntax tree. This is done once parsing has finished in order to

@@ -264,7 +264,7 @@ pub enum TypeTy {
 pub type ArrSize = Omittable<Expr>;
 
 /// A primitive language type.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum Primitive {
 	Void,
 	Bool,
@@ -706,7 +706,7 @@ pub enum ExprTy {
 	/// A literal constant.
 	Lit(Lit),
 	/// A variable.
-	Local(Either<super::VariableHandle, super::StructFieldHandle>),
+	Local(super::VariableHandle),
 	/// A prefix operation.
 	Prefix { op: PreOp, expr: Box<Expr> },
 	/// A postfix operation.
@@ -738,6 +738,11 @@ pub enum ExprTy {
 	/// A function call.
 	FnCall {
 		handle: super::FunctionHandle,
+		args: Vec<Expr>,
+	},
+	/// A struct constructor.
+	StructConstructor {
+		handle: super::StructHandle,
 		args: Vec<Expr>,
 	},
 	/// An initializer list.

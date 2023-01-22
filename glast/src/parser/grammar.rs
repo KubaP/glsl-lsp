@@ -1,7 +1,13 @@
 //! Parsing functions for GLSL language constructs.
 
 use super::{
-	ast, ast::*, expression::*, Ctx, Macro, TokenStreamProvider, Walker,
+	ast,
+	ast::*,
+	expression::{
+		parse_general_expr, try_parse_new_decl_def_idents_with_type_info,
+		try_parse_new_ident, try_parse_type_specifier, Mode,
+	},
+	Ctx, Macro, TokenStreamProvider, Walker,
 };
 use crate::{
 	diag::{
@@ -68,7 +74,7 @@ pub(super) fn parse_stmt<'a, P: TokenStreamProvider<'a>>(
 	walker: &mut Walker<'a, P>,
 	ctx: &mut Ctx,
 ) {
-	let qualifiers = try_parse_qualifiers(walker);
+	let qualifiers = try_parse_qualifiers(walker, ctx);
 
 	let Some((token, token_span)) = walker.get() else {
 		return;
@@ -277,6 +283,7 @@ fn switch_case_scope<'a, P: TokenStreamProvider<'a>>(
 /// This function makes no assumptions as to what the current token is.
 fn try_parse_qualifiers<'a, P: TokenStreamProvider<'a>>(
 	walker: &mut Walker<'a, P>,
+	ctx: &mut Ctx,
 ) -> Vec<Qualifier> {
 	let mut qualifiers = Vec::new();
 	'outer: loop {
@@ -763,6 +770,7 @@ fn try_parse_qualifiers<'a, P: TokenStreamProvider<'a>>(
 					// Consume the expression.
 					let value_expr = match parse_general_expr(
 						walker,
+						ctx,
 						Mode::DisallowTopLevelList,
 						[Token::RParen],
 					) {
@@ -1075,6 +1083,7 @@ fn try_parse_definition_declaration_expr<'a, P: TokenStreamProvider<'a>>(
 				// Consume the value expression.
 				let value_expr = match parse_general_expr(
 					walker,
+					ctx,
 					Mode::Default,
 					[Token::Semi],
 				) {
@@ -1428,7 +1437,7 @@ fn parse_function<'a, P: TokenStreamProvider<'a>>(
 		}
 		let param_span_start = token_span.start;
 
-		let qualifiers = try_parse_qualifiers(walker);
+		let qualifiers = try_parse_qualifiers(walker, ctx);
 
 		// Consume the type specifier.
 		let mut type_ = match try_parse_type_specifier(
@@ -1953,8 +1962,9 @@ fn parse_interface_block<'a, P: TokenStreamProvider<'a>>(
 	ident_expr: Expr,
 	l_brace_span: Span,
 ) {
-	let ident = match ident_expr.ty {
-		ExprTy::Ident(i) => i,
+	return;
+	/* let ident = match ident_expr.ty {
+		ExprTy::Local(i) => i,
 		_ => {
 			// We do not have an identifier before the opening brace. We consume tokens until we hit a closing
 			// brace.
@@ -2004,7 +2014,8 @@ fn parse_interface_block<'a, P: TokenStreamProvider<'a>>(
 
 	// Look for an optional instance definition.
 	let instance: Omittable<Expr> =
-		match parse_general_expr(walker, Mode::TakeOneUnit, [Token::Semi]) {
+		match parse_general_expr(walker, ctx, Mode::TakeOneUnit, [Token::Semi])
+		{
 			(Some(e), mut syntax, mut semantic, mut colours) => {
 				/* if let Some(_) = Type::parse(&e) {
 					// This expression can be a valid instance definition.
@@ -2081,7 +2092,7 @@ fn parse_interface_block<'a, P: TokenStreamProvider<'a>>(
 			body,
 			instance,
 		},
-	});
+	}); */
 }
 
 /// Parses a struct declaration/definition.
@@ -2097,23 +2108,25 @@ fn parse_struct<'a, P: TokenStreamProvider<'a>>(
 	walker.advance();
 
 	// Consume the struct name.
-	let name =
-		match try_parse_new_ident(walker, [Token::LBrace, Token::Semi], || {
-			SyntaxType::Struct
-		}) {
-			Ok((i, mut s)) => {
-				walker.semantic_diags.append(&mut s);
-				i
-			}
-			Err(_) => {
-				walker.push_syntax_diag(Syntax::Stmt(
-					StmtDiag::StructExpectedNameAfterKw(
-						kw_span.next_single_width(),
-					),
-				));
-				return;
-			}
-		};
+	let name = match try_parse_new_ident(
+		walker,
+		ctx,
+		[Token::LBrace, Token::Semi],
+		|| SyntaxType::Struct,
+	) {
+		Ok((i, mut s)) => {
+			walker.semantic_diags.append(&mut s);
+			i
+		}
+		Err(_) => {
+			walker.push_syntax_diag(Syntax::Stmt(
+				StmtDiag::StructExpectedNameAfterKw(
+					kw_span.next_single_width(),
+				),
+			));
+			return;
+		}
+	};
 
 	let struct_span_start = if let Some(q) = qualifiers.first() {
 		q.span.start
@@ -2481,6 +2494,7 @@ fn parse_if<'a, P: TokenStreamProvider<'a>>(
 			// Consume the condition expression.
 			let cond_expr = match parse_general_expr(
 				walker,
+				ctx,
 				Mode::Default,
 				[Token::RParen, Token::LBrace],
 			) {
@@ -2773,6 +2787,7 @@ fn parse_switch<'a, P: TokenStreamProvider<'a>>(
 	// Consume the condition expression.
 	let cond_expr = match parse_general_expr(
 		walker,
+		ctx,
 		Mode::Default,
 		[Token::RParen, Token::LBrace],
 	) {
@@ -2949,6 +2964,7 @@ fn parse_switch<'a, P: TokenStreamProvider<'a>>(
 				// Consume the expression.
 				let expr = match parse_general_expr(
 					walker,
+					ctx,
 					Mode::Default,
 					[Token::Colon],
 				) {
@@ -3350,7 +3366,7 @@ fn parse_for_loop<'a, P: TokenStreamProvider<'a>>(
 			}
 		}
 
-		let qualifiers = try_parse_qualifiers(walker);
+		let qualifiers = try_parse_qualifiers(walker, ctx);
 		let mut stmt = Vec::new();
 		try_parse_definition_declaration_expr(
 			walker,
@@ -3479,6 +3495,7 @@ fn parse_while_loop<'a, P: TokenStreamProvider<'a>>(
 	// Consume the condition expression.
 	let cond_expr = match parse_general_expr(
 		walker,
+		ctx,
 		Mode::Default,
 		[Token::RParen, Token::Semi],
 	) {
@@ -3682,6 +3699,7 @@ fn parse_do_while_loop<'a, P: TokenStreamProvider<'a>>(
 	// Consume the condition expression.
 	let cond_expr = match parse_general_expr(
 		walker,
+		ctx,
 		Mode::Default,
 		[Token::RParen, Token::Semi],
 	) {
@@ -3863,7 +3881,7 @@ fn parse_return<'a, P: TokenStreamProvider<'a>>(
 
 	// Look for the optional return value expression.
 	let return_expr =
-		match parse_general_expr(walker, Mode::Default, [Token::Semi]) {
+		match parse_general_expr(walker, ctx, Mode::Default, [Token::Semi]) {
 			(Some(expr), mut syntax, mut semantic, mut colours) => {
 				walker.append_colours(&mut colours);
 				walker.append_syntax_diags(&mut syntax);

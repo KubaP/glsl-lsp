@@ -1,18 +1,16 @@
 //! The parser for general expressions.
 
 use super::{
-	ast::{
-		BinOp, BinOpTy, Expr, ExprTy, Ident, Lit, PostOp, PostOpTy, PreOp,
-		PreOpTy,
-	},
+	ast::{BinOp, BinOpTy, Ident, Lit, PostOp, PostOpTy, PreOp, PreOpTy},
 	Ctx, SyntaxModifiers, SyntaxToken, SyntaxType, TokenStreamProvider, Walker,
 };
 use crate::{
 	diag::{ExprDiag, Semantic, Syntax},
 	lexer::{self, Token},
+	parser::ast,
 	Either, Span,
 };
-use std::collections::VecDeque;
+use std::{collections::VecDeque, ops::Deref};
 
 /*
 Useful reading links related to expression parsing:
@@ -35,9 +33,15 @@ https://matklad.github.io/2020/04/15/from-pratt-to-dijkstra.html
 /// Tries to parse a general expression beginning at the current position.
 pub(super) fn parse_general_expr<'a, P: TokenStreamProvider<'a>>(
 	walker: &mut Walker<'a, P>,
+	ctx: &mut Ctx,
 	mode: Mode,
 	end_tokens: impl AsRef<[Token]>,
-) -> (Option<Expr>, Vec<Syntax>, Vec<Semantic>, Vec<SyntaxToken>) {
+) -> (
+	Option<ast::Expr>,
+	Vec<Syntax>,
+	Vec<Semantic>,
+	Vec<SyntaxToken>,
+) {
 	let mut yard = ShuntingYard::new(
 		match walker.peek() {
 			Some((_, span)) => span.start,
@@ -46,9 +50,10 @@ pub(super) fn parse_general_expr<'a, P: TokenStreamProvider<'a>>(
 		mode,
 	);
 	yard.parse(walker, end_tokens.as_ref());
+	let ast = yard.create_ast(ctx);
 
 	(
-		yard.create_ast(),
+		yard.map_ast(ctx, ast),
 		yard.syntax_diags,
 		yard.semantic_diags,
 		yard.syntax_tokens,
@@ -61,11 +66,17 @@ pub(super) fn parse_general_expr<'a, P: TokenStreamProvider<'a>>(
 /// **If this function succeeds, it will have pushed the appropriate syntax token already.**
 pub(super) fn try_parse_new_ident<'a, P: TokenStreamProvider<'a>>(
 	walker: &mut Walker<'a, P>,
+	ctx: &mut Ctx,
 	end_tokens: impl AsRef<[Token]>,
 	new_token: fn() -> SyntaxType,
 ) -> Result<
 	(Ident, Vec<Semantic>),
-	(Option<Expr>, Vec<Syntax>, Vec<Semantic>, Vec<SyntaxToken>),
+	(
+		Option<ast::Expr>,
+		Vec<Syntax>,
+		Vec<Semantic>,
+		Vec<SyntaxToken>,
+	),
 > {
 	let mut yard = ShuntingYard::new(
 		match walker.peek() {
@@ -76,7 +87,7 @@ pub(super) fn try_parse_new_ident<'a, P: TokenStreamProvider<'a>>(
 	);
 	yard.parse(walker, end_tokens.as_ref());
 
-	match yard.try_create_new_ident(walker, new_token) {
+	match yard.try_create_new_ident(walker, ctx, new_token) {
 		Ok(ident) => Ok((ident, yard.semantic_diags)),
 		Err(expr) => Err((
 			expr,
@@ -114,7 +125,12 @@ pub(super) fn try_parse_new_decl_def_idents_with_type_info<
 		Vec<Semantic>,
 		Vec<SyntaxToken>,
 	),
-	(Option<Expr>, Vec<Syntax>, Vec<Semantic>, Vec<SyntaxToken>),
+	(
+		Option<ast::Expr>,
+		Vec<Syntax>,
+		Vec<Semantic>,
+		Vec<SyntaxToken>,
+	),
 > {
 	let mut yard = ShuntingYard::new(
 		match walker.peek() {
@@ -169,7 +185,12 @@ pub(super) fn try_parse_type_specifier<'a, P: TokenStreamProvider<'a>>(
 		Vec<Semantic>,
 		Vec<SyntaxToken>,
 	),
-	(Option<Expr>, Vec<Syntax>, Vec<Semantic>, Vec<SyntaxToken>),
+	(
+		Option<ast::Expr>,
+		Vec<Syntax>,
+		Vec<Semantic>,
+		Vec<SyntaxToken>,
+	),
 > {
 	let mut yard = ShuntingYard::new(
 		match walker.peek() {
@@ -595,12 +616,12 @@ impl ShuntingYard {
 			}
 
 			match (&op.ty, &back.ty) {
-				// This is done to make `ObjAccess` right-associative.
+				/* // This is done to make `ObjAccess` right-associative.
 				(OpTy::ObjAccess(_), OpTy::ObjAccess(_)) => {
 					let moved = self.operators.pop_back().unwrap();
 					self.stack.push_back(Either::Right(moved));
 					break;
-				}
+				} */
 				// These are done to make the ternary operator right-associate correctly. This is slightly more
 				// complex since the ternary is made of two distinct "operators", the `?` and `:`.
 				(OpTy::TernaryC(_), OpTy::TernaryQ(_)) => {
@@ -1675,7 +1696,7 @@ impl ShuntingYard {
 
 					self.set_op_rhs_toggle();
 
-					self.colour(walker, span, SyntaxType::UncheckedIdent);
+					self.colour(walker, span, SyntaxType::UnresolvedIdent);
 				}
 				Token::Ident(s) if state == State::AfterOperand => {
 					if self.mode == Mode::TakeOneUnit {
@@ -1715,7 +1736,7 @@ impl ShuntingYard {
 					// After an identifier, we may start a function call.
 					can_start = Start::FnOrArr;
 
-					self.colour(walker, span, SyntaxType::UncheckedIdent);
+					self.colour(walker, span, SyntaxType::UnresolvedIdent);
 
 					// We don't change state since even though we found an operand instead of an operator, after
 					// this operand we will still be expecting an operator.
@@ -2488,7 +2509,7 @@ impl ShuntingYard {
 	}
 
 	/// Converts the internal RPN stack into a singular `Expr` node, which contains the entire expression.
-	fn create_ast(&mut self) -> Option<Expr> {
+	fn create_ast(&mut self, ctx: &mut Ctx) -> Option<Expr> {
 		if self.stack.is_empty() {
 			return None;
 		}
@@ -2921,8 +2942,38 @@ impl ShuntingYard {
 			unreachable!("After processing the shunting yard output stack, we are left with more than one expression. This should not happen.");
 		}
 
+		let expr = stack.pop_back().unwrap();
+
 		// Return the one root expression.
-		Some(stack.pop_back().unwrap())
+		Some(expr)
+	}
+
+	fn map_ast(
+		&mut self,
+		ctx: &mut Ctx,
+		expr: Option<Expr>,
+	) -> Option<ast::Expr> {
+		let Some(expr) = expr else { return None; };
+
+		let mut new_colours = Vec::new();
+		let expr = expr.convert(ctx, &mut new_colours);
+
+		dbg!(&new_colours);
+		if !new_colours.is_empty() {
+			let mut current_new = new_colours.remove(0);
+			for token in self.syntax_tokens.iter_mut() {
+				if token.span == current_new.0 {
+					token.ty = current_new.1;
+					if new_colours.is_empty() {
+						break;
+					} else {
+						current_new = new_colours.remove(0);
+					}
+				}
+			}
+		}
+
+		Some(expr)
 	}
 
 	/// Tries to convert the internal RPN stack into a singular new identifier. If that fails, a general expression
@@ -2930,8 +2981,9 @@ impl ShuntingYard {
 	fn try_create_new_ident<'a, P: TokenStreamProvider<'a>>(
 		&mut self,
 		walker: &mut Walker<'a, P>,
+		ctx: &mut Ctx,
 		new_token: fn() -> SyntaxType,
-	) -> Result<Ident, Option<Expr>> {
+	) -> Result<Ident, Option<ast::Expr>> {
 		if self.stack.is_empty() {
 			return Err(None);
 		}
@@ -2948,7 +3000,8 @@ impl ShuntingYard {
 			Either::Right(_) => {}
 		}
 
-		Err(self.create_ast())
+		let ast = self.create_ast(ctx);
+		Err(self.map_ast(ctx, ast))
 	}
 
 	/// Tries to convert the internal RPN stack into one or more idents for a new declaration/definition. If that
@@ -2958,16 +3011,16 @@ impl ShuntingYard {
 		walker: &mut Walker<'a, P>,
 		ctx: &mut Ctx,
 		colour_as_member: bool,
-	) -> Result<(Vec<(Ident, Vec<super::ast::ArrSize>, Span)>), Option<Expr>> {
-		use super::ast::ArrSize;
-
+	) -> Result<(Vec<(Ident, Vec<ast::ArrSize>, Span)>), Option<ast::Expr>> {
 		if self.stack.is_empty() {
 			return Err(None);
 		}
 
-		let Some(expr) = self.create_ast() else { return Err(None); };
+		let Some(expr) = self.create_ast(ctx) else { return Err(None); };
 
-		fn convert(expr: &Expr) -> Result<(Ident, Vec<ArrSize>, Span), ()> {
+		fn convert(
+			expr: &Expr,
+		) -> Result<(Ident, Vec<Option<Expr>>, Span), ()> {
 			match &expr.ty {
 				ExprTy::Ident(i) => Ok((i.clone(), Vec::new(), i.span)),
 				ExprTy::Index { item, i } => {
@@ -2976,7 +3029,7 @@ impl ShuntingYard {
 					stack.push(i.as_deref().cloned().into());
 
 					let ident = loop {
-						match &&current_item.ty {
+						match &current_item.ty {
 							ExprTy::Ident(i) => break i.clone(),
 							ExprTy::Index { item, i } => {
 								stack.push(i.as_deref().cloned().into());
@@ -2999,7 +3052,7 @@ impl ShuntingYard {
 		let idents = match &expr.ty {
 			ExprTy::Ident(_) | ExprTy::Index { .. } => match convert(&expr) {
 				Ok(i) => vec![i],
-				Err(_) => return Err(Some(expr)),
+				Err(_) => return Err(self.map_ast(ctx, Some(expr))),
 			},
 			ExprTy::List { items } => {
 				let mut v = Vec::new();
@@ -3008,16 +3061,31 @@ impl ShuntingYard {
 						ExprTy::Ident(_) | ExprTy::Index { .. } => {
 							match convert(item) {
 								Ok(i) => v.push(i),
-								Err(_) => return Err(Some(expr)),
+								Err(_) => {
+									return Err(self.map_ast(ctx, Some(expr)))
+								}
 							}
 						}
-						_ => return Err(Some(expr)),
+						_ => return Err(self.map_ast(ctx, Some(expr))),
 					}
 				}
 				v
 			}
-			_ => return Err(Some(expr)),
+			_ => return Err(self.map_ast(ctx, Some(expr))),
 		};
+
+		let idents: Vec<(Ident, Vec<ast::Omittable<ast::Expr>>, Span)> = idents
+			.into_iter()
+			.map(|(ident, arr, span)| {
+				(
+					ident,
+					arr.into_iter()
+						.map(|size| self.map_ast(ctx, size).into())
+						.collect(),
+					span,
+				)
+			})
+			.collect();
 
 		// We know we have something like:
 		// - `foo`
@@ -3062,17 +3130,14 @@ impl ShuntingYard {
 		&mut self,
 		walker: &mut Walker<'a, P>,
 		ctx: &mut Ctx,
-	) -> Result<(super::ast::Type, Vec<Syntax>), Option<Expr>> {
-		use super::{
-			ast::{Type, TypeTy},
-			StructHandle,
-		};
+	) -> Result<(ast::Type, Vec<Syntax>), Option<ast::Expr>> {
+		use super::StructHandle;
 
 		if self.stack.is_empty() {
 			return Err(None);
 		}
 
-		let Some(expr) = self.create_ast() else { return Err(None); };
+		let Some(expr) = self.create_ast(ctx) else { return Err(None); };
 
 		let (ident, arr) = match &expr.ty {
 			ExprTy::Ident(i) => (i, None),
@@ -3089,7 +3154,7 @@ impl ShuntingYard {
 							stack.push(i.as_deref());
 							current_item = item;
 						}
-						_ => return Err(Some(expr)),
+						_ => return Err(self.map_ast(ctx, Some(expr))),
 					}
 				};
 
@@ -3100,7 +3165,7 @@ impl ShuntingYard {
 
 				(ident, Some(stack))
 			}
-			_ => return Err(Some(expr)),
+			_ => return Err(self.map_ast(ctx, Some(expr))),
 		};
 
 		// We know we have a type specifier expression, i.e. something like:
@@ -3150,26 +3215,44 @@ impl ShuntingYard {
 		});
 
 		Ok((
-			Type {
+			ast::Type {
 				ty: if let Some(mut arr) = arr {
 					if arr.len() == 1 {
-						TypeTy::Array(type_ty, arr.remove(0).cloned().into())
-					} else if arr.len() == 2 {
-						TypeTy::Array2D(
+						ast::TypeTy::Array(
 							type_ty,
-							arr.remove(0).cloned().into(),
-							arr.remove(0).cloned().into(),
+							arr.remove(0)
+								.cloned()
+								.map(|e| self.map_ast(ctx, Some(e)).unwrap())
+								.into(),
+						)
+					} else if arr.len() == 2 {
+						ast::TypeTy::Array2D(
+							type_ty,
+							arr.remove(0)
+								.cloned()
+								.map(|e| self.map_ast(ctx, Some(e)).unwrap())
+								.into(),
+							arr.remove(0)
+								.cloned()
+								.map(|e| self.map_ast(ctx, Some(e)).unwrap())
+								.into(),
 						)
 					} else {
-						TypeTy::ArrayND(
+						ast::TypeTy::ArrayND(
 							type_ty,
 							arr.into_iter()
-								.map(|o| o.cloned().into())
+								.map(|o| {
+									o.cloned()
+										.map(|e| {
+											self.map_ast(ctx, Some(e)).unwrap()
+										})
+										.into()
+								})
 								.collect(),
 						)
 					}
 				} else {
-					TypeTy::Single(type_ty)
+					ast::TypeTy::Single(type_ty)
 				},
 				qualifiers: Vec::new(),
 				span: expr.span,
@@ -3353,4 +3436,594 @@ fn process_list_args(
 	}
 
 	args
+}
+
+/// An expression node.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Expr {
+	pub ty: ExprTy,
+	pub span: Span,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub enum ExprTy {
+	/// A literal constant.
+	Lit(Lit),
+	/// An identifier.
+	Ident(Ident),
+	/// A prefix operator.
+	Prefix { op: PreOp, expr: Option<Box<Expr>> },
+	/// A postfix operator.
+	Postfix { expr: Box<Expr>, op: PostOp },
+	/// A binary expression.
+	Binary {
+		left: Box<Expr>,
+		op: BinOp,
+		right: Option<Box<Expr>>,
+	},
+	/// A ternary expression.
+	Ternary {
+		cond: Box<Expr>,
+		true_: Option<Box<Expr>>,
+		false_: Option<Box<Expr>>,
+	},
+	/// A set of parenthesis.
+	Parens { expr: Option<Box<Expr>> },
+	/// Object access.
+	ObjAccess {
+		obj: Box<Expr>,
+		leaf: Option<Box<Expr>>,
+	},
+	/// An index operator.
+	Index {
+		item: Box<Expr>,
+		i: Option<Box<Expr>>,
+	},
+	/// A function call.
+	FnCall { ident: Ident, args: Vec<Expr> },
+	/// An initializer list.
+	InitList { args: Vec<Expr> },
+	/// An array constructor.
+	ArrConstructor {
+		// FIXME:
+		/// Contains the first part of an array constructor, e.g. `int[3]`.
+		arr: Box<Expr>,
+		args: Vec<Expr>,
+	},
+	/// A general list expression, e.g. `a, b`.
+	List { items: Vec<Expr> },
+	/// A separator.
+	///
+	/// This node only exists during the execution of the expression parser. It will not occur in the final AST.
+	Separator,
+}
+
+impl Expr {
+	fn convert(
+		self,
+		ctx: &mut Ctx,
+		new_colours: &mut Vec<(Span, SyntaxType)>,
+	) -> ast::Expr {
+		match self.ty {
+			ExprTy::Lit(l) => ast::Expr {
+				span: self.span,
+				ty: ast::ExprTy::Lit(l),
+			},
+			ExprTy::Ident(i) => match ctx.lookup_variable(&i.name) {
+				Some(handle) => {
+					new_colours.push((self.span, SyntaxType::Variable));
+					ast::Expr {
+						span: self.span,
+						ty: ast::ExprTy::Local(Either::Left(handle)),
+					}
+				}
+				None => ast::Expr {
+					span: self.span,
+					ty: ast::ExprTy::Local(Either::Left(
+						super::VariableHandle(usize::MAX, usize::MAX),
+					)),
+				},
+			},
+			ExprTy::Prefix { op, expr } => {
+				if let Some(expr) = expr {
+					ast::Expr {
+						span: self.span,
+						ty: ast::ExprTy::Prefix {
+							op,
+							expr: Box::from(expr.convert(ctx, new_colours)),
+						},
+					}
+				} else {
+					ast::Expr {
+						span: self.span,
+						ty: ast::ExprTy::Invalid,
+					}
+				}
+			}
+			ExprTy::Postfix { expr, op } => ast::Expr {
+				span: self.span,
+				ty: ast::ExprTy::Postfix {
+					expr: Box::from(expr.convert(ctx, new_colours)),
+					op,
+				},
+			},
+			ExprTy::Binary { left, op, right } => {
+				if let Some(right) = right {
+					ast::Expr {
+						span: self.span,
+						ty: ast::ExprTy::Binary {
+							left: Box::from(left.convert(ctx, new_colours)),
+							op,
+							right: Box::from(right.convert(ctx, new_colours)),
+						},
+					}
+				} else {
+					ast::Expr {
+						span: self.span,
+						ty: ast::ExprTy::Invalid,
+					}
+				}
+			}
+			ExprTy::Ternary {
+				cond,
+				true_,
+				false_,
+			} => match (true_, false_) {
+				(Some(true_), Some(false_)) => ast::Expr {
+					span: self.span,
+					ty: ast::ExprTy::Ternary {
+						cond: Box::from(cond.convert(ctx, new_colours)),
+						true_: Box::from(true_.convert(ctx, new_colours)),
+						false_: Box::from(false_.convert(ctx, new_colours)),
+					},
+				},
+				_ => ast::Expr {
+					span: self.span,
+					ty: ast::ExprTy::Invalid,
+				},
+			},
+			ExprTy::Parens { expr } => {
+				if let Some(expr) = expr {
+					ast::Expr {
+						span: self.span,
+						ty: ast::ExprTy::Parens {
+							expr: Box::from(expr.convert(ctx, new_colours)),
+						},
+					}
+				} else {
+					ast::Expr {
+						span: self.span,
+						ty: ast::ExprTy::Invalid,
+					}
+				}
+			}
+			ExprTy::ObjAccess { .. } => {
+				self.convert_obj_access(ctx, new_colours)
+			}
+			ExprTy::Index { item, i } => ast::Expr {
+				span: self.span,
+				ty: ast::ExprTy::Index {
+					item: Box::from(item.convert(ctx, new_colours)),
+					i: i.map(|e| Box::from(e.convert(ctx, new_colours))).into(),
+				},
+			},
+			ExprTy::FnCall { ident, args } => {
+				// TODO: Resolve types of arguments so that handles point to overload instead of general function?
+				let handle = match ctx.lookup_function(&ident.name) {
+					Some(handle) => {
+						new_colours.push((ident.span, SyntaxType::Function));
+						Some(handle)
+					}
+					None => None,
+				};
+				ast::Expr {
+					span: self.span,
+					ty: ast::ExprTy::FnCall {
+						handle: handle
+							.unwrap_or(super::FunctionHandle(usize::MAX, true)),
+						args: args
+							.into_iter()
+							.map(|arg| arg.convert(ctx, new_colours))
+							.collect(),
+					},
+				}
+			}
+			ExprTy::InitList { args } => ast::Expr {
+				span: self.span,
+				ty: ast::ExprTy::InitList {
+					args: args
+						.into_iter()
+						.map(|arg| arg.convert(ctx, new_colours))
+						.collect(),
+				},
+			},
+			ExprTy::ArrConstructor { arr, args } => todo!(),
+			ExprTy::List { items } => ast::Expr {
+				span: self.span,
+				ty: ast::ExprTy::List {
+					items: items
+						.into_iter()
+						.map(|item| item.convert(ctx, new_colours))
+						.collect(),
+				},
+			},
+			ExprTy::Separator => unreachable!(),
+		}
+	}
+
+	fn convert_obj_access(
+		self,
+		ctx: &mut Ctx,
+		new_colours: &mut Vec<(Span, SyntaxType)>,
+	) -> ast::Expr {
+		let ExprTy::ObjAccess { obj, leaf } = self.ty else { unreachable!(); };
+
+		if leaf.is_none() {
+			return ast::Expr {
+				span: self.span,
+				ty: ast::ExprTy::Invalid,
+			};
+		}
+
+		let var_handle = match obj.ty {
+			ExprTy::Ident(ident) => {
+				match ctx.lookup_variable(&ident.name) {
+					Some(handle) => {
+						new_colours.push((ident.span, SyntaxType::Variable));
+						handle
+					}
+					None => {
+						// The first ident already cannot be resolved.
+						return ast::Expr {
+							span: self.span,
+							ty: ast::ExprTy::Invalid,
+						};
+					}
+				}
+			}
+			_ => {
+				// TODO: Syntax error.
+				return ast::Expr {
+					span: self.span,
+					ty: ast::ExprTy::Invalid,
+				};
+			}
+		};
+
+		let root_symbol = &ctx.variables[var_handle.0][var_handle.1];
+		let mut previous_type = root_symbol.type_.clone();
+
+		// Panic: `leaf[0]` exists, so one iteration is always valid.
+		let mut expr_stack = VecDeque::new();
+		expr_stack.push_back(*leaf.unwrap());
+		let mut leafs = Vec::new();
+		loop {
+			let Some(current) = expr_stack.pop_front() else { break; };
+			match current.ty {
+				ExprTy::Ident(ident) => {
+					// We can have either: vector swizzling, or struct member access.
+					match previous_type.variant() {
+						Either::Left(primitive) => {
+							use ast::Primitive;
+							match primitive {
+								Primitive::Vec2
+								| Primitive::Vec3
+								| Primitive::Vec4
+								| Primitive::BVec2
+								| Primitive::BVec3
+								| Primitive::BVec4
+								| Primitive::IVec2
+								| Primitive::IVec3
+								| Primitive::IVec4
+								| Primitive::UVec2
+								| Primitive::UVec3
+								| Primitive::UVec4
+								| Primitive::DVec2
+								| Primitive::DVec3
+								| Primitive::DVec4 => {}
+								_ => {
+									// TODO: Error
+									return ast::Expr {
+										span: self.span,
+										ty: ast::ExprTy::Invalid,
+									};
+								}
+							}
+
+							#[derive(PartialEq)]
+							enum Naming {
+								XYZW,
+								RGBA,
+								STPQ,
+							}
+
+							let mut requested_size = 0;
+							let mut naming = Naming::XYZW;
+							for (i, c) in ident.name.chars().enumerate() {
+								if i > 3 {
+									// TODO: Error
+									return ast::Expr {
+										span: self.span,
+										ty: ast::ExprTy::Invalid,
+									};
+								}
+
+								if i == 0 {
+									naming = match c {
+										'x' | 'y' | 'z' | 'w' => Naming::XYZW,
+										'r' | 'g' | 'b' | 'a' => Naming::RGBA,
+										's' | 't' | 'p' | 'q' => Naming::STPQ,
+										_ => {
+											// TODO: Error
+											return ast::Expr {
+												span: self.span,
+												ty: ast::ExprTy::Invalid,
+											};
+										}
+									};
+								} else {
+									match naming {
+										Naming::XYZW => match c {
+											'x' | 'y' | 'z' | 'w' => {}
+											_ => {
+												// TODO: Error
+											}
+										},
+										Naming::RGBA => match c {
+											'r' | 'g' | 'b' | 'a' => {}
+											_ => {
+												//TODO:Error
+											}
+										},
+										Naming::STPQ => match c {
+											's' | 't' | 'p' | 'q' => {}
+											_ => {
+												// TODO: Error
+											}
+										},
+									}
+								}
+								requested_size = i + 1;
+							}
+
+							if requested_size < 2 {
+								// TODO: Error
+								return ast::Expr {
+									span: self.span,
+									ty: ast::ExprTy::Invalid,
+								};
+							}
+
+							// FIXME: Represent this somehow?
+							leafs.push(Either::Left(super::StructFieldHandle(
+								usize::MAX,
+								usize::MAX,
+							)));
+							new_colours.push((ident.span, SyntaxType::Member));
+							previous_type = ast::Type {
+								span: Span::new(0, 0),
+								ty: ast::TypeTy::Single(Either::Left(
+									match requested_size {
+										// We don't need to worry about the difference between vecn, bvecn, ivecn,
+										// etc. because none of the logic in this conversion checks or depends on
+										// the specific type of vector; only the size is relevant.
+										2 => ast::Primitive::Vec2,
+										3 => ast::Primitive::Vec3,
+										4 => ast::Primitive::Vec4,
+										_ => unreachable!(),
+									},
+								)),
+								qualifiers: Vec::new(),
+							};
+							continue;
+						}
+						Either::Right(struct_handle) => {
+							let struct_symbol = &ctx.structs[struct_handle.0];
+							let matched_field =
+								struct_symbol.fields.iter().enumerate().find(
+									|(_, field)| {
+										if let ast::Omittable::Some(name) =
+											&field.name
+										{
+											name == &ident.name
+										} else {
+											false
+										}
+									},
+								);
+
+							if let Some((field_idx, field_symbol)) =
+								matched_field
+							{
+								// We have a resolved struct field.
+								leafs.push(Either::Left(
+									super::StructFieldHandle(
+										struct_handle.0,
+										field_idx,
+									),
+								));
+								new_colours
+									.push((ident.span, SyntaxType::Member));
+								previous_type = field_symbol.type_.clone();
+								continue;
+							} else {
+								// We have an unresolved struct field, so we can't resolve any further.
+								return ast::Expr {
+									span: self.span,
+									ty: ast::ExprTy::Invalid,
+								};
+							}
+						}
+					}
+				}
+				ExprTy::Index { item, i } => {
+					// We can only have struct member access.
+					let struct_handle = match previous_type.variant() {
+						Either::Left(_) => {
+							// TODO: Error
+							return ast::Expr {
+								span: self.span,
+								ty: ast::ExprTy::Invalid,
+							};
+						}
+						Either::Right(handle) => handle,
+					};
+
+					let mut current_index_item = &item;
+					let mut stack = Vec::new();
+					stack.push(i.as_deref());
+					let ident = loop {
+						match &current_index_item.ty {
+							ExprTy::Ident(i) => break i,
+							ExprTy::Index { item, i } => {
+								stack.push(i.as_deref());
+								current_index_item = item;
+							}
+							// TODO: Error
+							_ => {
+								return ast::Expr {
+									span: self.span,
+									ty: ast::ExprTy::Invalid,
+								}
+							}
+						}
+					};
+					stack.reverse();
+
+					// We know we have something like:
+					// - foo[0]
+					// - foo[1][4]
+
+					let struct_symbol = &ctx.structs[struct_handle.0];
+					let matched_field = struct_symbol
+						.fields
+						.iter()
+						.enumerate()
+						.find(|(_, field)| {
+							if let ast::Omittable::Some(name) = &field.name {
+								name == &ident.name
+							} else {
+								false
+							}
+						});
+
+					if let Some((field_idx, field_symbol)) = matched_field {
+						// We have a resolved struct field.
+						leafs.push(Either::Left(super::StructFieldHandle(
+							struct_handle.0,
+							field_idx,
+						)));
+						new_colours.push((ident.span, SyntaxType::Member));
+						previous_type = field_symbol.type_.clone();
+						continue;
+					} else {
+						// We have an unresolved struct field, so we can't resolve any further.
+						return ast::Expr {
+							span: self.span,
+							ty: ast::ExprTy::Invalid,
+						};
+					}
+				}
+				ExprTy::ObjAccess { obj, leaf } => {
+					expr_stack.push_back(*obj);
+					if let Some(leaf) = leaf {
+						expr_stack.push_back(*leaf);
+					}
+				}
+				ExprTy::FnCall { ident, args } => {
+					// We can only have built-in .length() methods for certain primitives and arrays.
+					match previous_type.variant() {
+						Either::Left(primitive) => {
+							if &ident.name != "length" {
+								// TODO: Error.
+								return ast::Expr {
+									span: self.span,
+									ty: ast::ExprTy::Invalid,
+								};
+							}
+							// Vectors and matrices have `.length()`. All array types have `.length()`.
+							if previous_type.is_array() {
+							} else {
+								use ast::Primitive;
+								match primitive {
+									Primitive::Vec2
+									| Primitive::Vec3
+									| Primitive::Vec4
+									| Primitive::BVec2
+									| Primitive::BVec3
+									| Primitive::BVec4
+									| Primitive::IVec2
+									| Primitive::IVec3
+									| Primitive::IVec4
+									| Primitive::UVec2
+									| Primitive::UVec3
+									| Primitive::UVec4
+									| Primitive::DVec2
+									| Primitive::DVec3
+									| Primitive::DVec4
+									| Primitive::Mat2x2
+									| Primitive::Mat2x3
+									| Primitive::Mat2x4
+									| Primitive::Mat3x2
+									| Primitive::Mat3x3
+									| Primitive::Mat3x4
+									| Primitive::Mat4x2
+									| Primitive::Mat4x3
+									| Primitive::Mat4x4
+									| Primitive::DMat2x2
+									| Primitive::DMat2x3
+									| Primitive::DMat2x4
+									| Primitive::DMat3x2
+									| Primitive::DMat3x3
+									| Primitive::DMat3x4
+									| Primitive::DMat4x2
+									| Primitive::DMat4x3
+									| Primitive::DMat4x4 => {}
+									_ => {
+										// TODO: Error
+										return ast::Expr {
+											span: self.span,
+											ty: ast::ExprTy::Invalid,
+										};
+									}
+								}
+							}
+						}
+						Either::Right(struct_handle_) => {
+							// Structs cannot have methods, so this cannot be valid.
+							// TODO: Error
+							return ast::Expr {
+								span: self.span,
+								ty: ast::ExprTy::Invalid,
+							};
+						}
+					}
+					new_colours.push((ident.span, SyntaxType::Function));
+					previous_type = ast::Type {
+						span: Span::new(0, 0),
+						ty: ast::TypeTy::Single(Either::Left(
+							ast::Primitive::Int,
+						)),
+						qualifiers: Vec::new(),
+					};
+					continue;
+				}
+				_ => {
+					// TODO: Error
+					return ast::Expr {
+						span: self.span,
+						ty: ast::ExprTy::Invalid,
+					};
+				}
+			}
+		}
+
+		ast::Expr {
+			span: self.span,
+			ty: ast::ExprTy::ObjAccess {
+				obj: var_handle,
+				leafs,
+			},
+		}
+	}
 }

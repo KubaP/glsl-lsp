@@ -34,29 +34,27 @@ pub enum SyntaxType {
 	//String,
 	/// A comment.
 	Comment,
-	///// A primitive type.
+	/// A primitive type.
 	Primitive,
-	///// A struct.
+	/// A struct.
 	Struct,
-	///// A function.
+	/// A function.
 	Function,
-	///// A subroutine.
+	/// A subroutine.
 	Subroutine,
-	///// A variable.
+	/// A variable.
 	Variable,
 	/// A struct member.
 	Member,
 	/// A function or function-like macro parameter.
 	Parameter,
-	/// A valid layout qualifier identifier.
+	/// A valid layout qualifier name.
 	LayoutQualifier,
-	/// An identifier which has not gone through name resolution yet.
-	UncheckedIdent,
 	/// An identifier which has not gone through name resolution and never will. This token is only used for any
 	/// identifiers within macro bodies.
 	Ident,
-	/// An unresolved identifier. This could be an unresolved variable identifier, an unresolved type name, or an
-	/// illegal layout qualifier identifier.
+	/// An unresolved identifier. This could be an unresolved variable name, an unresolved type name, an
+	/// invalid layout qualifier name, etc.
 	UnresolvedIdent,
 	/// An invalid character.
 	Invalid,

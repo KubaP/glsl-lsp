@@ -3234,14 +3234,23 @@ impl From<ast::Param> for FunctionParam {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct NodeHandle(generational_arena::Index);
 
+// FIXME: Check for usize::MAX invariants.
+
 /// A handle to a struct symbol stored within the [`Ast`]/[`Ctx`].
 ///
 /// A value of `usize::MAX` means that the handle is unresolved.
-/// FIXME: Check for this invariant.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct StructHandle(usize);
 
+/// A handle to a struct field stored within the [`Ast`]/[`Ctx`].
+///
+/// Values of `usize::MAX` means that the handle is unresolved.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct StructFieldHandle(usize, usize);
+
 /// A handle to a function symbol stored within the [`Ast`]/[`Ctx`].
+///
+/// A value of `usize::MAX` means that the handle is unresolved.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct FunctionHandle(
 	usize,
@@ -3250,10 +3259,14 @@ pub struct FunctionHandle(
 );
 
 /// A handle to a variable table.
+///
+/// A value of `usize::MAX` means that the handle is unresolved.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct VariableTableHandle(usize);
 
 /// A handle to a variable symbol, (stored within a variable table), stored within the [`Ast`]/[`Ctx`].
+///
+/// Values of `usize::MAX` means that the handle is unresolved.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct VariableHandle(
 	/// Index of table.
@@ -3572,13 +3585,28 @@ impl Ctx {
 	/// type checking so we wouldn't know which overload to select.
 	/// FIXME: Change function handles to point to the name rather than the specific overload. If we need pointers
 	/// to specific overload, we can leave that information empty for now and resolve it in the analyzer.
-	fn lookup_function(&self, name: &str) -> bool {
-		todo!()
+	fn lookup_function(&self, name: &str) -> Option<FunctionHandle> {
+		Some(FunctionHandle(usize::MAX, true))
 	}
 
 	/// Returns a handle to a variable symbol if a variable with the specified name exists.
 	fn lookup_variable(&self, name: &str) -> Option<VariableHandle> {
-		todo!()
+		let mut i = self.scope_stack.len() - 1;
+		loop {
+			let table_handle = self.scope_stack[i].1;
+			let variables = &self.variables[table_handle.0];
+			for (i, variable) in variables.iter().enumerate() {
+				if name == &variable.name {
+					return Some(VariableHandle(table_handle.0, i));
+				}
+			}
+			if i > 0 {
+				i -= 1;
+			} else {
+				break;
+			}
+		}
+		None
 	}
 
 	/// Converts this context into the abstract syntax tree. This is done once parsing has finished in order to

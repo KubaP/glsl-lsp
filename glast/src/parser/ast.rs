@@ -542,6 +542,26 @@ impl<T> From<Option<T>> for Omittable<T> {
 	}
 }
 
+impl Type {
+	pub(crate) fn variant(&self) -> Either<Primitive, StructHandle> {
+		match self.ty {
+			TypeTy::Single(e) => e,
+			TypeTy::Array(e, _) => e,
+			TypeTy::Array2D(e, _, _) => e,
+			TypeTy::ArrayND(e, _) => e,
+		}
+	}
+
+	pub(crate) fn is_array(&self) -> bool {
+		match self.ty {
+			TypeTy::Single(_) => false,
+			TypeTy::Array(_, _)
+			| TypeTy::Array2D(_, _, _)
+			| TypeTy::ArrayND(_, _) => true,
+		}
+	}
+}
+
 impl Primitive {
 	/// Tries to parse an identifier into a primitive type.
 	pub fn parse(ident: &Ident) -> Option<Self> {
@@ -681,54 +701,51 @@ pub struct Expr {
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum ExprTy {
+	/// An expression that wasn't syntactically well formed in some way.
+	Invalid,
 	/// A literal constant.
 	Lit(Lit),
-	/// An identifier.
-	Ident(Ident),
-	/// A prefix operator.
-	Prefix { op: PreOp, expr: Option<Box<Expr>> },
-	/// A postfix operator.
+	/// A variable.
+	Local(Either<super::VariableHandle, super::StructFieldHandle>),
+	/// A prefix operation.
+	Prefix { op: PreOp, expr: Box<Expr> },
+	/// A postfix operation.
 	Postfix { expr: Box<Expr>, op: PostOp },
-	/// A binary expression.
+	/// A binary operation.
 	Binary {
 		left: Box<Expr>,
 		op: BinOp,
-		right: Option<Box<Expr>>,
+		right: Box<Expr>,
 	},
-	/// A ternary expression.
+	/// A ternary operation.
 	Ternary {
 		cond: Box<Expr>,
-		true_: Option<Box<Expr>>,
-		false_: Option<Box<Expr>>,
+		true_: Box<Expr>,
+		false_: Box<Expr>,
 	},
-	/// A set of parenthesis.
-	Parens { expr: Option<Box<Expr>> },
+	/// An expression wrapped within parenthesis.
+	Parens { expr: Box<Expr> },
 	/// Object access.
 	ObjAccess {
-		obj: Box<Expr>,
-		leaf: Option<Box<Expr>>,
+		obj: super::VariableHandle,
+		leafs: Vec<Either<super::StructFieldHandle, super::FunctionHandle>>,
 	},
-	/// An index operator.
+	/// An index operation.
 	Index {
 		item: Box<Expr>,
-		i: Option<Box<Expr>>,
+		i: Omittable<Box<Expr>>,
 	},
 	/// A function call.
-	FnCall { ident: Ident, args: Vec<Expr> },
+	FnCall {
+		handle: super::FunctionHandle,
+		args: Vec<Expr>,
+	},
 	/// An initializer list.
 	InitList { args: Vec<Expr> },
 	/// An array constructor.
-	ArrConstructor {
-		/// Contains the first part of an array constructor, e.g. `int[3]`.
-		arr: Box<Expr>,
-		args: Vec<Expr>,
-	},
+	ArrConstructor { type_: Box<Type>, args: Vec<Expr> },
 	/// A general list expression, e.g. `a, b`.
 	List { items: Vec<Expr> },
-	/// A separator.
-	///
-	/// This node only exists during the execution of the expression parser. It will not occur in the final AST.
-	Separator,
 }
 
 /// A binary operator.

@@ -68,7 +68,7 @@ pub(super) fn try_parse_new_ident<'a, P: TokenStreamProvider<'a>>(
 	walker: &mut Walker<'a, P>,
 	ctx: &mut Ctx,
 	end_tokens: impl AsRef<[Token]>,
-	new_syntax: fn() -> SyntaxType,
+	colour: SyntaxType,
 ) -> Result<
 	(Ident, Vec<Semantic>),
 	(
@@ -87,7 +87,7 @@ pub(super) fn try_parse_new_ident<'a, P: TokenStreamProvider<'a>>(
 	);
 	yard.parse(walker, end_tokens.as_ref());
 
-	match yard.try_create_new_ident(walker, ctx, new_syntax) {
+	match yard.try_create_new_ident(walker, ctx, colour) {
 		Ok(ident) => Ok((ident, yard.semantic_diags)),
 		Err(expr) => Err((
 			expr,
@@ -117,7 +117,7 @@ pub(super) fn try_parse_new_decl_def_idents_with_type_info<
 	ctx: &mut Ctx,
 	end_tokens: impl AsRef<[Token]>,
 	only_one: bool,
-	colour_as_member: bool,
+	colour: SyntaxType,
 ) -> Result<
 	(
 		Vec<(Ident, Vec<super::ast::ArrSize>, Span)>,
@@ -145,7 +145,7 @@ pub(super) fn try_parse_new_decl_def_idents_with_type_info<
 	);
 	yard.parse(walker, end_tokens.as_ref());
 
-	match yard.try_create_new_decl_def_idents(walker, ctx, colour_as_member) {
+	match yard.try_create_new_decl_def_idents(walker, ctx, colour) {
 		Ok(idents) => Ok((
 			idents,
 			yard.syntax_diags,
@@ -2981,7 +2981,7 @@ impl ShuntingYard {
 		&mut self,
 		walker: &mut Walker<'a, P>,
 		ctx: &mut Ctx,
-		new_syntax: fn() -> SyntaxType,
+		colour: SyntaxType,
 	) -> Result<Ident, Option<ast::Expr>> {
 		if self.stack.is_empty() {
 			return Err(None);
@@ -2991,7 +2991,7 @@ impl ShuntingYard {
 		match item {
 			Either::Left(node) => match node.ty {
 				NodeTy::Ident(ident) => {
-					walker.push_colour(ident.span, new_syntax());
+					walker.push_colour(ident.span, colour);
 					return Ok(ident);
 				}
 				_ => {}
@@ -3009,7 +3009,7 @@ impl ShuntingYard {
 		&mut self,
 		walker: &mut Walker<'a, P>,
 		ctx: &mut Ctx,
-		colour_as_member: bool,
+		colour: SyntaxType,
 	) -> Result<(Vec<(Ident, Vec<ast::ArrSize>, Span)>), Option<ast::Expr>> {
 		if self.stack.is_empty() {
 			return Err(None);
@@ -3108,11 +3108,7 @@ impl ShuntingYard {
 		for token in self.syntax_tokens.iter_mut() {
 			// The original tokens are chronologically ordered, and so are the individual identifiers.
 			if token.span == idents[i].0.span {
-				if colour_as_member {
-					token.ty = SyntaxType::Member;
-				} else {
-					token.ty = SyntaxType::Variable;
-				}
+				token.ty = colour;
 				i += 1;
 				if idents.len() == i {
 					break;
@@ -3517,9 +3513,9 @@ impl Expr {
 				ty: ast::ExprTy::Lit(l),
 			},
 			ExprTy::Ident(ident) => {
-				let handle = ctx.resolve_variable(&ident);
+				let (handle, new_colour) = ctx.resolve_variable(&ident);
 				if handle.is_resolved() {
-					new_colours.push((self.span, SyntaxType::Variable));
+					new_colours.push((self.span, new_colour));
 					ast::Expr {
 						span: self.span,
 						ty: ast::ExprTy::Local(handle),
@@ -3683,14 +3679,14 @@ impl Expr {
 
 		let var_handle = match obj.ty {
 			ExprTy::Ident(ident) => {
-				let handle = ctx.resolve_variable(&ident);
+				let (handle, new_colour) = ctx.resolve_variable(&ident);
 				if handle.is_unresolved() {
 					return ast::Expr {
 						span: self.span,
 						ty: ast::ExprTy::Invalid,
 					};
 				}
-				new_colours.push((self.span, SyntaxType::Variable));
+				new_colours.push((self.span, new_colour));
 				handle
 			}
 			_ => {

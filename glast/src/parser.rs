@@ -3243,13 +3243,29 @@ pub struct VariableSymbol {
 	/// Handle to one of the following:
 	/// - `VarDef`/`VarDefs`/`VarDefInit`/`VarDefsInit`,
 	/// - `StructDef`; in this case it means that at least `node.instances[0]` exists.
+	/// - `FnDef`; in this case it means that at least `node.params[0]` exists.
 	def_node: NodeHandle,
 	/// The type.
 	type_: ast::Type,
 	/// The name.
 	name: String,
+	/// The type of variable symbol.
+	var_type: VariableType,
 	/// All references to this variable. This includes the name in the variable declaration/definition itself.
 	refs: Vec<Span>,
+}
+
+/// Describes the type of variable symbol. This is relevant only for syntax highlighting purposes; the full
+/// information about a variable can be found in its type.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum VariableType {
+	Default,
+	/// The variable is a parameter.
+	Parameter,
+	/// The variable is a constant.
+	Const,
+	/// The variable is a top-level shader input/output.
+	ShaderInOut,
 }
 
 impl From<ast::Param> for FunctionParam {
@@ -3271,14 +3287,60 @@ impl From<ast::Param> for FunctionParam {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct NodeHandle(generational_arena::Index);
 
-// FIXME: Check for usize::MAX invariants.
-
 /// A handle to a struct symbol stored within the [`Ast`]/[`Ctx`].
 ///
-/// A value of `usize::MAX` means that the handle is unresolved.
+/// # Invariants
+/// If `self.0 == usize::MAX`, this handle is unresolved.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct StructHandle(
 	/// Index into `ctx.structs`.
+	usize,
+);
+
+/// A handle to a struct field stored within the [`Ast`]/[`Ctx`].
+///
+/// # Invariants
+/// If `self.0 == usize::MAX`, this handle is unresolved and `self.1` can be disregarded.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct StructFieldHandle(
+	/// Index into `ctx.structs`.
+	usize,
+	/// Index into `struct.fields`.
+	usize,
+);
+
+/// A handle to a function symbol stored within the [`Ast`]/[`Ctx`].
+///
+/// # Invariants
+/// If `self.0 == usize::MAX`, this handle is fully unresolved. If `self.0 != usize::MAX && self.1 == usize::MAX`,
+/// handle is partially resolved (to the function symbol, but not a specific signature/overload).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct FunctionHandle(
+	/// Index into `ctx.functions`.
+	usize,
+	/// Index into `function.signatures`.
+	usize,
+);
+
+/// A handle to a variable table.
+///
+/// # Invariants
+/// If `self.0 == usize::MAX`, this handle is unresolved.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct VariableTableHandle(
+	/// Index into `ctx.variables`.
+	usize,
+);
+
+/// A handle to a variable symbol, (stored within a variable table), stored within the [`Ast`]/[`Ctx`].
+///
+/// # Invariants
+/// If `self.0 == usize::MAX`, this handle is unresolved and `self.1` can be disregarded.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct VariableHandle(
+	/// Index into `ctx.variables`.
+	usize,
+	/// Index into `variables`.
 	usize,
 );
 
@@ -3294,57 +3356,44 @@ impl StructHandle {
 	}
 }
 
-/// A handle to a struct field stored within the [`Ast`]/[`Ctx`].
-///
-/// Values of `usize::MAX` means that the handle is unresolved.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct StructFieldHandle(
-	/// Index into `ctx.structs`.
-	usize,
-	/// Index into `struct.fields`.
-	usize,
-);
-
-/// A handle to a function symbol stored within the [`Ast`]/[`Ctx`].
-///
-/// Values of `usize::MAX` means that the handle is unresolved.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct FunctionHandle(
-	/// Index into `ctx.functions`.
-	usize,
-	/// Index into `function.signatures`.
-	usize,
-);
-
-/// A handle to a variable table.
-///
-/// A value of `usize::MAX` means that the handle is unresolved.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct VariableTableHandle(
-	/// Index into `ctx.variables`.
-	usize,
-);
-
-/// A handle to a variable symbol, (stored within a variable table), stored within the [`Ast`]/[`Ctx`].
-///
-/// Values of `usize::MAX` means that the handle is unresolved.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct VariableHandle(
-	/// Index into `ctx.variables`.
-	usize,
-	/// Index into `variables`.
-	usize,
-);
-
-impl VariableHandle {
+impl StructFieldHandle {
 	#[inline]
 	pub fn is_resolved(self) -> bool {
-		!self.is_unresolved()
+		self.0 != usize::MAX && self.1 != usize::MAX
 	}
 
 	#[inline]
 	pub fn is_unresolved(self) -> bool {
-		self.0 == usize::MAX && self.0 == usize::MAX
+		self.0 == usize::MAX
+	}
+}
+
+impl FunctionHandle {
+	#[inline]
+	pub fn is_resolved_signature(self) -> bool {
+		self.0 != usize::MAX && self.1 != usize::MAX
+	}
+
+	#[inline]
+	pub fn is_resolved_symbol(self) -> bool {
+		self.0 != usize::MAX
+	}
+
+	#[inline]
+	pub fn is_unresolved(self) -> bool {
+		self.0 == usize::MAX
+	}
+}
+
+impl VariableHandle {
+	#[inline]
+	pub fn is_resolved(self) -> bool {
+		self.0 != usize::MAX
+	}
+
+	#[inline]
+	pub fn is_unresolved(self) -> bool {
+		self.0 == usize::MAX
 	}
 }
 
@@ -3398,6 +3447,7 @@ impl Ctx {
 		fields: Vec<StructField>,
 		node: ast::Node,
 		var_instances: Vec<(ast::Ident, ast::Type)>,
+		is_shader_in_out: bool,
 	) {
 		if let Some(_) = ast::Primitive::parse(&ident) {
 			// TODO: Syntax error; struct cannot have name of primitive.
@@ -3406,17 +3456,21 @@ impl Ctx {
 		if self.scope_stack.len() > 1 {
 			// TODO: Syntax error for node not in the top-level scope.
 		}
-		match self.current_active_symbols.get(&ident.name) {
-			Some(_handle) => {
+
+		let new_struct_handle = StructHandle(self.structs.len());
+		match self.current_active_symbols.get_mut(&ident.name) {
+			Some(handle) => {
 				if self.scope_stack.len() == 1 { // Prevent overlapping errors.
 					 // TODO: Semantic error because name already taken.
 				}
+				*handle = Either3::A(new_struct_handle);
 			}
-			None => {}
+			None => {
+				self.current_active_symbols
+					.insert(ident.name.clone(), Either3::A(new_struct_handle));
+			}
 		}
-
 		let node_handle = self.push_node(node);
-		let new_struct_handle = StructHandle(self.structs.len());
 		self.structs.push(StructSymbol {
 			def_node: node_handle,
 			name: ident.name.clone(),
@@ -3424,50 +3478,43 @@ impl Ctx {
 			refs: vec![ident.span],
 		});
 
-		match self.current_active_symbols.get_mut(&ident.name) {
-			Some(h) => *h = Either3::A(new_struct_handle),
-			None => {
-				self.current_active_symbols
-					.insert(ident.name.clone(), Either3::A(new_struct_handle));
-			}
-		}
-
 		// Register any instances within the current scope.
-		let scope = self.__get_current_scope();
-		let h = scope.variable_table;
+		let h = self.__get_current_scope().variable_table;
 		for (ident, type_) in var_instances.into_iter() {
-			match self.current_active_symbols.get(&ident.name) {
-				Some(handle) => match handle {
-					Either3::A(_) | Either3::B(_) => {}
-					Either3::A(_) | Either3::B(_)
-						if self.scope_stack.len() == 1 =>
-					{
-						// Variables can't shadow functions/structs in the top-level scope.
-						// TODO: Semantic error.
-					}
-					Either3::C(_) => {
-						// Variables can't shadow other variables at all.
-						// TODO: Semantic error because name already taken.
-					}
-				},
-				None => {}
-			}
-
 			let new_var_handle = VariableHandle(h.0, self.variables.len());
-			self.variables[h.0].push(VariableSymbol {
-				def_node: node_handle,
-				type_,
-				name: ident.name.clone(),
-				refs: vec![ident.span],
-			});
-
 			match self.current_active_symbols.get_mut(&ident.name) {
-				Some(h) => *h = Either3::C(new_var_handle),
+				Some(handle) => {
+					match handle {
+						Either3::A(_) | Either3::B(_) => {}
+						Either3::A(_) | Either3::B(_)
+							if self.scope_stack.len() == 1 =>
+						{
+							// Variables can't shadow functions/structs in the top-level scope.
+							// TODO: Semantic error.
+						}
+						Either3::C(_) => {
+							// Variables can't shadow other variables at all.
+							// TODO: Semantic error because name already taken.
+						}
+					}
+					*handle = Either3::C(new_var_handle);
+				}
 				None => {
 					self.current_active_symbols
 						.insert(ident.name.clone(), Either3::C(new_var_handle));
 				}
 			}
+			self.variables[h.0].push(VariableSymbol {
+				def_node: node_handle,
+				type_,
+				name: ident.name.clone(),
+				var_type: if is_shader_in_out {
+					VariableType::ShaderInOut
+				} else {
+					VariableType::Default
+				},
+				refs: vec![ident.span],
+			});
 		}
 	}
 
@@ -3489,17 +3536,21 @@ impl Ctx {
 		if self.scope_stack.len() > 1 {
 			// TODO: Syntax error for node not in the top-level scope.
 		}
-		match self.current_active_symbols.get(&ident.name) {
-			Some(_handle) => {
+
+		let fn_handle = FunctionHandle(self.functions.len(), 0);
+		match self.current_active_symbols.get_mut(&ident.name) {
+			Some(handle) => {
 				if self.scope_stack.len() == 1 { // Prevent overlapping errors.
 					 // TODO: Semantic error because name already taken.
 				}
+				*handle = Either3::B(fn_handle);
 			}
-			None => {}
+			None => {
+				self.current_active_symbols
+					.insert(ident.name.clone(), Either3::B(fn_handle));
+			}
 		}
-
 		let node_handle = self.push_node(node);
-		let fn_handle = FunctionHandle(self.functions.len(), 0);
 		match self
 			.functions
 			.iter_mut()
@@ -3550,20 +3601,13 @@ impl Ctx {
 				});
 			}
 		}
-
-		match self.current_active_symbols.get_mut(&ident.name) {
-			Some(h) => *h = Either3::B(fn_handle),
-			None => {
-				self.current_active_symbols
-					.insert(ident.name.clone(), Either3::B(fn_handle));
-			}
-		}
 	}
 
 	/// Pushes a function definition into the current scope, and registers a new function symbol, or if a function
 	/// with this name already exists, a new overloaded function symbol.
 	fn push_new_function_def(
 		&mut self,
+		scope_handle: NodeHandle,
 		ident: ast::Ident,
 		params: Vec<FunctionParam>,
 		return_type: ast::Type,
@@ -3572,17 +3616,30 @@ impl Ctx {
 		if self.scope_stack.len() > 1 {
 			// TODO: Syntax error for node not in the top-level scope.
 		}
-		match self.current_active_symbols.get(&ident.name) {
-			Some(_handle) => {
+
+		let fn_handle = FunctionHandle(self.functions.len(), 0);
+		match self.current_active_symbols.get_mut(&ident.name) {
+			Some(handle) => {
 				if self.scope_stack.len() == 1 { // Prevent overlapping errors.
 					 // TODO: Semantic error because name already taken.
 				}
+				*handle = Either3::B(fn_handle);
 			}
-			None => {}
+			None => {
+				self.current_active_symbols
+					.insert(ident.name.clone(), Either3::B(fn_handle));
+			}
 		}
 
-		let node_handle = self.push_node(node);
-		let fn_handle = FunctionHandle(self.functions.len(), 0);
+		{
+			// We previously had a temporary scope node, which we now swap out with the new function node.
+			let scope = self.__get_current_scope();
+			scope.contents.push(scope_handle);
+			scope.span.end = node.span.end;
+			*self.arena.get_mut(scope_handle.0).unwrap() = node;
+		}
+		let node_handle = scope_handle;
+
 		match self
 			.functions
 			.iter_mut()
@@ -3641,10 +3698,7 @@ impl Ctx {
 
 		match self.current_active_symbols.get_mut(&ident.name) {
 			Some(h) => *h = Either3::B(fn_handle),
-			None => {
-				self.current_active_symbols
-					.insert(ident.name.clone(), Either3::B(fn_handle));
-			}
+			None => {}
 		}
 	}
 
@@ -3653,6 +3707,7 @@ impl Ctx {
 	fn push_new_variables(
 		&mut self,
 		(pairs, node): (Vec<(ast::Type, ast::Ident)>, ast::Node),
+		var_type: VariableType,
 	) {
 		let node_end = node.span.end;
 		let new_handle = NodeHandle(self.arena.insert(node));
@@ -3670,8 +3725,10 @@ impl Ctx {
 				continue;
 			}
 
-			match self.current_active_symbols.get(&ident.name) {
-				Some(handle) => match handle {
+			let new_var_handle = VariableHandle(h.0, self.variables.len());
+			match self.current_active_symbols.get_mut(&ident.name) {
+				Some(handle) => {
+					match handle {
 					Either3::A(_) | Either3::B(_) => {}
 					Either3::A(_) | Either3::B(_)
 					    // Prevent overlapping errors.
@@ -3684,30 +3741,30 @@ impl Ctx {
 						// Variables can't shadow other variables at all.
 						// TODO: Semantic error because name already taken.
 					}
-				},
-				None => {}
-			}
-
-			let new_var_handle = VariableHandle(h.0, self.variables.len());
-			self.variables[h.0].push(VariableSymbol {
-				def_node: new_handle,
-				type_,
-				name: ident.name.clone(),
-				refs: vec![ident.span],
-			});
-
-			match self.current_active_symbols.get_mut(&ident.name) {
-				Some(h) => *h = Either3::C(new_var_handle),
+				}
+					*handle = Either3::C(new_var_handle);
+				}
 				None => {
 					self.current_active_symbols
 						.insert(ident.name.clone(), Either3::C(new_var_handle));
 				}
 			}
+			self.variables[h.0].push(VariableSymbol {
+				def_node: new_handle,
+				type_,
+				var_type,
+				name: ident.name.clone(),
+				refs: vec![ident.span],
+			});
 		}
 	}
 
 	/// Creates a new temporary scope.
-	fn new_temp_scope(&mut self, opening_delim: Span) -> NodeHandle {
+	fn new_temp_scope(
+		&mut self,
+		opening_delim: Span,
+		params: Option<&[ast::Param]>,
+	) -> NodeHandle {
 		// We create a temporary block node into which child nodes will go into. Later, this block node will be
 		// removed and its scope used in a different node, that will be subsequently inserted back in.
 		let new_table_handle = VariableTableHandle(self.variables.len());
@@ -3721,6 +3778,52 @@ impl Ctx {
 			}),
 		}));
 		self.scope_stack.push((new_handle, new_table_handle));
+
+		if let Some(params) = params {
+			for ast::Param { ident, type_, .. } in params.iter() {
+				if let ast::Omittable::Some(ident) = ident {
+					match self.current_active_symbols.get(&ident.name) {
+						Some(handle) => match handle {
+							Either3::A(_) | Either3::B(_) => {}
+							Either3::A(_) | Either3::B(_)
+								if self.scope_stack.len() == 1 =>
+							{
+								// Parameters can't shadow functions/structs in the top-level scope.
+								// TODO: Semantic error.
+							}
+							Either3::C(_) => {
+								// Parameters can't shadow other variables at all.
+								// TODO: Semantic error because name already taken.
+							}
+						},
+						None => {}
+					}
+
+					let new_var_handle = VariableHandle(
+						new_table_handle.0,
+						self.variables.len(),
+					);
+					self.variables[new_table_handle.0].push(VariableSymbol {
+						def_node: new_handle,
+						type_: type_.clone(),
+						name: ident.name.clone(),
+						var_type: VariableType::Parameter,
+						refs: vec![ident.span],
+					});
+
+					match self.current_active_symbols.get_mut(&ident.name) {
+						Some(h) => *h = Either3::C(new_var_handle),
+						None => {
+							self.current_active_symbols.insert(
+								ident.name.clone(),
+								Either3::C(new_var_handle),
+							);
+						}
+					}
+				}
+			}
+		}
+
 		new_handle
 	}
 
@@ -3731,6 +3834,22 @@ impl Ctx {
 
 		let block_node = self.arena.remove(handle.0).unwrap();
 		match block_node.ty {
+			ast::NodeTy::Block(scope) => scope,
+			_ => unreachable!(),
+		}
+	}
+
+	/// Takes a temporary scope, that will be replaced with a different node in-place.
+	fn replace_temp_scope(&mut self, handle: NodeHandle) -> ast::Scope {
+		let h = self.scope_stack.pop();
+		assert_eq!(h.unwrap().0, handle);
+
+		let mut node = ast::Node {
+			span: Span::new(0, 0),
+			ty: ast::NodeTy::Empty,
+		};
+		std::mem::swap(&mut node, self.arena.get_mut(handle.0).unwrap());
+		match node.ty {
 			ast::NodeTy::Block(scope) => scope,
 			_ => unreachable!(),
 		}
@@ -3751,7 +3870,7 @@ impl Ctx {
 
 	/// Returns a handle to a struct symbol, and registers the use site.
 	fn resolve_struct(&mut self, ident: &ast::Ident) -> StructHandle {
-		for (i, symbol) in self.structs.iter_mut().enumerate() {
+		for (i, symbol) in self.structs.iter_mut().enumerate().rev() {
 			if &ident.name == &symbol.name {
 				symbol.refs.push(ident.span);
 				return StructHandle(i);
@@ -3761,15 +3880,26 @@ impl Ctx {
 	}
 
 	/// Returns a handle to a variable symbol, and registers the use site.
-	fn resolve_variable(&mut self, ident: &ast::Ident) -> VariableHandle {
+	fn resolve_variable(
+		&mut self,
+		ident: &ast::Ident,
+	) -> (VariableHandle, SyntaxType) {
 		let mut i = self.scope_stack.len() - 1;
 		loop {
 			let table_handle = self.scope_stack[i].1;
 			let variables = &mut self.variables[table_handle.0];
-			for (i, symbol) in variables.iter_mut().enumerate() {
+			for (i, symbol) in variables.iter_mut().enumerate().rev() {
 				if &ident.name == &symbol.name {
 					symbol.refs.push(ident.span);
-					return VariableHandle(table_handle.0, i);
+					return (
+						VariableHandle(table_handle.0, i),
+						match symbol.var_type {
+							VariableType::Default => SyntaxType::Variable,
+							VariableType::Parameter => SyntaxType::Parameter,
+							VariableType::Const => SyntaxType::Variable,
+							VariableType::ShaderInOut => SyntaxType::Variable,
+						},
+					);
 				}
 			}
 			if i > 0 {
@@ -3778,7 +3908,10 @@ impl Ctx {
 				break;
 			}
 		}
-		VariableHandle(usize::MAX, usize::MAX)
+		(
+			VariableHandle(usize::MAX, usize::MAX),
+			SyntaxType::UnresolvedIdent,
+		)
 	}
 
 	/// Returns a handle either to a function symbol or a struct symbol (for struct constructors), and registers

@@ -86,7 +86,7 @@ pub(super) fn parse_stmt<'a, P: TokenStreamProvider<'a>>(
 			invalidate_qualifiers(walker, qualifiers);
 			walker.push_colour(l_brace_span, SyntaxType::Punctuation);
 			walker.advance();
-			let scope_handle = ctx.new_temp_scope(l_brace_span);
+			let scope_handle = ctx.new_temp_scope(l_brace_span, None);
 			parse_scope(walker, ctx, brace_scope, l_brace_span);
 			let scope = ctx.take_temp_scope(scope_handle);
 			ctx.push_node(Node {
@@ -922,7 +922,11 @@ fn try_parse_definition_declaration_expr<'a, P: TokenStreamProvider<'a>>(
 				ctx,
 				[Token::Semi],
 				false,
-				walker.parsing_struct,
+				if walker.parsing_struct {
+					SyntaxType::Member
+				} else {
+					SyntaxType::Variable
+				},
 			) {
 				Ok((i, mut syntax, mut semantic, mut colours)) => {
 					walker.append_colours(&mut colours);
@@ -1055,11 +1059,10 @@ fn try_parse_definition_declaration_expr<'a, P: TokenStreamProvider<'a>>(
 							ident_span.next_single_width(),
 						),
 					));
-					ctx.push_new_variables(var_def(
-						type_,
-						ident_info,
-						ident_span.end,
-					));
+					ctx.push_new_variables(
+						var_def(type_, ident_info, ident_span.end),
+						super::VariableType::Default,
+					);
 					return;
 				}
 			};
@@ -1068,11 +1071,10 @@ fn try_parse_definition_declaration_expr<'a, P: TokenStreamProvider<'a>>(
 				let semi_span = token_span;
 				walker.push_colour(semi_span, SyntaxType::Punctuation);
 				walker.advance();
-				ctx.push_new_variables(var_def(
-					type_,
-					ident_info,
-					semi_span.end,
-				));
+				ctx.push_new_variables(
+					var_def(type_, ident_info, semi_span.end),
+					super::VariableType::Default,
+				);
 				return;
 			} else if *token == Token::Op(OpTy::Eq) {
 				// We have a variable definition with initialization.
@@ -1099,12 +1101,10 @@ fn try_parse_definition_declaration_expr<'a, P: TokenStreamProvider<'a>>(
 								eq_span.next_single_width(),
 							),
 						));
-						ctx.push_new_variables(var_def_init(
-							type_,
-							ident_info,
-							None,
-							eq_span.end,
-						));
+						ctx.push_new_variables(
+							var_def_init(type_, ident_info, None, eq_span.end),
+							super::VariableType::Default,
+						);
 						seek_next_stmt(walker);
 						return;
 					}
@@ -1120,12 +1120,15 @@ fn try_parse_definition_declaration_expr<'a, P: TokenStreamProvider<'a>>(
 								value_span.next_single_width(),
 							),
 						));
-						ctx.push_new_variables(var_def_init(
-							type_,
-							ident_info,
-							Some(value_expr),
-							value_span.end,
-						));
+						ctx.push_new_variables(
+							var_def_init(
+								type_,
+								ident_info,
+								Some(value_expr),
+								value_span.end,
+							),
+							super::VariableType::Default,
+						);
 						return;
 					}
 				};
@@ -1133,12 +1136,15 @@ fn try_parse_definition_declaration_expr<'a, P: TokenStreamProvider<'a>>(
 					let semi_span = token_span;
 					walker.push_colour(semi_span, SyntaxType::Punctuation);
 					walker.advance();
-					ctx.push_new_variables(var_def_init(
-						type_,
-						ident_info,
-						Some(value_expr),
-						semi_span.end,
-					));
+					ctx.push_new_variables(
+						var_def_init(
+							type_,
+							ident_info,
+							Some(value_expr),
+							semi_span.end,
+						),
+						super::VariableType::Default,
+					);
 					return;
 				} else {
 					let end_span = token_span;
@@ -1147,12 +1153,15 @@ fn try_parse_definition_declaration_expr<'a, P: TokenStreamProvider<'a>>(
 							end_span.next_single_width(),
 						),
 					));
-					ctx.push_new_variables(var_def_init(
-						type_,
-						ident_info,
-						Some(value_expr),
-						end_span.end,
-					));
+					ctx.push_new_variables(
+						var_def_init(
+							type_,
+							ident_info,
+							Some(value_expr),
+							end_span.end,
+						),
+						super::VariableType::Default,
+					);
 					seek_next_stmt(walker);
 					return;
 				}
@@ -1165,11 +1174,10 @@ fn try_parse_definition_declaration_expr<'a, P: TokenStreamProvider<'a>>(
 						ident_span.next_single_width(),
 					),
 				));
-				ctx.push_new_variables(var_def(
-					type_,
-					ident_info,
-					ident_span.end,
-				));
+				ctx.push_new_variables(
+					var_def(type_, ident_info, ident_span.end),
+					super::VariableType::Default,
+				);
 				seek_next_stmt(walker);
 				return;
 			}
@@ -1499,7 +1507,7 @@ fn parse_function<'a, P: TokenStreamProvider<'a>>(
 			ctx,
 			[Token::Semi, Token::LBrace],
 			true,
-			false,
+			SyntaxType::Parameter,
 		) {
 			Ok((i, mut syntax, mut semantic, mut colours)) => {
 				walker.append_colours(&mut colours);
@@ -1610,10 +1618,11 @@ fn parse_function<'a, P: TokenStreamProvider<'a>>(
 		walker.push_colour(l_brace_span, SyntaxType::Punctuation);
 		walker.advance();
 
-		let scope_handle = ctx.new_temp_scope(l_brace_span);
+		let scope_handle = ctx.new_temp_scope(l_brace_span, Some(&params));
 		parse_scope(walker, ctx, brace_scope, l_brace_span);
-		let body = ctx.take_temp_scope(scope_handle);
+		let body = ctx.replace_temp_scope(scope_handle);
 		ctx.push_new_function_def(
+			scope_handle,
 			ident.clone(),
 			params.iter().cloned().map(|p| p.into()).collect(),
 			return_type.clone(),
@@ -1634,7 +1643,7 @@ fn parse_function<'a, P: TokenStreamProvider<'a>>(
 				param_end_span.next_single_width(),
 			),
 		));
-		ctx.push_new_function_def(
+		ctx.push_new_function_decl(
 			ident.clone(),
 			params.iter().cloned().map(|p| p.into()).collect(),
 			return_type.clone(),
@@ -2112,7 +2121,7 @@ fn parse_struct<'a, P: TokenStreamProvider<'a>>(
 		walker,
 		ctx,
 		[Token::LBrace, Token::Semi],
-		|| SyntaxType::Struct,
+		SyntaxType::Struct,
 	) {
 		Ok((i, mut s)) => {
 			walker.semantic_diags.append(&mut s);
@@ -2168,6 +2177,7 @@ fn parse_struct<'a, P: TokenStreamProvider<'a>>(
 				ty: NodeTy::StructDecl { qualifiers, name },
 			},
 			Vec::new(),
+			false,
 		);
 		return;
 	} else {
@@ -2182,7 +2192,7 @@ fn parse_struct<'a, P: TokenStreamProvider<'a>>(
 	};
 
 	// Parse the contents of the body.
-	let scope_handle = ctx.new_temp_scope(l_brace_span);
+	let scope_handle = ctx.new_temp_scope(l_brace_span, None);
 	walker.parsing_struct = true;
 	parse_scope(walker, ctx, brace_scope, l_brace_span);
 	walker.parsing_struct = false;
@@ -2253,7 +2263,7 @@ fn parse_struct<'a, P: TokenStreamProvider<'a>>(
 		ctx,
 		[Token::Semi],
 		false,
-		false,
+		SyntaxType::Variable,
 	) {
 		Ok((i, mut syntax, mut semantic, mut colours)) => {
 			walker.append_colours(&mut colours);
@@ -2282,6 +2292,7 @@ fn parse_struct<'a, P: TokenStreamProvider<'a>>(
 						},
 					},
 					Vec::new(),
+					false,
 				);
 				seek_next_stmt(walker);
 				return;
@@ -2356,6 +2367,16 @@ fn parse_struct<'a, P: TokenStreamProvider<'a>>(
 		(Vec::new(), Vec::new())
 	};
 
+	let is_shader_in_out = qualifiers
+		.iter()
+		.find(|q| match q.ty {
+			QualifierTy::In
+			| QualifierTy::Out
+			| QualifierTy::Uniform
+			| QualifierTy::Attribute => true,
+			_ => false,
+		})
+		.is_some();
 	ctx.push_new_struct(
 		name.clone(),
 		fields,
@@ -2369,6 +2390,7 @@ fn parse_struct<'a, P: TokenStreamProvider<'a>>(
 			},
 		},
 		var_instances,
+		is_shader_in_out,
 	);
 }
 
@@ -2586,7 +2608,7 @@ fn parse_if<'a, P: TokenStreamProvider<'a>>(
 						// We have a multi-line body.
 						walker.push_colour(token_span, SyntaxType::Punctuation);
 						walker.advance();
-						let scope_handle = ctx.new_temp_scope(token_span);
+						let scope_handle = ctx.new_temp_scope(token_span, None);
 						parse_scope(walker, ctx, brace_scope, token_span);
 						let body = ctx.take_temp_scope(scope_handle);
 
@@ -2620,7 +2642,7 @@ fn parse_if<'a, P: TokenStreamProvider<'a>>(
 						});
 					} else {
 						// We don't have a multi-line body, so we attempt to parse a single statement.
-						let scope_handle = ctx.new_temp_scope(token_span);
+						let scope_handle = ctx.new_temp_scope(token_span, None);
 						parse_stmt(walker, ctx);
 						let body = ctx.take_temp_scope(scope_handle);
 
@@ -2707,7 +2729,7 @@ fn parse_if<'a, P: TokenStreamProvider<'a>>(
 						// We have a multi-line body.
 						walker.push_colour(token_span, SyntaxType::Punctuation);
 						walker.advance();
-						let scope_handle = ctx.new_temp_scope(token_span);
+						let scope_handle = ctx.new_temp_scope(token_span, None);
 						parse_scope(walker, ctx, brace_scope, token_span);
 						let body = ctx.take_temp_scope(scope_handle);
 						branches.push(IfBranch {
@@ -3037,13 +3059,14 @@ fn parse_switch<'a, P: TokenStreamProvider<'a>>(
 				};
 
 				// Consume the body of the case.
-				let scope_handle = ctx.new_temp_scope(colon_span.unwrap_or(
-					if let Some(ref expr) = expr {
+				let scope_handle = ctx.new_temp_scope(
+					colon_span.unwrap_or(if let Some(ref expr) = expr {
 						expr.span
 					} else {
 						case_kw_span
-					},
-				));
+					}),
+					None,
+				);
 				parse_scope(
 					walker,
 					ctx,
@@ -3114,6 +3137,7 @@ fn parse_switch<'a, P: TokenStreamProvider<'a>>(
 				// Consume the body of the case.
 				let scope_handle = ctx.new_temp_scope(
 					colon_span.unwrap_or(default_kw_span.end_zero_width()),
+					None,
 				);
 				parse_scope(
 					walker,
@@ -3438,7 +3462,7 @@ fn parse_for_loop<'a, P: TokenStreamProvider<'a>>(
 	};
 
 	// Consume the body.
-	let scope_handle = ctx.new_temp_scope(l_brace_span);
+	let scope_handle = ctx.new_temp_scope(l_brace_span, None);
 	parse_scope(walker, ctx, brace_scope, l_brace_span);
 	let body = ctx.take_temp_scope(scope_handle);
 	let init = init.map(|n| ctx.push_node(n));
@@ -3578,7 +3602,7 @@ fn parse_while_loop<'a, P: TokenStreamProvider<'a>>(
 	};
 
 	// Parse the body.
-	let scope_handle = ctx.new_temp_scope(l_brace_span);
+	let scope_handle = ctx.new_temp_scope(l_brace_span, None);
 	parse_scope(walker, ctx, brace_scope, l_brace_span);
 	let body = ctx.take_temp_scope(scope_handle);
 	ctx.push_node(Node {
@@ -3628,7 +3652,7 @@ fn parse_do_while_loop<'a, P: TokenStreamProvider<'a>>(
 	};
 
 	// Parse the body.
-	let scope_handle = ctx.new_temp_scope(l_brace_span);
+	let scope_handle = ctx.new_temp_scope(l_brace_span, None);
 	parse_scope(walker, ctx, brace_scope, l_brace_span);
 	let body = ctx.take_temp_scope(scope_handle);
 

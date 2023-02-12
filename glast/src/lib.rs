@@ -147,7 +147,7 @@ impl GlslVersion {
 	}
 }
 
-/// Holds either one or the other value.
+/// Holds one of 2 possible values.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Either<L, R> {
 	Left(L),
@@ -156,7 +156,7 @@ pub enum Either<L, R> {
 
 /// Holds one of 3 possible values.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum Either3<A, B, C> {
+pub enum Either3<A, B, C> {
 	A(A),
 	B(B),
 	C(C),

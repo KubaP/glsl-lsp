@@ -51,7 +51,9 @@ mod grammar;
 mod walker_tests;
 
 use crate::{
-	diag::{PreprocConditionalDiag, PreprocDefineDiag, Semantic, Syntax},
+	diag::{
+		PreprocConditionalDiag, PreprocDefineDiag, Semantic, StmtDiag, Syntax,
+	},
 	lexer::{
 		self,
 		preprocessor::{ConditionToken, TokenStream as PreprocStream},
@@ -3116,27 +3118,47 @@ pub struct Ast {
 
 /// Context object for managing the parser state and pushing nodes into.
 ///
-/// # New struct symbols
-/// If the new name matches the name of a primitive, no symbol is created. A new struct symbol is always created,
-/// even if the name is already taken. Any later lookup of this name for type or function purposes will point to
-/// this new struct.
+/// # Name resolution
+/// Name resolution is done separately for types and for expressions.
 ///
-/// # New function symbols
-/// If the new name matches the name of a built-in function, no symbol is created. If the specific signature
-/// (overload) doesn't exist yet, a new signature is created. If the specific signature already exists, a new
-/// declaration is added. If the specific signature exists and contains a definition, the new definition is
-/// ignored. Any later lookup of this name for function purposes will point to this (new) function.
+/// If the name of a new symbol matches the name of a primitive, the symbol isn't created.
 ///
-/// # New variable symbols
-/// If the new name matches the name of a primitive, no symbol is created. A new variable symbol is always created,
-/// even if the name is already taken by a variable or by a function/struct if in the top-level scope. Any later
-/// lookup of this name for variable purposes will point to this new variable.
+/// ## Types
+/// Whenever the parser is explicitly looking for a type specifier, any names are looked up against primitives or
+/// defined structs only. Lookup against structs always happens irrespective of whether the most recent symbol with
+/// that name is or is not a struct.
 ///
-/// # Name resolution in general expressions
-/// If we are resolving a variable, we always resolve to a variable even if the latest symbol with the name is a
-/// function or struct.
+/// ## Expressions
+/// Whenever the parser is parsing a general expression, it does the following. For variables, names are looked up
+/// against the latest variable, excluding subroutine uniforms. For functions, names are looked up according to the
+/// latest defined symbol from:
+/// - functions, including functions associated with subroutines,
+/// - structs (for struct constructors),
+/// - subroutine uniforms.
 ///
-/// If we are resolving a function, ???
+/// ## Structs
+/// A struct is not allowed to shadow any other symbol.
+///
+/// ## Functions
+/// A function is allowed to use the name of an existing function. In this case, it is added as a new
+/// signature/overload to the existing function symbol, assuming that the parameters differ. If the parameters
+/// differ, the return type can also differ.
+///
+/// ## Subroutine Types
+/// A subroutine type is not allowed to shadow any other symbol.
+///
+/// ## Subroutine Functions
+/// An associated subroutine function is allowed to use the name of an existing function. In this case, it is added
+/// as a new signature/overload to the existing function symbol assuming that the parameters differ. If the
+/// parameters differ, the return type can also differ.
+///
+/// ## Subroutine Uniforms
+/// A subroutine uniform is not allowed to shadow any other symbol.
+///
+/// ## Variables
+/// A variable is only allowed to shadow an existing variable (incl. subroutine uniforms) if the previous variable
+/// is in a higher scope. A variable is allowed to shadow any other symbol as long as it is within a function
+/// scope, so not at the top-level scope where all other symbols (structs/functions/etc.) are defined.
 #[derive(Debug)]
 pub struct Ctx {
 	/// Arena of nodes.
@@ -3156,17 +3178,31 @@ pub struct Ctx {
 	swizzle_refs: Vec<Span>,
 	/// All user-defined struct symbols.
 	structs: Vec<StructSymbol>,
-	/// All built-in and user-defined function symbols.
+	/// All built-in and user-defined function symbols. This also includes all function symbols that are associated
+	/// with a subroutine.
 	functions: Vec<FunctionSymbol>,
+	/// All subroutine symbols.
+	subroutines: Vec<SubroutineSymbol>,
+	/// All subroutine uniform symbols.
+	subroutine_uniforms: Vec<SubroutineUniformSymbol>,
 	/// All variable symbol tables, each containing all variable symbols for that given table.
 	variables: Vec<Vec<VariableSymbol>>,
 	/// Currently active symbols, i.e. the most recent symbol for a given name.
 	///
 	/// All handles are always resolved.
-	current_active_symbols:
-		HashMap<String, Either3<StructHandle, FunctionHandle, VariableHandle>>,
+	current_active_symbols: HashMap<String, CurrentlyActive>,
 	// TODO: keep a list of unresolved names, and when we add a new symbol we can check if it was previously
 	// referenced to produce a nice error message: unresolved_names: Vec<Ident>
+}
+
+/// A handle to the current active symbol under the given name.
+#[derive(Debug)]
+pub enum CurrentlyActive {
+	Struct(StructHandle),
+	Function(FunctionHandle),
+	SubroutineType(SubroutineHandle),
+	SubroutineUniform(SubroutineUniformHandle),
+	Variable(VariableHandle),
 }
 
 /// A struct symbol.
@@ -3180,6 +3216,20 @@ pub struct StructSymbol {
 	/// information and nothing else.
 	fields: Vec<StructField>,
 	/// All references to this struct. This includes the name in the struct declaration/definition itself.
+	refs: Vec<Span>,
+}
+
+/// An interface block symbol.
+#[derive(Debug)]
+pub struct InterfaceSymbol {
+	/// Handle to the `InterfaceDef` node.
+	def_node: NodeHandle,
+	/// The name.
+	name: String,
+	/// The fields. Unlike the node itself, which can contain any child nodes within, this only contains field
+	/// information and nothing else.
+	fields: Vec<StructField>,
+	/// All references to this interface block. This includes the name in the block definition itself.
 	refs: Vec<Span>,
 }
 
@@ -3216,7 +3266,8 @@ pub struct FunctionSymbol {
 pub struct FunctionSignature {
 	/// Handles to any `FnDecl` nodes.
 	decl_nodes: Vec<NodeHandle>,
-	/// Handle to a `FnDef` node. Only one definition is allowed per function signature.
+	/// Handle to a `FnDef` node, or to a `SubroutineFnDefAssociation` node (only if this symbol is sourced from a
+	/// [`SubroutineSymbol`]). Only one definition is allowed per function signature.
 	def_node: Option<NodeHandle>,
 	/// The name.
 	name: String,
@@ -3237,35 +3288,57 @@ pub struct FunctionParam {
 	refs: Vec<Span>,
 }
 
+/// A subroutine symbol.
+#[derive(Debug)]
+pub struct SubroutineSymbol {
+	/// Handle to a `SubroutineTypeDecl` node.
+	decl_node: NodeHandle,
+	/// The name
+	name: String,
+	/// The parameters.
+	params: Vec<FunctionParam>,
+	/// The return type.
+	return_type: ast::Type,
+	/// All uniforms for this subroutine.
+	uniforms: Vec<SubroutineUniformHandle>,
+	/// All associated functions for this subroutine.
+	associated_fns: Vec<FunctionHandle>,
+	/// All references to this subroutine type. This includes the name in the subroutine type declaration itself.
+	refs: Vec<Span>,
+}
+
+/// A subroutine uniform symbol. This is handled separately from a [`VariableSymbol`] because, unlike normal
+/// variables, this is treated as a callable function, i.e. a subroutine uniform `my_choice` is used/referenced by
+/// `my_choice()`.
+#[derive(Debug)]
+pub struct SubroutineUniformSymbol {
+	/// Handle to a `SubroutineUniformDef`/`SubroutineUniformDefs` node.
+	def_node: NodeHandle,
+	/// The type. Contains a handle to the [`SubroutineSymbol`].
+	type_: ast::SubroutineType,
+	/// The name of the subroutine uniform.
+	name: String,
+	/// All references to this callable uniform variable. This includes the name in the variable definition itself.
+	refs: Vec<Span>,
+}
+
 /// A variable symbol.
 #[derive(Debug)]
 pub struct VariableSymbol {
-	/// Handle to one of the following:
-	/// - `VarDef`/`VarDefs`/`VarDefInit`/`VarDefsInit`,
-	/// - `StructDef`; in this case it means that at least `node.instances[0]` exists.
-	/// - `FnDef`; in this case it means that at least `node.params[0]` exists.
+	/// Handle to one of the following nodes:
+	/// - `VarDef`/`VarDefs`/`VarDefInit`/`VarDefsInits`,
+	/// - `StructDef`; means that at least `node.instances[0]` exists.
+	/// - `FnDef`; means that at least `node.params[0]` exists.
 	def_node: NodeHandle,
 	/// The type.
 	type_: ast::Type,
 	/// The name.
 	name: String,
-	/// The type of variable symbol.
-	var_type: VariableType,
-	/// All references to this variable. This includes the name in the variable declaration/definition itself.
+	/// The syntax highlighting token for this variable. The information for this could be found just by looking
+	/// through the `type_` and `def_node` fields, but by storing it here we remove lookup costs.
+	syntax: (SyntaxType, SyntaxModifiers),
+	/// All references to this variable. This includes the name in the variable definition itself.
 	refs: Vec<Span>,
-}
-
-/// Describes the type of variable symbol. This is relevant only for syntax highlighting purposes; the full
-/// information about a variable can be found in its type.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum VariableType {
-	Default,
-	/// The variable is a parameter.
-	Parameter,
-	/// The variable is a constant.
-	Const,
-	/// The variable is a top-level shader input/output.
-	ShaderInOut,
 }
 
 impl From<ast::Param> for FunctionParam {
@@ -3283,6 +3356,7 @@ impl From<ast::Param> for FunctionParam {
 	}
 }
 
+// region: Handles
 /// A handle to a node stored within the [`Ast`]/[`Ctx`].
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct NodeHandle(generational_arena::Index);
@@ -3319,6 +3393,26 @@ pub struct FunctionHandle(
 	/// Index into `ctx.functions`.
 	usize,
 	/// Index into `function.signatures`.
+	usize,
+);
+
+/// A handle to a subroutine symbol stored within the [`Ast`]/[`Ctx`].
+///
+/// # Invariants
+/// If `self.0 == usize::MAX`, this handle is unresolved.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct SubroutineHandle(
+	/// Index into `ctx.subroutines`.
+	usize,
+);
+
+/// A handle to a subroutine uniform symbol stored within the [`Ast`]/[`Ctx`].
+///
+/// # Invariants
+/// If `self.0 == usize::MAX`, this handle is unresolved.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct SubroutineUniformHandle(
+	/// Index into `ctx.subroutine_uniforms`.
 	usize,
 );
 
@@ -3385,6 +3479,30 @@ impl FunctionHandle {
 	}
 }
 
+impl SubroutineHandle {
+	#[inline]
+	pub fn is_resolved(self) -> bool {
+		self.0 != usize::MAX
+	}
+
+	#[inline]
+	pub fn is_unresolved(self) -> bool {
+		self.0 == usize::MAX
+	}
+}
+
+impl SubroutineUniformHandle {
+	#[inline]
+	pub fn is_resolved(self) -> bool {
+		self.0 != usize::MAX
+	}
+
+	#[inline]
+	pub fn is_unresolved(self) -> bool {
+		self.0 == usize::MAX
+	}
+}
+
 impl VariableHandle {
 	#[inline]
 	pub fn is_resolved(self) -> bool {
@@ -3396,6 +3514,7 @@ impl VariableHandle {
 		self.0 == usize::MAX
 	}
 }
+// endregion: Handles
 
 impl Ctx {
 	/// Constructs a new context.
@@ -3422,6 +3541,8 @@ impl Ctx {
 			swizzle_refs: Vec::new(),
 			structs: Vec::new(),
 			functions: Vec::new(),
+			subroutines: Vec::new(),
+			subroutine_uniforms: Vec::new(),
 			variables,
 			current_active_symbols: HashMap::new(),
 		}
@@ -3460,14 +3581,18 @@ impl Ctx {
 		let new_struct_handle = StructHandle(self.structs.len());
 		match self.current_active_symbols.get_mut(&ident.name) {
 			Some(handle) => {
-				if self.scope_stack.len() == 1 { // Prevent overlapping errors.
-					 // TODO: Semantic error because name already taken.
+				// We only generate this error if the struct is in the top-level scope, to prevent overlapping
+				// error squiggles.
+				if self.scope_stack.len() == 1 {
+					// TODO: Semantic error because name already taken.
 				}
-				*handle = Either3::A(new_struct_handle);
+				*handle = CurrentlyActive::Struct(new_struct_handle);
 			}
 			None => {
-				self.current_active_symbols
-					.insert(ident.name.clone(), Either3::A(new_struct_handle));
+				self.current_active_symbols.insert(
+					ident.name.clone(),
+					CurrentlyActive::Struct(new_struct_handle),
+				);
 			}
 		}
 		let node_handle = self.push_node(node);
@@ -3479,40 +3604,51 @@ impl Ctx {
 		});
 
 		// Register any instances within the current scope.
-		let h = self.__get_current_scope().variable_table;
+		let th = self.__get_current_scope().variable_table;
 		for (ident, type_) in var_instances.into_iter() {
-			let new_var_handle = VariableHandle(h.0, self.variables.len());
+			let new_var_handle = VariableHandle(th.0, self.variables.len());
 			match self.current_active_symbols.get_mut(&ident.name) {
 				Some(handle) => {
 					match handle {
-						Either3::A(_) | Either3::B(_) => {}
-						Either3::A(_) | Either3::B(_)
+						CurrentlyActive::Struct(_)
+						| CurrentlyActive::Function(_)
+						| CurrentlyActive::SubroutineType(_)
+						| CurrentlyActive::SubroutineUniform(_)
 							if self.scope_stack.len() == 1 =>
 						{
-							// Variables can't shadow functions/structs in the top-level scope.
+							// Variables can't shadow functions/structs/subroutine uniforms in the top-level scope.
 							// TODO: Semantic error.
 						}
-						Either3::C(_) => {
-							// Variables can't shadow other variables at all.
-							// TODO: Semantic error because name already taken.
+						CurrentlyActive::Struct(_)
+						| CurrentlyActive::Function(_)
+						| CurrentlyActive::SubroutineType(_)
+						| CurrentlyActive::SubroutineUniform(_) => {}
+						CurrentlyActive::Variable(_) => {
+							if self.variables[th.0]
+								.iter()
+								.find(|s| &s.name == &ident.name)
+								.is_some()
+							{
+								// Variables can't shadow variables unless the other variable is in a different
+								// (higher) scope.
+								// TODO: Semantic error.
+							}
 						}
 					}
-					*handle = Either3::C(new_var_handle);
+					*handle = CurrentlyActive::Variable(new_var_handle);
 				}
 				None => {
-					self.current_active_symbols
-						.insert(ident.name.clone(), Either3::C(new_var_handle));
+					self.current_active_symbols.insert(
+						ident.name.clone(),
+						CurrentlyActive::Variable(new_var_handle),
+					);
 				}
 			}
-			self.variables[h.0].push(VariableSymbol {
+			self.variables[th.0].push(VariableSymbol {
 				def_node: node_handle,
 				type_,
 				name: ident.name.clone(),
-				var_type: if is_shader_in_out {
-					VariableType::ShaderInOut
-				} else {
-					VariableType::Default
-				},
+				syntax: (SyntaxType::Variable, SyntaxModifiers::empty()),
 				refs: vec![ident.span],
 			});
 		}
@@ -3540,14 +3676,26 @@ impl Ctx {
 		let fn_handle = FunctionHandle(self.functions.len(), 0);
 		match self.current_active_symbols.get_mut(&ident.name) {
 			Some(handle) => {
-				if self.scope_stack.len() == 1 { // Prevent overlapping errors.
-					 // TODO: Semantic error because name already taken.
+				// Prevent overlapping errors.
+				if self.scope_stack.len() == 1 {
+					match handle {
+						CurrentlyActive::Struct(_)
+						| CurrentlyActive::SubroutineType(_)
+						| CurrentlyActive::SubroutineUniform(_)
+						| CurrentlyActive::Variable(_) => {
+
+							// TODO: Semantic error because name already taken.
+						}
+						_ => {}
+					}
 				}
-				*handle = Either3::B(fn_handle);
+				*handle = CurrentlyActive::Function(fn_handle);
 			}
 			None => {
-				self.current_active_symbols
-					.insert(ident.name.clone(), Either3::B(fn_handle));
+				self.current_active_symbols.insert(
+					ident.name.clone(),
+					CurrentlyActive::Function(fn_handle),
+				);
 			}
 		}
 		let node_handle = self.push_node(node);
@@ -3620,14 +3768,26 @@ impl Ctx {
 		let fn_handle = FunctionHandle(self.functions.len(), 0);
 		match self.current_active_symbols.get_mut(&ident.name) {
 			Some(handle) => {
-				if self.scope_stack.len() == 1 { // Prevent overlapping errors.
-					 // TODO: Semantic error because name already taken.
+				// Prevent overlapping errors.
+				if self.scope_stack.len() == 1 {
+					match handle {
+						CurrentlyActive::Struct(_)
+						| CurrentlyActive::SubroutineType(_)
+						| CurrentlyActive::SubroutineUniform(_)
+						| CurrentlyActive::Variable(_) => {
+
+							// TODO: Semantic error because name already taken.
+						}
+						_ => {}
+					}
 				}
-				*handle = Either3::B(fn_handle);
+				*handle = CurrentlyActive::Function(fn_handle);
 			}
 			None => {
-				self.current_active_symbols
-					.insert(ident.name.clone(), Either3::B(fn_handle));
+				self.current_active_symbols.insert(
+					ident.name.clone(),
+					CurrentlyActive::Function(fn_handle),
+				);
 			}
 		}
 
@@ -3695,10 +3855,296 @@ impl Ctx {
 				});
 			}
 		}
+	}
 
+	/// Pushes a subroutine type declaration into the current scope, and registers a new subroutine type symbol.
+	fn push_new_subroutine_type(
+		&mut self,
+		return_type: ast::Type,
+		ident: ast::Ident,
+		params: Vec<ast::Param>,
+		end_pos: usize,
+	) {
+		if let Some(_) = ast::Primitive::parse(&ident) {
+			// TODO: error
+			return;
+		}
+		if self.scope_stack.len() > 1 {
+			// TODO: error
+		}
+
+		let new_subroutine_handle = SubroutineHandle(self.subroutines.len());
 		match self.current_active_symbols.get_mut(&ident.name) {
-			Some(h) => *h = Either3::B(fn_handle),
-			None => {}
+			Some(handle) => {
+				// TODO: Semantic error because name already taken.
+				*handle =
+					CurrentlyActive::SubroutineType(new_subroutine_handle);
+			}
+			None => {
+				self.current_active_symbols.insert(
+					ident.name.clone(),
+					CurrentlyActive::SubroutineType(new_subroutine_handle),
+				);
+			}
+		}
+
+		let node_handle = self.push_node(ast::Node {
+			span: Span::new(return_type.span.start, end_pos),
+			ty: ast::NodeTy::SubroutineTypeDecl {
+				return_type: return_type.clone(),
+				ident: ident.clone(),
+				params: params.clone(),
+			},
+		});
+		self.subroutines.push(SubroutineSymbol {
+			decl_node: node_handle,
+			name: ident.name.clone(),
+			params: params.into_iter().map(|p| p.into()).collect(),
+			return_type,
+			uniforms: Vec::new(),
+			associated_fns: Vec::new(),
+			refs: vec![ident.span],
+		});
+	}
+
+	/// Pushes a subroutine associated function definition into the current scope, and registers a new function
+	/// symbol.
+	fn push_new_associated_subroutine_fn_def(
+		&mut self,
+		scope_handle: NodeHandle,
+		association_list: Vec<(SubroutineHandle, ast::Ident)>,
+		ident: ast::Ident,
+		params: Vec<FunctionParam>,
+		return_type: ast::Type,
+		node: ast::Node,
+	) {
+		if self.scope_stack.len() > 1 {
+			// TODO: Syntax error for node not in the top-level scope.
+		}
+
+		let fn_handle = FunctionHandle(self.functions.len(), 0);
+		match self.current_active_symbols.get_mut(&ident.name) {
+			Some(handle) => {
+				// Prevent overlapping errors.
+				if self.scope_stack.len() == 1 {
+					match handle {
+						CurrentlyActive::Struct(_)
+						| CurrentlyActive::SubroutineType(_)
+						| CurrentlyActive::SubroutineUniform(_)
+						| CurrentlyActive::Variable(_) => {
+
+							// TODO: Semantic error because name already taken.
+						}
+						_ => {}
+					}
+				}
+				*handle = CurrentlyActive::Function(fn_handle);
+			}
+			None => {
+				self.current_active_symbols.insert(
+					ident.name.clone(),
+					CurrentlyActive::Function(fn_handle),
+				);
+			}
+		}
+
+		{
+			// We previously had a temporary scope node, which we now swap out with the new function node.
+			let scope = self.__get_current_scope();
+			scope.contents.push(scope_handle);
+			scope.span.end = node.span.end;
+			*self.arena.get_mut(scope_handle.0).unwrap() = node;
+		}
+		let node_handle = scope_handle;
+
+		let fn_handle = match self
+			.functions
+			.iter_mut()
+			.enumerate()
+			.rev()
+			.find(|(_, symbol)| &ident.name == &symbol.name)
+		{
+			Some((i, fn_)) => {
+				// A function with this name already exists. If the function is built-in, defining a new signature
+				// is not allowed. If the signature already exists, defining a second (or third...) signature is
+				// not allowed.
+				if fn_.built_in {
+					// TODO: Semantic error.
+					return;
+				}
+				let fn_handle = match fn_
+					.signatures
+					.iter_mut()
+					.enumerate()
+					.find(|(_, sig)| {
+						&sig.params == &params
+							&& &sig.return_type == &return_type
+					}) {
+					Some((sig_i, signature)) => {
+						// We already have a matching signature.
+
+						if signature.def_node.is_some() {
+							// TODO: Semantic error.
+							return;
+						}
+						signature.def_node = Some(node_handle);
+						FunctionHandle(i, sig_i)
+					}
+					None => {
+						// We don't have this specific signature yet.
+						let fn_handle = FunctionHandle(i, fn_.signatures.len());
+						fn_.signatures.push(FunctionSignature {
+							decl_nodes: Vec::new(),
+							def_node: Some(node_handle),
+							name: ident.name.clone(),
+							params,
+							return_type,
+						});
+						fn_handle
+					}
+				};
+				fn_.refs.push(ident.span);
+				fn_handle
+			}
+			None => {
+				// We haven't come across a function with this name yet.
+				let fn_handle = FunctionHandle(self.functions.len(), 0);
+				self.functions.push(FunctionSymbol {
+					built_in: false,
+					name: ident.name.clone(),
+					signatures: vec![FunctionSignature {
+						decl_nodes: Vec::new(),
+						def_node: Some(node_handle),
+						name: ident.name.clone(),
+						params,
+						return_type,
+					}],
+					refs: vec![ident.span],
+				});
+				fn_handle
+			}
+		};
+
+		for (handle, ident) in association_list {
+			let subroutine = &mut self.subroutines[handle.0];
+			subroutine.refs.push(ident.span);
+			subroutine.associated_fns.push(fn_handle);
+		}
+	}
+
+	/// Pushes one or more subroutine uniform definitions into the current scope, and registers new subroutine
+	/// uniform symbols.
+	fn push_new_subroutine_uniforms<'a, P: TokenStreamProvider<'a>>(
+		&mut self,
+		walker: &mut Walker<'a, P>,
+		type_: ast::SubroutineType,
+		// Invariant: has a length of at least 1.
+		var_specifiers: Vec<NewVarSpecifier>,
+		end_pos: usize,
+	) {
+		let start_pos = type_.span.start;
+
+		if self.scope_stack.len() > 1 {
+			walker.push_syntax_diag(Syntax::Stmt(
+				StmtDiag::FoundSubUniformInNestedScope(Span::new(
+					start_pos, end_pos,
+				)),
+			));
+		}
+
+		// Create subroutine uniform definition node.
+		let node_handle = self.push_node(match var_specifiers.len() {
+			0 => unreachable!("Checked by caller"),
+			1 => {
+				let var = var_specifiers[0].clone();
+				if let Some(span) = var.contains_init() {
+					walker.push_syntax_diag(Syntax::Stmt(
+						StmtDiag::SubUniformFoundInit(span),
+					));
+				}
+				let type_ = grammar::combine_subroutine_type_with_idents(
+					type_.clone(),
+					var.arr,
+				);
+				ast::Node {
+					span: Span::new(start_pos, end_pos),
+					ty: ast::NodeTy::SubroutineUniformDef {
+						type_,
+						ident: var.ident,
+					},
+				}
+			}
+			_ => {
+				let mut v = Vec::with_capacity(var_specifiers.len());
+				for var in var_specifiers.iter() {
+					if let Some(span) = var.contains_init() {
+						walker.push_syntax_diag(Syntax::Stmt(
+							StmtDiag::SubUniformFoundInit(span),
+						));
+					}
+					v.push((
+						grammar::combine_subroutine_type_with_idents(
+							type_.clone(),
+							var.arr.clone(),
+						),
+						var.ident.clone(),
+					));
+				}
+				ast::Node {
+					span: Span::new(start_pos, end_pos),
+					ty: ast::NodeTy::SubroutineUniformDefs(
+						var_specifiers
+							.iter()
+							.cloned()
+							.map(|var| {
+								(
+									grammar::combine_subroutine_type_with_idents(type_.clone(), var.arr),
+									var.ident
+								)
+							})
+							.collect(),
+					),
+				}
+			}
+		});
+
+		// Register individual subroutine uniform symbols.
+		let subroutine = &mut self.subroutines[type_.handle().0];
+		for var in var_specifiers {
+			if let Some(_) = ast::Primitive::parse(&var.ident) {
+				// TODO: error
+				continue;
+			}
+
+			let new_uniform_handle =
+				SubroutineUniformHandle(self.subroutine_uniforms.len());
+
+			match self.current_active_symbols.get_mut(&var.ident.name) {
+				Some(handle) => {
+					// TODO:
+					*handle =
+						CurrentlyActive::SubroutineUniform(new_uniform_handle);
+				}
+				None => {
+					self.current_active_symbols.insert(
+						var.ident.name.clone(),
+						CurrentlyActive::SubroutineUniform(new_uniform_handle),
+					);
+				}
+			}
+
+			self.subroutine_uniforms.push(SubroutineUniformSymbol {
+				def_node: node_handle,
+				type_: grammar::combine_subroutine_type_with_idents(
+					type_.clone(),
+					var.arr,
+				),
+				name: var.ident.name,
+				refs: vec![var.ident.span],
+			});
+
+			subroutine.uniforms.push(new_uniform_handle);
+			subroutine.refs.push(type_.span);
 		}
 	}
 
@@ -3707,7 +4153,7 @@ impl Ctx {
 	fn push_new_variables(
 		&mut self,
 		(pairs, node): (Vec<(ast::Type, ast::Ident)>, ast::Node),
-		var_type: VariableType,
+		syntax: (SyntaxType, SyntaxModifiers),
 	) {
 		let node_end = node.span.end;
 		let new_handle = NodeHandle(self.arena.insert(node));
@@ -3718,41 +4164,55 @@ impl Ctx {
 		scope.span.end = node_end;
 
 		// Register symbols.
-		let h = scope.variable_table;
+		let th = scope.variable_table;
 		for (type_, ident) in pairs {
 			if let Some(_) = ast::Primitive::parse(&ident) {
 				// TODO: Syntax error; variable cannot have name of primitive.
 				continue;
 			}
 
-			let new_var_handle = VariableHandle(h.0, self.variables.len());
+			let new_var_handle = VariableHandle(th.0, self.variables.len());
 			match self.current_active_symbols.get_mut(&ident.name) {
 				Some(handle) => {
 					match handle {
-					Either3::A(_) | Either3::B(_) => {}
-					Either3::A(_) | Either3::B(_)
-					    // Prevent overlapping errors.
-						if self.scope_stack.len() == 1 =>
-					{
-						// Variables can't shadow functions/structs in the top-level scope.
-						// TODO: Semantic error.
+						CurrentlyActive::Struct(_)
+						| CurrentlyActive::Function(_)
+						| CurrentlyActive::SubroutineType(_)
+						| CurrentlyActive::SubroutineUniform(_)
+							if self.scope_stack.len() == 1 =>
+						{
+							// Variables can't shadow functions/structs/subroutine uniforms in the top-level scope.
+							// TODO: Semantic error.
+						}
+						CurrentlyActive::Struct(_)
+						| CurrentlyActive::Function(_)
+						| CurrentlyActive::SubroutineType(_)
+						| CurrentlyActive::SubroutineUniform(_) => {}
+						CurrentlyActive::Variable(_) => {
+							if self.variables[th.0]
+								.iter()
+								.find(|s| &s.name == &ident.name)
+								.is_some()
+							{
+								// Variables can't shadow variables unless the other variable is in a different
+								// (higher) scope.
+								// TODO: Semantic error.
+							}
+						}
 					}
-					Either3::C(_) => {
-						// Variables can't shadow other variables at all.
-						// TODO: Semantic error because name already taken.
-					}
-				}
-					*handle = Either3::C(new_var_handle);
+					*handle = CurrentlyActive::Variable(new_var_handle);
 				}
 				None => {
-					self.current_active_symbols
-						.insert(ident.name.clone(), Either3::C(new_var_handle));
+					self.current_active_symbols.insert(
+						ident.name.clone(),
+						CurrentlyActive::Variable(new_var_handle),
+					);
 				}
 			}
-			self.variables[h.0].push(VariableSymbol {
+			self.variables[th.0].push(VariableSymbol {
 				def_node: new_handle,
 				type_,
-				var_type,
+				syntax,
 				name: ident.name.clone(),
 				refs: vec![ident.span],
 			});
@@ -3782,23 +4242,6 @@ impl Ctx {
 		if let Some(params) = params {
 			for ast::Param { ident, type_, .. } in params.iter() {
 				if let ast::Omittable::Some(ident) = ident {
-					match self.current_active_symbols.get(&ident.name) {
-						Some(handle) => match handle {
-							Either3::A(_) | Either3::B(_) => {}
-							Either3::A(_) | Either3::B(_)
-								if self.scope_stack.len() == 1 =>
-							{
-								// Parameters can't shadow functions/structs in the top-level scope.
-								// TODO: Semantic error.
-							}
-							Either3::C(_) => {
-								// Parameters can't shadow other variables at all.
-								// TODO: Semantic error because name already taken.
-							}
-						},
-						None => {}
-					}
-
 					let new_var_handle = VariableHandle(
 						new_table_handle.0,
 						self.variables.len(),
@@ -3807,16 +4250,21 @@ impl Ctx {
 						def_node: new_handle,
 						type_: type_.clone(),
 						name: ident.name.clone(),
-						var_type: VariableType::Parameter,
+						syntax: (
+							SyntaxType::Parameter,
+							SyntaxModifiers::empty(),
+						),
 						refs: vec![ident.span],
 					});
 
 					match self.current_active_symbols.get_mut(&ident.name) {
-						Some(h) => *h = Either3::C(new_var_handle),
+						Some(h) => {
+							*h = CurrentlyActive::Variable(new_var_handle)
+						}
 						None => {
 							self.current_active_symbols.insert(
 								ident.name.clone(),
-								Either3::C(new_var_handle),
+								CurrentlyActive::Variable(new_var_handle),
 							);
 						}
 					}
@@ -3879,6 +4327,19 @@ impl Ctx {
 		StructHandle(usize::MAX)
 	}
 
+	fn resolve_subroutine_type(
+		&mut self,
+		ident: &ast::Ident,
+	) -> SubroutineHandle {
+		for (i, symbol) in self.subroutines.iter_mut().enumerate().rev() {
+			if &ident.name == &symbol.name {
+				//symbol.refs.push(ident.name);
+				return SubroutineHandle(i);
+			}
+		}
+		SubroutineHandle(usize::MAX)
+	}
+
 	/// Returns a handle to a variable symbol, and registers the use site.
 	fn resolve_variable(
 		&mut self,
@@ -3893,12 +4354,7 @@ impl Ctx {
 					symbol.refs.push(ident.span);
 					return (
 						VariableHandle(table_handle.0, i),
-						match symbol.var_type {
-							VariableType::Default => SyntaxType::Variable,
-							VariableType::Parameter => SyntaxType::Parameter,
-							VariableType::Const => SyntaxType::Variable,
-							VariableType::ShaderInOut => SyntaxType::Variable,
-						},
+						symbol.syntax.0,
 					);
 				}
 			}
@@ -3908,6 +4364,15 @@ impl Ctx {
 				break;
 			}
 		}
+
+		// We may have a reference to a subroutine uniform. This isn't valid, since a subroutine uniform is treated
+		// like a function call but we can generate a better diagnostic.
+		for symbol in self.subroutine_uniforms.iter().rev() {
+			if &ident.name == &symbol.name {
+				// TODO: Semantic error:
+			}
+		}
+
 		(
 			VariableHandle(usize::MAX, usize::MAX),
 			SyntaxType::UnresolvedIdent,
@@ -3919,7 +4384,7 @@ impl Ctx {
 	fn resolve_function(
 		&mut self,
 		ident: &ast::Ident,
-	) -> Either<FunctionHandle, StructHandle> {
+	) -> Either3<FunctionHandle, StructHandle, SubroutineHandle> {
 		// A function can either be an actual function (built-in or user-defined), or a struct constructor, so we
 		// to check the if either match. If both match, we want to select the latest one to be declared/defined.
 		let fn_ = self
@@ -3934,38 +4399,61 @@ impl Ctx {
 			.enumerate()
 			.rev()
 			.find(|(_, symbol)| &ident.name == &symbol.name);
+		let subroutine_ = self
+			.subroutine_uniforms
+			.iter_mut()
+			.enumerate()
+			.rev()
+			.find(|(_, symbol)| &ident.name == &symbol.name);
 
-		match (fn_, struct_) {
-			(Some((fn_i, fn_)), Some((struct_i, struct_))) => {
-				// Find the last declared/defined signature of this function.
-				let fn_span = {
-					let sig = fn_.signatures.last().unwrap();
-					if let Some(def_node) = sig.def_node {
-						self.arena[def_node.0].span
-					} else {
-						self.arena[sig.decl_nodes.last().unwrap().0].span
-					}
-				};
-
-				let struct_span = self.arena[struct_.def_node.0].span;
-
-				if struct_span.is_after(&fn_span) {
-					struct_.refs.push(ident.span);
-					Either::Right(StructHandle(struct_i))
+		// We want to get the most recently-defined symbol.
+		let mut i = -1;
+		let mut fn_span = Span::new(0, 0);
+		let mut struct_span = Span::new(0, 0);
+		if let Some((_, fn_)) = &fn_ {
+			i = 0;
+			fn_span = {
+				let sig = fn_.signatures.last().unwrap();
+				if let Some(def_node) = sig.def_node {
+					self.arena[def_node.0].span
 				} else {
-					fn_.refs.push(ident.span);
-					Either::Left(FunctionHandle(fn_i, usize::MAX))
+					self.arena[sig.decl_nodes.last().unwrap().0].span
 				}
+			};
+		}
+		if let Some((_, struct_)) = &struct_ {
+			struct_span = self.arena[struct_.def_node.0].span;
+			if struct_span.is_after(&fn_span) {
+				i = 1;
 			}
-			(Some((i, fn_)), _) => {
+		}
+		if let Some((_, subroutine_)) = &subroutine_ {
+			let subroutine_span = self.arena[subroutine_.def_node.0].span;
+			if subroutine_span.is_after(&fn_span)
+				&& subroutine_span.is_after(&struct_span)
+			{
+				i = 2;
+			}
+		}
+
+		match i {
+			-1 => Either3::A(FunctionHandle(usize::MAX, usize::MAX)),
+			0 => {
+				let (i, fn_) = fn_.unwrap();
 				fn_.refs.push(ident.span);
-				Either::Left(FunctionHandle(i, usize::MAX))
+				Either3::A(FunctionHandle(i, usize::MAX))
 			}
-			(_, Some((i, struct_))) => {
+			1 => {
+				let (i, struct_) = struct_.unwrap();
 				struct_.refs.push(ident.span);
-				Either::Right(StructHandle(i))
+				Either3::B(StructHandle(i))
 			}
-			_ => Either::Left(FunctionHandle(usize::MAX, usize::MAX)),
+			2 => {
+				let (i, subroutine_) = subroutine_.unwrap();
+				subroutine_.refs.push(ident.span);
+				Either3::C(SubroutineHandle(i))
+			}
+			_ => unreachable!(),
 		}
 	}
 
@@ -3991,6 +4479,35 @@ impl Ctx {
 			NodeTy::Block(scope) => scope,
 			NodeTy::TranslationUnit(scope) => scope,
 			_ => unreachable!(),
+		}
+	}
+}
+
+/// Data for a parsed new-variable specifier.
+#[derive(Debug, Clone)]
+struct NewVarSpecifier {
+	/// The identifier.
+	ident: ast::Ident,
+	/// Any array-size specifiers.
+	arr: Option<Vec<ast::ArrSize>>,
+	/// Span of the optional equals sign.
+	eq_span: Option<Span>,
+	/// Optional initialization expression.
+	init_expr: Option<ast::Expr>,
+	/// Span of all relevant bits for this variable, e.g.
+	/// ```text
+	///  int  |   foobar =   |   baz[3] = {5}
+	/// ^   ^ |  ^        ^  |  ^            ^
+	/// ```
+	span: Span,
+}
+
+impl NewVarSpecifier {
+	fn contains_init(&self) -> Option<Span> {
+		let Some(eq_span) = self.eq_span else { return None; };
+		match &self.init_expr {
+			Some(expr) => Some(Span::new(eq_span.start, expr.span.end)),
+			None => Some(eq_span),
 		}
 	}
 }

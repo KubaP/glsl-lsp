@@ -38,14 +38,16 @@ pub enum SyntaxType {
 	Primitive,
 	/// A struct.
 	Struct,
+	/// A subroutine type name.
+	SubroutineType,
 	/// A function.
 	Function,
 	/// A subroutine.
 	Subroutine,
 	/// A variable.
 	Variable,
-	/// A struct member.
-	Member,
+	/// A struct field.
+	Field,
 	/// A function or function-like macro parameter.
 	Parameter,
 	/// A valid layout qualifier name.
@@ -96,15 +98,28 @@ bitflags! {
 	/// - `MACRO_SIGNATURE` = `1`,
 	/// - `MACRO_BODY` = `2`,
 	/// - `UNDEFINE` = `4`,
-	/// - `CONDITIONAL` = `8`.
+	/// - `CONDITIONAL` = `8`,
+	/// - `DECLARATION` = `16`,
+	/// - `DEFINITION` = `32`,
+	/// - `CONST` = `64`,
+	/// - `SHADER_IN_OUT` = `128`,
+	/// - `SHADER_UNIFORM` = `256`.
 	pub struct SyntaxModifiers: u32 {
 		/// Tokens within the macro signature, e.g. the `BAR(A, B)` within `#define BAR(A, B) foo`.
 		const MACRO_SIGNATURE = 0b00000001;
 		/// Tokens within the macro body, e.g. the `foo + bar` within `#define FOO foo + bar`.
 		const MACRO_BODY = 0b00000010;
-		/// Tokens within the `#undef` directive; not applied to the `#undef` part.
+		/// Tokens within the `#undef` directive, apart from the `#undef` part.
 		const UNDEFINE = 0b00000100;
-		/// Tokens within a conditional directive; not applied to the `#if`/`#elif`/etc. part.
+		/// Tokens within a conditional directive, apart from the `#if`/`#elif`/etc. part.
 		const CONDITIONAL = 0b00001000;
+		const DECLARATION = 0b00010000;
+		const DEFINITION = 0b00100000;
+		/// Variable names that are defined as constants.
+		const CONST = 0b01000000;
+		/// Variable names that are shader inputs/outputs.
+		const SHADER_IN_OUT = 0b10000000;
+		/// Variable names that are shader uniforms.
+		const SHADER_UNIFORM = 0b100000000;
 	}
 }

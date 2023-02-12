@@ -29,7 +29,7 @@ use super::{NodeHandle, StructHandle, VariableTableHandle};
 use crate::{
 	diag::Syntax,
 	lexer::{NumType, Token},
-	Either, Span, Spanned,
+	Either, Either3, Span, Spanned,
 };
 
 /// This type represents a value which can be omitted in accordance to the GLSL specification.
@@ -67,24 +67,28 @@ pub struct Node {
 pub enum NodeTy {
 	/// A translation unit, i.e. the entire abstract syntax tree.
 	TranslationUnit(Scope),
-	/// An empty statement, e.g. `;`.
+	/// An empty statement, i.e. just `;`.
 	Empty,
 	/// An expression statement, e.g. `5 + 1;` or `i++;`.
 	Expr(Expr),
 	/// A block scope, e.g. `{ int i; }`.
 	Block(Scope),
+	/// A standalone type specifier, e.g. `float;`.
+	TypeSpecifier(Type),
+	/// One or more standalone qualifiers, e.g. `layout(points) in;`.
+	Qualifiers(Vec<Qualifier>),
 	/// A variable definition, e.g. `int i;`.
 	VarDef { type_: Type, ident: Ident },
-	/// A variable definition containing multiple variables, e.g. `int i, j, k;`.
-	VarDefs(Vec<(Type, Ident)>),
-	/// A variable definition with initialization, e.g. `int i = 0;`.
+	/// A variable definition with initialization, e.g. `int i = 5;`
 	VarDefInit {
 		type_: Type,
 		ident: Ident,
-		init_expr: Option<Expr>,
+		value: Expr,
 	},
-	/// A variable definition with initialization, containing multiple variables, e.g. `int i, j, k = 0;`.
-	VarDefInits(Vec<(Type, Ident)>, Option<Expr>),
+	/// A variable definition containing multiple variables, e.g. `int i, j, k;`.
+	VarDefs(Vec<(Type, Ident)>),
+	/// A variable definition with initialization, containing multiple variables, e.g. `int i = 0, j, k = 3;`.
+	VarDefsInits(Vec<(Type, Ident, Option<Expr>)>),
 	/// An interface block definition, e.g. `out V { vec2 pos; } v_out;`.
 	InterfaceDef {
 		qualifiers: Vec<Qualifier>,
@@ -92,8 +96,6 @@ pub enum NodeTy {
 		body: Scope,
 		instance: Omittable<Expr>,
 	},
-	/// A list of qualifiers, e.g. `layout(points) in;`.
-	Qualifiers(Vec<Qualifier>),
 	/// A function declaration, e.g. `int foo(int i);`.
 	FnDecl {
 		return_type: Type,
@@ -114,15 +116,17 @@ pub enum NodeTy {
 		params: Vec<Param>,
 	},
 	/// A subroutine associated function definition, e.g. `subroutine(foo) int foo_1(int i) {/*...*/}`.
-	SubroutineFnDef {
+	SubroutineFnDefAssociation {
 		associations: Vec<Ident>,
 		return_type: Type,
 		ident: Ident,
 		params: Vec<Param>,
-		body: Option<Scope>,
+		body: Scope,
 	},
 	/// A subroutine uniform definition, e.g. `subroutine uniform foo my_foo;`.
-	SubroutineUniformDef { type_: Type, ident: Ident },
+	SubroutineUniformDef { type_: SubroutineType, ident: Ident },
+	/// A subroutine uniform definition containing multiple variables, e.g. `subroutine uniform foo m1, m2;`.
+	SubroutineUniformDefs(Vec<(SubroutineType, Ident)>),
 	/// A struct declaration, e.g. `struct FooBar;`. This is an illegal GLSL statement, however it is modelled here
 	/// for completeness sake.
 	StructDecl {
@@ -233,6 +237,31 @@ pub struct SwitchCase {
 	pub expr: Either<Option<Expr>, ()>,
 	pub body: Option<Scope>,
 	pub span: Span,
+}
+
+/// A subroutine type.
+#[derive(Debug, Clone, PartialEq)]
+pub struct SubroutineType {
+	pub ty: SubroutineTypeTy,
+	pub qualifiers: Vec<Qualifier>,
+	pub span: Span,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub enum SubroutineTypeTy {
+	/// A type which has only a single value.
+	Single(super::SubroutineHandle),
+	/// An array type which contains zero or more values.
+	Array(super::SubroutineHandle, ArrSize),
+	/// A 2D array type which contains zero or more values.
+	///
+	/// - `1` - Size of the outer array.
+	/// - `2` - Size of each inner array.
+	Array2D(super::SubroutineHandle, ArrSize, ArrSize),
+	/// An n-dimensional array type which contains zero or more values.
+	///
+	/// - `1` - Vec containing the sizes of arrays, starting with the outer-most array.
+	ArrayND(super::SubroutineHandle, Vec<ArrSize>),
 }
 
 /// A type.
@@ -542,6 +571,17 @@ impl<T> From<Option<T>> for Omittable<T> {
 	}
 }
 
+impl SubroutineType {
+	pub(crate) fn handle(&self) -> super::SubroutineHandle {
+		match self.ty {
+			SubroutineTypeTy::Single(h)
+			| SubroutineTypeTy::Array(h, _)
+			| SubroutineTypeTy::Array2D(h, _, _)
+			| SubroutineTypeTy::ArrayND(h, _) => h,
+		}
+	}
+}
+
 impl Type {
 	pub(crate) fn variant(&self) -> Either<Primitive, StructHandle> {
 		match self.ty {
@@ -706,7 +746,10 @@ pub enum ExprTy {
 	/// A literal constant.
 	Lit(Lit),
 	/// A variable.
-	Local(super::VariableHandle),
+	Local{
+		name: Ident,
+		handle: super::VariableHandle,
+	},
 	/// A prefix operation.
 	Prefix { op: PreOp, expr: Box<Expr> },
 	/// A postfix operation.
@@ -728,7 +771,10 @@ pub enum ExprTy {
 	/// Object access.
 	ObjAccess {
 		obj: super::VariableHandle,
-		leafs: Vec<Either<super::StructFieldHandle, super::FunctionHandle>>,
+		/// - `A` - struct field,
+		/// - `B` - `length()` method (only on supported types),
+		/// - `C` - swizzle (only on vectors).
+		leafs: Vec<Either3<super::StructFieldHandle, (), Swizzle>>,
 	},
 	/// An index operation.
 	Index {
@@ -737,16 +783,24 @@ pub enum ExprTy {
 	},
 	/// A function call.
 	FnCall {
+		name: Ident,
 		handle: super::FunctionHandle,
+		args: Vec<Expr>,
+	},
+	/// A subroutine call.
+	SubroutineCall {
+		name: Ident,
+		handle: super::SubroutineHandle,
 		args: Vec<Expr>,
 	},
 	/// A struct constructor.
 	StructConstructor {
+		name: Ident,
 		handle: super::StructHandle,
 		args: Vec<Expr>,
 	},
 	/// An initializer list.
-	InitList { args: Vec<Expr> },
+	Initializer { args: Vec<Expr> },
 	/// An array constructor.
 	ArrConstructor { type_: Box<Type>, args: Vec<Expr> },
 	/// A general list expression, e.g. `a, b`.
@@ -820,6 +874,32 @@ pub struct PostOp {
 pub enum PostOpTy {
 	Add,
 	Sub,
+}
+
+/// A vector swizzle.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct Swizzle {
+	/// The buffer of swizzle components. Each value represents one axis component.
+	///
+	/// Only the values within the `[0..len]` range are relevant, anything outside can be disgarded. The reason
+	/// this is done this way is in order to have a fixed length array and avoid allocating a vec on the heap.
+	pub buf: [Axis; 4],
+	/// Number of swizzle components. This is the length of `buf` that should be read, e.g. `buf[0..len]`.
+	///
+	/// # Invariants
+	/// Has a value in the range `[1, 4]`.
+	pub len: u8,
+	pub span: Span,
+}
+
+/// Describes an axis.
+#[derive(Debug, Clone, Copy, PartialEq)]
+#[repr(u8)]
+pub enum Axis {
+	X = 0,
+	Y = 1,
+	Z = 2,
+	W = 3,
 }
 
 /// A literal constant.

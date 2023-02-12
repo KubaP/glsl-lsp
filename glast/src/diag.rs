@@ -31,6 +31,32 @@ pub enum Semantic {
 	///
 	/// - `0` - The span of the line containing the directive.
 	EmptyDirective(Span),
+	/* NAME RESOLUTION */
+	/// E003 - Found an identifier in an expression that could not be resolved.
+	UnresolvedVariable(Span),
+	/// E003 - Found a function call in an expression that could not be resolved to either a function call, a
+	/// struct, or a subroutine uniform variable.
+	UnresolvedFunction(Span),
+	/// E003 - Found a typename that could not be resolved to either a primitive or a struct.
+	UnresolvedType(Span),
+	/// E003 - Found a subroutine typename that could not be resolved.
+	UnresolvedSubroutineType(Span),
+	/// E003 - Found a struct field that could not be resolved.
+	UnresolvedStructField(Span),
+	/// E004 - Found a method call. Methods, apart from a handful of built-in exemptions, are not a language
+	/// feature.
+	FoundMethod(Span),
+	/// E005 - Found a `length()` method call on a type that does not support it.
+	LengthMethodNotOnValidType(Span),
+	/// E006 - Found invalid field access on a primitive type. The only valid field access is vector swizzling on
+	/// vector primitives (and generally on structs).
+	InvalidFieldAccessOnPrimitive(Span, String),
+	/// E007 - Found a swizzle which mixes the notation sets.
+	SwizzleMixesNotations(Span),
+	/* SUBROUTINES */
+	/// E002 - Found an identifier in an expression that matches the name of a subroutine uniform. Subroutine
+	/// uniforms, whilst defined like variables, are treated like functions and need to be called.
+	SubUniformTreatedAsVariable(Span),
 	/* MACROS */
 	/// WARNING - Found a macro call site, but the macro contains no replacement tokens.
 	///
@@ -55,11 +81,24 @@ pub enum Semantic {
 	UndefMacroNameUnresolved(Span),
 }
 
+// FIXME: Remove `get_` from names; not idiomatic.
 impl Semantic {
 	/// Returns the severity of a diagnostic.
 	pub fn get_severity(&self) -> Severity {
 		match self {
 			Self::EmptyDirective(_) => Severity::Warning,
+			/* NAME RESOLUTION */
+			Self::UnresolvedVariable(_) => Severity::Error,
+			Self::UnresolvedFunction(_) => Severity::Error,
+			Self::UnresolvedType(_) => Severity::Error,
+			Self::UnresolvedSubroutineType(_) => Severity::Error,
+			Self::UnresolvedStructField(_) => Severity::Error,
+			Self::FoundMethod(_) => Severity::Error,
+			Self::LengthMethodNotOnValidType(_) => Severity::Error,
+			Self::InvalidFieldAccessOnPrimitive(_, _) => Severity::Error,
+			Self::SwizzleMixesNotations(_) => Severity::Error,
+			/* SUBROUTINES */
+			Self::SubUniformTreatedAsVariable(_) => Severity::Error,
 			/* MACROS */
 			Self::EmptyMacroCallSite(_) => Severity::Warning,
 			Self::FunctionMacroMismatchedArgCount(_, _) => Severity::Error,
@@ -72,10 +111,40 @@ impl Semantic {
 	pub fn get_error_code(&self) -> Option<&'static str> {
 		match self {
 			Self::FunctionMacroMismatchedArgCount(_, _) => Some("E001"),
+			Self::SubUniformTreatedAsVariable(_) => Some("E002"),
+			Self::UnresolvedVariable(_)
+			| Self::UnresolvedFunction(_)
+			| Self::UnresolvedType(_)
+			| Self::UnresolvedSubroutineType(_)
+			| Self::UnresolvedStructField(_) => Some("E003"),
+			Self::FoundMethod(_) => Some("E004"),
+			Self::LengthMethodNotOnValidType(_) => Some("E005"),
+			Self::InvalidFieldAccessOnPrimitive(_, _) => Some("E006"),
+			Self::SwizzleMixesNotations(_) => Some("E007"),
 			_ => None,
 		}
 	}
 }
+
+// MAYBE: Revamp syntax diagnostics to look like:
+//
+// enum Syntax {
+//     MissingPunctuation {
+//         type: char,
+//         context: ContextEnum
+//     }
+//     ..
+// }
+//
+// enum ContextEnum {
+//     NewVarSpecifier,
+//     FnDeclOrDef,
+//     IfStmt
+// }
+//
+// This would also make it much easier to deal with code actions since we would only need to implement an action
+// once. Only for the error messages themselves would we need to check the context to display a more descriptive
+// message.
 
 /// All syntax diagnostics.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -340,6 +409,9 @@ pub enum ExprDiag {
 	///
 	/// - `0` - The position where the closing parenthesis is expected.
 	ExpectedRParenAfterDefineOpIdent(Span),
+
+	/*  */
+	ExpectedIdentOnLhsOfDot(Span),
 }
 
 /// Syntax diagnostics for statement.
@@ -360,11 +432,18 @@ pub enum StmtDiag {
 	///
 	/// - `0` - The span of the qualifier(s).
 	FoundQualifiersBeforeStmt(Span),
-	/// ERROR - Did not find an identifier after a type, (this could be for a variable, function, etc.). E.g.
-	/// `mat4x4[4]`.
+	/// ERROR - Did not find one or more identifiers after a type specifier, (this could be for a variable,
+	/// function, etc.). E.g. `mat4[2] ;`.
 	///
-	/// - `0` - The position where the identifier is expected.
-	TypeExpectedIdentAfterType(Span),
+	/// - `0` - The position where the identifier(s) are expected.
+	TypeExpectedIdentsAfterType(Span),
+
+	/* SCOPING */
+	/// ERROR - Found a subroutine uniform definition statement within a nested scope; only valid in the top-level
+	/// scope.
+	///
+	/// - `0` - The span of the statement.
+	FoundSubUniformInNestedScope(Span),
 
 	/* QUALIFIERS */
 	/// ERROR - Did not find an opening parenthesis after the `layout` keyword.
@@ -465,11 +544,81 @@ pub enum StmtDiag {
 	FnExpectedSemiOrLBraceAfterParams(Span),
 
 	/* SUBROUTINES */
+	/// ERROR - Did not find a subroutine type declaration, an associated-function definition, or a subroutine
+	/// uniform definition after a set of qualifiers including the subroutine keyword.
+	///
+	/// - `0` - The position where the rest of the statement is expected.
+	SubExpectedAfterKw(Span),
+	/// ERROR - Did not find a subroutine type declaration, an associated-function definition, or a subroutine
+	/// uniform definition after the qualifiers containing the subroutine keyword.
+	///
+	/// - `0` - The position where either of the options are expected.
+	SubExpectedTypeFnOrUniformAfterQualifiers(Span),
+	/// ERROR - Did not find a uniform keyword in a statement that contains the subroutine keyword and a variable
+	/// definition. The closest valid statement is a subroutine uniform definition, so that's what we assume.
+	///
+	/// - `0` - The position, after all qualifiers, where the uniform keyword is expected.
+	SubUniformExpectedUniformKw(Span),
+	/// ERROR - Found the uniform keyword before the subroutine keyword. E.g. `uniform subroutine foo f;`.
+	///
+	/// - `0` - The span of the keyword.
+	SubUniformFoundUniformKwBeforeSubKw(Span),
+	/// ERROR - Found an association list in a subroutine uniform definition. E.g. `subroutine(foo) uniform foo
+	/// my_foo;`.
+	///
+	/// - `0` - The span of the association list.
+	SubUniformFoundAssociationList(Span),
+	/// ERROR - Found a normal type specifier rather than a subroutine type specifier in a subroutine uniform
+	/// definition. E.g. `subroutine uniform int my_int;`.
+	///
+	/// - `0` - The span of the normal type specifier.
+	SubUniformExpectedSubroutineType(Span),
+	/// ERROR - Did not find a semi-colon after the new variable specifier(s) in a subroutine uniform definition.
+	///
+	/// - `0` - The position where the semi-colon is expected.
+	SubUniformExpectedSemiAfterVars(Span),
+	/// ERROR - Found an initialization in a new variable specifier in a subroutine uniform definition. E.g.
+	/// `subroutine uniform foo f = 1;`.
+	///
+	/// - `0` - The span of the initialization part of the new variable specifier.
+	SubUniformFoundInit(Span),
+
+	/// ERROR - Found an association list in a subroutine type declaration. E.g. `subroutine(foo) void foo();`.
+	///
+	/// - `0` - The span of the association list.
+	SubTypeDeclFoundAssociationList(Span),
+	/// ERROR - Found the `uniform` keyword in a subroutine type declaration. E.g. `subroutine uniform void
+	/// foo();`.
+	///
+	/// - `0` - The span of the uniform keyword.
+	SubTypeDeclFoundUniformKw(Span),
+	/// ERROR - Found a subroutine type specifier rather than a normal type specifier for the return value in a
+	/// subroutine type declaration. E.g. `subroutine my_sub foo();`.
+	///
+	/// - `0` - The span of the subroutine type specifier.
+	SubTypeDeclExpectedNormalType(Span),
+
+	/// ERROR - Did not find an association list in a subroutine associated-function definition. E.g. `subroutine
+	/// foo f1() {}`.
+	///
+	/// - `0` - The position where the association list is expected.
+	SubFnDefExpectedAssociationList(Span),
+	/// ERROR - Found the `uniform` keyword in a subroutine associated-function definition. E.g. `subroutine
+	/// uniform void f1() { }`.
+	///
+	/// - `0` - The span of the uniform keyword.
+	SubFnDefFoundUniformKw(Span),
+	/// ERROR - Found a subroutine type specifier rather than a normal type specifier for the return value in a
+	/// subroutine associated-function definition. E.g. `subroutine(foo) foo f1() { }`.
+	///
+	/// - `0` - The span of the subroutine type specifier.
+	SubFnDefExpectedNormalType(Span),
+
 	/// ERROR - Did not find a variable definition after the `uniform` keyword in a subroutine definition. E.g.
 	/// `subroutine uniform struct;`.
 	///
 	/// - `0` - The position where the variable definition is expected.
-	SubroutineExpectedVarDefAfterUniformKw(Span),
+	SubroutineUniformExpectedVarDefAfterQualifiers(Span),
 	/// ERROR - Did not find either a subroutine type declaration, an associated function definition, or a uniform
 	/// definition after the `subroutine` keyword. E.g. `subroutine struct Bar...`.
 	///

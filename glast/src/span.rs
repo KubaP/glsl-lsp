@@ -89,7 +89,15 @@ impl Span {
 		}
 	}
 
-	/// Constructs a zero-width span at the position.
+	/// Constructs a new single-width span at the position.
+	pub fn new_single_width(position: usize) -> Self {
+		Self {
+			start: position,
+			end: position.saturating_add(1),
+		}
+	}
+
+	/// Constructs a new zero-width span at the position.
 	pub fn new_zero_width(position: usize) -> Self {
 		Self {
 			start: position,

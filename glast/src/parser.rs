@@ -52,7 +52,8 @@ mod walker_tests;
 
 use crate::{
 	diag::{
-		PreprocConditionalDiag, PreprocDefineDiag, Semantic, StmtDiag, Syntax,
+		DiagCtx, ForRemoval, PreprocConditionalDiag, PreprocDefineDiag,
+		Semantic, StmtDiag, StmtType, Syntax, Syntax2,
 	},
 	lexer::{
 		self,
@@ -61,7 +62,7 @@ use crate::{
 	},
 	parser::conditional_expression::cond_parser,
 	syntax::*,
-	Either, Either3, GlslVersion, Span, SpanEncoding, Spanned,
+	Either, Either3, GlslVersion, NonEmpty, Span, SpanEncoding, Spanned,
 };
 use std::collections::{HashMap, HashSet};
 
@@ -71,10 +72,11 @@ pub struct ParseResult {
 	/// The abstract syntax tree. By nature of this tree being parsed after having applied conditional compilation,
 	/// it will not contain any conditional compilation directives.
 	pub ast: Ast,
-	/// All syntax diagnostics.
-	pub syntax_diags: Vec<Syntax>,
-	/// All semantic diagnostics. Since the parser only creates an AST and doesn't perform any further analysis
-	/// (such as name resolution), this vector will only contain semantic errors in relation to macros.
+	/// All syntax errors.
+	pub syntax_diags: Vec<Syntax2>,
+	/// All semantic diagnostics. Note that this step only generates semantic diagnostics in relation to macros and
+	/// name resolution. Other semantic diagnostics, such as type checking or control flow analysis, are part of
+	/// the analyzer step.
 	pub semantic_diags: Vec<Semantic>,
 	/// The syntax highlighting tokens. If this result is obtained by calling a parsing method without enabling
 	/// entire-file syntax highlighting, the tokens in this vector will only be for the contents of the abstract
@@ -1079,7 +1081,8 @@ impl TokenTree {
 		while !walker.is_done() {
 			grammar::parse_stmt(&mut walker, &mut ctx);
 		}
-		walker.syntax_diags.append(&mut self.syntax_diags.clone());
+		// FIXME:
+		//walker.syntax_diags.append(&mut self.syntax_diags.clone());
 		let (ast, syntax_diags, semantic_diags, mut root_tokens) = (
 			ctx.into_ast(),
 			walker.syntax_diags,
@@ -1230,7 +1233,8 @@ impl TokenTree {
 		while !walker.is_done() {
 			grammar::parse_stmt(&mut walker, &mut ctx);
 		}
-		walker.syntax_diags.append(&mut self.syntax_diags.clone());
+		// FIXME:
+		//walker.syntax_diags.append(&mut self.syntax_diags.clone());
 
 		let eval_key = walker.token_provider.chosen_key;
 		let eval_regions = walker.token_provider.chosen_regions;
@@ -1519,7 +1523,8 @@ impl TokenTree {
 		while !walker.is_done() {
 			grammar::parse_stmt(&mut walker, &mut ctx);
 		}
-		walker.syntax_diags.append(&mut self.syntax_diags.clone());
+		// FIXME:
+		//walker.syntax_diags.append(&mut self.syntax_diags.clone());
 
 		(
 			ParseResult {
@@ -1992,7 +1997,7 @@ trait TokenStreamProvider<'a>: Clone {
 	fn get_next_stream(
 		&mut self,
 		macros: &HashMap<String, (Span, Macro)>,
-		syntax_diags: &mut Vec<Syntax>,
+		syntax_diags: &mut Vec<Syntax2>,
 		syntax_tokens: &mut Vec<SyntaxToken>,
 		span_encoding: SpanEncoding,
 	) -> Option<TokenStream>;
@@ -2029,7 +2034,7 @@ impl<'a> TokenStreamProvider<'a> for RootTokenStreamProvider<'a> {
 	fn get_next_stream(
 		&mut self,
 		_macros: &HashMap<String, (Span, Macro)>,
-		_syntax_diags: &mut Vec<Syntax>,
+		_syntax_diags: &mut Vec<Syntax2>,
 		_syntax_tokens: &mut Vec<SyntaxToken>,
 		_span_encoding: SpanEncoding,
 	) -> Option<TokenStream> {
@@ -2079,7 +2084,7 @@ impl<'a> TokenStreamProvider<'a> for PreselectedTokenStreamProvider<'a> {
 	fn get_next_stream(
 		&mut self,
 		_macros: &HashMap<String, (Span, Macro)>,
-		_syntax_diags: &mut Vec<Syntax>,
+		_syntax_diags: &mut Vec<Syntax2>,
 		syntax_tokens: &mut Vec<SyntaxToken>,
 		_span_encoding: SpanEncoding,
 	) -> Option<TokenStream> {
@@ -2172,7 +2177,7 @@ impl<'a> TokenStreamProvider<'a> for DynamicTokenStreamProvider<'a> {
 	fn get_next_stream(
 		&mut self,
 		macros: &HashMap<String, (Span, Macro)>,
-		syntax_diags: &mut Vec<Syntax>,
+		syntax_diags: &mut Vec<Syntax2>,
 		syntax_tokens: &mut Vec<SyntaxToken>,
 		span_encoding: SpanEncoding,
 	) -> Option<TokenStream> {
@@ -2365,7 +2370,8 @@ impl<'a> TokenStreamProvider<'a> for DynamicTokenStreamProvider<'a> {
 										macros,
 										span_encoding,
 									);
-								syntax_diags.append(&mut syntax);
+								// FIXME:
+								//syntax_diags.append(&mut syntax);
 								syntax_tokens.append(&mut colours);
 
 								if let Some(expr) = expr {
@@ -2450,7 +2456,7 @@ struct Walker<'a, Provider: TokenStreamProvider<'a>> {
 	active_macros: HashSet<String>,
 
 	/// Any syntax diagnostics created from the tokens parsed so-far.
-	syntax_diags: Vec<Syntax>,
+	syntax_diags: Vec<Syntax2>,
 	/// Any semantic diagnostics created from the tokens parsed so-far.
 	semantic_diags: Vec<Semantic>,
 
@@ -2627,7 +2633,7 @@ impl<'a, Provider: TokenStreamProvider<'a>> Walker<'a, Provider> {
 	/// example, the walker consumes a comment but the expresion syntax tokens are appended after the fact.
 	fn advance_expr_parser(
 		&mut self,
-		syntax_diags: &mut Vec<Syntax>,
+		syntax_diags: &mut Vec<Syntax2>,
 		semantic_diags: &mut Vec<Semantic>,
 		syntax_tokens: &mut Vec<SyntaxToken>,
 	) {
@@ -2662,7 +2668,7 @@ impl<'a, Provider: TokenStreamProvider<'a>> Walker<'a, Provider> {
 		macros: &mut HashMap<String, (Span, Macro)>,
 		active_macros: &mut HashSet<String>,
 		macro_call_site: &mut Option<Span>,
-		syntax_diags: &mut Vec<Syntax>,
+		syntax_diags: &mut Vec<Syntax2>,
 		semantic_diags: &mut Vec<Semantic>,
 		syntax_tokens: &mut Vec<SyntaxToken>,
 		span_encoding: SpanEncoding,
@@ -2802,9 +2808,10 @@ impl<'a, Provider: TokenStreamProvider<'a>> Walker<'a, Provider> {
 									match stream.get(*cursor) {
 										Some(t) => t,
 										None => {
-											syntax_diags.push(Syntax::PreprocDefine(PreprocDefineDiag::ParamsExpectedRParen(
-											prev_span.next_single_width()
-										)));
+											// FIXME:
+											/* syntax_diags.push(Syntax::PreprocDefine(PreprocDefineDiag::ParamsExpectedRParen(
+												prev_span.next_single_width()
+											))); */
 											break 'outer;
 										}
 									};
@@ -2906,7 +2913,8 @@ impl<'a, Provider: TokenStreamProvider<'a>> Walker<'a, Provider> {
 									new_body,
 									span_encoding,
 								);
-							syntax_diags.append(&mut syntax);
+							// FIXME:
+							//syntax_diags.append(&mut syntax);
 							semantic_diags.append(&mut semantic);
 
 							if body.is_empty() {
@@ -2994,9 +3002,10 @@ impl<'a, Provider: TokenStreamProvider<'a>> Walker<'a, Provider> {
 				}
 				Token::BlockComment { contains_eof, .. } => {
 					if *contains_eof {
-						syntax_diags.push(Syntax::BlockCommentMissingEnd(
+						// FIXME:
+						/* syntax_diags.push(Syntax::BlockCommentMissingEnd(
 							token_span.end_zero_width(),
-						));
+						)); */
 					}
 					let token_span = *token_span;
 					if streams.len() == 1 {
@@ -3060,12 +3069,17 @@ impl<'a, Provider: TokenStreamProvider<'a>> Walker<'a, Provider> {
 
 	/// Pushes a syntax diagnostic.
 	fn push_syntax_diag(&mut self, diag: Syntax) {
+		// TODO:
+	}
+
+	/// Pushes a syntax diagnostic.
+	fn push_nsyntax_diag(&mut self, diag: Syntax2) {
 		self.syntax_diags.push(diag);
 	}
 
 	/// Appends a collection of syntax diagnostics.
 	fn append_syntax_diags(&mut self, syntax: &mut Vec<Syntax>) {
-		self.syntax_diags.append(syntax);
+		// TODO:
 	}
 
 	/// Pushes a semantic diagnostic.
@@ -3110,9 +3124,30 @@ impl<'a, Provider: TokenStreamProvider<'a>> Walker<'a, Provider> {
 /// An abstract syntax tree.
 #[derive(Debug)]
 pub struct Ast {
+	/// Arena of nodes.
 	arena: generational_arena::Arena<ast::Node>,
+	/// Handle to the root of the AST.
+	///
+	/// # Invariants
+	/// This points to a `NodeTy::TranslationUnit` node.
+	root_handle: generational_arena::Index,
+
+	/// All references to primitives.
+	primitive_refs: HashMap<ast::Primitive, Vec<Span>>,
+	/// All references to vector swizzles.
+	swizzle_refs: Vec<Span>,
+	/// All user-defined struct symbols.
 	structs: Vec<StructSymbol>,
+	/// All user-defined interface block symbols.
+	interfaces: Vec<InterfaceSymbol>,
+	/// All built-in and user-defined function symbols. This also includes all function symbols that are associated
+	/// with a subroutine.
 	functions: Vec<FunctionSymbol>,
+	/// All subroutine symbols.
+	subroutines: Vec<SubroutineSymbol>,
+	/// All subroutine uniform symbols.
+	subroutine_uniforms: Vec<SubroutineUniformSymbol>,
+	/// All variable symbol tables, each containing all variable symbols for that given table.
 	variables: Vec<Vec<VariableSymbol>>,
 }
 
@@ -3139,6 +3174,10 @@ pub struct Ast {
 /// ## Structs
 /// A struct is not allowed to shadow any other symbol.
 ///
+/// ## Interface Blocks
+/// An interface block is not allowed to shadow any other symbol, **even though** it is un-referencable in since
+/// it's not treated as a real typename.
+///
 /// ## Functions
 /// A function is allowed to use the name of an existing function. In this case, it is added as a new
 /// signature/overload to the existing function symbol, assuming that the parameters differ. If the parameters
@@ -3163,9 +3202,14 @@ pub struct Ast {
 pub struct Ctx {
 	/// Arena of nodes.
 	arena: generational_arena::Arena<ast::Node>,
+	/// Handle to the root of the AST.
+	///
+	/// # Invariants
+	/// This points to a `NodeTy::TranslationUnit` node.
+	root_handle: generational_arena::Index,
 	/// The stack of active scopes.
 	///
-	/// - `0` - Handle to the `ast::Node::Block` scope.
+	/// - `0` - Handle to the `NodeTy::Block` scope (see exception for `self[0]`).
 	/// - `1` - Handle to the variable symbol table for this scope.
 	///
 	/// # Invariants
@@ -3178,6 +3222,8 @@ pub struct Ctx {
 	swizzle_refs: Vec<Span>,
 	/// All user-defined struct symbols.
 	structs: Vec<StructSymbol>,
+	/// All user-defined interface block symbols.
+	interfaces: Vec<InterfaceSymbol>,
 	/// All built-in and user-defined function symbols. This also includes all function symbols that are associated
 	/// with a subroutine.
 	functions: Vec<FunctionSymbol>,
@@ -3208,7 +3254,7 @@ pub enum CurrentlyActive {
 /// A struct symbol.
 #[derive(Debug)]
 pub struct StructSymbol {
-	/// Handle to the `StructDecl` or `StructDef` node.
+	/// Handle to the `StructDecl` or `StructDef` node, or to an `InterfaceDef` node if `self.is_interface = true`.
 	def_node: NodeHandle,
 	/// The name.
 	name: String,
@@ -3217,9 +3263,14 @@ pub struct StructSymbol {
 	fields: Vec<StructField>,
 	/// All references to this struct. This includes the name in the struct declaration/definition itself.
 	refs: Vec<Span>,
+	/// Whether this struct is an interface block.
+	is_interface: bool,
 }
 
 /// An interface block symbol.
+///
+/// Unlike the [`StructSymbol`], this symbol does not have references because interface block names cannot be used
+/// anywhere else in the same shader. An interface block **is not** a type, unlike a struct.
 #[derive(Debug)]
 pub struct InterfaceSymbol {
 	/// Handle to the `InterfaceDef` node.
@@ -3229,8 +3280,6 @@ pub struct InterfaceSymbol {
 	/// The fields. Unlike the node itself, which can contain any child nodes within, this only contains field
 	/// information and nothing else.
 	fields: Vec<StructField>,
-	/// All references to this interface block. This includes the name in the block definition itself.
-	refs: Vec<Span>,
 }
 
 /// A field within a struct symbol.
@@ -3329,6 +3378,7 @@ pub struct VariableSymbol {
 	/// - `VarDef`/`VarDefs`/`VarDefInit`/`VarDefsInits`,
 	/// - `StructDef`; means that at least `node.instances[0]` exists.
 	/// - `FnDef`; means that at least `node.params[0]` exists.
+	/// - `InterfaceDef`;
 	def_node: NodeHandle,
 	/// The type.
 	type_: ast::Type,
@@ -3339,21 +3389,6 @@ pub struct VariableSymbol {
 	syntax: (SyntaxType, SyntaxModifiers),
 	/// All references to this variable. This includes the name in the variable definition itself.
 	refs: Vec<Span>,
-}
-
-impl From<ast::Param> for FunctionParam {
-	fn from(p: ast::Param) -> Self {
-		let (name, refs) = if let ast::Omittable::Some(ident) = p.ident {
-			(ast::Omittable::Some(ident.name), vec![ident.span])
-		} else {
-			(ast::Omittable::None, Vec::new())
-		};
-		Self {
-			type_: p.type_,
-			name,
-			refs,
-		}
-	}
 }
 
 // region: Handles
@@ -3368,6 +3403,16 @@ pub struct NodeHandle(generational_arena::Index);
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct StructHandle(
 	/// Index into `ctx.structs`.
+	usize,
+);
+
+/// A handle to an interface block symbol stored within the [`Ast`]/[`Ctx`].
+///
+/// # Invariants
+/// If `self.0 == usize::MAX`, this handle is unresolved.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct InterfaceHandle(
+	/// Index into `ctx.interfaces`.
 	usize,
 );
 
@@ -3522,24 +3567,25 @@ impl Ctx {
 		let mut arena = generational_arena::Arena::new();
 		let variables = vec![vec![]];
 		let mut scope_stack = Vec::new();
-		scope_stack.push((
-			NodeHandle(arena.insert(ast::Node {
+
+		let root_node = arena.insert(ast::Node {
+			span: Span::new(0, 0),
+			ty: ast::NodeTy::TranslationUnit(ast::Scope {
 				span: Span::new(0, 0),
-				ty: ast::NodeTy::TranslationUnit(ast::Scope {
-					span: Span::new(0, 0),
-					contents: Vec::new(),
-					variable_table: VariableTableHandle(0),
-				}),
-			})),
-			VariableTableHandle(0),
-		));
+				contents: Vec::new(),
+				variable_table: VariableTableHandle(0),
+			}),
+		});
+		scope_stack.push((NodeHandle(root_node), VariableTableHandle(0)));
 
 		Self {
 			arena,
+			root_handle: root_node,
 			scope_stack,
 			primitive_refs: HashMap::new(),
 			swizzle_refs: Vec::new(),
 			structs: Vec::new(),
+			interfaces: Vec::new(),
 			functions: Vec::new(),
 			subroutines: Vec::new(),
 			subroutine_uniforms: Vec::new(),
@@ -3548,7 +3594,7 @@ impl Ctx {
 		}
 	}
 
-	/// Pushes a node into the current scope.
+	/// Pushes a node into the current scope. Doesn't do any syntax colouring or diagnostics.
 	fn push_node(&mut self, node: ast::Node) -> NodeHandle {
 		let node_end = node.span.end;
 		let new_handle = NodeHandle(self.arena.insert(node));
@@ -3562,31 +3608,47 @@ impl Ctx {
 	}
 
 	/// Pushes a struct node into the current scope, and registers a new struct symbol.
-	fn push_new_struct(
+	fn push_new_struct<'a, P: TokenStreamProvider<'a>>(
 		&mut self,
+		walker: &mut Walker<'a, P>,
+		// Since the qualifiers are part of the individual instance types, it's best to unambigiously declare the
+		// start position for the node.
+		start_pos: usize,
+		qualifiers: ast::Omittable<NonEmpty<ast::Qualifier>>,
 		ident: ast::Ident,
-		fields: Vec<StructField>,
-		node: ast::Node,
-		var_instances: Vec<(ast::Ident, ast::Type)>,
-		is_shader_in_out: bool,
+		fields: Vec<(ast::Type, Option<ast::Ident>)>,
+		instances: Vec<NewVarSpecifier>,
+		end_pos: usize,
 	) {
-		if let Some(_) = ast::Primitive::parse(&ident) {
-			// TODO: Syntax error; struct cannot have name of primitive.
-			return;
-		}
+		let node_span = Span::new(start_pos, end_pos);
+
 		if self.scope_stack.len() > 1 {
-			// TODO: Syntax error for node not in the top-level scope.
+			walker.push_nsyntax_diag(Syntax2::NotAllowedInNestedScope {
+				stmt: StmtType::Struct,
+				span: node_span,
+			});
 		}
 
 		let new_struct_handle = StructHandle(self.structs.len());
-		match self.current_active_symbols.get_mut(&ident.name) {
-			Some(handle) => {
-				// We only generate this error if the struct is in the top-level scope, to prevent overlapping
-				// error squiggles.
-				if self.scope_stack.len() == 1 {
-					// TODO: Semantic error because name already taken.
-				}
-				*handle = CurrentlyActive::Struct(new_struct_handle);
+
+		// Check if the name is already in use.
+		if let Some(_) = ast::Primitive::parse(&ident) {
+			// With struct/function/variable names we always lookup the latest definition, but with primitive
+			// typenames we don't do any lookup at all; we always assume the primitive type. This means that
+			// there's no sense in creating a symbol that would have a primitive typename as the name since it
+			// will never be looked up-against.
+			walker.push_nsyntax_diag(Syntax2::ExpectedNameFoundPrimitive(
+				ident.span,
+			));
+			return;
+		}
+		match self.__get_currently_active_symbol(&ident) {
+			Some((active, span)) => {
+				walker.push_semantic_diag(Semantic::NameAlreadyInUse {
+					new: ident.span,
+					existing: span,
+				});
+				*active = CurrentlyActive::Struct(new_struct_handle);
 			}
 			None => {
 				self.current_active_symbols.insert(
@@ -3595,47 +3657,90 @@ impl Ctx {
 				);
 			}
 		}
-		let node_handle = self.push_node(node);
+
+		// Create the struct definition node.
+		let node_handle = self.push_node(ast::Node {
+			span: node_span,
+			ty: ast::NodeTy::StructDef {
+				qualifiers: qualifiers.clone(),
+				name: ident.clone(),
+				fields: fields
+					.iter()
+					.cloned()
+					.map(|(t, i)| (t, i.into()))
+					.collect(),
+				instances: instances
+					.iter()
+					.map(|var: &NewVarSpecifier| {
+						(var.ident.clone(), var.arr.clone().into())
+					})
+					.collect(),
+			},
+		});
+
 		self.structs.push(StructSymbol {
 			def_node: node_handle,
 			name: ident.name.clone(),
-			fields,
+			fields: fields
+				.into_iter()
+				.map(|(type_, ident)| StructField {
+					refs: if let Some(ident) = &ident {
+						vec![ident.span]
+					} else {
+						Vec::new()
+					},
+					name: ident.map(|i| i.name).into(),
+					type_,
+				})
+				.collect(),
 			refs: vec![ident.span],
+			is_interface: false,
+		});
+
+		// Check whether the instances are shader inputs/outputs. This is in order to use different syntax tokens
+		// for the variables.
+		let is_in_out = qualifiers.as_ref().map_or(false, |vec| {
+			vec.iter()
+				.find(|q| match q.ty {
+					ast::QualifierTy::In
+					| ast::QualifierTy::Out
+					| ast::QualifierTy::Uniform
+					| ast::QualifierTy::Attribute => true,
+					_ => false,
+				})
+				.is_some()
 		});
 
 		// Register any instances within the current scope.
 		let th = self.__get_current_scope().variable_table;
-		for (ident, type_) in var_instances.into_iter() {
+		for NewVarSpecifier {
+			ident,
+			arr,
+			eq_span,
+			init_expr,
+			span: var_span,
+		} in instances.into_iter()
+		{
 			let new_var_handle = VariableHandle(th.0, self.variables.len());
-			match self.current_active_symbols.get_mut(&ident.name) {
-				Some(handle) => {
-					match handle {
-						CurrentlyActive::Struct(_)
-						| CurrentlyActive::Function(_)
-						| CurrentlyActive::SubroutineType(_)
-						| CurrentlyActive::SubroutineUniform(_)
-							if self.scope_stack.len() == 1 =>
-						{
-							// Variables can't shadow functions/structs/subroutine uniforms in the top-level scope.
-							// TODO: Semantic error.
-						}
-						CurrentlyActive::Struct(_)
-						| CurrentlyActive::Function(_)
-						| CurrentlyActive::SubroutineType(_)
-						| CurrentlyActive::SubroutineUniform(_) => {}
-						CurrentlyActive::Variable(_) => {
-							if self.variables[th.0]
-								.iter()
-								.find(|s| &s.name == &ident.name)
-								.is_some()
-							{
-								// Variables can't shadow variables unless the other variable is in a different
-								// (higher) scope.
-								// TODO: Semantic error.
-							}
-						}
-					}
-					*handle = CurrentlyActive::Variable(new_var_handle);
+
+			// Check if the name is already in use.
+			if let Some(_) = ast::Primitive::parse(&ident) {
+				// With struct/function/variable names we always lookup the latest definition, but with primitive
+				// typenames we don't do any lookup at all; we always assume the primitive type. This means that
+				// there's no sense in creating a symbol that would have a primitive typename as the name since it
+				// will never be looked up-against.
+				walker.push_nsyntax_diag(Syntax2::ExpectedNameFoundPrimitive(
+					ident.span,
+				));
+				continue;
+			}
+			match self.__get_currently_active_symbol(&ident) {
+				Some((active, span)) => {
+					walker.push_semantic_diag(Semantic::NameAlreadyInUse {
+						new: ident.span,
+						existing: span,
+					});
+					*active = CurrentlyActive::Variable(new_var_handle);
 				}
 				None => {
 					self.current_active_symbols.insert(
@@ -3644,9 +3749,20 @@ impl Ctx {
 					);
 				}
 			}
+
 			self.variables[th.0].push(VariableSymbol {
 				def_node: node_handle,
-				type_,
+				type_: grammar::combine_type_with_arr(
+					ast::Type {
+						ty_specifier_span: ident.span,
+						disjointed_span: ast::Omittable::None,
+						ty: ast::TypeTy::Single(Either::Right(
+							new_struct_handle,
+						)),
+						qualifiers: qualifiers.clone(),
+					},
+					arr,
+				),
 				name: ident.name.clone(),
 				syntax: (SyntaxType::Variable, SyntaxModifiers::empty()),
 				refs: vec![ident.span],
@@ -3654,87 +3770,332 @@ impl Ctx {
 		}
 	}
 
-	/// Returns a handle that will be allocated for the next struct to be pushed in. Once this handle is retrieved,
-	/// a new struct should be pushed immediately following.
-	fn get_handle_for_next_struct(&self) -> StructHandle {
-		StructHandle(self.structs.len())
+	/// Pushes a struct node into the current scope, and registers a new struct symbol.
+	fn push_new_interface<'a, P: TokenStreamProvider<'a>>(
+		&mut self,
+		walker: &mut Walker<'a, P>,
+		// Since the qualifiers are part of the individual instance types, it's best to unambigiously declare the
+		// start position for the node.
+		start_pos: usize,
+		qualifiers: Option<NonEmpty<ast::Qualifier>>,
+		ident: ast::Ident,
+		fields: Vec<(ast::Type, Option<ast::Ident>)>,
+		instances: Vec<NewVarSpecifier>,
+		end_pos: usize,
+	) {
+		let node_span = Span::new(start_pos, end_pos);
+
+		if self.scope_stack.len() > 1 {
+			walker.push_nsyntax_diag(Syntax2::NotAllowedInNestedScope {
+				stmt: StmtType::Interface,
+				span: node_span,
+			});
+		}
+
+		// Check if the name is already in use.
+		if let Some(_) = ast::Primitive::parse(&ident) {
+			// With struct/function/variable names we always lookup the latest definition, but with primitive
+			// typenames we don't do any lookup at all; we always assume the primitive type. This means that
+			// there's no sense in creating a symbol that would have a primitive typename as the name since it
+			// will never be looked up-against.
+			walker.push_nsyntax_diag(Syntax2::ExpectedNameFoundPrimitive(
+				ident.span,
+			));
+			return;
+		}
+		match self.__get_currently_active_symbol(&ident) {
+			// Unlike with structs, since interfaces are un-referencable we don't set it as the active name.
+			Some((active, span)) => {
+				walker.push_semantic_diag(Semantic::NameAlreadyInUse {
+					new: ident.span,
+					existing: span,
+				});
+			}
+			None => {}
+		}
+
+		// Create the interface block definition node.
+		let node_handle = self.push_node(ast::Node {
+			span: node_span,
+			ty: ast::NodeTy::InterfaceDef {
+				qualifiers: qualifiers.clone(),
+				name: ident.clone(),
+				fields: fields
+					.iter()
+					.cloned()
+					.map(|(t, i)| (t, i.into()))
+					.collect(),
+				instances: instances
+					.iter()
+					.map(|var: &NewVarSpecifier| {
+						(var.ident.clone(), var.arr.clone().into())
+					})
+					.collect(),
+			},
+		});
+
+		let new_interface_handle = InterfaceHandle(self.interfaces.len());
+
+		self.interfaces.push(InterfaceSymbol {
+			def_node: node_handle,
+			name: ident.name.clone(),
+			fields: fields
+				.iter()
+				.cloned()
+				.map(|(type_, ident)| StructField {
+					refs: if let Some(ident) = &ident {
+						vec![ident.span]
+					} else {
+						Vec::new()
+					},
+					type_,
+					name: ident.map(|i| i.name).into(),
+				})
+				.collect(),
+		});
+		if !instances.is_empty() {
+			// We have instances. That means this interface block functions as a struct (although it's not
+			// referencable), and we create a struct symbol for it. The reason we do it is because otherwise we'd
+			// need to support `InterfaceHandle` for object access resolution/ast and I don't see a point in
+			// complicating it further.
+
+			let new_struct_handle = StructHandle(self.structs.len());
+			self.structs.push(StructSymbol {
+				def_node: node_handle,
+				name: ident.name.clone(),
+				fields: fields
+					.iter()
+					.cloned()
+					.map(|(type_, ident)| StructField {
+						refs: if let Some(ident) = &ident {
+							vec![ident.span]
+						} else {
+							Vec::new()
+						},
+						name: ident.map(|i| i.name).into(),
+						type_,
+					})
+					.collect(),
+				refs: vec![ident.span],
+				is_interface: true,
+			});
+
+			// Register any instances within the current scope.
+			let th = self.__get_current_scope().variable_table;
+			for NewVarSpecifier {
+				ident,
+				arr,
+				eq_span,
+				init_expr,
+				span: var_span,
+			} in instances.into_iter()
+			{
+				let new_var_handle = VariableHandle(th.0, self.variables.len());
+
+				// Check if the name is already in use.
+				if let Some(_) = ast::Primitive::parse(&ident) {
+					// With struct/function/variable names we always lookup the latest definition, but with
+					// primitive typenames we don't do any lookup at all; we always assume the primitive type. This
+					// means that there's no sense in creating a symbol that would have a primitive typename as the
+					// name since it will never be looked up-against.
+					walker.push_nsyntax_diag(
+						Syntax2::ExpectedNameFoundPrimitive(ident.span),
+					);
+					continue;
+				}
+				match self.__get_currently_active_symbol(&ident) {
+					Some((active, span)) => {
+						walker.push_semantic_diag(Semantic::NameAlreadyInUse {
+							new: ident.span,
+							existing: span,
+						});
+						*active = CurrentlyActive::Variable(new_var_handle);
+					}
+					None => {
+						self.current_active_symbols.insert(
+							ident.name.clone(),
+							CurrentlyActive::Variable(new_var_handle),
+						);
+					}
+				}
+
+				self.variables[th.0].push(VariableSymbol {
+					def_node: node_handle,
+					type_: grammar::combine_type_with_arr(
+						ast::Type {
+							ty_specifier_span: ident.span,
+							disjointed_span: ast::Omittable::None,
+							ty: ast::TypeTy::Single(Either::Right(
+								new_struct_handle,
+							)),
+							qualifiers: qualifiers.clone().into(),
+						},
+						arr,
+					),
+					name: ident.name.clone(),
+					syntax: (SyntaxType::Variable, SyntaxModifiers::empty()),
+					refs: vec![ident.span],
+				});
+			}
+		} else {
+			// We don't have instances. That means the fields in this interface block are global variables.
+			let th = self.__get_current_scope().variable_table;
+			for (mut type_, ident) in fields.into_iter() {
+				let Some(ident) = ident else { continue; };
+
+				let new_var_handle = VariableHandle(th.0, self.variables.len());
+
+				// Check if the name is already in use.
+				if let Some(_) = ast::Primitive::parse(&ident) {
+					// With struct/function/variable names we always lookup the latest definition, but with
+					// primitive typenames we don't do any lookup at all; we always assume the primitive type. This
+					// means that there's no sense in creating a symbol that would have a primitive typename as the
+					// name since it will never be looked up-against.
+					walker.push_nsyntax_diag(
+						Syntax2::ExpectedNameFoundPrimitive(ident.span),
+					);
+					continue;
+				}
+				match self.__get_currently_active_symbol(&ident) {
+					Some((active, span)) => {
+						walker.push_semantic_diag(Semantic::NameAlreadyInUse {
+							new: ident.span,
+							existing: span,
+						});
+						*active = CurrentlyActive::Variable(new_var_handle);
+					}
+					None => {
+						self.current_active_symbols.insert(
+							ident.name.clone(),
+							CurrentlyActive::Variable(new_var_handle),
+						);
+					}
+				}
+
+				type_.qualifiers = qualifiers.clone().into();
+
+				self.variables[th.0].push(VariableSymbol {
+					def_node: node_handle,
+					type_,
+					name: ident.name,
+					syntax: (SyntaxType::Variable, SyntaxModifiers::empty()),
+					refs: vec![ident.span],
+				});
+			}
+		}
 	}
 
 	/// Pushes a function declaration into the current scope, and registers a new function symbol, or if a function
 	/// with this name already exists, a new overloaded function symbol.
-	fn push_new_function_decl(
+	fn push_new_function_decl<'a, P: TokenStreamProvider<'a>>(
 		&mut self,
-		ident: ast::Ident,
-		params: Vec<FunctionParam>,
+		walker: &mut Walker<'a, P>,
 		return_type: ast::Type,
-		node: ast::Node,
+		ident: ast::Ident,
+		params: Vec<ast::Param>,
+		end_pos: usize,
 	) {
+		let node_span = Span::new(return_type.span_start(), end_pos);
+
 		if self.scope_stack.len() > 1 {
-			// TODO: Syntax error for node not in the top-level scope.
+			walker.push_nsyntax_diag(Syntax2::NotAllowedInNestedScope {
+				stmt: StmtType::FnDecl,
+				span: node_span,
+			});
 		}
 
-		let fn_handle = FunctionHandle(self.functions.len(), 0);
-		match self.current_active_symbols.get_mut(&ident.name) {
-			Some(handle) => {
-				// Prevent overlapping errors.
-				if self.scope_stack.len() == 1 {
-					match handle {
-						CurrentlyActive::Struct(_)
-						| CurrentlyActive::SubroutineType(_)
-						| CurrentlyActive::SubroutineUniform(_)
-						| CurrentlyActive::Variable(_) => {
+		// Create the function declaration node.
+		let node_handle = self.push_node(ast::Node {
+			span: node_span,
+			ty: ast::NodeTy::FnDecl {
+				return_type: return_type.clone(),
+				ident: ident.clone(),
+				params: params.clone(),
+			},
+		});
 
-							// TODO: Semantic error because name already taken.
-						}
-						_ => {}
-					}
+		let new_fn_decl_handle = FunctionHandle(self.functions.len(), 0);
+
+		// Check if the name is already in use.
+		if let Some(_) = ast::Primitive::parse(&ident) {
+			// With struct/function/variable names we always lookup the latest definition, but with primitive
+			// typenames we don't do any lookup at all; we always assume the primitive type. This means that
+			// there's no sense in creating a symbol that would have a primitive typename as the name since it
+			// will never be looked up-against.
+			walker.push_nsyntax_diag(Syntax2::ExpectedNameFoundPrimitive(
+				ident.span,
+			));
+			return;
+		}
+
+		let params = params
+			.into_iter()
+			.map(|p| {
+				let (name, refs) = if let ast::Omittable::Some(ident) = p.ident
+				{
+					(ast::Omittable::Some(ident.name), vec![ident.span])
+				} else {
+					(ast::Omittable::None, Vec::new())
+				};
+				FunctionParam {
+					type_: p.type_,
+					name,
+					refs,
 				}
-				*handle = CurrentlyActive::Function(fn_handle);
-			}
-			None => {
-				self.current_active_symbols.insert(
-					ident.name.clone(),
-					CurrentlyActive::Function(fn_handle),
-				);
-			}
-		}
-		let node_handle = self.push_node(node);
-		match self
+			})
+			.collect();
+
+		// Register the function declaration in an appropriate function symbol.
+		let fn_handle = match self
 			.functions
 			.iter_mut()
+			.enumerate()
 			.rev()
-			.find(|symbol| &ident.name == &symbol.name)
+			.find(|(_, symbol)| &ident.name == &symbol.name)
 		{
-			Some(fn_) => {
+			Some((i, fn_)) => {
 				// A function with this name already exists. If the function is built-in, declaring a new signature
 				// is not allowed. If the signature already exists, declaring a second (or third...) signature is
 				// allowed.
 				if fn_.built_in {
-					// TODO: Semantic error.
+					walker.push_semantic_diag(
+						Semantic::CannotOverloadBuiltInFn {
+							name: ident.clone(),
+						},
+					);
 					return;
 				}
-				match fn_.signatures.iter_mut().find(|sig| {
-					&sig.params == &params && &sig.return_type == &return_type
-				}) {
-					Some(signature) => {
-						// We already have a matching signature.
-						signature.decl_nodes.push(node_handle);
-					}
-					None => {
-						// We don't have this specific signature yet.
-						fn_.signatures.push(FunctionSignature {
-							decl_nodes: vec![node_handle],
-							def_node: None,
-							name: ident.name.clone(),
-							params,
-							return_type,
-						});
-					}
-				}
+				let fn_handle =
+					match fn_.signatures.iter_mut().enumerate().find(
+						|(_, sig)| {
+							&sig.params == &params
+								&& &sig.return_type == &return_type
+						},
+					) {
+						Some((sig_i, signature)) => {
+							// We already have a matching signature.
+							signature.decl_nodes.push(node_handle);
+							FunctionHandle(i, sig_i)
+						}
+						None => {
+							// We don't have this specific signature yet.
+							let fn_handle = FunctionHandle(i, usize::MAX);
+							fn_.signatures.push(FunctionSignature {
+								decl_nodes: vec![node_handle],
+								def_node: None,
+								name: ident.name.clone(),
+								params,
+								return_type,
+							});
+							fn_handle
+						}
+					};
 				fn_.refs.push(ident.span);
+				fn_handle
 			}
 			None => {
 				// We haven't come across a function with this name yet.
+				let new_fn_handle = FunctionHandle(self.functions.len(), 0);
 				self.functions.push(FunctionSymbol {
 					built_in: false,
 					name: ident.name.clone(),
@@ -3747,41 +4108,26 @@ impl Ctx {
 					}],
 					refs: vec![ident.span],
 				});
+				new_fn_handle
 			}
-		}
-	}
+		};
 
-	/// Pushes a function definition into the current scope, and registers a new function symbol, or if a function
-	/// with this name already exists, a new overloaded function symbol.
-	fn push_new_function_def(
-		&mut self,
-		scope_handle: NodeHandle,
-		ident: ast::Ident,
-		params: Vec<FunctionParam>,
-		return_type: ast::Type,
-		node: ast::Node,
-	) {
-		if self.scope_stack.len() > 1 {
-			// TODO: Syntax error for node not in the top-level scope.
-		}
-
-		let fn_handle = FunctionHandle(self.functions.len(), 0);
-		match self.current_active_symbols.get_mut(&ident.name) {
-			Some(handle) => {
-				// Prevent overlapping errors.
-				if self.scope_stack.len() == 1 {
-					match handle {
-						CurrentlyActive::Struct(_)
-						| CurrentlyActive::SubroutineType(_)
-						| CurrentlyActive::SubroutineUniform(_)
-						| CurrentlyActive::Variable(_) => {
-
-							// TODO: Semantic error because name already taken.
-						}
-						_ => {}
+		// Check if the name is already in use.
+		match self.__get_currently_active_symbol(&ident) {
+			Some((active, span)) => {
+				match active {
+					CurrentlyActive::Struct(_)
+					| CurrentlyActive::SubroutineType(_)
+					| CurrentlyActive::SubroutineUniform(_)
+					| CurrentlyActive::Variable(_) => {
+						walker.push_semantic_diag(Semantic::NameAlreadyInUse {
+							new: ident.span,
+							existing: span,
+						});
 					}
+					_ => {}
 				}
-				*handle = CurrentlyActive::Function(fn_handle);
+				*active = CurrentlyActive::Function(fn_handle);
 			}
 			None => {
 				self.current_active_symbols.insert(
@@ -3790,57 +4136,132 @@ impl Ctx {
 				);
 			}
 		}
+	}
 
+	/// Pushes a function definition into the current scope, and registers a new function symbol, or if a function
+	/// with this name already exists, a new overloaded function symbol.
+	fn push_new_function_def<'a, P: TokenStreamProvider<'a>>(
+		&mut self,
+		walker: &mut Walker<'a, P>,
+		scope_handle: NodeHandle,
+		return_type: ast::Type,
+		ident: ast::Ident,
+		params: Vec<ast::Param>,
+		body: ast::Scope,
+		end_pos: usize,
+	) {
+		let node_span = Span::new(return_type.span_start(), end_pos);
+
+		if self.scope_stack.len() > 1 {
+			walker.push_nsyntax_diag(Syntax2::NotAllowedInNestedScope {
+				stmt: StmtType::FnDecl,
+				span: node_span,
+			});
+		}
+
+		// Create the function declaration node.
 		{
 			// We previously had a temporary scope node, which we now swap out with the new function node.
 			let scope = self.__get_current_scope();
 			scope.contents.push(scope_handle);
-			scope.span.end = node.span.end;
-			*self.arena.get_mut(scope_handle.0).unwrap() = node;
+			scope.span.end = node_span.end;
+			*self.arena.get_mut(scope_handle.0).unwrap() = ast::Node {
+				span: node_span,
+				ty: ast::NodeTy::FnDef {
+					return_type: return_type.clone(),
+					ident: ident.clone(),
+					params: params.clone(),
+					body,
+				},
+			};
 		}
 		let node_handle = scope_handle;
 
-		match self
+		// Check if the name is already in use.
+		if let Some(_) = ast::Primitive::parse(&ident) {
+			// With struct/function/variable names we always lookup the latest definition, but with primitive
+			// typenames we don't do any lookup at all; we always assume the primitive type. This means that
+			// there's no sense in creating a symbol that would have a primitive typename as the name since it
+			// will never be looked up-against.
+			walker.push_nsyntax_diag(Syntax2::ExpectedNameFoundPrimitive(
+				ident.span,
+			));
+			return;
+		}
+
+		let params = params
+			.into_iter()
+			.map(|p| {
+				let (name, refs) = if let ast::Omittable::Some(ident) = p.ident
+				{
+					(ast::Omittable::Some(ident.name), vec![ident.span])
+				} else {
+					(ast::Omittable::None, Vec::new())
+				};
+				FunctionParam {
+					type_: p.type_,
+					name,
+					refs,
+				}
+			})
+			.collect();
+
+		// Register the function definition in an appropriate function symbol.
+		let fn_handle = match self
 			.functions
 			.iter_mut()
+			.enumerate()
 			.rev()
-			.find(|symbol| &ident.name == &symbol.name)
+			.find(|(_, symbol)| &ident.name == &symbol.name)
 		{
-			Some(fn_) => {
+			Some((i, fn_)) => {
 				// A function with this name already exists. If the function is built-in, defining a new signature
 				// is not allowed. If the signature already exists, defining a second (or third...) signature is
 				// not allowed.
 				if fn_.built_in {
-					// TODO: Semantic error.
+					walker.push_semantic_diag(
+						Semantic::CannotOverloadBuiltInFn {
+							name: ident.clone(),
+						},
+					);
 					return;
 				}
-				match fn_.signatures.iter_mut().find(|sig| {
-					&sig.params == &params && &sig.return_type == &return_type
-				}) {
-					Some(signature) => {
-						// We already have a matching signature.
+				let fn_handle =
+					match fn_.signatures.iter_mut().enumerate().find(
+						|(_, sig)| {
+							&sig.params == &params
+								&& &sig.return_type == &return_type
+						},
+					) {
+						Some((sig_i, signature)) => {
+							// We already have a matching signature.
 
-						if signature.def_node.is_some() {
-							// TODO: Semantic error.
-							return;
+							if signature.def_node.is_some() {
+								// TODO: Semantic error.
+								return;
+							}
+							signature.def_node = Some(node_handle);
+							FunctionHandle(i, sig_i)
 						}
-						signature.def_node = Some(node_handle);
-					}
-					None => {
-						// We don't have this specific signature yet.
-						fn_.signatures.push(FunctionSignature {
-							decl_nodes: Vec::new(),
-							def_node: Some(node_handle),
-							name: ident.name.clone(),
-							params,
-							return_type,
-						});
-					}
-				}
+						None => {
+							// We don't have this specific signature yet.
+							let fn_handle = FunctionHandle(i, usize::MAX);
+							fn_.signatures.push(FunctionSignature {
+								decl_nodes: Vec::new(),
+								def_node: Some(node_handle),
+								name: ident.name.clone(),
+								params,
+								return_type,
+							});
+							fn_handle
+						}
+					};
 				fn_.refs.push(ident.span);
+				fn_handle
 			}
 			None => {
 				// We haven't come across a function with this name yet.
+				let new_fn_handle = FunctionHandle(self.functions.len(), 0);
 				self.functions.push(FunctionSymbol {
 					built_in: false,
 					name: ident.name.clone(),
@@ -3853,31 +4274,74 @@ impl Ctx {
 					}],
 					refs: vec![ident.span],
 				});
+				new_fn_handle
+			}
+		};
+
+		// Check if the name is already in use.
+		match self.__get_currently_active_symbol(&ident) {
+			Some((active, span)) => {
+				match active {
+					CurrentlyActive::Struct(_)
+					| CurrentlyActive::SubroutineType(_)
+					| CurrentlyActive::SubroutineUniform(_)
+					| CurrentlyActive::Variable(_) => {
+						walker.push_semantic_diag(Semantic::NameAlreadyInUse {
+							new: ident.span,
+							existing: span,
+						});
+					}
+					_ => {}
+				}
+				*active = CurrentlyActive::Function(fn_handle);
+			}
+			None => {
+				self.current_active_symbols.insert(
+					ident.name.clone(),
+					CurrentlyActive::Function(fn_handle),
+				);
 			}
 		}
 	}
 
 	/// Pushes a subroutine type declaration into the current scope, and registers a new subroutine type symbol.
-	fn push_new_subroutine_type(
+	fn push_new_subroutine_type<'a, P: TokenStreamProvider<'a>>(
 		&mut self,
+		walker: &mut Walker<'a, P>,
 		return_type: ast::Type,
 		ident: ast::Ident,
 		params: Vec<ast::Param>,
 		end_pos: usize,
 	) {
-		if let Some(_) = ast::Primitive::parse(&ident) {
-			// TODO: error
-			return;
-		}
+		let node_span = Span::new(return_type.span_start(), end_pos);
+
 		if self.scope_stack.len() > 1 {
-			// TODO: error
+			walker.push_nsyntax_diag(Syntax2::NotAllowedInNestedScope {
+				stmt: StmtType::SubType,
+				span: node_span,
+			});
 		}
 
 		let new_subroutine_handle = SubroutineHandle(self.subroutines.len());
-		match self.current_active_symbols.get_mut(&ident.name) {
-			Some(handle) => {
-				// TODO: Semantic error because name already taken.
-				*handle =
+
+		// Check if the name is already in use.
+		if let Some(_) = ast::Primitive::parse(&ident) {
+			// With struct/function/variable names we always lookup the latest definition, but with primitive
+			// typenames we don't do any lookup at all; we always assume the primitive type. This means that
+			// there's no sense in creating a symbol that would have a primitive typename as the name since it
+			// will never be looked up-against.
+			walker.push_nsyntax_diag(Syntax2::ExpectedNameFoundPrimitive(
+				ident.span,
+			));
+			return;
+		}
+		match self.__get_currently_active_symbol(&ident) {
+			Some((active, span)) => {
+				walker.push_semantic_diag(Semantic::NameAlreadyInUse {
+					new: ident.span,
+					existing: span,
+				});
+				*active =
 					CurrentlyActive::SubroutineType(new_subroutine_handle);
 			}
 			None => {
@@ -3888,18 +4352,35 @@ impl Ctx {
 			}
 		}
 
+		// Create the subroutine type declaration node.
 		let node_handle = self.push_node(ast::Node {
-			span: Span::new(return_type.span.start, end_pos),
+			span: node_span,
 			ty: ast::NodeTy::SubroutineTypeDecl {
 				return_type: return_type.clone(),
 				ident: ident.clone(),
 				params: params.clone(),
 			},
 		});
+
 		self.subroutines.push(SubroutineSymbol {
 			decl_node: node_handle,
-			name: ident.name.clone(),
-			params: params.into_iter().map(|p| p.into()).collect(),
+			name: ident.name,
+			params: params
+				.into_iter()
+				.map(|p| {
+					let (name, refs) =
+						if let ast::Omittable::Some(ident) = p.ident {
+							(ast::Omittable::Some(ident.name), vec![ident.span])
+						} else {
+							(ast::Omittable::None, Vec::new())
+						};
+					FunctionParam {
+						type_: p.type_,
+						name,
+						refs,
+					}
+				})
+				.collect(),
 			return_type,
 			uniforms: Vec::new(),
 			associated_fns: Vec::new(),
@@ -3909,53 +4390,76 @@ impl Ctx {
 
 	/// Pushes a subroutine associated function definition into the current scope, and registers a new function
 	/// symbol.
-	fn push_new_associated_subroutine_fn_def(
+	fn push_new_associated_subroutine_fn_def<'a, P: TokenStreamProvider<'a>>(
 		&mut self,
+		walker: &mut Walker<'a, P>,
 		scope_handle: NodeHandle,
-		association_list: Vec<(SubroutineHandle, ast::Ident)>,
-		ident: ast::Ident,
-		params: Vec<FunctionParam>,
+		// Since the `subroutine` keyword could appear before any qualifiers, we cannot use `type_.span_start()` to
+		// get the start position for this definition node.
+		start_pos: usize,
+		associations: Vec<(SubroutineHandle, ast::Ident)>,
 		return_type: ast::Type,
-		node: ast::Node,
+		ident: ast::Ident,
+		params: Vec<ast::Param>,
+		body: ast::Scope,
+		end_pos: usize,
 	) {
+		let node_span = Span::new(start_pos, end_pos);
+
 		if self.scope_stack.len() > 1 {
-			// TODO: Syntax error for node not in the top-level scope.
+			walker.push_nsyntax_diag(Syntax2::NotAllowedInNestedScope {
+				stmt: StmtType::FnDecl,
+				span: node_span,
+			});
 		}
 
-		let fn_handle = FunctionHandle(self.functions.len(), 0);
-		match self.current_active_symbols.get_mut(&ident.name) {
-			Some(handle) => {
-				// Prevent overlapping errors.
-				if self.scope_stack.len() == 1 {
-					match handle {
-						CurrentlyActive::Struct(_)
-						| CurrentlyActive::SubroutineType(_)
-						| CurrentlyActive::SubroutineUniform(_)
-						| CurrentlyActive::Variable(_) => {
-
-							// TODO: Semantic error because name already taken.
-						}
-						_ => {}
-					}
-				}
-				*handle = CurrentlyActive::Function(fn_handle);
-			}
-			None => {
-				self.current_active_symbols.insert(
-					ident.name.clone(),
-					CurrentlyActive::Function(fn_handle),
-				);
-			}
-		}
-
+		// Create the function declaration node.
 		{
 			// We previously had a temporary scope node, which we now swap out with the new function node.
 			let scope = self.__get_current_scope();
 			scope.contents.push(scope_handle);
-			scope.span.end = node.span.end;
-			*self.arena.get_mut(scope_handle.0).unwrap() = node;
+			scope.span.end = node_span.end;
+			*self.arena.get_mut(scope_handle.0).unwrap() = ast::Node {
+				span: node_span,
+				ty: ast::NodeTy::SubroutineFnDefAssociation {
+					associations: associations.clone(),
+					return_type: return_type.clone(),
+					ident: ident.clone(),
+					params: params.clone(),
+					body,
+				},
+			};
 		}
 		let node_handle = scope_handle;
+
+		// Check if the name is already in use.
+		if let Some(_) = ast::Primitive::parse(&ident) {
+			// With struct/function/variable names we always lookup the latest definition, but with primitive
+			// typenames we don't do any lookup at all; we always assume the primitive type. This means that
+			// there's no sense in creating a symbol that would have a primitive typename as the name since it
+			// will never be looked up-against.
+			walker.push_nsyntax_diag(Syntax2::ExpectedNameFoundPrimitive(
+				ident.span,
+			));
+			return;
+		}
+
+		let params = params
+			.into_iter()
+			.map(|p| {
+				let (name, refs) = if let ast::Omittable::Some(ident) = p.ident
+				{
+					(ast::Omittable::Some(ident.name), vec![ident.span])
+				} else {
+					(ast::Omittable::None, Vec::new())
+				};
+				FunctionParam {
+					type_: p.type_,
+					name,
+					refs,
+				}
+			})
+			.collect();
 
 		let fn_handle = match self
 			.functions
@@ -3969,7 +4473,11 @@ impl Ctx {
 				// is not allowed. If the signature already exists, defining a second (or third...) signature is
 				// not allowed.
 				if fn_.built_in {
-					// TODO: Semantic error.
+					walker.push_semantic_diag(
+						Semantic::CannotOverloadBuiltInFn {
+							name: ident.clone(),
+						},
+					);
 					return;
 				}
 				let fn_handle = match fn_
@@ -4025,49 +4533,77 @@ impl Ctx {
 			}
 		};
 
-		for (handle, ident) in association_list {
+		// Check if the name is already in use.
+		match self.__get_currently_active_symbol(&ident) {
+			Some((active, span)) => {
+				match active {
+					CurrentlyActive::Struct(_)
+					| CurrentlyActive::SubroutineType(_)
+					| CurrentlyActive::SubroutineUniform(_)
+					| CurrentlyActive::Variable(_) => {
+						walker.push_semantic_diag(Semantic::NameAlreadyInUse {
+							new: ident.span,
+							existing: span,
+						});
+					}
+					_ => {}
+				}
+				*active = CurrentlyActive::Function(fn_handle);
+			}
+			None => {
+				self.current_active_symbols.insert(
+					ident.name.clone(),
+					CurrentlyActive::Function(fn_handle),
+				);
+			}
+		}
+
+		for (handle, ident) in associations {
 			let subroutine = &mut self.subroutines[handle.0];
 			subroutine.refs.push(ident.span);
 			subroutine.associated_fns.push(fn_handle);
 		}
 	}
 
-	/// Pushes one or more subroutine uniform definitions into the current scope, and registers new subroutine
-	/// uniform symbols.
+	/// Pushes a subroutine uniform definition node into the current scope, and registers new subroutine uniform
+	/// symbols.
 	fn push_new_subroutine_uniforms<'a, P: TokenStreamProvider<'a>>(
 		&mut self,
 		walker: &mut Walker<'a, P>,
+		// Since the `subroutine` keyword could appear before any qualifiers, we cannot use `type_.span_start()` to
+		// get the start position for this definition node.
+		start_pos: usize,
 		type_: ast::SubroutineType,
-		// Invariant: has a length of at least 1.
-		var_specifiers: Vec<NewVarSpecifier>,
+		var_specifiers: NonEmpty<NewVarSpecifier>,
 		end_pos: usize,
 	) {
-		let start_pos = type_.span.start;
+		let node_span = Span::new(start_pos, end_pos);
 
 		if self.scope_stack.len() > 1 {
-			walker.push_syntax_diag(Syntax::Stmt(
-				StmtDiag::FoundSubUniformInNestedScope(Span::new(
-					start_pos, end_pos,
-				)),
-			));
+			walker.push_nsyntax_diag(Syntax2::NotAllowedInNestedScope {
+				stmt: StmtType::SubUniform,
+				span: node_span,
+			});
 		}
 
-		// Create subroutine uniform definition node.
-		let node_handle = self.push_node(match var_specifiers.len() {
-			0 => unreachable!("Checked by caller"),
+		// Create the subroutine uniform definition node.
+		let node_handle = self.push_node(match var_specifiers.len().get() {
+			0 => unreachable!("Ensured by type invariant"),
 			1 => {
 				let var = var_specifiers[0].clone();
 				if let Some(span) = var.contains_init() {
-					walker.push_syntax_diag(Syntax::Stmt(
-						StmtDiag::SubUniformFoundInit(span),
-					));
+					walker.push_nsyntax_diag(Syntax2::ForRemoval {
+						item: ForRemoval::VarInitialization,
+						span,
+						ctx: DiagCtx::SubroutineUniform,
+					});
 				}
-				let type_ = grammar::combine_subroutine_type_with_idents(
+				let type_ = grammar::combine_subroutine_type_with_arr(
 					type_.clone(),
 					var.arr,
 				);
 				ast::Node {
-					span: Span::new(start_pos, end_pos),
+					span: node_span,
 					ty: ast::NodeTy::SubroutineUniformDef {
 						type_,
 						ident: var.ident,
@@ -4075,15 +4611,17 @@ impl Ctx {
 				}
 			}
 			_ => {
-				let mut v = Vec::with_capacity(var_specifiers.len());
+				let mut vars = Vec::with_capacity(var_specifiers.len().get());
 				for var in var_specifiers.iter() {
 					if let Some(span) = var.contains_init() {
-						walker.push_syntax_diag(Syntax::Stmt(
-							StmtDiag::SubUniformFoundInit(span),
-						));
+						walker.push_nsyntax_diag(Syntax2::ForRemoval {
+							item: ForRemoval::VarInitialization,
+							span,
+							ctx: DiagCtx::SubroutineUniform,
+						});
 					}
-					v.push((
-						grammar::combine_subroutine_type_with_idents(
+					vars.push((
+						grammar::combine_subroutine_type_with_arr(
 							type_.clone(),
 							var.arr.clone(),
 						),
@@ -4092,37 +4630,34 @@ impl Ctx {
 				}
 				ast::Node {
 					span: Span::new(start_pos, end_pos),
-					ty: ast::NodeTy::SubroutineUniformDefs(
-						var_specifiers
-							.iter()
-							.cloned()
-							.map(|var| {
-								(
-									grammar::combine_subroutine_type_with_idents(type_.clone(), var.arr),
-									var.ident
-								)
-							})
-							.collect(),
-					),
+					ty: ast::NodeTy::SubroutineUniformDefs(vars),
 				}
 			}
 		});
 
-		// Register individual subroutine uniform symbols.
-		let subroutine = &mut self.subroutines[type_.handle().0];
-		for var in var_specifiers {
-			if let Some(_) = ast::Primitive::parse(&var.ident) {
-				// TODO: error
-				continue;
-			}
-
+		// Register the individual subroutine uniform symbols.
+		for var in var_specifiers.into_iter() {
 			let new_uniform_handle =
 				SubroutineUniformHandle(self.subroutine_uniforms.len());
 
-			match self.current_active_symbols.get_mut(&var.ident.name) {
-				Some(handle) => {
-					// TODO:
-					*handle =
+			// Check if the name is already in use.
+			if let Some(_) = ast::Primitive::parse(&var.ident) {
+				// With struct/function/variable names we always lookup the latest definition, but with primitive
+				// typenames we don't do any lookup at all; we always assume the primitive type. This means that
+				// there's no sense in creating a symbol that would have a primitive typename as the name since it
+				// will never be looked up-against.
+				walker.push_nsyntax_diag(Syntax2::ExpectedNameFoundPrimitive(
+					var.ident.span,
+				));
+				continue;
+			}
+			match self.__get_currently_active_symbol(&var.ident) {
+				Some((active, span)) => {
+					walker.push_semantic_diag(Semantic::NameAlreadyInUse {
+						new: var.ident.span,
+						existing: span,
+					});
+					*active =
 						CurrentlyActive::SubroutineUniform(new_uniform_handle);
 				}
 				None => {
@@ -4135,7 +4670,7 @@ impl Ctx {
 
 			self.subroutine_uniforms.push(SubroutineUniformSymbol {
 				def_node: node_handle,
-				type_: grammar::combine_subroutine_type_with_idents(
+				type_: grammar::combine_subroutine_type_with_arr(
 					type_.clone(),
 					var.arr,
 				),
@@ -4143,78 +4678,135 @@ impl Ctx {
 				refs: vec![var.ident.span],
 			});
 
+			let subroutine = &mut self.subroutines[type_.handle().0];
 			subroutine.uniforms.push(new_uniform_handle);
-			subroutine.refs.push(type_.span);
+			subroutine.refs.push(type_.ident_span);
 		}
 	}
 
-	/// Pushes one or more variable definitions into the current scope, and registers new variable
-	/// symbols in the current scope.
-	fn push_new_variables(
+	/// Pushes a variable definition node into the current scope, and registers new variable symbols.
+	fn push_new_variables<'a, P: TokenStreamProvider<'a>>(
 		&mut self,
-		(pairs, node): (Vec<(ast::Type, ast::Ident)>, ast::Node),
+		walker: &mut Walker<'a, P>,
+		type_: ast::Type,
+		var_specifiers: NonEmpty<NewVarSpecifier>,
+		end_pos: usize,
 		syntax: (SyntaxType, SyntaxModifiers),
 	) {
-		let node_end = node.span.end;
-		let new_handle = NodeHandle(self.arena.insert(node));
+		let node_span = Span::new(type_.span_start(), end_pos);
 
-		// Push the handle into the current scope.
-		let scope = self.__get_current_scope();
-		scope.contents.push(new_handle);
-		scope.span.end = node_end;
+		// Create the variable definition node.
+		let node_handle = self.push_node(match var_specifiers.len().get() {
+			0 => unreachable!("Ensured by type invariant"),
+			1 => {
+				let var = var_specifiers[0].clone();
+				let type_ =
+					grammar::combine_type_with_arr(type_.clone(), var.arr);
+				ast::Node {
+					span: node_span,
+					ty: ast::NodeTy::VarDef {
+						type_,
+						ident: var.ident,
+						eq_span: var.eq_span.into(),
+						init_expr: var.init_expr.into(),
+					},
+				}
+			}
+			_ => {
+				let mut vars = Vec::with_capacity(var_specifiers.len().get());
+				for var in var_specifiers.iter() {
+					vars.push((
+						grammar::combine_type_with_arr(
+							type_.clone(),
+							var.arr.clone(),
+						),
+						var.ident.clone(),
+						var.eq_span.into(),
+						var.init_expr.clone().into(),
+					));
+				}
+				ast::Node {
+					span: node_span,
+					ty: ast::NodeTy::VarDefs(vars),
+				}
+			}
+		});
 
-		// Register symbols.
-		let th = scope.variable_table;
-		for (type_, ident) in pairs {
-			if let Some(_) = ast::Primitive::parse(&ident) {
-				// TODO: Syntax error; variable cannot have name of primitive.
+		// Register the individual variable symbols.
+		let th = self.__get_current_scope().variable_table;
+		for var in var_specifiers.into_iter() {
+			let new_var_handle = VariableHandle(th.0, self.variables.len());
+
+			// Check if the name is already in use.
+			if let Some(_) = ast::Primitive::parse(&var.ident) {
+				// With struct/function/variable names we always lookup the latest definition, but with primitive
+				// typenames we don't do any lookup at all; we always assume the primitive type. This means that
+				// there's no sense in creating a symbol that would have a primitive typename as the name since it
+				// will never be looked up-against.
+				walker.push_nsyntax_diag(Syntax2::ExpectedNameFoundPrimitive(
+					var.ident.span,
+				));
 				continue;
 			}
-
-			let new_var_handle = VariableHandle(th.0, self.variables.len());
-			match self.current_active_symbols.get_mut(&ident.name) {
-				Some(handle) => {
-					match handle {
+			let is_in_top_scope = self.scope_stack.len() == 1;
+			match self.__get_currently_active_symbol(&var.ident) {
+				Some((active, span)) => {
+					let mut collision = false;
+					match active {
 						CurrentlyActive::Struct(_)
 						| CurrentlyActive::Function(_)
 						| CurrentlyActive::SubroutineType(_)
 						| CurrentlyActive::SubroutineUniform(_)
-							if self.scope_stack.len() == 1 =>
+							if is_in_top_scope =>
 						{
 							// Variables can't shadow functions/structs/subroutine uniforms in the top-level scope.
-							// TODO: Semantic error.
+							walker.push_semantic_diag(
+								Semantic::NameAlreadyInUse {
+									new: var.ident.span,
+									existing: span,
+								},
+							);
 						}
 						CurrentlyActive::Struct(_)
 						| CurrentlyActive::Function(_)
 						| CurrentlyActive::SubroutineType(_)
 						| CurrentlyActive::SubroutineUniform(_) => {}
 						CurrentlyActive::Variable(_) => {
-							if self.variables[th.0]
-								.iter()
-								.find(|s| &s.name == &ident.name)
-								.is_some()
-							{
-								// Variables can't shadow variables unless the other variable is in a different
-								// (higher) scope.
-								// TODO: Semantic error.
-							}
+							collision = true;
 						}
 					}
-					*handle = CurrentlyActive::Variable(new_var_handle);
+					*active = CurrentlyActive::Variable(new_var_handle);
+					if collision {
+						if self.variables[th.0]
+							.iter()
+							.find(|s| &s.name == &var.ident.name)
+							.is_some()
+						{
+							// Variables can't shadow variables unless the other variable is in a different
+							// (parent) scope.
+							walker.push_semantic_diag(
+								Semantic::NameAlreadyInUse {
+									new: var.ident.span,
+									existing: span,
+								},
+							);
+						}
+					}
 				}
 				None => {
 					self.current_active_symbols.insert(
-						ident.name.clone(),
+						var.ident.name.clone(),
 						CurrentlyActive::Variable(new_var_handle),
 					);
 				}
 			}
+
 			self.variables[th.0].push(VariableSymbol {
-				def_node: new_handle,
-				type_,
+				def_node: node_handle,
+				type_: grammar::combine_type_with_arr(type_.clone(), var.arr),
 				syntax,
-				name: ident.name.clone(),
-				refs: vec![ident.span],
+				name: var.ident.name,
+				refs: vec![var.ident.span],
 			});
 		}
 	}
@@ -4277,8 +4869,14 @@ impl Ctx {
 
 	/// Takes the temporary scope, to be used in an actual node.
 	fn take_temp_scope(&mut self, handle: NodeHandle) -> ast::Scope {
-		let h = self.scope_stack.pop();
-		assert_eq!(h.unwrap().0, handle);
+		let h = self.scope_stack.pop().unwrap();
+		assert_eq!(h.0, handle);
+
+		// We are closing a scope, so all currently active symbols from said scope need to be un-tracked.
+		let variable_table = &self.variables[h.1 .0];
+		for variable in variable_table.iter() {
+			self.current_active_symbols.remove(&variable.name);
+		}
 
 		let block_node = self.arena.remove(handle.0).unwrap();
 		match block_node.ty {
@@ -4289,8 +4887,14 @@ impl Ctx {
 
 	/// Takes a temporary scope, that will be replaced with a different node in-place.
 	fn replace_temp_scope(&mut self, handle: NodeHandle) -> ast::Scope {
-		let h = self.scope_stack.pop();
-		assert_eq!(h.unwrap().0, handle);
+		let h = self.scope_stack.pop().unwrap();
+		assert_eq!(h.0, handle);
+
+		// We are closing a scope, so all currently active symbols from said scope need to be un-tracked.
+		let variable_table = &self.variables[h.1 .0];
+		for variable in variable_table.iter() {
+			self.current_active_symbols.remove(&variable.name);
+		}
 
 		let mut node = ast::Node {
 			span: Span::new(0, 0),
@@ -4316,10 +4920,14 @@ impl Ctx {
 		self.arena.get(handle.0).unwrap()
 	}
 
+	fn remove_node(&mut self, handle: NodeHandle) -> ast::Node {
+		self.arena.remove(handle.0).unwrap()
+	}
+
 	/// Returns a handle to a struct symbol, and registers the use site.
 	fn resolve_struct(&mut self, ident: &ast::Ident) -> StructHandle {
 		for (i, symbol) in self.structs.iter_mut().enumerate().rev() {
-			if &ident.name == &symbol.name {
+			if &ident.name == &symbol.name && !symbol.is_interface {
 				symbol.refs.push(ident.span);
 				return StructHandle(i);
 			}
@@ -4393,12 +5001,14 @@ impl Ctx {
 			.enumerate()
 			.rev()
 			.find(|(_, symbol)| &ident.name == &symbol.name);
-		let struct_ = self
-			.structs
-			.iter_mut()
-			.enumerate()
-			.rev()
-			.find(|(_, symbol)| &ident.name == &symbol.name);
+		let struct_ =
+			self.structs
+				.iter_mut()
+				.enumerate()
+				.rev()
+				.find(|(_, symbol)| {
+					&ident.name == &symbol.name && !symbol.is_interface
+				});
 		let subroutine_ = self
 			.subroutine_uniforms
 			.iter_mut()
@@ -4459,16 +5069,50 @@ impl Ctx {
 
 	/// Converts this context into the abstract syntax tree. This is done once parsing has finished in order to
 	/// remove fields that were only necessary during the parsing process itself, such as any stacks or
-	/// state-tracking variables.
+	/// temporary/state-tracking variables.
 	fn into_ast(self) -> Ast {
 		Ast {
 			arena: self.arena,
+			root_handle: self.root_handle,
+			primitive_refs: self.primitive_refs,
+			swizzle_refs: self.swizzle_refs,
 			structs: self.structs,
+			interfaces: self.interfaces,
 			functions: self.functions,
+			subroutines: self.subroutines,
+			subroutine_uniforms: self.subroutine_uniforms,
 			variables: self.variables,
 		}
 	}
 
+	/// (!) Internal: do not use outside of impl.
+	fn __get_currently_active_symbol(
+		&mut self,
+		ident: &ast::Ident,
+	) -> Option<(&mut CurrentlyActive, Span)> {
+		let span = match self.current_active_symbols.get_mut(&ident.name) {
+			Some(symbol) => match symbol {
+				CurrentlyActive::Struct(h) => self.structs[h.0].refs[0],
+				CurrentlyActive::Function(h) => self.functions[h.0].refs[0],
+				CurrentlyActive::SubroutineType(h) => {
+					self.subroutines[h.0].refs[0]
+				}
+				CurrentlyActive::SubroutineUniform(h) => {
+					self.subroutine_uniforms[h.0].refs[0]
+				}
+				CurrentlyActive::Variable(h) => {
+					self.variables[h.0][h.1].refs[0]
+				}
+			},
+			None => return None,
+		};
+		Some((
+			self.current_active_symbols.get_mut(&ident.name).unwrap(),
+			span,
+		))
+	}
+
+	/// (!) Internal: do not use outside of impl.
 	fn __get_current_scope(&mut self) -> &mut ast::Scope {
 		use ast::NodeTy;
 		let scope_node = &mut self.arena[self.scope_stack.last().unwrap().0 .0];
@@ -4489,20 +5133,21 @@ struct NewVarSpecifier {
 	/// The identifier.
 	ident: ast::Ident,
 	/// Any array-size specifiers.
-	arr: Option<Vec<ast::ArrSize>>,
+	arr: Option<Spanned<Vec<ast::ArrSize>>>,
 	/// Span of the optional equals sign.
 	eq_span: Option<Span>,
 	/// Optional initialization expression.
 	init_expr: Option<ast::Expr>,
 	/// Span of all relevant bits for this variable, e.g.
 	/// ```text
-	///  int  |   foobar =   |   baz[3] = {5}
-	/// ^   ^ |  ^        ^  |  ^            ^
+	///  int  |   foobar =   |   baz[3] = {5, 1, 3}
+	/// ^   ^ |  ^        ^  |  ^                  ^
 	/// ```
 	span: Span,
 }
 
 impl NewVarSpecifier {
+	/// Whether this new-variable specifier contains (potentially incomplete) initialization.
 	fn contains_init(&self) -> Option<Span> {
 		let Some(eq_span) = self.eq_span else { return None; };
 		match &self.init_expr {

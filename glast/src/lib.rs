@@ -161,3 +161,303 @@ pub enum Either3<A, B, C> {
 	B(B),
 	C(C),
 }
+
+/// A non-empty vector, guaranteed to always have at least one element.
+///
+/// This is just a wrapper struct around [`Vec<T>`]. This implements a lot of commonly used (stable) `Vec` methods,
+/// includes derives for commonly used traits, as well as implements [`AsRef`]/[`AsMut`],
+/// [`Deref`](std::ops::Deref)/[`DerefMut`](std::ops::DerefMut),
+/// [`Index`](std::ops::Index)/[`IndexMut`](std::ops::IndexMut), [`Default`], [`IntoIterator`] for ref/mut/owned
+/// iteration, and [`PartialEq`] against all array/slice types.
+///
+/// # Examples
+/// ```rust
+/// // A non-empty vector must be initialized with one element.
+/// let mut vec = NonEmpty::new(5i32);
+/// assert_eq!(vec.len(), 1);
+///
+/// // You can push elements into the vector like normal.
+/// vec.push(10);
+/// vec.push(100);
+///
+/// assert_eq!(vec.len(), 3);
+///
+/// // You can iterate (immutably/mutably/by value) over the vector just like normal.
+/// for i in &vec {
+///     println!("{i}");
+/// }
+///
+/// // The vector's contents can be compared just like normal.
+/// assert_eq!(vec, [5, 10, 100]);
+///
+/// // You can remove elements from the vector, ** apart from the last one. **
+/// assert_eq!(vec.pop(), Some(100));
+/// assert_eq!(vec.pop(), Some(10));
+/// assert_eq!(vec.pop(), None);
+///
+/// assert_eq!(vec.len(), 1);
+///
+/// // To remove the final element, you must destruct the vector.
+/// // This method consumes the vector in the process.
+/// assert_eq!(vec.destruct(), 5);
+///
+/// // `vec` no longer exists.
+/// ```
+/// For rare cases when access to the underlying vector is necessary, because the API of this type doesn't/can't
+/// implement something (or for other reasons), use the [`as_vec()`](NonEmpty::as_vec()) and
+/// [`as_mut_vec()`](NonEmpty::as_mut_vec()) methods. If using the mutable method, the caller must ensure the type
+/// invariant is upheld at all times, otherwise undefined behaviour may occur.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
+#[repr(transparent)]
+pub struct NonEmpty<T>(Vec<T>);
+
+impl<T> NonEmpty<T> {
+	/// Constructs a new `NonEmpty<T>`.
+	pub fn new(item: T) -> Self {
+		Self(vec![item])
+	}
+
+	/// Tries to construct a new `NonEmpty<T>` from a `Vec<T>`. This succeeds only if the vector has at least one
+	/// element.
+	pub fn from_vec(vec: Vec<T>) -> Option<Self> {
+		if vec.is_empty() {
+			None
+		} else {
+			Some(Self(vec))
+		}
+	}
+
+	/// Appends an element to the back of the vector.
+	pub fn push(&mut self, item: T) {
+		self.0.push(item);
+	}
+
+	/// Inserts an element at position `index` within the vector, shifting all elements after it to the right.
+	pub fn insert(&mut self, index: usize, item: T) {
+		self.0.insert(index, item);
+	}
+
+	/// Returns a reference to an element at position `index`, or [`None`] if the index is out of bounds.
+	pub fn get(&self, index: usize) -> Option<&T> {
+		self.0.get(index)
+	}
+
+	/// Returns a mutable reference to an element at position `index`, or [`None`] if the index is out of bounds.
+	pub fn get_mut(&mut self, index: usize) -> Option<&mut T> {
+		self.0.get_mut(index)
+	}
+
+	/// Removes the last element from the vector and returns it, or [`None`] if the vector contains only one
+	/// element.
+	pub fn pop(&mut self) -> Option<T> {
+		if self.0.len() == 1 {
+			None
+		} else {
+			self.0.pop()
+		}
+	}
+
+	/// Removes the element at position `index` from the vector and returns it, or [`None`] if the vector contains
+	/// only one element. If the vector contains only one element, use the [`NonEmpty::destruct()`] function
+	/// instead.
+	pub fn remove(&mut self, index: usize) -> Option<T> {
+		if self.0.len() == 1 {
+			None
+		} else {
+			Some(self.0.remove(index))
+		}
+	}
+
+	/// Destructs this non-empty vector, returning the last element.
+	///
+	/// This is implemented in this manner because removing the last element would make this non-empty vector
+	/// empty, which would break the invariant. Hence, this method must consume the value to prevent it from being
+	/// accessed afterwards.
+	///
+	/// # Panics
+	/// If this vector has more than one element, this method will panic.
+	pub fn destruct(mut self) -> T {
+		if self.0.len() > 1 {
+			panic!("NonEmpty vector cannot be destructed because it has more than 1 element")
+		}
+		self.0.remove(0)
+	}
+
+	/// Appends the other non-empty vector into this non-empty vector.
+	pub fn append(&mut self, mut other: Self) {
+		self.0.append(&mut other.0);
+	}
+
+	/// Returns the number of elements in the vector.
+	pub fn len(&self) -> std::num::NonZeroUsize {
+		unsafe { std::num::NonZeroUsize::new_unchecked(self.0.len()) }
+	}
+
+	/// Returns a reference to the first element of the vector.
+	pub fn first(&self) -> &T {
+		self.0.first().unwrap()
+	}
+
+	/// Returns a mutable reference to the first element of the vector.
+	pub fn first_mut(&mut self) -> &mut T {
+		self.0.first_mut().unwrap()
+	}
+
+	/// Returns a reference to the last element of the vector.
+	pub fn last(&self) -> &T {
+		self.0.last().unwrap()
+	}
+
+	/// Returns a mutable reference to the last element of the vector.
+	pub fn last_mut(&mut self) -> &mut T {
+		self.0.last_mut().unwrap()
+	}
+
+	/// Returns a reference to the underlying vector.
+	///
+	/// # Invariants
+	/// The vector has at least one element.
+	pub fn as_vec(&self) -> &Vec<T> {
+		&self.0
+	}
+
+	/// Returns a mutable reference to the underlying vector.
+	///
+	/// # Safety
+	/// The caller must ensure that the vector always retains at least one element. Failure to do so will break the
+	/// invariant on the `NonEmpty` type, and potentially lead to undefined behaviour.
+	pub fn as_mut_vec(&mut self) -> &mut Vec<T> {
+		&mut self.0
+	}
+
+	/// Returns the underlying vector, destructuring this type in the process.
+	///
+	/// # Invariants
+	/// The vector has at least one element.
+	pub fn into_vec(self) -> Vec<T> {
+		self.0
+	}
+}
+
+impl<T: Default> Default for NonEmpty<T> {
+	fn default() -> Self {
+		Self(vec![T::default()])
+	}
+}
+
+impl<T> std::ops::Index<usize> for NonEmpty<T> {
+	type Output = T;
+
+	fn index(&self, index: usize) -> &Self::Output {
+		&self.0[index]
+	}
+}
+
+impl<T> std::ops::IndexMut<usize> for NonEmpty<T> {
+	fn index_mut(&mut self, index: usize) -> &mut Self::Output {
+		&mut self.0[index]
+	}
+}
+
+impl<T> AsRef<[T]> for NonEmpty<T> {
+	fn as_ref(&self) -> &[T] {
+		self.0.as_ref()
+	}
+}
+
+impl<T> AsMut<[T]> for NonEmpty<T> {
+	fn as_mut(&mut self) -> &mut [T] {
+		self.0.as_mut()
+	}
+}
+
+impl<T> std::ops::Deref for NonEmpty<T> {
+	type Target = [T];
+
+	fn deref(&self) -> &Self::Target {
+		self.0.deref()
+	}
+}
+
+impl<T> std::ops::DerefMut for NonEmpty<T> {
+	fn deref_mut(&mut self) -> &mut Self::Target {
+		self.0.deref_mut()
+	}
+}
+
+impl<T> IntoIterator for NonEmpty<T> {
+	type Item = T;
+
+	type IntoIter = std::vec::IntoIter<Self::Item>;
+
+	fn into_iter(self) -> Self::IntoIter {
+		self.0.into_iter()
+	}
+}
+
+impl<'a, T> IntoIterator for &'a NonEmpty<T> {
+	type Item = &'a T;
+
+	type IntoIter = std::slice::Iter<'a, T>;
+
+	fn into_iter(self) -> Self::IntoIter {
+		self.0.iter()
+	}
+}
+
+impl<'a, T> IntoIterator for &'a mut NonEmpty<T> {
+	type Item = &'a mut T;
+
+	type IntoIter = std::slice::IterMut<'a, T>;
+
+	fn into_iter(self) -> Self::IntoIter {
+		self.0.iter_mut()
+	}
+}
+
+impl<T: PartialEq<T>, const N: usize> PartialEq<&[T; N]> for NonEmpty<T> {
+	fn eq(&self, other: &&[T; N]) -> bool {
+		&self.0 == other
+	}
+}
+
+impl<T: PartialEq<T>> PartialEq<&[T]> for NonEmpty<T> {
+	fn eq(&self, other: &&[T]) -> bool {
+		&self.0 == other
+	}
+}
+
+impl<T: PartialEq<T>, const N: usize> PartialEq<&mut [T; N]> for NonEmpty<T> {
+	fn eq(&self, other: &&mut [T; N]) -> bool {
+		&self.0 == &**other
+	}
+}
+
+impl<T: PartialEq<T>, const N: usize> PartialEq<[T; N]> for NonEmpty<T> {
+	fn eq(&self, other: &[T; N]) -> bool {
+		&self.0 == other
+	}
+}
+
+impl<T: PartialEq<T>> PartialEq<[T]> for NonEmpty<T> {
+	fn eq(&self, other: &[T]) -> bool {
+		&self.0 == other
+	}
+}
+
+/// Crate-level checks.
+#[cfg(test)]
+mod checks {
+	use crate::{parser::ast::Omittable, NonEmpty};
+	use std::mem::size_of;
+
+	#[test]
+	fn sizes() {
+		assert_eq!(size_of::<Option<i32>>(), size_of::<Omittable<i32>>());
+		assert_eq!(size_of::<Vec<i32>>(), size_of::<NonEmpty<i32>>());
+		assert_eq!(
+			size_of::<Option<Vec<i32>>>(),
+			size_of::<Omittable<NonEmpty<i32>>>()
+		);
+	}
+}

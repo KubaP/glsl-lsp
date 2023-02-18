@@ -8,14 +8,37 @@ use tower_lsp::lsp_types::{
 
 /// Converts [`Syntax`] and [`Semantic`] diagnostics to LSP diagnostics.
 pub fn convert(
-	syntax_diags: &[Syntax],
+	syntax_diags: &[Syntax2],
 	semantic_diags: &[Semantic],
 	diags: &mut Vec<Diagnostic>,
 	file: &crate::file::File,
 	supports_related_info: bool,
 ) {
 	for diag in syntax_diags {
-		let (message, span, related) = convert_syntax(diag.clone());
+		let (message, span, related) = match diag {
+			Syntax2::MissingPunct { char, pos, ctx } => {
+				missing_punct(*char, *pos, *ctx)
+			}
+			Syntax2::ForRemoval { item, span, ctx } => {
+				for_removal(*item, *span, *ctx)
+			}
+			Syntax2::ExpectedGrammar { item, pos } => {
+				expected_grammar(*item, *pos)
+			}
+			Syntax2::IncorrectOrder { msg, span } => {
+				(format!("Syntax error: {msg}"), *span, None)
+			}
+			Syntax2::NotAllowedInNestedScope { stmt, span } => {
+				not_allowed_in_nested_scope(*stmt, *span)
+			}
+			Syntax2::ExpectedNameFoundPrimitive(span) => (
+				format!(
+					"Syntax error: expected a name, found a primitive type"
+				),
+				*span,
+				None,
+			),
+		};
 		diags.push(Diagnostic {
 			range: file.span_to_lsp(span),
 			severity: Some(DiagnosticSeverity::ERROR),
@@ -196,18 +219,156 @@ fn convert_semantic(
 			span,
 			None
 		),
-		_ => unreachable!(),
+		_ => (
+			format!("UNIMPLEMENTED DIAG"),
+			Span::new(0, 0),
+			None
+		),
 	};
 	(
 		message,
 		span,
-		diag.get_severity(),
-		diag.get_error_code(),
+		diag.severity(),
+		diag.error_code(),
 		related,
 	)
 }
 
 type DiagReturn = (String, Span, Option<(String, Span)>);
+
+#[rustfmt::skip]
+fn missing_punct(char: char, pos: usize, ctx: DiagCtx) -> DiagReturn {
+	let msg = match (char, ctx) {
+		(';', DiagCtx::ExprStmt) => format!("Syntax error: expected a semi-colon `;` after an expression"),
+		(';', DiagCtx::VarDef) => format!("Syntax error: expected a semi-colon `;` after a variable definition"),
+		(';', DiagCtx::FnDecl) => format!("Syntax error: expected a semi-colon `;` after a function declaration"),
+		(';', DiagCtx::StructDef) => format!("Syntax error: expected a semi-colon `;` after a struct definition"),
+		(';', DiagCtx::InterfaceBlockDef) => format!("Syntax error: expected a semi-colon `;` after an interface block definition"),
+		(';', DiagCtx::SubroutineType) => format!("Syntax error: expected a semi-colon `;` after a subroutine type declaration"),
+		(';', DiagCtx::SubroutineUniform) => format!("Syntax error: expected a semi-colon `;` after a subroutine uniform definition"),
+		(')', DiagCtx::ParamList) => format!("Syntax error: expected a closing parenthesis `)` to finish a parameter list"),
+		(',', DiagCtx::ParamList) => format!("Syntax error: expected a comma `,` between the parameters"),
+		(')', DiagCtx::AssociationList) => format!("Syntax error: expected a closing parenthesis `)` to finish a subroutine association list"),
+		(',', DiagCtx::AssociationList) => format!("Syntax error: expected a comma `,` between the subroutine types"),
+		('{', DiagCtx::StructDef) => format!("Syntax error: expected an opening brace `{{` after the struct name"),
+		// Generic fallback
+		(_, _) => format!("Syntax error: expected a `{char}`"),
+	};
+	(msg, Span::new_zero_width(pos), None)
+}
+
+#[rustfmt::skip]
+fn for_removal(item: ForRemoval, span: Span, ctx: DiagCtx) -> DiagReturn {
+	let msg = match (item, ctx) {
+		(ForRemoval::Expr, DiagCtx::ParamList) => format!(
+			"Syntax error: expected a type, found an expression"
+		),
+		(ForRemoval::Something, DiagCtx::ParamList) => format!(
+			"Syntax error: expected a type, found something else"
+		),
+		(ForRemoval::VarInitialization, DiagCtx::ParamList) => format!(
+			"Syntax error: parameters cannot be initialized"
+		),
+		(ForRemoval::Something, DiagCtx::AssociationList) => format!(
+			"Syntax error: expected a subroutine type, found something else"
+		),
+		(ForRemoval::VarInitialization, DiagCtx::StructField) => format!(
+			"Syntax error: struct field cannot be initialized"
+		),
+		(ForRemoval::Something, DiagCtx::StructField) => format!(
+			"Syntax error: expected a struct field definition, found something else"
+		),
+		(ForRemoval::VarInitialization, DiagCtx::InterfaceField) => format!(
+			"Syntax error: interface field cannot be initialized"
+		),
+		(ForRemoval::Something, DiagCtx::InterfaceField) => format!(
+			"Syntax error: expected an interface field definition, found something else"
+		),
+		(ForRemoval::Keyword("subroutine"), DiagCtx::InterfaceBlockDef) => format!(
+			"Syntax error: interface block cannot have a `subroutine` qualifier"
+		),
+		(ForRemoval::AssociationList, DiagCtx::SubroutineType) => format!(
+			"Syntax error: subroutine type declaration cannot have an association list"
+		),
+		(ForRemoval::Keyword("uniform"), DiagCtx::SubroutineType) => format!(
+			"Syntax error: subroutine type declaration cannot have a `uniform` qualifier"
+		),
+		(ForRemoval::Keyword("uniform"), DiagCtx::SubroutineAssociatedFn) => format!(
+			"Syntax error: subroutine function definition cannot have a `uniform` qualifier"
+		),
+		(ForRemoval::AssociationList, DiagCtx::SubroutineUniform) => format!(
+			"Syntax error: subroutine uniform definition cannot have an association list"
+		),
+		(ForRemoval::VarInitialization, DiagCtx::SubroutineUniform) => format!(
+			"Syntax error: subroutine uniforms cannot be initialized"
+		),
+		// We can't really have a generic fallback.
+		(_, _) => format!("Syntax error: UNIMPLEMENTED"),
+	};
+	(msg, span, None)
+}
+
+#[rustfmt::skip]
+fn expected_grammar(item: ExpectedGrammar, pos: usize) -> DiagReturn {
+	let msg = match item {
+		ExpectedGrammar::AfterQualifiers => format!(
+			"Syntax error: expected a statement after the qualifiers"
+		),
+		ExpectedGrammar::AfterSubroutineQualifiers => format!(
+			"Syntax error: expected a statement after the qualifiers"
+		),
+		ExpectedGrammar::AfterType => format!(
+			"Syntax error: expected a variable or function after the type"
+		),
+		ExpectedGrammar::AfterSubroutineType => format!(
+			"Syntax error: expected a subroutine type, an associated function, or a subroutine uniform after the subroutine type"
+		),
+		ExpectedGrammar::NewVarSpecifier => format!(
+			"Syntax error: expected a variable name (and possible initialization) after the type"
+		),
+		ExpectedGrammar::Parameter => format!(
+			"Syntax error: expected a parameter"
+		),
+		ExpectedGrammar::AssociationList => format!(
+			"Syntax error: expected an association list"
+		),
+		ExpectedGrammar::SubroutineTypename => format!(
+			"Syntax error: expected a subroutine type"
+		),
+		ExpectedGrammar::QualifierBeforeInterfaceBlock => format!(
+			"Syntax error: expected qualifiers before an interface block"
+		),
+		ExpectedGrammar::AfterStructKw => format!(
+			"Syntax error: expected a struct name after the `struct` keyword"
+		),
+		ExpectedGrammar::StructField => format!(
+			"Syntax error: expected a field inside the struct body"
+		),
+		ExpectedGrammar::InterfaceField => format!(
+			"Syntax error: expected a field inside the interface block"
+		),
+		ExpectedGrammar::Keyword(kw) => format!(
+			"Syntax error: expected the `{kw}` keyword"
+		)
+	};
+	(msg, Span::new_zero_width(pos), None)
+}
+
+#[rustfmt::skip]
+fn not_allowed_in_nested_scope(stmt: StmtType, span: Span) -> DiagReturn {
+	let msg = format!(
+		"Syntax error: {} must be in the top-level scope",
+		match stmt {
+			StmtType::FnDecl => "a function declaration",
+			StmtType::FnDef => "a function definition",
+			StmtType::Struct => "a struct definition",
+			StmtType::Interface => "an interface block",
+			StmtType::SubType => "a subroutine type",
+			StmtType::SubUniform => "a subroutine uniform",
+		}
+	);
+	(msg, span, None)
+}
 
 #[rustfmt::skip]
 fn convert_syntax(diag: Syntax) -> DiagReturn {
@@ -599,11 +760,6 @@ fn convert_syntax_stmt(diag: StmtDiag) -> DiagReturn {
 			None
 		),
 		/* SUBROUTINES */
-		StmtDiag::SubroutineExpectedVarDefAfterUniformKw(pos) => (
-			format!("Syntax error: expected a variable definition after the `uniform` keyword"),
-			pos,
-			None
-		),
 		StmtDiag::SubroutineExpectedTypeFuncUniformAfterKw(pos) => (
 			format!("Syntax error: expected a subroutine type declaration, a subroutine associated function definition, or a subroutine uniform definition after the `subroutine` keyword"),
 			pos,
@@ -650,38 +806,38 @@ fn convert_syntax_stmt(diag: StmtDiag) -> DiagReturn {
 			None
 		),
 		/* STRUCTS */
-		StmtDiag::StructExpectedIdentAfterKw(pos) => (
+		StmtDiag::StructExpectedNameAfterKw(pos) => (
 			format!("Syntax error: expected an name after the `struct` keyword"),
 			pos,
 			None
 		),
-		StmtDiag::StructExpectedLBraceAfterIdent(pos) => (
-			format!("Syntax error: expected an opening brace `{{` after the struct name"),
+		StmtDiag::StructExpectedLBraceAfterName(pos) => (
+			format!("Syntax error: expected an opening brace `{{` after the struct's name"),
 			pos,
 			None
 		),
 		StmtDiag::StructInvalidStmtInBody(span) => (
-			format!("Syntax error: found an invalid statement within the struct body; only variable definitions are allowed"),
+			format!("Syntax error: expected a member definition; found a different statement"),
 			span,
 			None
 		),
-		StmtDiag::StructExpectedAtLeastOneStmtInBody(span) => (
-			format!("Syntax error: found a struct body that is empty"),
+		StmtDiag::StructExpectedAtLeastOneMemberInBody(span) => (
+			format!("Syntax error: expected at least one member within the struct's body"),
 			span,
 			None
 		),
 		StmtDiag::StructExpectedInstanceOrSemiAfterBody(pos) => (
-			format!("Syntax error: expected a semi-colon `;` or an instance name after the struct body"),
+			format!("Syntax error: expected a semi-colon `;` or instance name(s) after the struct's body"),
 			pos,
 			None
 		),
 		StmtDiag::StructExpectedSemiAfterInstance(pos) => (
-			format!("Syntax error: expected a semi-colon `;` after the struct's instance name"),
+			format!("Syntax error: expected a semi-colon `;` after the instance name(s)"),
 			pos,
 			None
 		),
 		StmtDiag::StructDeclIsIllegal(span) => (
-			format!("Syntax error: found a struct declaration; this is an illegal GLSL statement"),
+			format!("Syntax error: GLSL does not allow struct declarations"),
 			span,
 			None
 		),

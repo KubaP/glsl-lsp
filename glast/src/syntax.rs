@@ -40,6 +40,9 @@ pub enum SyntaxType {
 	Struct,
 	/// A subroutine type name.
 	SubroutineType,
+	/// An interface block name. **This is not** the name of an instance of an interface block, but of the block
+	/// itself.
+	InterfaceBlock,
 	/// A function.
 	Function,
 	/// A subroutine.

@@ -11,8 +11,9 @@ use super::{
 };
 use crate::{
 	diag::{
-		ExprDiag, PreprocDefineDiag, PreprocExtDiag, PreprocLineDiag,
-		PreprocVersionDiag, Semantic, StmtDiag, Syntax,
+		DiagCtx, ExpectedGrammar, ExprDiag, ForRemoval, PreprocDefineDiag,
+		PreprocExtDiag, PreprocLineDiag, PreprocVersionDiag, Semantic,
+		StmtDiag, Syntax, Syntax2,
 	},
 	lexer::{
 		preprocessor::{
@@ -22,7 +23,7 @@ use crate::{
 		OpTy, Token,
 	},
 	syntax::{SyntaxModifiers, SyntaxToken, SyntaxType},
-	Either, Span, Spanned,
+	Either, NonEmpty, Span, Spanned,
 };
 
 /// Consumes tokens until a beginning of a new statement is reached.
@@ -60,12 +61,10 @@ fn invalidate_qualifiers<'a, P: TokenStreamProvider<'a>>(
 	qualifiers: Vec<Qualifier>,
 ) {
 	if let Some(q) = qualifiers.last() {
-		walker.push_syntax_diag(Syntax::Stmt(
-			StmtDiag::FoundQualifiersBeforeStmt(Span::new(
-				qualifiers.first().unwrap().span.start,
-				q.span.end,
-			)),
-		));
+		walker.push_nsyntax_diag(Syntax2::ExpectedGrammar {
+			item: ExpectedGrammar::AfterQualifiers,
+			pos: q.span.end,
+		});
 	}
 }
 
@@ -98,20 +97,19 @@ pub(super) fn parse_stmt<'a, P: TokenStreamProvider<'a>>(
 			let semi_span = token_span;
 			walker.push_colour(semi_span, SyntaxType::Punctuation);
 			walker.advance();
-			if !qualifiers.is_empty() {
-				ctx.push_node(Node {
+			match NonEmpty::from_vec(qualifiers) {
+				Some(qualifiers) => ctx.push_node(Node {
 					span: Span::new(
-						qualifiers.first().unwrap().span.start,
-						qualifiers.last().unwrap().span.end,
+						qualifiers.first().span.start,
+						qualifiers.last().span.end,
 					),
 					ty: NodeTy::Qualifiers(qualifiers),
-				});
-			} else {
-				ctx.push_node(Node {
+				}),
+				None => ctx.push_node(Node {
 					span: semi_span,
 					ty: NodeTy::Empty,
-				});
-			}
+				}),
+			};
 		}
 		Token::Struct => parse_struct(walker, ctx, qualifiers, token_span),
 		Token::Directive(stream) => {
@@ -199,9 +197,7 @@ pub(super) fn parse_stmt<'a, P: TokenStreamProvider<'a>>(
 			walker.push_syntax_diag(Syntax::FoundIllegalChar(token_span, c));
 			walker.advance();
 		}
-		_ => {} /* _ => try_parse_definition_declaration_expr(
-					walker, ctx, qualifiers, false,
-				), */
+		_ => parse_non_kw_stmt(walker, ctx, qualifiers),
 	}
 }
 
@@ -817,22 +813,18 @@ fn try_parse_qualifiers<'a, P: TokenStreamProvider<'a>>(
 
 	qualifiers
 }
-/*
+
 /// Tries to parse a variable definition or a function declaration/definition, an expression statement, or an
 /// interface block.
 ///
 /// This function attempts to look for a statement at the current position. If this fails, error recovery till the
 /// next clear statement delineation occurs.
-///
-/// - `parsing_last_for_stmt` - Set to `true` if this function is attempting to parse the increment statement in a
-///   for loop header.
-fn try_parse_definition_declaration_expr<'a, P: TokenStreamProvider<'a>>(
+fn parse_non_kw_stmt<'a, P: TokenStreamProvider<'a>>(
 	walker: &mut Walker<'a, P>,
 	ctx: &mut Ctx,
 	qualifiers: Vec<Qualifier>,
-	parsing_last_for_stmt: bool,
 ) {
-	// We attempt to parse a type specifier at the current position.
+	// We attempt to parse a type specifier at the current position, and if that fails an expression.
 	let e = match try_parse_type_specifier(walker, ctx, [Token::Semi]) {
 		Ok((mut type_, mut syntax, mut semantic, mut colours)) => {
 			// This must be a variable definition or function declaration/definition.
@@ -840,24 +832,16 @@ fn try_parse_definition_declaration_expr<'a, P: TokenStreamProvider<'a>>(
 			walker.append_syntax_diags(&mut syntax);
 			walker.append_semantic_diags(&mut semantic);
 
+			type_.qualifiers = NonEmpty::from_vec(qualifiers).into();
+
 			let (token, token_span) = match walker.peek() {
 				Some(t) => t,
 				None => {
-					// We are lacking an identifier after the type.
-					invalidate_qualifiers(walker, qualifiers);
-					if parsing_last_for_stmt {
-						walker.push_syntax_diag(Syntax::Stmt(
-							StmtDiag::ForExpectedRParenAfterStmts(
-								type_.span.next_single_width(),
-							),
-						))
-					} else {
-						walker.push_syntax_diag(Syntax::Stmt(
-							StmtDiag::TypeExpectedIdentsAfterType(
-								type_.span.next_single_width(),
-							),
-						));
-					}
+					// We expect something after the type specifier.
+					walker.push_nsyntax_diag(Syntax2::ExpectedGrammar {
+						item: ExpectedGrammar::AfterType,
+						pos: walker.get_last_span().end,
+					});
 					return;
 				}
 			};
@@ -868,7 +852,6 @@ fn try_parse_definition_declaration_expr<'a, P: TokenStreamProvider<'a>>(
 					Some(next) => match next.0 {
 						Token::LParen => {
 							// We have a function declaration/definition.
-							type_.qualifiers = qualifiers;
 							let l_paren_span = next.1;
 							let ident = Ident {
 								name: i.clone(),
@@ -892,39 +875,21 @@ fn try_parse_definition_declaration_expr<'a, P: TokenStreamProvider<'a>>(
 					},
 					None => {}
 				},
-				Token::RParen if parsing_last_for_stmt => {
-					// We are lacking an identifier.
-					invalidate_qualifiers(walker, qualifiers);
-					if parsing_last_for_stmt {
-						walker.push_syntax_diag(Syntax::Stmt(
-							StmtDiag::ForExpectedRParenAfterStmts(
-								type_.span.next_single_width(),
-							),
-						))
-					} else {
-						walker.push_syntax_diag(Syntax::Stmt(
-							StmtDiag::TypeExpectedIdentsAfterType(
-								type_.span.next_single_width(),
-							),
-						));
-					}
-					return;
-				}
 				_ => {}
 			}
 
 			// We don't have a function declaration/definition, so this must be a variable definition.
 
-			let ident_info = match try_parse_new_decl_def_idents_with_type_info(
+			let var_specifiers = match try_parse_new_var_specifiers(
 				walker,
 				ctx,
 				[Token::Semi],
-				false,
 				if walker.parsing_struct {
 					SyntaxType::Field
 				} else {
 					SyntaxType::Variable
 				},
+				false,
 			) {
 				Ok((i, mut syntax, mut semantic, mut colours)) => {
 					walker.append_colours(&mut colours);
@@ -939,250 +904,103 @@ fn try_parse_definition_declaration_expr<'a, P: TokenStreamProvider<'a>>(
 
 					if let Some(expr) = expr {
 						// We have a type specifier, followed by a second expression but the second expression
-						// isn't one or more identifiers suitable for a variable definition. We treat the first
-						// expression as an incomplete type grammar and the second expression as a standalone
-						// expression.
-						invalidate_qualifiers(walker, qualifiers);
-						if parsing_last_for_stmt {
-							walker.push_syntax_diag(Syntax::Stmt(
-								StmtDiag::ForExpectedRParenAfterStmts(
-									expr.span.next_single_width(),
-								),
-							))
-						} else {
-							walker.push_syntax_diag(Syntax::Stmt(
-								StmtDiag::TypeExpectedIdentsAfterType(
-									type_.span.next_single_width(),
-								),
-							));
-						}
+						// isn't one or more new variable specifiers. The best error recovery strategy is to treat
+						// the type specifier as a standalone type specifier, and the second expression as an
+						// expression statement on its own.
+						walker.push_nsyntax_diag(Syntax2::ExpectedGrammar {
+							item: ExpectedGrammar::AfterType,
+							pos: type_.ty_specifier_span.end,
+						});
 						ctx.push_node(Node {
-							span: expr.span,
+							span: Span::new(
+								if let Omittable::Some(qualifiers) =
+									&type_.qualifiers
+								{
+									qualifiers.first().span.start
+								} else {
+									type_.ty_specifier_span.start
+								},
+								type_.ty_specifier_span.end,
+							),
+							ty: NodeTy::TypeSpecifier(type_),
+						});
+
+						// We expect a `;` after an expression to make it into a statement.
+						let semi_span = match walker.peek() {
+							Some((token, span)) => {
+								if *token == Token::Semi {
+									walker.push_colour(
+										span,
+										SyntaxType::Punctuation,
+									);
+									walker.advance();
+									Some(span)
+								} else {
+									None
+								}
+							}
+							None => None,
+						};
+						let expr_end = expr.span.end;
+						ctx.push_node(Node {
+							span: if let Some(semi_span) = semi_span {
+								Span::new(expr.span.start, semi_span.end)
+							} else {
+								expr.span
+							},
 							ty: NodeTy::Expr(expr),
 						});
-						seek_next_stmt(walker);
-					} else {
-						// We have a type specifier followed by something that can't be parsed as any expression.
-						invalidate_qualifiers(walker, qualifiers);
-						if parsing_last_for_stmt {
-							walker.push_syntax_diag(Syntax::Stmt(
-								StmtDiag::ForExpectedRParenAfterStmts(
-									type_.span.next_single_width(),
-								),
-							))
-						} else {
-							walker.push_syntax_diag(Syntax::Stmt(
-								StmtDiag::TypeExpectedIdentsAfterType(
-									type_.span.next_single_width(),
-								),
-							));
-						}
-					}
-					return;
-				}
-			};
-			let ident_span = ident_info.last().unwrap().0.span;
-			type_.qualifiers = qualifiers;
-
-			fn var_def(
-				type_: Type,
-				idents: Vec<(Ident, Vec<ArrSize>, Span)>,
-				end_pos: usize,
-			) -> (Vec<(Type, Ident)>, Node) {
-				let span = Span::new(type_.span.start, end_pos);
-				let mut vars = combine_type_with_idents(type_, idents);
-				match vars.len() {
-					1 => {
-						let (type_, ident) = vars.remove(0);
-						(
-							vec![(type_.clone(), ident.clone())],
-							Node {
-								span,
-								ty: NodeTy::VarDef { type_, ident },
-							},
-						)
-					}
-					_ => (
-						vars.clone(),
-						Node {
-							span,
-							ty: NodeTy::VarDefs(vars),
-						},
-					),
-				}
-			}
-
-			fn var_def_init(
-				type_: Type,
-				idents: Vec<(Ident, Vec<ArrSize>, Span)>,
-				value: Option<Expr>,
-				end_pos: usize,
-			) -> (Vec<(Type, Ident)>, Node) {
-				let span = Span::new(type_.span.start, end_pos);
-				let mut vars = combine_type_with_idents(type_, idents);
-				match vars.len() {
-					1 => {
-						let (type_, ident) = vars.remove(0);
-						(
-							vec![(type_.clone(), ident.clone())],
-							Node {
-								span,
-								ty: NodeTy::VarDefInit {
-									type_,
-									ident,
-									value: value.unwrap(),
-								},
-							},
-						)
-					}
-					_ => (
-						vars.clone(),
-						Node {
-							span,
-							ty: NodeTy::VarDefsInits(vec![]),
-						},
-					),
-				}
-			}
-
-			// Consume the `;` for a definition, or a `=` for a definition with initialization.
-			let (token, token_span) = match walker.peek() {
-				Some(t) => t,
-				None => {
-					// We have something that matches the start of a variable definition. Since we have neither the
-					// `;` or `=`, we assume that this is a definition without initialization that is missing the
-					// semi-colon.
-					walker.push_syntax_diag(Syntax::Stmt(
-						StmtDiag::VarDefExpectedSemiOrEqAfterIdents(
-							ident_span.next_single_width(),
-						),
-					));
-					ctx.push_new_variables(
-						var_def(type_, ident_info, ident_span.end),
-						(SyntaxType::Variable, SyntaxModifiers::empty()),
-					);
-					return;
-				}
-			};
-			if *token == Token::Semi {
-				// We have a variable definition without initialization.
-				let semi_span = token_span;
-				walker.push_colour(semi_span, SyntaxType::Punctuation);
-				walker.advance();
-				ctx.push_new_variables(
-					var_def(type_, ident_info, semi_span.end),
-					(SyntaxType::Variable, SyntaxModifiers::empty()),
-				);
-				return;
-			} else if *token == Token::Op(OpTy::Eq) {
-				// We have a variable definition with initialization.
-				let eq_span = token_span;
-				walker.push_colour(eq_span, SyntaxType::Operator);
-				walker.advance();
-
-				// Consume the value expression.
-				let value_expr =
-					match parse_expr(walker, ctx, Mode::Default, [Token::Semi])
-					{
-						(Some(e), mut syntax, mut semantic, mut colours) => {
-							walker.append_colours(&mut colours);
-							walker.append_syntax_diags(&mut syntax);
-							walker.append_semantic_diags(&mut semantic);
-							e
-						}
-						(None, _, _, _) => {
-							walker.push_syntax_diag(Syntax::Stmt(
-								StmtDiag::VarDefInitExpectedValueAfterEq(
-									eq_span.next_single_width(),
-								),
-							));
-							ctx.push_new_variables(
-								var_def_init(
-									type_,
-									ident_info,
-									None,
-									eq_span.end,
-								),
-								(
-									SyntaxType::Variable,
-									SyntaxModifiers::empty(),
-								),
-							);
+						if semi_span.is_none() {
+							walker.push_nsyntax_diag(Syntax2::MissingPunct {
+								char: ';',
+								pos: expr_end,
+								ctx: DiagCtx::ExprStmt,
+							});
 							seek_next_stmt(walker);
-							return;
 						}
-					};
-
-				// Consume the semi-colon.
-				let (token, token_span) = match walker.peek() {
-					Some(t) => t,
-					None => {
-						let value_span = value_expr.span;
-						walker.push_syntax_diag(Syntax::Stmt(
-							StmtDiag::VarDefInitExpectedSemiAfterValue(
-								value_span.next_single_width(),
-							),
-						));
-						ctx.push_new_variables(
-							var_def_init(
-								type_,
-								ident_info,
-								Some(value_expr),
-								value_span.end,
-							),
-							(SyntaxType::Variable, SyntaxModifiers::empty()),
-						);
-						return;
+					} else {
+						// We have a type specifier followed by something that can't be parsed at all as an
+						// expression. The best error recovery strategy is to treat the type specifier as a
+						// standalone type specifier, and seek the next statement.
+						walker.push_nsyntax_diag(Syntax2::ExpectedGrammar {
+							item: ExpectedGrammar::AfterType,
+							pos: type_.ty_specifier_span.end,
+						});
+						seek_next_stmt(walker);
 					}
-				};
-				if *token == Token::Semi {
-					let semi_span = token_span;
-					walker.push_colour(semi_span, SyntaxType::Punctuation);
-					walker.advance();
-					ctx.push_new_variables(
-						var_def_init(
-							type_,
-							ident_info,
-							Some(value_expr),
-							semi_span.end,
-						),
-						(SyntaxType::Variable, SyntaxModifiers::empty()),
-					);
-					return;
-				} else {
-					let end_span = token_span;
-					walker.push_syntax_diag(Syntax::Stmt(
-						StmtDiag::VarDefInitExpectedSemiAfterValue(
-							end_span.next_single_width(),
-						),
-					));
-					ctx.push_new_variables(
-						var_def_init(
-							type_,
-							ident_info,
-							Some(value_expr),
-							end_span.end,
-						),
-						(SyntaxType::Variable, SyntaxModifiers::empty()),
-					);
-					seek_next_stmt(walker);
 					return;
 				}
-			} else {
-				// We have something that matches the start of a variable definition. Since we have neither the `;`
-				// or `=`, we assume that this is a definition without initialization which is missing the
-				// semi-colon.
-				walker.push_syntax_diag(Syntax::Stmt(
-					StmtDiag::VarDefExpectedSemiOrEqAfterIdents(
-						ident_span.next_single_width(),
-					),
-				));
-				ctx.push_new_variables(
-					var_def(type_, ident_info, ident_span.end),
-					(SyntaxType::Variable, SyntaxModifiers::empty()),
-				);
+			};
+
+			let last_var_spec_span = var_specifiers.last().span;
+
+			// We expect a `;` after the new variable specifier(s);
+			let semi_span = match walker.peek() {
+				Some((token, token_span)) => {
+					if *token == Token::Semi {
+						walker.push_colour(token_span, SyntaxType::Punctuation);
+						walker.advance();
+						Some(token_span)
+					} else {
+						None
+					}
+				}
+				None => None,
+			};
+			ctx.push_new_variables(
+				walker,
+				type_,
+				var_specifiers,
+				semi_span.map(|s| s.end).unwrap_or(last_var_spec_span.end),
+				(SyntaxType::Variable, SyntaxModifiers::empty()),
+			);
+			if semi_span.is_none() {
+				walker.push_nsyntax_diag(Syntax2::MissingPunct {
+					char: ';',
+					pos: last_var_spec_span.end,
+					ctx: DiagCtx::VarDef,
+				});
 				seek_next_stmt(walker);
-				return;
 			}
 
 			return;
@@ -1191,109 +1009,58 @@ fn try_parse_definition_declaration_expr<'a, P: TokenStreamProvider<'a>>(
 	};
 
 	let (Some(expr), mut syntax, mut semantic, mut colours) = e else {
-		// Could not parse any expression, so this cannot be a valid statement at all.
+		// We couldn't parse a type specifier not even an expression, so this cannot be a valid statement.
 		invalidate_qualifiers(walker, qualifiers);
 		seek_next_stmt(walker);
 		return;
 	};
 
-	// FIXME: if expr == ident, and next is `{` We have an expression which cannot be parsed as a type specifier,
-	// so this cannot start a variable definition nor a function declaration or definition; it must therefore be a
-	// standalone expression statement or an interface block.
-	/* match walker.peek() {
-		   Some((token, token_span)) => match token {
-			   Token::LBrace => {
-				   // We have an interface block.
+	// We have an expression. If the expression is just a single identifier and we have a `{` next then the closest
+	// match is an interface block, otherwise the closest match is an expression statement.
 
-				   // Interface blocks can begin with one of the following:
-				   // in
-				   // out
-				   // patch in
-				   // patch out
-				   // uniform
-				   // buffer
-				   // A layout() qualifier may precede any of these.
-				   let valid_qualifiers = if qualifiers.len() == 1 {
-					   match &qualifiers[0].ty {
-						   QualifierTy::In
-						   | QualifierTy::Out
-						   | QualifierTy::Uniform
-						   | QualifierTy::Buffer => true,
-						   _ => false,
-					   }
-				   } else if qualifiers.len() == 2 {
-					   match (&qualifiers[0].ty, &qualifiers[1].ty) {
-						   (QualifierTy::Patch, QualifierTy::In)
-						   | (QualifierTy::Patch, QualifierTy::Out)
-						   | (QualifierTy::Layout(_), QualifierTy::In)
-						   | (QualifierTy::Layout(_), QualifierTy::Out)
-						   | (QualifierTy::Layout(_), QualifierTy::Uniform)
-						   | (QualifierTy::Layout(_), QualifierTy::Buffer) => true,
-						   (_, _) => false,
-					   }
-				   } else if qualifiers.len() == 3 {
-					   match (
-						   &qualifiers[0].ty,
-						   &qualifiers[1].ty,
-						   &qualifiers[2].ty,
-					   ) {
-						   (
-							   QualifierTy::Layout(_),
-							   QualifierTy::Patch,
-							   QualifierTy::In,
-						   )
-						   | (
-							   QualifierTy::Layout(_),
-							   QualifierTy::Patch,
-							   QualifierTy::Out,
-						   ) => true,
-						   (_, _, _) => false,
-					   }
-				   } else {
-					   false
-				   };
-				   if !valid_qualifiers {
-					   // TODO: Syntax error for invalid qualifiers before interface block.
-					   return;
-				   }
-				   let l_brace_span = token_span;
-				   walker.append_colours(&mut start_colours);
-				   start_syntax.retain(|e| {
-					   if let Syntax::Expr(ExprDiag::FoundOperandAfterOperand(
-						   _,
-						   _,
-					   )) = e
-					   {
-						   false
-					   } else {
-						   true
-					   }
-				   });
-				   walker.append_syntax_diags(&mut start_syntax);
-				   walker.append_semantic_diags(&mut start_semantic);
-				   walker.push_colour(l_brace_span, SyntaxType::Punctuation);
-				   walker.advance();
-				   parse_interface_block(
-					   walker,
-					   ctx,
-					   qualifiers,
-					   start,
-					   l_brace_span,
-				   );
-				   return;
-			   }
-			   _ => {}
-		   },
-		   None => {}
-	   }
-	*/
-	// We have a standalone expression statement.
+	match (&expr.ty, walker.peek()) {
+		(ExprTy::Local { name: ident, .. }, Some((token, token_span))) => {
+			match token {
+				Token::LBrace => {
+					let l_brace_span = token_span;
+					syntax.retain(|e| {
+						if let Syntax::Expr(
+							ExprDiag::FoundOperandAfterOperand(_, _),
+						) = e
+						{
+							false
+						} else {
+							true
+						}
+					});
+					walker.append_semantic_diags(&mut semantic);
+					walker.push_colour(ident.span, SyntaxType::InterfaceBlock);
+					walker.push_colour(l_brace_span, SyntaxType::Punctuation);
+					walker.advance();
+					parse_interface_block(
+						walker,
+						ctx,
+						qualifiers,
+						ident.clone(),
+						l_brace_span,
+					);
+					return;
+				}
+				_ => {}
+			}
+		}
+		(_, _) => {}
+	}
+
+	// We have an expression potentially preceeded by qualifiers. The best error recovery strategy is to treat the
+	// qualifiers as invalid and the expression as an expression statement.
 	invalidate_qualifiers(walker, qualifiers);
+
 	walker.append_colours(&mut colours);
 	walker.append_syntax_diags(&mut syntax);
 	walker.append_semantic_diags(&mut semantic);
 
-	// Consume the `;` to end the statement.
+	// We expect a `;` after an expression to make it into a statement.
 	let semi_span = match walker.peek() {
 		Some((token, span)) => {
 			if *token == Token::Semi {
@@ -1306,15 +1073,7 @@ fn try_parse_definition_declaration_expr<'a, P: TokenStreamProvider<'a>>(
 		}
 		None => None,
 	};
-	if semi_span.is_none() {
-		walker.push_syntax_diag(Syntax::Stmt(
-			StmtDiag::ExprStmtExpectedSemiAfterExpr(
-				expr.span.next_single_width(),
-			),
-		));
-		seek_next_stmt(walker);
-	}
-
+	let expr_end = expr.span.end;
 	ctx.push_node(Node {
 		span: if let Some(semi_span) = semi_span {
 			Span::new(expr.span.start, semi_span.end)
@@ -1323,6 +1082,14 @@ fn try_parse_definition_declaration_expr<'a, P: TokenStreamProvider<'a>>(
 		},
 		ty: NodeTy::Expr(expr),
 	});
+	if semi_span.is_none() {
+		walker.push_nsyntax_diag(Syntax2::MissingPunct {
+			char: ';',
+			pos: expr_end,
+			ctx: DiagCtx::ExprStmt,
+		});
+		seek_next_stmt(walker);
+	}
 }
 
 /// Parses a function declaration/definition.
@@ -1335,7 +1102,7 @@ fn parse_function<'a, P: TokenStreamProvider<'a>>(
 	ident: Ident,
 	l_paren_span: Span,
 ) {
-	// Look for any parameters until we hit a closing `)` parenthesis.
+	// Look for any parameters until we hit a closing `)` parenthesis, or other error recovery exit condition.
 	#[derive(PartialEq)]
 	enum Prev {
 		None,
@@ -1346,26 +1113,25 @@ fn parse_function<'a, P: TokenStreamProvider<'a>>(
 	let mut prev = Prev::None;
 	let mut prev_span = l_paren_span;
 	let mut params = Vec::new();
-	let param_end_span = loop {
+	let params_end_pos = loop {
 		let (token, token_span) = match walker.peek() {
 			Some(t) => t,
 			None => {
-				// We have not yet finished parsing the parameter list, but we treat this as a valid declaration
-				// since that's the closest match.
-				let span = Span::new(return_type.span.start, prev_span.end);
-				walker.push_syntax_diag(Syntax::Stmt(
-					StmtDiag::ParamsExpectedRParen(
-						prev_span.next_single_width(),
-					),
-				));
-				ctx.push_node(Node {
-					span,
-					ty: NodeTy::FnDecl {
-						return_type,
-						ident,
-						params,
-					},
+				// We expect a `)` to finish the parameter list. Since we know there's nothing else left, the best
+				// error recovery strategy is to treat this as a function declaration. (We are also technically
+				// missing the `;` but two overlapping errors should be avoided).
+				walker.push_nsyntax_diag(Syntax2::MissingPunct {
+					char: ')',
+					pos: prev_span.end,
+					ctx: DiagCtx::ParamList,
 				});
+				ctx.push_new_function_decl(
+					walker,
+					return_type,
+					ident,
+					params,
+					walker.get_last_span().end,
+				);
 				return;
 			}
 		};
@@ -1375,17 +1141,15 @@ fn parse_function<'a, P: TokenStreamProvider<'a>>(
 				walker.push_colour(token_span, SyntaxType::Punctuation);
 				walker.advance();
 				if prev == Prev::Comma {
-					walker.push_syntax_diag(Syntax::Stmt(
-						StmtDiag::ParamsExpectedParamAfterComma(
-							Span::new_between(prev_span, token_span),
-						),
-					));
+					walker.push_nsyntax_diag(Syntax2::ExpectedGrammar {
+						item: ExpectedGrammar::Parameter,
+						pos: prev_span.end,
+					});
 				} else if prev == Prev::None {
-					walker.push_syntax_diag(Syntax::Stmt(
-						StmtDiag::ParamsExpectedParamBetweenParenComma(
-							Span::new_between(l_paren_span, token_span),
-						),
-					));
+					walker.push_nsyntax_diag(Syntax2::ExpectedGrammar {
+						item: ExpectedGrammar::Parameter,
+						pos: l_paren_span.end,
+					});
 				}
 				prev = Prev::Comma;
 				prev_span = token_span;
@@ -1395,62 +1159,62 @@ fn parse_function<'a, P: TokenStreamProvider<'a>>(
 				walker.push_colour(token_span, SyntaxType::Punctuation);
 				walker.advance();
 				if prev == Prev::Comma {
-					walker.push_syntax_diag(Syntax::Stmt(
-						StmtDiag::ParamsExpectedParamAfterComma(
-							Span::new_between(prev_span, token_span),
-						),
-					));
+					walker.push_nsyntax_diag(Syntax2::ExpectedGrammar {
+						item: ExpectedGrammar::Parameter,
+						pos: prev_span.end,
+					});
 				}
-				break token_span;
+				break token_span.end;
 			}
 			Token::Semi => {
 				walker.push_colour(token_span, SyntaxType::Punctuation);
 				walker.advance();
-				// We have not yet finished parsing the parameter list but we've encountered a semi-colon. We treat
-				// this as a valid declaration since that's the closest match.
-				walker.push_syntax_diag(Syntax::Stmt(
-					StmtDiag::ParamsExpectedRParen(
-						prev_span.next_single_width(),
-					),
-				));
-				ctx.push_node(Node {
-					span: Span::new(return_type.span.start, token_span.end),
-					ty: NodeTy::FnDecl {
-						return_type,
-						ident,
-						params,
-					},
+
+				// Although we expect a `)` to close the parameter list, since we've encountered a `;` the best
+				// error recovery strategy is to allow a function declaration anyway.
+				walker.push_nsyntax_diag(Syntax2::MissingPunct {
+					char: ')',
+					pos: prev_span.end,
+					ctx: DiagCtx::ParamList,
 				});
+				ctx.push_new_function_decl(
+					walker,
+					return_type,
+					ident,
+					params,
+					token_span.end,
+				);
 				return;
 			}
 			Token::LBrace => {
 				walker.push_colour(token_span, SyntaxType::Punctuation);
-				// We don't advance because the next check after this loop checks for a l-brace.
+				// We don't advance because the next check after this loop checks for a `{`.
 
-				// We have not yet finished parsing the parameter list but we've encountered a l-brace. We treat
-				// this as a potentially valid definition since that's the closest match.
-				walker.push_syntax_diag(Syntax::Stmt(
-					StmtDiag::ParamsExpectedRParen(
-						prev_span.next_single_width(),
-					),
-				));
-				break token_span;
+				// Although we expect a `)` to close the parameter list, since we've encountered a `{` the best
+				// error recovery strategy is to continue on anyway (to a function definition).
+				walker.push_nsyntax_diag(Syntax2::MissingPunct {
+					char: ')',
+					pos: prev_span.end,
+					ctx: DiagCtx::ParamList,
+				});
+				break token_span.end;
 			}
 			_ => {}
 		}
 
 		if prev == Prev::Param {
-			walker.push_syntax_diag(Syntax::Stmt(
-				StmtDiag::ParamsExpectedCommaAfterParam(
-					prev_span.next_single_width(),
-				),
-			));
+			// We have a parameter after a parameter, though we expect a separating `,` between.
+			walker.push_nsyntax_diag(Syntax2::MissingPunct {
+				char: ',',
+				pos: prev_span.end,
+				ctx: DiagCtx::ParamList,
+			});
 		}
 		let param_span_start = token_span.start;
 
 		let qualifiers = try_parse_qualifiers(walker, ctx);
 
-		// Consume the type specifier.
+		// We expect a type specifier.
 		let mut type_ = match try_parse_type_specifier(
 			walker,
 			ctx,
@@ -1464,39 +1228,40 @@ fn parse_function<'a, P: TokenStreamProvider<'a>>(
 			}
 			Err((expr, mut syntax, mut semantic, mut colours)) => {
 				if let Some(expr) = expr {
-					// We have an expression which cannot be parsed into a type. We ignore this and continue
-					// searching for the next parameter.
-					walker.push_syntax_diag(Syntax::Stmt(
-						StmtDiag::ParamsInvalidTypeExpr(expr.span),
-					));
+					// We couldn't parse a type specifier. The best error recovery strategy is to ignore this and
+					// continue looking for the next parameter.
+					walker.push_nsyntax_diag(Syntax2::ForRemoval {
+						item: ForRemoval::Expr,
+						span: expr.span,
+						ctx: DiagCtx::ParamList,
+					});
 					prev = Prev::Invalid;
 					prev_span = Span::new(param_span_start, expr.span.end);
 					continue;
 				} else {
-					// We immediately have a token that is not an expression. We ignore this and loop until we hit
-					// something recognizable.
-					let end_span = loop {
+					// We immediately have a token that is not an expression. The best error recovery strategy is
+					// to ignore this and loop until we hit something recognizable.
+					let end_pos = loop {
 						match walker.peek() {
 							Some((token, span)) => {
 								if *token == Token::Comma
 									|| *token == Token::RParen || *token
 									== Token::Semi || *token == Token::LBrace
 								{
-									break span;
+									break span.end;
 								} else {
 									walker.advance();
 									continue;
 								}
 							}
-							None => break walker.get_last_span(),
+							None => break walker.get_last_span().end,
 						}
 					};
-					walker.push_syntax_diag(Syntax::Stmt(
-						StmtDiag::ParamsInvalidTypeExpr(Span::new(
-							param_span_start,
-							end_span.end,
-						)),
-					));
+					walker.push_nsyntax_diag(Syntax2::ForRemoval {
+						item: ForRemoval::Something,
+						span: Span::new(param_span_start, end_pos),
+						ctx: DiagCtx::ParamList,
+					});
 					prev = Prev::Invalid;
 					prev_span = token_span;
 					continue;
@@ -1504,13 +1269,13 @@ fn parse_function<'a, P: TokenStreamProvider<'a>>(
 			}
 		};
 
-		// Look for the optional ident.
-		let ident = match try_parse_new_decl_def_idents_with_type_info(
+		// We may have an optional new variable specifier.
+		let mut vars = match try_parse_new_var_specifiers(
 			walker,
 			ctx,
 			[Token::Semi, Token::LBrace],
-			true,
 			SyntaxType::Parameter,
+			true,
 		) {
 			Ok((i, mut syntax, mut semantic, mut colours)) => {
 				walker.append_colours(&mut colours);
@@ -1520,29 +1285,40 @@ fn parse_function<'a, P: TokenStreamProvider<'a>>(
 			}
 			Err((expr, mut syntax, mut semantic, mut colours)) => {
 				if let Some(expr) = expr {
-					// We have a second expression after the first expression, but the second expression can't be
-					// converted to an identifier for the parameter. We treat the first type expression as an
+					// We have an expression after the type specifier, but the expression can't be parsed as a new
+					// variable specifier. The best error recovery strategy is to treat the type specifier as an
 					// anonymous parameter, and the second expression as invalid.
-					let param_span =
-						Span::new(param_span_start, type_.span.end);
-					type_.qualifiers = qualifiers;
+					let param_span = Span::new(
+						param_span_start,
+						type_.ty_specifier_span.end,
+					);
+					type_.qualifiers = NonEmpty::from_vec(qualifiers).into();
 					params.push(Param {
-						span: Span::new(param_span_start, type_.span.end),
+						span: Span::new(
+							param_span_start,
+							type_.ty_specifier_span.end,
+						),
 						type_,
 						ident: Omittable::None,
 					});
-					walker.push_syntax_diag(Syntax::Stmt(
-						StmtDiag::ParamsInvalidIdentExpr(expr.span),
-					));
+					walker.push_nsyntax_diag(Syntax2::ForRemoval {
+						item: ForRemoval::Expr,
+						span: expr.span,
+						ctx: DiagCtx::ParamList,
+					});
 					prev = Prev::Param;
 					prev_span = param_span;
 					continue;
 				} else {
-					// We have a first expression and then something that is not an expression. We treat this as an
-					// anonymous parameter, whatever the current token is will be dealt with in the next iteration.
-					type_.qualifiers = qualifiers;
-					let param_span =
-						Span::new(param_span_start, type_.span.end);
+					// We have a type specifier followed by something that can't even be parsed into an expression.
+					// The best error recovery strategy is to treat the type specifier as an anonymous parameter,
+					// and continue looking. It's possible that we hit a `,` or `)`, in which case it would be
+					// erreneous to produce a diagnostic.
+					type_.qualifiers = NonEmpty::from_vec(qualifiers).into();
+					let param_span = Span::new(
+						param_span_start,
+						type_.ty_specifier_span.end,
+					);
 					params.push(Param {
 						span: param_span,
 						type_,
@@ -1554,11 +1330,38 @@ fn parse_function<'a, P: TokenStreamProvider<'a>>(
 				}
 			}
 		};
-		let ident_span = ident[0].0.span;
 
-		type_.qualifiers = qualifiers;
-		let (type_, ident) = combine_type_with_idents(type_, ident).remove(0);
-		let param_span = Span::new(param_span_start, ident_span.end);
+		// Panic: `vars` has a length of exactly 1
+		let super::NewVarSpecifier {
+			ident,
+			arr,
+			eq_span,
+			init_expr,
+			span: var_span,
+		} = vars.destruct();
+
+		// New variable specifiers inside parameter lists cannot have an initialization expression.
+		match (eq_span, init_expr) {
+			(Some(span), None) => {
+				walker.push_nsyntax_diag(Syntax2::ForRemoval {
+					item: ForRemoval::VarInitialization,
+					span,
+					ctx: DiagCtx::ParamList,
+				})
+			}
+			(Some(begin), Some(end)) => {
+				walker.push_nsyntax_diag(Syntax2::ForRemoval {
+					item: ForRemoval::VarInitialization,
+					span: Span::new(begin.start, end.span.end),
+					ctx: DiagCtx::ParamList,
+				})
+			}
+			_ => {}
+		}
+
+		type_.qualifiers = NonEmpty::from_vec(qualifiers).into();
+		let type_ = combine_type_with_arr(type_, arr);
+		let param_span = Span::new(param_span_start, var_span.end);
 		params.push(Param {
 			span: param_span,
 			type_,
@@ -1568,101 +1371,63 @@ fn parse_function<'a, P: TokenStreamProvider<'a>>(
 		prev_span = param_span;
 	};
 
-	// Consume the `;` for a declaration or a `{` for a definition.
-	let (token, token_span) = match walker.peek() {
-		Some(t) => t,
-		None => {
-			// This branch will only be triggered if we exited the param loop with a `)`, it will not trigger if we
-			// exit with a `{` because that token is not consumed.
+	// We expect a `;` for a declaration, or a `{` for a definition.
+	let semi_span = match walker.peek() {
+		Some((token, token_span)) => match token {
+			Token::Semi => {
+				walker.push_colour(token_span, SyntaxType::Punctuation);
+				walker.advance();
+				Some(token_span)
+			}
+			Token::LBrace => {
+				// We have a function definition.
+				let l_brace_span = token_span;
+				walker.push_colour(l_brace_span, SyntaxType::Punctuation);
+				walker.advance();
 
-			// We are missing a `;` for a declaration. We treat this as a declaration since that's the closest
-			// match.
-			walker.push_syntax_diag(Syntax::Stmt(
-				StmtDiag::FnExpectedSemiOrLBraceAfterParams(
-					param_end_span.next_single_width(),
-				),
-			));
-			ctx.push_new_function_decl(
-				ident.clone(),
-				params.iter().cloned().map(|p| p.into()).collect(),
-				return_type.clone(),
-				Node {
-					span: Span::new(return_type.span.start, param_end_span.end),
-					ty: NodeTy::FnDecl {
-						return_type,
-						ident,
-						params,
-					},
-				},
-			);
-			return;
-		}
-	};
-	if *token == Token::Semi {
-		// We have a declaration.
-		walker.push_colour(token_span, SyntaxType::Punctuation);
-		walker.advance();
-		ctx.push_new_function_decl(
-			ident.clone(),
-			params.iter().cloned().map(|p| p.into()).collect(),
-			return_type.clone(),
-			Node {
-				span: Span::new(return_type.span.start, param_end_span.end),
-				ty: NodeTy::FnDecl {
-					return_type,
-					ident,
-					params,
-				},
-			},
-		);
-	} else if *token == Token::LBrace {
-		// We have a definition.
-		let l_brace_span = token_span;
-		walker.push_colour(l_brace_span, SyntaxType::Punctuation);
-		walker.advance();
+				// Parse the contents of the body.
+				let scope_handle =
+					ctx.new_temp_scope(l_brace_span, Some(&params));
+				parse_scope(walker, ctx, brace_scope, l_brace_span);
+				let body = ctx.replace_temp_scope(scope_handle);
 
-		let scope_handle = ctx.new_temp_scope(l_brace_span, Some(&params));
-		parse_scope(walker, ctx, brace_scope, l_brace_span);
-		let body = ctx.replace_temp_scope(scope_handle);
-		ctx.push_new_function_def(
-			scope_handle,
-			ident.clone(),
-			params.iter().cloned().map(|p| p.into()).collect(),
-			return_type.clone(),
-			Node {
-				span: Span::new(return_type.span.start, body.span.end),
-				ty: NodeTy::FnDef {
+				let end_pos = body.span.end;
+				ctx.push_new_function_def(
+					walker,
+					scope_handle,
 					return_type,
 					ident,
 					params,
 					body,
-				},
-			},
-		);
+					end_pos,
+				);
+				return;
+			}
+			_ => None,
+		},
+		None => None,
+	};
+
+	// We have a function declaration.
+
+	let end_pos = if let Some(span) = semi_span {
+		span.end
 	} else {
-		// We are missing a `;` for a declaration. We treat this as a declaration since that's the closest match.
-		walker.push_syntax_diag(Syntax::Stmt(
-			StmtDiag::FnExpectedSemiOrLBraceAfterParams(
-				param_end_span.next_single_width(),
-			),
-		));
-		ctx.push_new_function_decl(
-			ident.clone(),
-			params.iter().cloned().map(|p| p.into()).collect(),
-			return_type.clone(),
-			Node {
-				span: Span::new(return_type.span.start, param_end_span.end),
-				ty: NodeTy::FnDecl {
-					return_type,
-					ident,
-					params,
-				},
-			},
-		);
+		params_end_pos
+	};
+
+	ctx.push_new_function_decl(walker, return_type, ident, params, end_pos);
+
+	if semi_span.is_none() {
+		walker.push_nsyntax_diag(Syntax2::MissingPunct {
+			char: ';',
+			pos: params_end_pos,
+			ctx: DiagCtx::FnDecl,
+		});
 		seek_next_stmt(walker);
 	}
 }
- */
+
 /// Parses a subroutine type declaration, subroutine associated function definition, or a subroutine uniform
 /// definition.
 ///
@@ -1670,16 +1435,15 @@ fn parse_function<'a, P: TokenStreamProvider<'a>>(
 fn parse_subroutine<'a, P: TokenStreamProvider<'a>>(
 	walker: &mut Walker<'a, P>,
 	ctx: &mut Ctx,
-	kw_span: Span,
+	subroutine_kw_span: Span,
 	mut qualifiers: Vec<Qualifier>,
 ) {
-	let subroutine_kw_span = kw_span;
 	let start_pos = if let Some(q) = qualifiers.first() {
 		q.span.start
 	} else {
 		subroutine_kw_span.start
 	};
-	walker.push_colour(kw_span, SyntaxType::Keyword);
+	walker.push_colour(subroutine_kw_span, SyntaxType::Keyword);
 	walker.advance();
 
 	let is_uniform_before_subroutine = qualifiers
@@ -1710,11 +1474,13 @@ fn parse_subroutine<'a, P: TokenStreamProvider<'a>>(
 					let (token, token_span) = match walker.peek() {
 						Some(t) => t,
 						None => {
-							walker.push_syntax_diag(Syntax::Stmt(
-						StmtDiag::SubroutineAssociatedListExpectedRParen(
-							prev_span.next_single_width(),
-						),
-					));
+							// We expect a `)` to finish the association list. There is no error recovery strategy
+							// because there are multiple options possible after this.
+							walker.push_nsyntax_diag(Syntax2::MissingPunct {
+								char: ')',
+								pos: prev_span.end,
+								ctx: DiagCtx::AssociationList,
+							});
 							return;
 						}
 					};
@@ -1727,17 +1493,21 @@ fn parse_subroutine<'a, P: TokenStreamProvider<'a>>(
 							);
 							walker.advance();
 							if prev == Prev::Comma {
-								walker.push_syntax_diag(Syntax::Stmt(
-							StmtDiag::SubroutineAssociatedListExpectedIdentAfterComma(
-								Span::new_between(prev_span, token_span),
-							),
-						));
+								walker.push_nsyntax_diag(
+									Syntax2::ExpectedGrammar {
+										item:
+											ExpectedGrammar::SubroutineTypename,
+										pos: prev_span.end,
+									},
+								);
 							} else if prev == Prev::None {
-								walker.push_syntax_diag(Syntax::Stmt(
-							StmtDiag::SubroutineAssociatedListExpectedIdentBetweenParenComma(
-								Span::new_between(l_paren_span, token_span),
-							),
-						));
+								walker.push_nsyntax_diag(
+									Syntax2::ExpectedGrammar {
+										item:
+											ExpectedGrammar::SubroutineTypename,
+										pos: l_paren_span.end,
+									},
+								);
 							}
 							prev = Prev::Comma;
 							prev_span = token_span;
@@ -1750,11 +1520,12 @@ fn parse_subroutine<'a, P: TokenStreamProvider<'a>>(
 							);
 							walker.advance();
 							if prev == Prev::Comma {
-								walker.push_syntax_diag(Syntax::Stmt(
-							StmtDiag::SubroutineAssociatedListExpectedIdentAfterComma(
-								Span::new_between(prev_span, token_span),
-							),
-						));
+								walker.push_nsyntax_diag(
+									Syntax2::ExpectedGrammar {
+										item: ExpectedGrammar::Parameter,
+										pos: prev_span.end,
+									},
+								);
 							}
 							break token_span;
 						}
@@ -1771,22 +1542,77 @@ fn parse_subroutine<'a, P: TokenStreamProvider<'a>>(
 									span: token_span,
 								},
 							));
-							walker.push_colour(token_span, SyntaxType::Ident);
+							walker.push_colour(
+								token_span,
+								if subroutine_type_handle.is_resolved() {
+									SyntaxType::SubroutineType
+								} else {
+									SyntaxType::UnresolvedIdent
+								},
+							);
 							walker.advance();
 							if prev == Prev::Ident {
-								walker.push_syntax_diag(Syntax::Stmt(StmtDiag::SubroutineAssociatedListExpectedCommaAfterIdent(
-							prev_span.next_single_width()
-						)));
+								walker.push_nsyntax_diag(
+									Syntax2::MissingPunct {
+										char: ',',
+										pos: prev_span.end,
+										ctx: DiagCtx::AssociationList,
+									},
+								);
 							}
 							prev = Prev::Ident;
 							prev_span = token_span;
 							continue;
 						}
+						Token::Semi => {
+							// We expect a `)` to finish the parameter list, (and stuff afterwards), but since we
+							// hit a `;` we just abort creating anything and return out. There is no error recovery
+							// strategy because there are multiple options possible after this.
+							walker.push_colour(
+								token_span,
+								SyntaxType::Punctuation,
+							);
+							walker.advance();
+							walker.push_nsyntax_diag(Syntax2::MissingPunct {
+								char: ')',
+								pos: prev_span.end,
+								ctx: DiagCtx::AssociationList,
+							});
+							return;
+						}
 						_ => {
+							// We immediately have a token that is not an identifier. The best error recovery
+							// strategy is to ignore this and loop until we hit something recognizable.
+							let end_span = loop {
+								match walker.peek() {
+									Some((token, span)) => {
+										if *token == Token::Comma
+											|| *token == Token::RParen || *token
+											== Token::Semi || *token
+											== Token::LBrace
+										{
+											break span;
+										} else {
+											walker.advance();
+											continue;
+										}
+									}
+									None => break walker.get_last_span(),
+								}
+							};
+							walker.push_nsyntax_diag(Syntax2::ForRemoval {
+								item: ForRemoval::Something,
+								span: Span::new(
+									l_paren_span.start,
+									end_span.end,
+								),
+								ctx: DiagCtx::AssociationList,
+							});
 							walker.push_colour(token_span, SyntaxType::Invalid);
 							walker.advance();
 							prev = Prev::Invalid;
 							prev_span = token_span;
+							continue;
 						}
 					}
 				};
@@ -1796,11 +1622,12 @@ fn parse_subroutine<'a, P: TokenStreamProvider<'a>>(
 			_ => None,
 		},
 		None => {
-			walker.push_syntax_diag(Syntax::Stmt(
-				StmtDiag::SubroutineExpectedTypeFuncUniformAfterKw(
-					kw_span.next_single_width(),
-				),
-			));
+			// Even if we don't have an association list, we still expect something after the subroutine/qualifiers
+			// to make a valid statement.
+			walker.push_nsyntax_diag(Syntax2::ExpectedGrammar {
+				item: ExpectedGrammar::AfterSubroutineQualifiers,
+				pos: subroutine_kw_span.end,
+			});
 			return;
 		}
 	};
@@ -1809,7 +1636,7 @@ fn parse_subroutine<'a, P: TokenStreamProvider<'a>>(
 	let qualifiers_end_pos = if let Some(q) = qualifiers.last() {
 		q.span.end
 	} else {
-		kw_span.end
+		subroutine_kw_span.end
 	};
 	let mut next_qualifiers = try_parse_qualifiers(walker, ctx);
 	let qualifiers_end_pos = if let Some(q) = next_qualifiers.last() {
@@ -1846,10 +1673,23 @@ fn parse_interface_block<'a, P: TokenStreamProvider<'a>>(
 	walker: &mut Walker<'a, P>,
 	ctx: &mut Ctx,
 	qualifiers: Vec<Qualifier>,
-	qualifier_span_start: usize,
 	name: Ident,
 	l_brace_span: Span,
 ) {
+	let (start_pos, qualifiers) = if let Some(q) = qualifiers.first() {
+		(q.span.start, Some(NonEmpty::from_vec(qualifiers).unwrap()))
+	} else {
+		// We expect certain qualifiers before an interface block.
+		walker.push_nsyntax_diag(Syntax2::ExpectedGrammar {
+			item: ExpectedGrammar::QualifierBeforeInterfaceBlock,
+			pos: name.span.start,
+		});
+		(name.span.start, None)
+	};
+
+	// For perf optimization, see end of function.
+	let syntax_vec_len = walker.syntax_tokens.len();
+
 	// Parse the contents of the body.
 	let scope_handle = ctx.new_temp_scope(l_brace_span, None);
 	walker.parsing_struct = true;
@@ -1858,118 +1698,155 @@ fn parse_interface_block<'a, P: TokenStreamProvider<'a>>(
 	let body = ctx.take_temp_scope(scope_handle);
 
 	if body.contents.is_empty() {
-		walker.push_syntax_diag(Syntax::Stmt(
-			StmtDiag::InterfaceExpectedAtLeastOneStmtInBody(body.span),
-		));
+		// We expect fields inside the body.
+		walker.push_nsyntax_diag(Syntax2::ExpectedGrammar {
+			item: ExpectedGrammar::InterfaceField,
+			pos: body.span.start,
+		});
 	}
 	let mut fields = Vec::new();
 	for handle in body.contents.iter() {
-		let node = ctx.get_node(*handle);
-		match &node.ty {
-			NodeTy::VarDef { type_, ident } => {
-				fields.push(super::StructField {
-					type_: type_.clone(),
-					name: Omittable::Some(ident.name.clone()),
-					refs: vec![ident.span],
-				});
-			}
-			NodeTy::VarDefs(defs) => {
-				for def in defs {
-					fields.push(super::StructField {
-						type_: def.0.clone(),
-						name: Omittable::Some(def.1.name.clone()),
-						refs: vec![name.span],
-					});
-				}
-			}
-			NodeTy::VarDefInit {
+		let node = ctx.remove_node(*handle);
+		match node.ty {
+			NodeTy::VarDef {
 				type_,
 				ident,
-				value,
+				eq_span,
+				init_expr,
 			} => {
-				walker.push_syntax_diag(Syntax::Stmt(
-					StmtDiag::StructMemberCannotBeInitialized(node.span),
-				));
-				fields.push(super::StructField {
-					type_: type_.clone(),
-					name: Omittable::Some(ident.name.clone()),
-					refs: vec![ident.span],
-				});
+				// Interface fields cannot be initialized.
+				match (eq_span, init_expr) {
+					(Omittable::Some(start), Omittable::Some(end)) => walker
+						.push_nsyntax_diag(Syntax2::ForRemoval {
+							item: ForRemoval::VarInitialization,
+							span: Span::new(start.start, end.span.end),
+							ctx: DiagCtx::InterfaceField,
+						}),
+					(Omittable::Some(span), _) => {
+						walker.push_nsyntax_diag(Syntax2::ForRemoval {
+							item: ForRemoval::VarInitialization,
+							span: span,
+							ctx: DiagCtx::InterfaceField,
+						})
+					}
+					_ => {}
+				}
+				fields.push((type_, Some(ident)));
 			}
-			NodeTy::VarDefsInits(vars) => {
-				walker.push_syntax_diag(Syntax::Stmt(
-					StmtDiag::StructMemberCannotBeInitialized(node.span),
-				));
-				for var in vars {
-					fields.push(super::StructField {
-						type_: var.0.clone(),
-						name: Omittable::Some(var.1.name.clone()),
-						refs: vec![name.span],
-					});
+			NodeTy::VarDefs(vars) => {
+				for (type_, ident, eq_span, init_expr) in vars {
+					// Interface fields cannot be initialized.
+					match (eq_span, init_expr) {
+						(Omittable::Some(start), Omittable::Some(end)) => {
+							walker.push_nsyntax_diag(Syntax2::ForRemoval {
+								item: ForRemoval::VarInitialization,
+								span: Span::new(start.start, end.span.end),
+								ctx: DiagCtx::InterfaceField,
+							})
+						}
+						(Omittable::Some(span), _) => {
+							walker.push_nsyntax_diag(Syntax2::ForRemoval {
+								item: ForRemoval::VarInitialization,
+								span: span,
+								ctx: DiagCtx::InterfaceField,
+							})
+						}
+						_ => {}
+					}
+					fields.push((type_, Some(ident)));
 				}
 			}
-			_ => walker.push_syntax_diag(Syntax::Stmt(
-				StmtDiag::InterfaceInvalidStmtInBody(node.span),
-			)),
+			NodeTy::TypeSpecifier(type_) => {
+				walker.push_nsyntax_diag(Syntax2::ExpectedGrammar {
+					item: ExpectedGrammar::AfterType,
+					pos: type_.ty_specifier_span.end,
+				});
+				fields.push((type_, None));
+			}
+			_ => walker.push_nsyntax_diag(Syntax2::ForRemoval {
+				item: ForRemoval::Something,
+				span: node.span,
+				ctx: DiagCtx::InterfaceField,
+			}),
 		}
 	}
 
-	// Look for optional instances.
+	// We may have optional instance variable specifiers.
 	let instances = match try_parse_new_var_specifiers(
 		walker,
 		ctx,
 		[Token::Semi],
 		SyntaxType::Variable,
+		false,
 	) {
 		Ok((vars, mut syntax, mut semantic, mut colours)) => {
 			walker.append_colours(&mut colours);
 			walker.append_syntax_diags(&mut syntax);
 			walker.append_semantic_diags(&mut semantic);
-			Some(
-				vars.into_iter()
-					.map(
-						|super::NewVarSpecifier {
-						     ident,
-						     arr,
-						     eq_span,
-						     init_expr,
-						     span,
-						 }| (ident, arr.unwrap_or(Vec::new()), span),
-					)
-					.collect::<Vec<_>>(),
-			)
+			vars.into_vec()
 		}
 		Err((expr, mut syntax, mut semantic, mut colours)) => {
+			walker.append_colours(&mut colours);
+			walker.append_syntax_diags(&mut syntax);
+			walker.append_semantic_diags(&mut semantic);
+
 			if let Some(expr) = expr {
-				walker.append_colours(&mut colours);
-				walker.append_syntax_diags(&mut syntax);
-				walker.append_semantic_diags(&mut semantic);
-				/* walker.push_syntax_diag(Syntax::Stmt(
-					StmtDiag::StructExpectedInstanceOrSemiAfterBody(expr.span),
-				));
-				ctx.push_new_struct(
-					name.clone(),
+				// We have an interface block body followed by an expression, but the expression isn't one or more
+				// new variable specifiers. The best error recovery strategy is to treat the current state as an
+				// interface block definition, and the second expression as an expression statement on its own.
+				walker.push_nsyntax_diag(Syntax2::MissingPunct {
+					char: ';',
+					pos: body.span.end,
+					ctx: DiagCtx::InterfaceBlockDef,
+				});
+				ctx.push_new_interface(
+					walker,
+					start_pos,
+					qualifiers,
+					name,
 					fields,
-					Node {
-						span: Span::new(struct_span_start, body.span.end),
-						ty: NodeTy::StructDef {
-							qualifiers,
-							name,
-							body,
-							instances: Vec::new(),
-						},
-					},
 					Vec::new(),
-					false,
-				); */
-				seek_next_stmt(walker);
+					body.span.end,
+				);
+
+				// We expect a `;` after an expression to make it into a statement.
+				let semi_span = match walker.peek() {
+					Some((token, span)) => {
+						if *token == Token::Semi {
+							walker.push_colour(span, SyntaxType::Punctuation);
+							walker.advance();
+							Some(span)
+						} else {
+							None
+						}
+					}
+					None => None,
+				};
+				let expr_end = expr.span.end;
+				ctx.push_node(Node {
+					span: if let Some(semi_span) = semi_span {
+						Span::new(expr.span.start, semi_span.end)
+					} else {
+						expr.span
+					},
+					ty: NodeTy::Expr(expr),
+				});
+				if semi_span.is_none() {
+					walker.push_nsyntax_diag(Syntax2::MissingPunct {
+						char: ';',
+						pos: expr_end,
+						ctx: DiagCtx::ExprStmt,
+					});
+					seek_next_stmt(walker);
+				}
 				return;
 			}
-			None
+
+			Vec::new()
 		}
 	};
 
-	// Consume the `;` to end the statement.
+	// We expect a `;` at the end.
 	let semi_span = match walker.peek() {
 		Some((token, span)) => {
 			if *token == Token::Semi {
@@ -1982,42 +1859,51 @@ fn parse_interface_block<'a, P: TokenStreamProvider<'a>>(
 		}
 		None => None,
 	};
-	if semi_span.is_none() {
-		if let Some(ref i) = instances {
-			walker.push_syntax_diag(Syntax::Stmt(
-				StmtDiag::StructExpectedSemiAfterInstance(
-					i.last().unwrap().0.span.next_single_width(),
-				),
-			));
-		} else {
-			walker.push_syntax_diag(Syntax::Stmt(
-				StmtDiag::StructExpectedInstanceOrSemiAfterBody(
-					body.span.next_single_width(),
-				),
-			));
-		}
-	}
 
-	/* ctx.push_node(Node {
-		span: Span::new(
-			interface_span_start,
-			if let Some(semi_span) = semi_span {
-				semi_span.end
-			} else {
-				if let Omittable::Some(ref i) = instance {
-					i.span.end
-				} else {
-					body.span.end
+	let end_pos = if let Some(semi_span) = semi_span {
+		semi_span.end
+	} else {
+		if let Some(var) = instances.last() {
+			var.span.end
+		} else {
+			body.span.end
+		}
+	};
+
+	// If we have one or more instances, the interface block effectively acts as a struct and all the fields are
+	// namespaced within the instances. However, if we don't have any instances, then the "fields" are actually
+	// individual global variables. If so, we need to modify the syntax highlighting information because by default
+	// the fields are highlighting like struct fields.
+	let end_pos = if !instances.is_empty() {
+		let mut i = 0;
+		// Panic: We record the length of the vector before parsing the body and optional instance new variable
+		// specifiers. It is impossible for the length to have shrunk in the meantime.
+		for token in walker.syntax_tokens[syntax_vec_len..].iter_mut() {
+			if token.span == instances[i].ident.span {
+				token.ty = SyntaxType::Variable;
+				i += 1;
+				if instances.len() == i {
+					break;
 				}
-			},
-		),
-		ty: NodeTy::InterfaceDef {
-			qualifiers,
-			ident,
-			body,
-			instance,
-		},
-	}); */
+			}
+		}
+		instances.last().unwrap().span.end
+	} else {
+		body.span.end
+	};
+
+	ctx.push_new_interface(
+		walker, start_pos, qualifiers, name, fields, instances, end_pos,
+	);
+
+	if semi_span.is_none() {
+		walker.push_nsyntax_diag(Syntax2::MissingPunct {
+			char: ';',
+			pos: end_pos,
+			ctx: DiagCtx::InterfaceBlockDef,
+		});
+		seek_next_stmt(walker);
+	}
 }
 
 /// Parses a struct declaration/definition.
@@ -2029,10 +1915,18 @@ fn parse_struct<'a, P: TokenStreamProvider<'a>>(
 	qualifiers: Vec<Qualifier>,
 	kw_span: Span,
 ) {
+	let (start_pos, qualifiers) = if let Some(q) = qualifiers.first() {
+		(
+			q.span.start,
+			Omittable::Some(NonEmpty::from_vec(qualifiers).unwrap()),
+		)
+	} else {
+		(kw_span.start, Omittable::None)
+	};
 	walker.push_colour(kw_span, SyntaxType::Keyword);
 	walker.advance();
 
-	// Consume the struct name.
+	// We expect a name.
 	let name = match try_parse_new_name(
 		walker,
 		ctx,
@@ -2044,67 +1938,57 @@ fn parse_struct<'a, P: TokenStreamProvider<'a>>(
 			i
 		}
 		Err(_) => {
-			walker.push_syntax_diag(Syntax::Stmt(
-				StmtDiag::StructExpectedNameAfterKw(
-					kw_span.next_single_width(),
-				),
-			));
+			// We expect a name. In the current state, there is no sensible recovery strategy, so we abort.
+			walker.push_nsyntax_diag(Syntax2::ExpectedGrammar {
+				item: ExpectedGrammar::AfterStructKw,
+				pos: walker.get_last_span().end,
+			});
 			return;
 		}
 	};
 
-	let struct_span_start = if let Some(q) = qualifiers.first() {
-		q.span.start
-	} else {
-		kw_span.start
-	};
-
-	// Consume the `{`.
-	let (token, token_span) = match walker.peek() {
-		Some(t) => t,
+	// We expect a `{` to open the body.
+	let l_brace_span = match walker.peek() {
+		Some((token, token_span)) => match token {
+			Token::LBrace => {
+				walker.push_colour(token_span, SyntaxType::Punctuation);
+				walker.advance();
+				token_span
+			}
+			Token::Semi => {
+				// We have a struct declaration. This is not legal, but for better error recovery we allow this.
+				walker.push_colour(token_span, SyntaxType::Punctuation);
+				walker.advance();
+				// We don't create a symbol because a struct declaration is not legal.
+				ctx.push_node(Node {
+					span: Span::new(start_pos, token_span.end),
+					ty: NodeTy::StructDecl { qualifiers, name },
+				});
+				return;
+			}
+			_ => {
+				// We could treat this as a struct declaration for error recovery, but since a struct declaration
+				// is not a valid statement in the first place, it would create more confusion, so the best choice
+				// is to abort.
+				walker.push_nsyntax_diag(Syntax2::MissingPunct {
+					char: '{',
+					pos: name.span.end,
+					ctx: DiagCtx::StructDef,
+				});
+				return;
+			}
+		},
 		None => {
-			// We don't create a struct declaration because it would result in two errors that would reduce
-			// clarity.
-			walker.push_syntax_diag(Syntax::Stmt(
-				StmtDiag::StructExpectedLBraceAfterName(
-					name.span.next_single_width(),
-				),
-			));
+			// We could treat this as a struct declaration for error recovery, but since a struct declaration is
+			// not a valid statement in the first place, it would create more confusion, so the best choice is to
+			// abort.
+			walker.push_nsyntax_diag(Syntax2::MissingPunct {
+				char: '{',
+				pos: name.span.end,
+				ctx: DiagCtx::StructDef,
+			});
 			return;
 		}
-	};
-	let l_brace_span = if *token == Token::LBrace {
-		walker.push_colour(token_span, SyntaxType::Punctuation);
-		walker.advance();
-		token_span
-	} else if *token == Token::Semi {
-		// We have a declaration, (which is illegal).
-		let span = Span::new(struct_span_start, token_span.end);
-		walker.push_colour(token_span, SyntaxType::Punctuation);
-		walker.push_syntax_diag(Syntax::Stmt(StmtDiag::StructDeclIsIllegal(
-			span,
-		)));
-		walker.advance();
-		ctx.push_new_struct(
-			name.clone(),
-			Vec::new(),
-			Node {
-				span,
-				ty: NodeTy::StructDecl { qualifiers, name },
-			},
-			Vec::new(),
-			false,
-		);
-		return;
-	} else {
-		// We have something else entirely. We don't create a struct declaration because it would just create a
-		// second error over the first, and that would be less clear.
-		walker.push_syntax_diag(Syntax::Stmt(
-			StmtDiag::StructExpectedLBraceAfterName(
-				name.span.next_single_width(),
-			),
-		));
-		return;
 	};
 
 	// Parse the contents of the body.
@@ -2114,121 +1998,162 @@ fn parse_struct<'a, P: TokenStreamProvider<'a>>(
 	walker.parsing_struct = false;
 	let body = ctx.take_temp_scope(scope_handle);
 
+	// Note: Unlike a lot of other cases where we only look for specific grammar items inside of
+	// parenthesis/braces/etc. with a struct we parse anything and only afterwards do we extract the field
+	// information out. The main reason for doing this is to improve the UX in case the user writes non-field
+	// grammar inside of the struct (maybe they instinctively write a method within the struct body like you do in
+	// C++).
+
 	if body.contents.is_empty() {
-		walker.push_syntax_diag(Syntax::Stmt(
-			StmtDiag::StructExpectedAtLeastOneMemberInBody(body.span),
-		));
+		// We expect fields inside the body.
+		walker.push_nsyntax_diag(Syntax2::ExpectedGrammar {
+			item: ExpectedGrammar::StructField,
+			pos: body.span.start,
+		});
 	}
 	let mut fields = Vec::new();
 	for handle in body.contents.iter() {
-		let node = ctx.get_node(*handle);
-		match &node.ty {
-			NodeTy::VarDef { type_, ident } => {
-				fields.push(super::StructField {
-					type_: type_.clone(),
-					name: Omittable::Some(ident.name.clone()),
-					refs: vec![ident.span],
-				});
-			}
-			NodeTy::VarDefs(defs) => {
-				for def in defs {
-					fields.push(super::StructField {
-						type_: def.0.clone(),
-						name: Omittable::Some(def.1.name.clone()),
-						refs: vec![name.span],
-					});
-				}
-			}
-			NodeTy::VarDefInit {
+		let node = ctx.remove_node(*handle);
+		match node.ty {
+			NodeTy::VarDef {
 				type_,
 				ident,
-				value,
+				eq_span,
+				init_expr,
 			} => {
-				walker.push_syntax_diag(Syntax::Stmt(
-					StmtDiag::StructMemberCannotBeInitialized(node.span),
-				));
-				fields.push(super::StructField {
-					type_: type_.clone(),
-					name: Omittable::Some(ident.name.clone()),
-					refs: vec![ident.span],
-				});
+				// Struct fields cannot be initialized.
+				match (eq_span, init_expr) {
+					(Omittable::Some(start), Omittable::Some(end)) => walker
+						.push_nsyntax_diag(Syntax2::ForRemoval {
+							item: ForRemoval::VarInitialization,
+							span: Span::new(start.start, end.span.end),
+							ctx: DiagCtx::StructField,
+						}),
+					(Omittable::Some(span), _) => {
+						walker.push_nsyntax_diag(Syntax2::ForRemoval {
+							item: ForRemoval::VarInitialization,
+							span: span,
+							ctx: DiagCtx::StructField,
+						})
+					}
+					_ => {}
+				}
+				fields.push((type_, Some(ident)));
 			}
-			NodeTy::VarDefsInits(vars) => {
-				walker.push_syntax_diag(Syntax::Stmt(
-					StmtDiag::StructMemberCannotBeInitialized(node.span),
-				));
-				for var in vars {
-					fields.push(super::StructField {
-						type_: var.0.clone(),
-						name: Omittable::Some(var.1.name.clone()),
-						refs: vec![name.span],
-					});
+			NodeTy::VarDefs(vars) => {
+				for (type_, ident, eq_span, init_expr) in vars {
+					// Struct fields cannot be initialized.
+					match (eq_span, init_expr) {
+						(Omittable::Some(start), Omittable::Some(end)) => {
+							walker.push_nsyntax_diag(Syntax2::ForRemoval {
+								item: ForRemoval::VarInitialization,
+								span: Span::new(start.start, end.span.end),
+								ctx: DiagCtx::StructField,
+							})
+						}
+						(Omittable::Some(span), _) => {
+							walker.push_nsyntax_diag(Syntax2::ForRemoval {
+								item: ForRemoval::VarInitialization,
+								span: span,
+								ctx: DiagCtx::StructField,
+							})
+						}
+						_ => {}
+					}
+					fields.push((type_, Some(ident)));
 				}
 			}
-			_ => {
-				walker.push_syntax_diag(Syntax::Stmt(
-					StmtDiag::StructInvalidStmtInBody(node.span),
-				));
+			NodeTy::TypeSpecifier(type_) => {
+				walker.push_nsyntax_diag(Syntax2::ExpectedGrammar {
+					item: ExpectedGrammar::AfterType,
+					pos: type_.ty_specifier_span.end,
+				});
+				fields.push((type_, None));
 			}
+			_ => walker.push_nsyntax_diag(Syntax2::ForRemoval {
+				item: ForRemoval::Something,
+				span: node.span,
+				ctx: DiagCtx::StructField,
+			}),
 		}
 	}
 
-	// Look for optional instances.
+	// We may have optional instance variable specifiers.
 	let instances = match try_parse_new_var_specifiers(
 		walker,
 		ctx,
 		[Token::Semi],
 		SyntaxType::Variable,
+		false,
 	) {
 		Ok((vars, mut syntax, mut semantic, mut colours)) => {
 			walker.append_colours(&mut colours);
 			walker.append_syntax_diags(&mut syntax);
 			walker.append_semantic_diags(&mut semantic);
-			Some(
-				vars.into_iter()
-					.map(
-						|super::NewVarSpecifier {
-						     ident,
-						     arr,
-						     eq_span,
-						     init_expr,
-						     span,
-						 }| (ident, arr.unwrap_or(Vec::new()), span),
-					)
-					.collect::<Vec<_>>(),
-			)
+			vars.into_vec()
 		}
 		Err((expr, mut syntax, mut semantic, mut colours)) => {
+			walker.append_colours(&mut colours);
+			walker.append_syntax_diags(&mut syntax);
+			walker.append_semantic_diags(&mut semantic);
+
 			if let Some(expr) = expr {
-				walker.append_colours(&mut colours);
-				walker.append_syntax_diags(&mut syntax);
-				walker.append_semantic_diags(&mut semantic);
-				walker.push_syntax_diag(Syntax::Stmt(
-					StmtDiag::StructExpectedInstanceOrSemiAfterBody(expr.span),
-				));
+				// We have a struct body followed by an expression, but the expression isn't one or more new
+				// variable specifiers. The best error recovery strategy is to treat the current state as a struct
+				// definition, and the second expression as an expression statement on its own.
+				walker.push_nsyntax_diag(Syntax2::MissingPunct {
+					char: ';',
+					pos: body.span.end,
+					ctx: DiagCtx::StructDef,
+				});
 				ctx.push_new_struct(
-					name.clone(),
+					walker,
+					start_pos,
+					qualifiers,
+					name,
 					fields,
-					Node {
-						span: Span::new(struct_span_start, body.span.end),
-						ty: NodeTy::StructDef {
-							qualifiers,
-							name,
-							body,
-							instances: Vec::new(),
-						},
-					},
 					Vec::new(),
-					false,
+					body.span.end,
 				);
-				seek_next_stmt(walker);
+
+				// We expect a `;` after an expression to make it into a statement.
+				let semi_span = match walker.peek() {
+					Some((token, span)) => {
+						if *token == Token::Semi {
+							walker.push_colour(span, SyntaxType::Punctuation);
+							walker.advance();
+							Some(span)
+						} else {
+							None
+						}
+					}
+					None => None,
+				};
+				let expr_end = expr.span.end;
+				ctx.push_node(Node {
+					span: if let Some(semi_span) = semi_span {
+						Span::new(expr.span.start, semi_span.end)
+					} else {
+						expr.span
+					},
+					ty: NodeTy::Expr(expr),
+				});
+				if semi_span.is_none() {
+					walker.push_nsyntax_diag(Syntax2::MissingPunct {
+						char: ';',
+						pos: expr_end,
+						ctx: DiagCtx::ExprStmt,
+					});
+					seek_next_stmt(walker);
+				}
 				return;
 			}
-			None
+
+			Vec::new()
 		}
 	};
 
-	// Consume the `;` to end the statement.
+	// We expect a `;` at the end.
 	let semi_span = match walker.peek() {
 		Some((token, span)) => {
 			if *token == Token::Semi {
@@ -2241,84 +2166,29 @@ fn parse_struct<'a, P: TokenStreamProvider<'a>>(
 		}
 		None => None,
 	};
-	if semi_span.is_none() {
-		if let Some(ref i) = instances {
-			walker.push_syntax_diag(Syntax::Stmt(
-				StmtDiag::StructExpectedSemiAfterInstance(
-					i.last().unwrap().0.span.next_single_width(),
-				),
-			));
-		} else {
-			walker.push_syntax_diag(Syntax::Stmt(
-				StmtDiag::StructExpectedInstanceOrSemiAfterBody(
-					body.span.next_single_width(),
-				),
-			));
-		}
-	}
 
-	let struct_span_end = if let Some(semi_span) = semi_span {
+	let end_pos = if let Some(semi_span) = semi_span {
 		semi_span.end
 	} else {
-		if let Some(ref i) = instances {
-			i.last().unwrap().2.end
+		if let Some(var) = instances.last() {
+			var.span.end
 		} else {
 			body.span.end
 		}
 	};
 
-	let handle = ctx.get_handle_for_next_struct();
-	let (instances, var_instances) = if let Some(instances) = instances {
-		let (mut a, mut b) = (Vec::new(), Vec::new());
-		for (ident, mut arr, span) in instances.into_iter() {
-			let type_ = Type {
-				span,
-				qualifiers: Vec::new(),
-				ty: match arr.len() {
-					0 => TypeTy::Single(Either::Right(handle)),
-					1 => TypeTy::Array(Either::Right(handle), arr.remove(0)),
-					2 => TypeTy::Array2D(
-						Either::Right(handle),
-						arr.remove(0),
-						arr.remove(0),
-					),
-					_ => TypeTy::ArrayND(Either::Right(handle), arr),
-				},
-			};
-			a.push(type_.clone());
-			b.push((ident, type_));
-		}
-
-		(a, b)
-	} else {
-		(Vec::new(), Vec::new())
-	};
-
-	let is_shader_in_out = qualifiers
-		.iter()
-		.find(|q| match q.ty {
-			QualifierTy::In
-			| QualifierTy::Out
-			| QualifierTy::Uniform
-			| QualifierTy::Attribute => true,
-			_ => false,
-		})
-		.is_some();
 	ctx.push_new_struct(
-		name.clone(),
-		fields,
-		Node {
-			span: Span::new(struct_span_start, struct_span_end),
-			ty: NodeTy::StructDef {
-				qualifiers,
-				name,
-				body,
-				instances,
-			},
-		},
-		var_instances,
-		is_shader_in_out,
+		walker, start_pos, qualifiers, name, fields, instances, end_pos,
 	);
+
+	if semi_span.is_none() {
+		walker.push_nsyntax_diag(Syntax2::MissingPunct {
+			char: ';',
+			pos: end_pos,
+			ctx: DiagCtx::StructDef,
+		});
+		seek_next_stmt(walker);
+	}
 }
 
 /// Parses an if statement.
@@ -5076,7 +4946,7 @@ fn parse_non_kw_stmt_for_subroutine<'a, P: TokenStreamProvider<'a>>(
 	qualifiers_end_pos: usize,
 ) {
 	// We attempt to parse a subroutine type specifier at the current position, and if that fails a normal type
-	// specifier.
+	// specifier, and if that fails an expression.
 	let e =
 		match try_parse_subroutine_type_specifier(walker, ctx, [Token::Semi]) {
 			Ok((mut type_, mut syntax, mut semantic, mut colours)) => {
@@ -5086,15 +4956,23 @@ fn parse_non_kw_stmt_for_subroutine<'a, P: TokenStreamProvider<'a>>(
 				walker.append_syntax_diags(&mut syntax);
 				walker.append_semantic_diags(&mut semantic);
 
+				match &mut type_ {
+					Either::Left(type_) => {
+						type_.qualifiers = NonEmpty::from_vec(qualifiers).into()
+					}
+					Either::Right(type_) => {
+						type_.qualifiers = NonEmpty::from_vec(qualifiers).into()
+					}
+				}
+
 				let (token, token_span) = match walker.peek() {
 					Some(t) => t,
 					None => {
-						// We are lacking an identifier after the type.
-						walker.push_syntax_diag(Syntax::Stmt(
-							StmtDiag::SubExpectedTypeFnOrUniformAfterQualifiers(
-								Span::new_single_width(qualifiers_end_pos),
-							),
-						));
+						// We expect something after the type specifier.
+						walker.push_nsyntax_diag(Syntax2::ExpectedGrammar {
+							item: ExpectedGrammar::AfterSubroutineType,
+							pos: qualifiers_end_pos,
+						});
 						return;
 					}
 				};
@@ -5105,14 +4983,6 @@ fn parse_non_kw_stmt_for_subroutine<'a, P: TokenStreamProvider<'a>>(
 						Some(next) => match next.0 {
 							Token::LParen => {
 								// We have a function declaration/definition.
-								match &mut type_ {
-									Either::Left(type_) => {
-										type_.qualifiers = qualifiers
-									}
-									Either::Right(type_) => {
-										type_.qualifiers = qualifiers
-									}
-								}
 								let l_paren_span = next.1;
 								let ident = Ident {
 									name: i.clone(),
@@ -5158,6 +5028,7 @@ fn parse_non_kw_stmt_for_subroutine<'a, P: TokenStreamProvider<'a>>(
 					ctx,
 					[Token::Semi],
 					SyntaxType::Subroutine,
+					false,
 				) {
 					Ok((i, mut syntax, mut semantic, mut colours)) => {
 						walker.append_colours(&mut colours);
@@ -5172,48 +5043,78 @@ fn parse_non_kw_stmt_for_subroutine<'a, P: TokenStreamProvider<'a>>(
 
 						if let Some(expr) = expr {
 							// We have a (subroutine/normal) type specifier, followed by a second expression but
-							// the second expression isn't one or more new variable specifiers. We treat the first
-							// expression as an incomplete subroutine uniform grammar and the second expression as
-							// a standalone expression.
-							walker.push_syntax_diag(Syntax::Stmt(
-								StmtDiag::TypeExpectedIdentsAfterType(
-									match type_ {
-										Either::Left(t) => {
-											t.span.next_single_width()
-										}
-										Either::Right(t) => {
-											t.span.next_single_width()
-										}
-									},
-								),
-							));
+							// the second expression isn't one or more new variable specifiers. The best error
+							// recovery strategy is to treat the subroutine qualifiers and type specifier as an
+							// unfinished subroutine uniform statement, and the second expression as an expression
+							// statement on its own.
+							walker.push_nsyntax_diag(
+								Syntax2::ExpectedGrammar {
+									item: ExpectedGrammar::NewVarSpecifier,
+									pos: match &type_ {
+										Either::Left(t) => t.ty_specifier_span,
+										Either::Right(t) => t.ty_specifier_span,
+									}
+									.end,
+								},
+							);
+
+							// We expect a `;` after an expression to make it into a statement.
+							let semi_span = match walker.peek() {
+								Some((token, span)) => {
+									if *token == Token::Semi {
+										walker.push_colour(
+											span,
+											SyntaxType::Punctuation,
+										);
+										walker.advance();
+										Some(span)
+									} else {
+										None
+									}
+								}
+								None => None,
+							};
+							let expr_end = expr.span.end;
 							ctx.push_node(Node {
-								span: expr.span,
+								span: if let Some(semi_span) = semi_span {
+									Span::new(expr.span.start, semi_span.end)
+								} else {
+									expr.span
+								},
 								ty: NodeTy::Expr(expr),
 							});
-							seek_next_stmt(walker);
+							if semi_span.is_none() {
+								walker.push_nsyntax_diag(
+									Syntax2::MissingPunct {
+										char: ';',
+										pos: expr_end,
+										ctx: DiagCtx::ExprStmt,
+									},
+								);
+								seek_next_stmt(walker);
+							}
 						} else {
 							// We have a (subroutine/normal) type specifier followed by something that can't be
-							// parsed at all as an expression.
-							walker.push_syntax_diag(Syntax::Stmt(
-								StmtDiag::TypeExpectedIdentsAfterType(
-									match type_ {
-										Either::Left(t) => {
-											t.span.next_single_width()
-										}
-										Either::Right(t) => {
-											t.span.next_single_width()
-										}
-									},
-								),
-							));
+							// parsed at all as an expression. The best error recovery strategy is to treat the
+							// subroutine qualifiers and type specifier as an unfinished subroutine uniform
+							// statement, and seek the next statement.
+							walker.push_nsyntax_diag(
+								Syntax2::ExpectedGrammar {
+									item: ExpectedGrammar::NewVarSpecifier,
+									pos: match &type_ {
+										Either::Left(t) => t.ty_specifier_span,
+										Either::Right(t) => t.ty_specifier_span,
+									}
+									.end,
+								},
+							);
+							seek_next_stmt(walker);
 						}
 						return;
 					}
 				};
 
-				// Panic: `var_specifiers` has a length of at least 1.
-				let last_var_spec_span = var_specifiers.last().unwrap().span;
+				let last_var_spec_pos = var_specifiers.last().span.end;
 
 				// We definitely have something which matches a variable(s) definition, irrespective of what comes
 				// next. That means the only node that makes sense to produce is a subroutine uniform definition
@@ -5225,52 +5126,27 @@ fn parse_non_kw_stmt_for_subroutine<'a, P: TokenStreamProvider<'a>>(
 
 				// Check (a)
 				if let Some((_, l_paren, r_paren)) = association_list {
-					walker.push_syntax_diag(Syntax::Stmt(
-						StmtDiag::SubUniformFoundAssociationList(Span::new(
-							l_paren.start,
-							r_paren.end,
-						)),
-					));
+					walker.push_nsyntax_diag(Syntax2::ForRemoval {
+						item: ForRemoval::AssociationList,
+						span: Span::new(l_paren.start, r_paren.end),
+						ctx: DiagCtx::SubroutineUniform,
+					});
 				}
 
 				// Check (b)
-				if let Some(span) = uniform_kw_span {
+				if let Some(uniform_kw_span) = uniform_kw_span {
 					if is_uniform_before_subroutine {
-						walker.push_syntax_diag(Syntax::Stmt(
-							StmtDiag::SubUniformFoundUniformKwBeforeSubKw(span),
-						));
+						walker.push_nsyntax_diag(Syntax2::IncorrectOrder {
+							msg: "`uniform` keyword must be located after the `subroutine` keyword",
+							span: uniform_kw_span,
+						});
 					}
 				} else {
-					walker.push_syntax_diag(Syntax::Stmt(
-						StmtDiag::SubUniformExpectedUniformKw(
-							Span::new_single_width(qualifiers_end_pos),
-						),
-					));
+					walker.push_nsyntax_diag(Syntax2::ExpectedGrammar {
+						item: ExpectedGrammar::Keyword("uniform"),
+						pos: qualifiers_end_pos,
+					});
 				}
-
-				// Consume the `;` to end the statement.
-				let semi_span = match walker.peek() {
-					Some((token, token_span)) => {
-						if *token == Token::Semi {
-							Some(token_span)
-						} else {
-							walker.push_syntax_diag(Syntax::Stmt(
-								StmtDiag::SubUniformExpectedSemiAfterVars(
-									last_var_spec_span.next_single_width(),
-								),
-							));
-							None
-						}
-					}
-					None => {
-						walker.push_syntax_diag(Syntax::Stmt(
-							StmtDiag::SubUniformExpectedSemiAfterVars(
-								last_var_spec_span.next_single_width(),
-							),
-						));
-						None
-					}
-				};
 
 				// Check (c)
 				let type_ = match type_ {
@@ -5278,25 +5154,50 @@ fn parse_non_kw_stmt_for_subroutine<'a, P: TokenStreamProvider<'a>>(
 					Either::Right(type_) => {
 						// Since the subroutine uniform node takes a subroutine type handle, there is really
 						// nothing else we can do other than abort creating anything.
-						walker.push_syntax_diag(Syntax::Stmt(
-							StmtDiag::SubUniformExpectedSubroutineType(
-								type_.span,
+						walker.push_semantic_diag(
+							Semantic::SubUniformFoundNormalType(
+								type_.ty_specifier_span,
 							),
-						));
+						);
 						return;
 					}
 				};
 
+				// We expect a `;` after the new variable specifier(s).
+				let semi_span = match walker.peek() {
+					Some((token, token_span)) => {
+						if *token == Token::Semi {
+							walker.push_colour(
+								token_span,
+								SyntaxType::Punctuation,
+							);
+							walker.advance();
+							Some(token_span)
+						} else {
+							None
+						}
+					}
+					None => None,
+				};
 				ctx.push_new_subroutine_uniforms(
 					walker,
+					start_pos,
 					type_,
 					var_specifiers,
 					if let Some(semi_span) = semi_span {
 						semi_span.end
 					} else {
-						last_var_spec_span.end
+						last_var_spec_pos
 					},
 				);
+				if semi_span.is_none() {
+					walker.push_nsyntax_diag(Syntax2::MissingPunct {
+						char: ';',
+						pos: last_var_spec_pos,
+						ctx: DiagCtx::SubroutineUniform,
+					});
+					seek_next_stmt(walker);
+				}
 				return;
 			}
 			Err(e) => e,
@@ -5305,19 +5206,29 @@ fn parse_non_kw_stmt_for_subroutine<'a, P: TokenStreamProvider<'a>>(
 	let (Some(expr), mut syntax, mut semantic, mut colours) = e else {
 		// We couldn't parse a (subroutine/normal) type specifier nor even an expression, so this cannot be a
 		// valid statement.
-		invalidate_qualifiers(walker, qualifiers);
+		walker.push_nsyntax_diag(Syntax2::ExpectedGrammar {
+			item: ExpectedGrammar::AfterSubroutineQualifiers,
+			pos: qualifiers_end_pos,
+		});
 		seek_next_stmt(walker);
 		return;
 	};
 
-	// We have an expression, it must therefore be a standalone expression statement or an interface block.
+	// We have an expression. If the expression is just a single identifier and we have a `{` next then the closest
+	// match is an interface block, otherwise the closest match is an expression statement.
 
 	match (&expr.ty, walker.peek()) {
 		(ExprTy::Local { name: ident, .. }, Some((token, token_span))) => {
 			match token {
 				Token::LBrace => {
-					// We have an interface block. Because of the presence of the `subroutine` keyword this isn't
-					// valid, but we allow it anyway for better error recovery.
+					// Though this technically isn't a valid interface block because of the presence of the
+					// `subroutine` keyword, this is the best error recovery strategy.
+					walker.push_nsyntax_diag(Syntax2::ForRemoval {
+						item: ForRemoval::Keyword("subroutine"),
+						span: subroutine_kw_span,
+						ctx: DiagCtx::InterfaceBlockDef,
+					});
+
 					let l_brace_span = token_span;
 					syntax.retain(|e| {
 						if let Syntax::Expr(
@@ -5329,17 +5240,14 @@ fn parse_non_kw_stmt_for_subroutine<'a, P: TokenStreamProvider<'a>>(
 							true
 						}
 					});
-					// TODO: Syntax error
-					walker.append_syntax_diags(&mut syntax);
 					walker.append_semantic_diags(&mut semantic);
-					walker.push_colour(ident.span, SyntaxType::Variable);
+					walker.push_colour(ident.span, SyntaxType::InterfaceBlock);
 					walker.push_colour(l_brace_span, SyntaxType::Punctuation);
 					walker.advance();
 					parse_interface_block(
 						walker,
 						ctx,
 						qualifiers,
-						start_pos,
 						ident.clone(),
 						l_brace_span,
 					);
@@ -5351,17 +5259,18 @@ fn parse_non_kw_stmt_for_subroutine<'a, P: TokenStreamProvider<'a>>(
 		(_, _) => {}
 	}
 
-	// We have a standalone expression statement. This is incompatible with the `subroutine` keyword. We treat the
-	// qualifiers (inc. subroutine keyword) as a half-finished subroutine statement of some kind and ignore it,
-	// whilst treating the expression as a standalone expression statement.
-	walker.push_syntax_diag(Syntax::Stmt(StmtDiag::SubExpectedAfterKw(
-		Span::new_single_width(qualifiers_end_pos),
-	)));
+	// We have an expression preceeded by qualifiers **including** the `subroutine` keyword. The best error
+	// recovery strategy is to treat the qualifiers/subroutine as the beginning of a subroutine-related statement
+	// that is incomplete, and the expression as an expression statement on its own.
+	walker.push_nsyntax_diag(Syntax2::ExpectedGrammar {
+		item: ExpectedGrammar::AfterSubroutineQualifiers,
+		pos: qualifiers_end_pos,
+	});
 	walker.append_colours(&mut colours);
 	walker.append_syntax_diags(&mut syntax);
 	walker.append_semantic_diags(&mut semantic);
 
-	// Consume the `;` to end the statement.
+	// We expect a `;` after an expression to make it into a statement.
 	let semi_span = match walker.peek() {
 		Some((token, span)) => {
 			if *token == Token::Semi {
@@ -5374,15 +5283,7 @@ fn parse_non_kw_stmt_for_subroutine<'a, P: TokenStreamProvider<'a>>(
 		}
 		None => None,
 	};
-	if semi_span.is_none() {
-		walker.push_syntax_diag(Syntax::Stmt(
-			StmtDiag::ExprStmtExpectedSemiAfterExpr(
-				expr.span.next_single_width(),
-			),
-		));
-		seek_next_stmt(walker);
-	}
-
+	let expr_end = expr.span.end;
 	ctx.push_node(Node {
 		span: if let Some(semi_span) = semi_span {
 			Span::new(expr.span.start, semi_span.end)
@@ -5391,9 +5292,18 @@ fn parse_non_kw_stmt_for_subroutine<'a, P: TokenStreamProvider<'a>>(
 		},
 		ty: NodeTy::Expr(expr),
 	});
+	if semi_span.is_none() {
+		walker.push_nsyntax_diag(Syntax2::MissingPunct {
+			char: ';',
+			pos: expr_end,
+			ctx: DiagCtx::ExprStmt,
+		});
+		seek_next_stmt(walker);
+	}
 }
 
-/// Parses a function declaration/definition.
+/// Parses a subroutine type declaration (function declaration grammar) or an associated subroutine function
+/// definition.
 ///
 /// This function assumes that the return type, ident, and opening parenthesis have been consumed.
 fn parse_subroutine_function<'a, P: TokenStreamProvider<'a>>(
@@ -5432,32 +5342,41 @@ fn parse_subroutine_function<'a, P: TokenStreamProvider<'a>>(
 		// just ignore it. However, if (c) is not met, we can't create the node since the ast node explicitly
 		// takes only a normal type.
 		if let Some((_, l_paren, r_paren)) = association_list {
-			walker.push_syntax_diag(Syntax::Stmt(
-				StmtDiag::SubTypeDeclFoundAssociationList(Span::new(
-					l_paren.start,
-					r_paren.end,
-				)),
-			));
+			walker.push_nsyntax_diag(Syntax2::ForRemoval {
+				item: ForRemoval::AssociationList,
+				span: Span::new(l_paren.start, r_paren.end),
+				ctx: DiagCtx::SubroutineType,
+			});
 		}
-		if let Some(span) = uniform_kw_span {
-			walker.push_syntax_diag(Syntax::Stmt(
-				StmtDiag::SubTypeDeclFoundUniformKw(span),
-			));
+		if let Some(uniform_kw_span) = uniform_kw_span {
+			walker.push_nsyntax_diag(Syntax2::ForRemoval {
+				item: ForRemoval::Keyword("uniform"),
+				span: uniform_kw_span,
+				ctx: DiagCtx::SubroutineType,
+			});
 		}
 		let return_type = match return_type {
 			Either::Left(type_) => {
-				walker.push_syntax_diag(Syntax::Stmt(
-					StmtDiag::SubTypeDeclExpectedNormalType(type_.span),
+				// Since the subroutine type node takes a subroutine type handle, there is really nothing else we
+				// can do other than abort creating anything.
+				walker.push_semantic_diag(Semantic::SubTypeFoundSubType(
+					type_.ty_specifier_span,
 				));
 				return;
 			}
 			Either::Right(type_) => type_,
 		};
 
-		ctx.push_new_subroutine_type(return_type, ident, params, end_pos);
+		ctx.push_new_subroutine_type(
+			walker,
+			return_type,
+			ident,
+			params,
+			end_pos,
+		);
 	}
 
-	// Look for any parameters until we hit a closing `)` parenthesis.
+	// Look for any parameters until we hit a closing `)` parenthesis, or other error recovery exit condition.
 	#[derive(PartialEq)]
 	enum Prev {
 		None,
@@ -5468,18 +5387,18 @@ fn parse_subroutine_function<'a, P: TokenStreamProvider<'a>>(
 	let mut prev = Prev::None;
 	let mut prev_span = l_paren_span;
 	let mut params = Vec::new();
-	let param_end_span = loop {
+	let params_end_pos = loop {
 		let (token, token_span) = match walker.peek() {
 			Some(t) => t,
 			None => {
-				// We have not yet finished parsing the parameter list, but we treat this as a valid declaration
-				// since that's the closest match.
-				walker.push_syntax_diag(Syntax::Stmt(
-					StmtDiag::ParamsExpectedRParen(
-						prev_span.next_single_width(),
-					),
-				));
-
+				// We expect a `)` to finish the parameter list. Since we know there's nothing else left, the best
+				// error recovery strategy is to treat this as a subroutine type declaration. (We are also
+				// technically missing the `;` but two overlapping errors should be avoided).
+				walker.push_nsyntax_diag(Syntax2::MissingPunct {
+					char: ')',
+					pos: prev_span.end,
+					ctx: DiagCtx::ParamList,
+				});
 				push_type_decl(
 					walker,
 					ctx,
@@ -5499,17 +5418,15 @@ fn parse_subroutine_function<'a, P: TokenStreamProvider<'a>>(
 				walker.push_colour(token_span, SyntaxType::Punctuation);
 				walker.advance();
 				if prev == Prev::Comma {
-					walker.push_syntax_diag(Syntax::Stmt(
-						StmtDiag::ParamsExpectedParamAfterComma(
-							Span::new_between(prev_span, token_span),
-						),
-					));
+					walker.push_nsyntax_diag(Syntax2::ExpectedGrammar {
+						item: ExpectedGrammar::Parameter,
+						pos: prev_span.end,
+					});
 				} else if prev == Prev::None {
-					walker.push_syntax_diag(Syntax::Stmt(
-						StmtDiag::ParamsExpectedParamBetweenParenComma(
-							Span::new_between(l_paren_span, token_span),
-						),
-					));
+					walker.push_nsyntax_diag(Syntax2::ExpectedGrammar {
+						item: ExpectedGrammar::Parameter,
+						pos: l_paren_span.end,
+					});
 				}
 				prev = Prev::Comma;
 				prev_span = token_span;
@@ -5519,25 +5436,24 @@ fn parse_subroutine_function<'a, P: TokenStreamProvider<'a>>(
 				walker.push_colour(token_span, SyntaxType::Punctuation);
 				walker.advance();
 				if prev == Prev::Comma {
-					walker.push_syntax_diag(Syntax::Stmt(
-						StmtDiag::ParamsExpectedParamAfterComma(
-							Span::new_between(prev_span, token_span),
-						),
-					));
+					walker.push_nsyntax_diag(Syntax2::ExpectedGrammar {
+						item: ExpectedGrammar::Parameter,
+						pos: prev_span.end,
+					});
 				}
-				break token_span;
+				break token_span.end;
 			}
 			Token::Semi => {
 				walker.push_colour(token_span, SyntaxType::Punctuation);
 				walker.advance();
-				// We have not yet finished parsing the parameter list but we've encountered a semi-colon. We treat
-				// this as a valid declaration since that's the closest match.
-				walker.push_syntax_diag(Syntax::Stmt(
-					StmtDiag::ParamsExpectedRParen(
-						prev_span.next_single_width(),
-					),
-				));
 
+				// Although we expect a `)` to close the parameter list, since we've encountered a `;` the best
+				// error recovery strategy is to allow a subroutine type declaration anyway.
+				walker.push_nsyntax_diag(Syntax2::MissingPunct {
+					char: ')',
+					pos: prev_span.end,
+					ctx: DiagCtx::ParamList,
+				});
 				push_type_decl(
 					walker,
 					ctx,
@@ -5552,32 +5468,33 @@ fn parse_subroutine_function<'a, P: TokenStreamProvider<'a>>(
 			}
 			Token::LBrace => {
 				walker.push_colour(token_span, SyntaxType::Punctuation);
-				// We don't advance because the next check after this loop checks for a l-brace.
+				// We don't advance because the next check after this loop checks for a `{`.
 
-				// We have not yet finished parsing the parameter list but we've encountered a l-brace. We treat
-				// this as a potentially valid definition since that's the closest match.
-				walker.push_syntax_diag(Syntax::Stmt(
-					StmtDiag::ParamsExpectedRParen(
-						prev_span.next_single_width(),
-					),
-				));
-				break token_span;
+				// Although we expect a `)` to close the parameter list, since we've encountered a `{` the best
+				// error recovery strategy is to continue on anyway (to a function definition).
+				walker.push_nsyntax_diag(Syntax2::MissingPunct {
+					char: ')',
+					pos: prev_span.end,
+					ctx: DiagCtx::ParamList,
+				});
+				break token_span.end;
 			}
 			_ => {}
 		}
 
 		if prev == Prev::Param {
-			walker.push_syntax_diag(Syntax::Stmt(
-				StmtDiag::ParamsExpectedCommaAfterParam(
-					prev_span.next_single_width(),
-				),
-			));
+			// We have a parameter after a parameter, though we expect a separating `,` between.
+			walker.push_nsyntax_diag(Syntax2::MissingPunct {
+				char: ',',
+				pos: prev_span.end,
+				ctx: DiagCtx::ParamList,
+			});
 		}
 		let param_span_start = token_span.start;
 
 		let qualifiers = try_parse_qualifiers(walker, ctx);
 
-		// Consume the type specifier.
+		// We expect a type specifier.
 		let mut type_ = match try_parse_type_specifier(
 			walker,
 			ctx,
@@ -5591,39 +5508,40 @@ fn parse_subroutine_function<'a, P: TokenStreamProvider<'a>>(
 			}
 			Err((expr, mut syntax, mut semantic, mut colours)) => {
 				if let Some(expr) = expr {
-					// We have an expression which cannot be parsed into a type. We ignore this and continue
-					// searching for the next parameter.
-					walker.push_syntax_diag(Syntax::Stmt(
-						StmtDiag::ParamsInvalidTypeExpr(expr.span),
-					));
+					// We couldn't parse a type specifier. The best error recovery strategy is to ignore this and
+					// continue looking for the next parameter.
+					walker.push_nsyntax_diag(Syntax2::ForRemoval {
+						item: ForRemoval::Expr,
+						span: expr.span,
+						ctx: DiagCtx::ParamList,
+					});
 					prev = Prev::Invalid;
 					prev_span = Span::new(param_span_start, expr.span.end);
 					continue;
 				} else {
-					// We immediately have a token that is not an expression. We ignore this and loop until we hit
-					// something recognizable.
-					let end_span = loop {
+					// We immediately have a token that is not an expression. The best error recovery strategy is
+					// to ignore this and loop until we hit something recognizable.
+					let end_pos = loop {
 						match walker.peek() {
 							Some((token, span)) => {
 								if *token == Token::Comma
 									|| *token == Token::RParen || *token
 									== Token::Semi || *token == Token::LBrace
 								{
-									break span;
+									break span.end;
 								} else {
 									walker.advance();
 									continue;
 								}
 							}
-							None => break walker.get_last_span(),
+							None => break walker.get_last_span().end,
 						}
 					};
-					walker.push_syntax_diag(Syntax::Stmt(
-						StmtDiag::ParamsInvalidTypeExpr(Span::new(
-							param_span_start,
-							end_span.end,
-						)),
-					));
+					walker.push_nsyntax_diag(Syntax2::ForRemoval {
+						item: ForRemoval::Something,
+						span: Span::new(param_span_start, end_pos),
+						ctx: DiagCtx::ParamList,
+					});
 					prev = Prev::Invalid;
 					prev_span = token_span;
 					continue;
@@ -5631,13 +5549,13 @@ fn parse_subroutine_function<'a, P: TokenStreamProvider<'a>>(
 			}
 		};
 
-		// Look for the optional ident.
-		/* let ident = match try_parse_new_decl_def_idents_with_type_info(
+		// We may have an optional new variable specifier.
+		let mut vars = match try_parse_new_var_specifiers(
 			walker,
 			ctx,
 			[Token::Semi, Token::LBrace],
-			true,
 			SyntaxType::Parameter,
+			true,
 		) {
 			Ok((i, mut syntax, mut semantic, mut colours)) => {
 				walker.append_colours(&mut colours);
@@ -5647,29 +5565,40 @@ fn parse_subroutine_function<'a, P: TokenStreamProvider<'a>>(
 			}
 			Err((expr, mut syntax, mut semantic, mut colours)) => {
 				if let Some(expr) = expr {
-					// We have a second expression after the first expression, but the second expression can't be
-					// converted to an identifier for the parameter. We treat the first type expression as an
+					// We have an expression after the type specifier, but the expression can't be parsed as a new
+					// variable specifier. The best error recovery strategy is to treat the type specifier as an
 					// anonymous parameter, and the second expression as invalid.
-					let param_span =
-						Span::new(param_span_start, type_.span.end);
-					type_.qualifiers = qualifiers;
+					let param_span = Span::new(
+						param_span_start,
+						type_.ty_specifier_span.end,
+					);
+					type_.qualifiers = NonEmpty::from_vec(qualifiers).into();
 					params.push(Param {
-						span: Span::new(param_span_start, type_.span.end),
+						span: Span::new(
+							param_span_start,
+							type_.ty_specifier_span.end,
+						),
 						type_,
 						ident: Omittable::None,
 					});
-					walker.push_syntax_diag(Syntax::Stmt(
-						StmtDiag::ParamsInvalidIdentExpr(expr.span),
-					));
+					walker.push_nsyntax_diag(Syntax2::ForRemoval {
+						item: ForRemoval::Expr,
+						span: expr.span,
+						ctx: DiagCtx::ParamList,
+					});
 					prev = Prev::Param;
 					prev_span = param_span;
 					continue;
 				} else {
-					// We have a first expression and then something that is not an expression. We treat this as an
-					// anonymous parameter, whatever the current token is will be dealt with in the next iteration.
-					type_.qualifiers = qualifiers;
-					let param_span =
-						Span::new(param_span_start, type_.span.end);
+					// We have a type specifier followed by something that can't even be parsed into an expression.
+					// The best error recovery strategy is to treat the type specifier as an anonymous parameter,
+					// and continue looking. It's possible that we hit a `,` or `)`, in which case it would be
+					// erreneous to produce a diagnostic.
+					type_.qualifiers = NonEmpty::from_vec(qualifiers).into();
+					let param_span = Span::new(
+						param_span_start,
+						type_.ty_specifier_span.end,
+					);
 					params.push(Param {
 						span: param_span,
 						type_,
@@ -5680,14 +5609,39 @@ fn parse_subroutine_function<'a, P: TokenStreamProvider<'a>>(
 					continue;
 				}
 			}
-		}; */
-		// FIXME:
-		let ident: Vec<(Ident, Vec<Omittable<Expr>>, Span)> = vec![];
-		let ident_span = ident[0].0.span;
+		};
 
-		type_.qualifiers = qualifiers;
-		let (type_, ident) = combine_type_with_idents(type_, ident).remove(0);
-		let param_span = Span::new(param_span_start, ident_span.end);
+		// Panic: `vars` has a length of exactly 1
+		let super::NewVarSpecifier {
+			ident,
+			arr,
+			eq_span,
+			init_expr,
+			span: var_span,
+		} = vars.destruct();
+
+		// New variable specifiers inside parameter lists cannot have an initialization expression.
+		match (eq_span, init_expr) {
+			(Some(span), None) => {
+				walker.push_nsyntax_diag(Syntax2::ForRemoval {
+					item: ForRemoval::VarInitialization,
+					span,
+					ctx: DiagCtx::ParamList,
+				})
+			}
+			(Some(begin), Some(end)) => {
+				walker.push_nsyntax_diag(Syntax2::ForRemoval {
+					item: ForRemoval::VarInitialization,
+					span: Span::new(begin.start, end.span.end),
+					ctx: DiagCtx::ParamList,
+				})
+			}
+			_ => {}
+		}
+
+		type_.qualifiers = NonEmpty::from_vec(qualifiers).into();
+		let type_ = combine_type_with_arr(type_, arr);
+		let param_span = Span::new(param_span_start, var_span.end);
 		params.push(Param {
 			span: param_span,
 			type_,
@@ -5697,16 +5651,21 @@ fn parse_subroutine_function<'a, P: TokenStreamProvider<'a>>(
 		prev_span = param_span;
 	};
 
-	// Consume the `;` for a declaration or a `{` for a definition.
+	// We expect a `;` for a declaration, or a `{` for a definition.
 	let semi_span = match walker.peek() {
 		Some((token, token_span)) => match token {
-			Token::Semi => Some(token_span),
+			Token::Semi => {
+				walker.push_colour(token_span, SyntaxType::Punctuation);
+				walker.advance();
+				Some(token_span)
+			}
 			Token::LBrace => {
 				// We have a subroutine associated-function definition.
 				let l_brace_span = token_span;
 				walker.push_colour(l_brace_span, SyntaxType::Punctuation);
 				walker.advance();
 
+				// Parse the contents of the body.
 				let scope_handle =
 					ctx.new_temp_scope(l_brace_span, Some(&params));
 				parse_scope(walker, ctx, brace_scope, l_brace_span);
@@ -5720,43 +5679,40 @@ fn parse_subroutine_function<'a, P: TokenStreamProvider<'a>>(
 					if let Some((association_list, _, _)) = association_list {
 						association_list
 					} else {
-						walker.push_syntax_diag(Syntax::Stmt(
-							StmtDiag::SubFnDefExpectedAssociationList(
-								subroutine_kw_span.next_single_width(),
-							),
-						));
+						walker.push_nsyntax_diag(Syntax2::ExpectedGrammar {
+							item: ExpectedGrammar::AssociationList,
+							pos: subroutine_kw_span.end,
+						});
 						Vec::new()
 					};
-				if let Some(span) = uniform_kw_span {
-					walker.push_syntax_diag(Syntax::Stmt(
-						StmtDiag::SubFnDefFoundUniformKw(span),
-					));
+				if let Some(uniform_kw_span) = uniform_kw_span {
+					walker.push_nsyntax_diag(Syntax2::ForRemoval {
+						item: ForRemoval::Keyword("uniform"),
+						span: uniform_kw_span,
+						ctx: DiagCtx::SubroutineAssociatedFn,
+					});
 				}
 				let return_type = match return_type {
 					Either::Left(type_) => {
-						walker.push_syntax_diag(Syntax::Stmt(
-							StmtDiag::SubFnDefExpectedNormalType(type_.span),
+						walker.push_semantic_diag(Semantic::SubFnFoundSubType(
+							type_.ty_specifier_span,
 						));
 						return;
 					}
 					Either::Right(type_) => type_,
 				};
 
+				let end_pos = body.span.end;
 				ctx.push_new_associated_subroutine_fn_def(
+					walker,
 					scope_handle,
+					start_pos,
 					association_list,
-					ident.clone(),
-					params.iter().cloned().map(|p| p.into()).collect(),
-					return_type.clone(),
-					Node {
-						span: Span::new(return_type.span.start, body.span.end),
-						ty: NodeTy::FnDef {
-							return_type,
-							ident,
-							params,
-							body,
-						},
-					},
+					return_type,
+					ident,
+					params,
+					body,
+					end_pos,
 				);
 				return;
 			}
@@ -5767,22 +5723,6 @@ fn parse_subroutine_function<'a, P: TokenStreamProvider<'a>>(
 
 	// We have a subroutine type declaration.
 
-	match semi_span {
-		Some(semi_span) => {
-			walker.push_colour(semi_span, SyntaxType::Punctuation);
-			walker.advance();
-		}
-		None => {
-			// We are missing a `;` to make this grammatically valid. We treat this as a declaration though since
-			// it's the closest unambiguous match.
-			walker.push_syntax_diag(Syntax::Stmt(
-				StmtDiag::FnExpectedSemiOrLBraceAfterParams(
-					param_end_span.next_single_width(),
-				),
-			));
-		}
-	}
-
 	push_type_decl(
 		walker,
 		ctx,
@@ -5791,98 +5731,81 @@ fn parse_subroutine_function<'a, P: TokenStreamProvider<'a>>(
 		association_list,
 		uniform_kw_span,
 		params,
-		semi_span.map(|s| s.end).unwrap_or(param_end_span.end),
+		semi_span.map(|s| s.end).unwrap_or(params_end_pos),
 	);
-
 	if semi_span.is_none() {
+		walker.push_nsyntax_diag(Syntax2::MissingPunct {
+			char: ';',
+			pos: params_end_pos,
+			ctx: DiagCtx::SubroutineType,
+		});
 		seek_next_stmt(walker);
 	}
 }
 
-/// Combines the ident information with the type to create one or more type-ident pairs. This step is necessary
-/// because the idents themselves can contain type information, e.g. `int[3] i[9]`.
-fn combine_type_with_idents(
+/// Combines the disjointed type specifier with a type.
+pub(super) fn combine_type_with_arr(
 	type_: Type,
-	ident_info: Vec<(Ident, Vec<ArrSize>, Span)>,
-) -> Vec<(Type, Ident)> {
-	let mut vars = Vec::new();
-	for (ident, sizes, _) in ident_info {
-		if sizes.is_empty() {
-			vars.push((type_.clone(), ident));
-		} else {
-			let mut sizes = sizes.clone();
-			let Type {
-				ty,
-				qualifiers,
-				span,
-			} = type_.clone();
-			let primitive = match ty {
-				TypeTy::Single(p) => p,
-				TypeTy::Array(p, i) => {
-					sizes.push(i);
-					p
-				}
-				TypeTy::Array2D(p, i, j) => {
-					sizes.push(i);
-					sizes.push(j);
-					p
-				}
-				TypeTy::ArrayND(p, mut v) => {
-					sizes.append(&mut v);
-					p
-				}
-			};
+	arr: Option<Spanned<Vec<ArrSize>>>,
+) -> Type {
+	let Some((arr, arr_span)) = arr else { return type_; };
 
-			let type_ = if sizes.len() == 0 {
-				Type {
-					span,
-					ty: TypeTy::Single(primitive),
-					qualifiers,
-				}
-			} else if sizes.len() == 1 {
-				Type {
-					span,
-					ty: TypeTy::Array(primitive, sizes.remove(0)),
-					qualifiers,
-				}
-			} else if sizes.len() == 2 {
-				Type {
-					span,
-					ty: TypeTy::Array2D(
-						primitive,
-						sizes.remove(0),
-						sizes.remove(0),
-					),
-					qualifiers,
-				}
-			} else {
-				Type {
-					span,
-					ty: TypeTy::ArrayND(primitive, sizes),
-					qualifiers,
-				}
-			};
-
-			vars.push((type_, ident))
+	let mut sizes = arr;
+	let Type {
+		ty,
+		qualifiers,
+		ty_specifier_span,
+		disjointed_span: _,
+	} = type_;
+	let handle = match ty {
+		TypeTy::Single(h) => h,
+		TypeTy::Array(h, i) => {
+			sizes.push(i);
+			h
 		}
+		TypeTy::Array2D(h, i, j) => {
+			sizes.push(i);
+			sizes.push(j);
+			h
+		}
+		TypeTy::ArrayND(h, mut v) => {
+			sizes.append(&mut v);
+			h
+		}
+	};
+
+	Type {
+		ty_specifier_span,
+		disjointed_span: Omittable::Some(arr_span),
+		ty: match sizes.len() {
+			0 => TypeTy::Single(handle),
+			1 => TypeTy::Array(handle, sizes.remove(0)),
+			2 => {
+				let b = sizes.remove(0);
+				let a = sizes.remove(0);
+				TypeTy::Array2D(handle, a, b)
+			}
+			_ => TypeTy::ArrayND(handle, sizes),
+		},
+		qualifiers,
 	}
-	vars
 }
 
-/// Combines the ident information with the subroutine type to create one or more subroutine type-ident pairs. This
-/// step is necessary because the idents themselves can contain type information, e.g. `foo[3] i[9]`.
-pub(super) fn combine_subroutine_type_with_idents(
+/// Combines the disjointed type specifier with a subroutine type.
+pub(super) fn combine_subroutine_type_with_arr(
 	type_: SubroutineType,
-	arr: Option<Vec<ArrSize>>,
+	arr: Option<Spanned<Vec<ArrSize>>>,
 ) -> SubroutineType {
-	let Some(arr) = arr else { return type_; };
+	let Some((arr, arr_span)) = arr else { return type_; };
 
-	let mut sizes = arr.clone();
+	let mut sizes = arr;
 	let SubroutineType {
 		ty,
 		qualifiers,
-		span,
-	} = type_.clone();
+		ident_span,
+		ty_specifier_span,
+		disjointed_span: _,
+	} = type_;
 	let handle = match ty {
 		SubroutineTypeTy::Single(h) => h,
 		SubroutineTypeTy::Array(h, i) => {
@@ -5900,35 +5823,20 @@ pub(super) fn combine_subroutine_type_with_idents(
 		}
 	};
 
-	let type_ = if sizes.len() == 0 {
-		SubroutineType {
-			span,
-			ty: SubroutineTypeTy::Single(handle),
-			qualifiers,
-		}
-	} else if sizes.len() == 1 {
-		SubroutineType {
-			span,
-			ty: SubroutineTypeTy::Array(handle, sizes.remove(0)),
-			qualifiers,
-		}
-	} else if sizes.len() == 2 {
-		SubroutineType {
-			span,
-			ty: SubroutineTypeTy::Array2D(
-				handle,
-				sizes.remove(0),
-				sizes.remove(0),
-			),
-			qualifiers,
-		}
-	} else {
-		SubroutineType {
-			span,
-			ty: SubroutineTypeTy::ArrayND(handle, sizes),
-			qualifiers,
-		}
-	};
-
-	type_
+	SubroutineType {
+		ident_span,
+		ty_specifier_span,
+		disjointed_span: Omittable::Some(arr_span),
+		ty: match sizes.len() {
+			0 => SubroutineTypeTy::Single(handle),
+			1 => SubroutineTypeTy::Array(handle, sizes.remove(0)),
+			2 => {
+				let b = sizes.remove(0);
+				let a = sizes.remove(0);
+				SubroutineTypeTy::Array2D(handle, a, b)
+			}
+			_ => SubroutineTypeTy::ArrayND(handle, sizes),
+		},
+		qualifiers,
+	}
 }

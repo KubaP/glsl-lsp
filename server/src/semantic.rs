@@ -117,7 +117,7 @@ pub fn convert(
 
 /* WARNING: Ensure that the array and constant numbers match */
 
-pub const TOKEN_TYPES: [&str; 31] = [
+pub const TOKEN_TYPES: [&str; 32] = [
 	"keyword",
 	"punctuation", // nonstandard - inherits from `operator`
 	"operator",
@@ -130,6 +130,7 @@ pub const TOKEN_TYPES: [&str; 31] = [
 	"function",
 	"subroutine", // nonstandard - inherits from `function`
 	"variable",
+	"property",
 	"parameter",
 	"layoutQualifier",       // custom - inherits from `variable`
 	"ident",                 // custom - inherits from `variable`
@@ -158,30 +159,31 @@ const NUMBER: u32 = 3;
 const BOOLEAN: u32 = 4;
 const _STRING: u32 = 5;
 const COMMENT: u32 = 6;
-const _PRIMITIVE: u32 = 7;
-const _STRUCT: u32 = 8;
-const _FUNCTION: u32 = 9;
-const _SUBROUTINE: u32 = 10;
-const _VARIABLE: u32 = 11;
-const PARAMETER: u32 = 12;
-const LAYOUT_QUALIFIER: u32 = 13;
-const IDENT: u32 = 14;
-const UNRESOLVED_REFERENCE: u32 = 15;
-const INVALID: u32 = 16;
-const _LINE_CONTINUATOR: u32 = 17;
-const OBJECT_MACRO: u32 = 18;
-const FUNCTION_MACRO: u32 = 19;
-const DIRECTIVE: u32 = 20;
-const DIRECTIVE_CONCAT: u32 = 21;
-const DIRECTIVE_HASH: u32 = 22;
-const DIRECTIVE_NAME: u32 = 23;
-const DIRECTIVE_VERSION: u32 = 24;
-const DIRECTIVE_PROFILE: u32 = 25;
-const DIRECTIVE_EXT_NAME: u32 = 26;
-const DIRECTIVE_EXT_BEHAVIOUR: u32 = 27;
-const DIRECTIVE_LINE_NUMBER: u32 = 28;
-const DIRECTIVE_ERROR: u32 = 29;
-const DIRECTIVE_PRAGMA: u32 = 30;
+const PRIMITIVE: u32 = 7;
+const STRUCT: u32 = 8;
+const FUNCTION: u32 = 9;
+const SUBROUTINE: u32 = 10;
+const VARIABLE: u32 = 11;
+const PROPERTY: u32 = 12;
+const PARAMETER: u32 = 13;
+const LAYOUT_QUALIFIER: u32 = 14;
+const IDENT: u32 = 15;
+const UNRESOLVED_REFERENCE: u32 = 16;
+const INVALID: u32 = 17;
+const _LINE_CONTINUATOR: u32 = 18;
+const OBJECT_MACRO: u32 = 19;
+const FUNCTION_MACRO: u32 = 20;
+const DIRECTIVE: u32 = 21;
+const DIRECTIVE_CONCAT: u32 = 22;
+const DIRECTIVE_HASH: u32 = 23;
+const DIRECTIVE_NAME: u32 = 24;
+const DIRECTIVE_VERSION: u32 = 25;
+const DIRECTIVE_PROFILE: u32 = 26;
+const DIRECTIVE_EXT_NAME: u32 = 27;
+const DIRECTIVE_EXT_BEHAVIOUR: u32 = 28;
+const DIRECTIVE_LINE_NUMBER: u32 = 29;
+const DIRECTIVE_ERROR: u32 = 30;
+const DIRECTIVE_PRAGMA: u32 = 31;
 
 fn convert_to_lsp_ty(ty: &SyntaxType) -> u32 {
 	match ty {
@@ -191,9 +193,16 @@ fn convert_to_lsp_ty(ty: &SyntaxType) -> u32 {
 		SyntaxType::Number => NUMBER,
 		SyntaxType::Boolean => BOOLEAN,
 		SyntaxType::Comment => COMMENT,
+		SyntaxType::Primitive => PRIMITIVE,
+		SyntaxType::Struct => STRUCT,
+		SyntaxType::SubroutineType => SUBROUTINE,
+		SyntaxType::InterfaceBlock => STRUCT,
+		SyntaxType::Function => FUNCTION,
+		SyntaxType::Subroutine => SUBROUTINE,
+		SyntaxType::Variable => VARIABLE,
+		SyntaxType::Field => PROPERTY,
 		SyntaxType::Parameter => PARAMETER,
 		SyntaxType::LayoutQualifier => LAYOUT_QUALIFIER,
-		SyntaxType::UncheckedIdent => IDENT,
 		SyntaxType::Ident => IDENT,
 		SyntaxType::UnresolvedIdent => UNRESOLVED_REFERENCE,
 		SyntaxType::Invalid => INVALID,

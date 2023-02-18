@@ -12,7 +12,7 @@
 //! order to provide very specific and precise diagnostics without having to hardcode `&'static` strings
 //! everywhere. In order to make the amount more managable, most diagnostics are split into nested enums.
 
-use crate::{Span, Spanned};
+use crate::{parser::ast, Span, Spanned};
 
 /// The severity of a diagnostic.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -32,12 +32,24 @@ pub enum Semantic {
 	/// - `0` - The span of the line containing the directive.
 	EmptyDirective(Span),
 	/* NAME RESOLUTION */
+	/// E??? - When registering a new symbol, we found a name that is already in use. Note that this excludes
+	/// primitive typenames; for those the [`Syntax2::ExpectedNameFoundPrimitive`] error is emitted instead.
+	/// ```text
+	/// struct Foo { /*...*/ };
+	///
+	/// void Foo();
+	///      ~~~ `Foo` already exists
+	/// ```
+	NameAlreadyInUse { new: Span, existing: Span },
+	/// E??? - When registering a new function symbol, we found a name that is a built-in function. You cannot
+	/// overload built-in functions.
+	CannotOverloadBuiltInFn { name: ast::Ident },
 	/// E003 - Found an identifier in an expression that could not be resolved.
 	UnresolvedVariable(Span),
 	/// E003 - Found a function call in an expression that could not be resolved to either a function call, a
 	/// struct, or a subroutine uniform variable.
 	UnresolvedFunction(Span),
-	/// E003 - Found a typename that could not be resolved to either a primitive or a struct.
+	/// E003 - Found a typename that could not be resolved toL either a primitive or a struct.
 	UnresolvedType(Span),
 	/// E003 - Found a subroutine typename that could not be resolved.
 	UnresolvedSubroutineType(Span),
@@ -57,6 +69,12 @@ pub enum Semantic {
 	/// E002 - Found an identifier in an expression that matches the name of a subroutine uniform. Subroutine
 	/// uniforms, whilst defined like variables, are treated like functions and need to be called.
 	SubUniformTreatedAsVariable(Span),
+	/// E008 - Found a normal type specifier in a subroutine uniform definition.
+	SubUniformFoundNormalType(Span),
+	/// E009 - Found a subroutine type specifier in a subroutine type declaration.
+	SubTypeFoundSubType(Span),
+	/// E010 - Found a subroutine type specifier in an associated subroutine function definition.
+	SubFnFoundSubType(Span),
 	/* MACROS */
 	/// WARNING - Found a macro call site, but the macro contains no replacement tokens.
 	///
@@ -81,10 +99,9 @@ pub enum Semantic {
 	UndefMacroNameUnresolved(Span),
 }
 
-// FIXME: Remove `get_` from names; not idiomatic.
 impl Semantic {
 	/// Returns the severity of a diagnostic.
-	pub fn get_severity(&self) -> Severity {
+	pub fn severity(&self) -> Severity {
 		match self {
 			Self::EmptyDirective(_) => Severity::Warning,
 			/* NAME RESOLUTION */
@@ -99,52 +116,217 @@ impl Semantic {
 			Self::SwizzleMixesNotations(_) => Severity::Error,
 			/* SUBROUTINES */
 			Self::SubUniformTreatedAsVariable(_) => Severity::Error,
+			Self::SubUniformFoundNormalType(_) => Severity::Error,
+			Self::SubTypeFoundSubType(_) => Severity::Error,
+			Self::SubFnFoundSubType(_) => Severity::Error,
 			/* MACROS */
 			Self::EmptyMacroCallSite(_) => Severity::Warning,
 			Self::FunctionMacroMismatchedArgCount(_, _) => Severity::Error,
 			Self::TokenConcatUnnecessary(_) => Severity::Warning,
 			Self::UndefMacroNameUnresolved(_) => Severity::Warning,
+			_ => Severity::Error,
 		}
 	}
 
 	/// Returns an error code of a diagnostic. Only error diagnostics will return `Some`.
-	pub fn get_error_code(&self) -> Option<&'static str> {
+	pub fn error_code(&self) -> Option<&'static str> {
 		match self {
-			Self::FunctionMacroMismatchedArgCount(_, _) => Some("E001"),
-			Self::SubUniformTreatedAsVariable(_) => Some("E002"),
-			Self::UnresolvedVariable(_)
-			| Self::UnresolvedFunction(_)
-			| Self::UnresolvedType(_)
-			| Self::UnresolvedSubroutineType(_)
-			| Self::UnresolvedStructField(_) => Some("E003"),
-			Self::FoundMethod(_) => Some("E004"),
-			Self::LengthMethodNotOnValidType(_) => Some("E005"),
-			Self::InvalidFieldAccessOnPrimitive(_, _) => Some("E006"),
-			Self::SwizzleMixesNotations(_) => Some("E007"),
+			// TODO: Implement
 			_ => None,
 		}
 	}
 }
 
-// MAYBE: Revamp syntax diagnostics to look like:
-//
-// enum Syntax {
-//     MissingPunctuation {
-//         type: char,
-//         context: ContextEnum
-//     }
-//     ..
-// }
-//
-// enum ContextEnum {
-//     NewVarSpecifier,
-//     FnDeclOrDef,
-//     IfStmt
-// }
-//
-// This would also make it much easier to deal with code actions since we would only need to implement an action
-// once. Only for the error messages themselves would we need to check the context to display a more descriptive
-// message.
+/// A syntax error.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Syntax2 {
+	/// Missing a punctuation symbol that would make a grammar item fully valid. For the purposes of
+	/// parsing, this punctuation symbol has been infered and the relevant grammar item parsed. Some examples:
+	/// ```text
+	/// foo + bar
+	///          ^ missing `;` to make this a valid expression statement
+	///
+	/// void foo(int bar ;
+	///                 ^ missing `)` to make this a valid parameter list
+	///
+	/// void foo(int i float);
+	///               ^ missing a `,` to make this a valid parameter list
+	/// ```
+	MissingPunct {
+		/// The missing character.
+		char: char,
+		/// The position where it should be inserted at.
+		pos: usize,
+		/// The parser context.
+		ctx: DiagCtx,
+	},
+	/// Found a piece of grammar that needs removal to make a grammar item fully valid. For the purposes of
+	/// parsing, this piece of grammar has been assumed to not exist in order to parse a "closest-match" grammar
+	/// item. Some examples:
+	/// ```text
+	/// in subroutine from_vert { vec4 color; };
+	///    ~~~~~~~~~~ removing makes this a valid interface block definition
+	///
+	/// void foo(int i + 7, float f);
+	///              ~~~~~ removing makes this a valid parameter list
+	/// ```
+	ForRemoval {
+		/// The item to remove.
+		item: ForRemoval,
+		/// The span of the text.
+		span: Span,
+		/// The parser context.
+		ctx: DiagCtx,
+	},
+	/// Missing some grammar to make a valid grammar item. The missing piece of grammar may be one of a few
+	/// possibilities if the flexiblity allows for multiple possible grammar items. For the purposes of aprsing,
+	/// this piece of grammar has **not** been assumed to exist because it's not obvious what it should be, and
+	/// parsing of that grammar item has been aborted. Some examples:
+	/// ```text
+	/// subroutine
+	///           ^ there are 3 options for missing grammar that could result in
+	///             a subroutine type declaration, subroutine function definition,
+	///             or a subroutine uniform definition
+	///
+	/// subroutine uniform
+	///                   ^ there is only one option that makes sense,
+	///                     a type specifier for the uniform definition
+	///
+	/// void foo(int i, , float f);
+	///                ^ expected a type specifier for a parameter
+	/// ```
+	ExpectedGrammar {
+		/// The expected grammar.
+		item: ExpectedGrammar,
+		/// The position where the item should be inserted at.
+		/// MAYBE: Allow for a span for slightly nicer error squiggles in certain cases?
+		pos: usize,
+	},
+	/// Found a piece of grammar that is in an incorrect order.
+	IncorrectOrder {
+		/// TODO: Once we have a better idea of how often this case crops up, we can consider a typed enum.
+		msg: &'static str,
+		/// The span of the text that needs to be moved.
+		span: Span,
+		// MAYBE: Store position text should be moved to?
+	},
+	/// Found a statement that can only appear in the top-level scope. Some examples:
+	/// ```text
+	/// void main() {
+	///     subroutine uniform my_condition condition;
+	///     ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+	///       not allowed in nested scope
+	/// }
+	/// ```
+	NotAllowedInNestedScope {
+		/// The type of statement.
+		stmt: StmtType,
+		/// The span of the statement.
+		span: Span,
+	},
+	ExpectedNameFoundPrimitive(Span),
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DiagCtx {
+	/// The parser is within a standalone expression statement.
+	ExprStmt,
+	/// The parser is within an interface block definition.
+	InterfaceBlockDef,
+	/// The parser is analyzing an interface field definition.
+	InterfaceField,
+	/// The parser is within a parameter list.
+	ParamList,
+	/// The parser is within an association list.
+	AssociationList,
+	/// The parser is within a variable definition.
+	VarDef,
+	/// The parser is within a function declaration.
+	FnDecl,
+	/// The parser is looking for something subroutine related, but what exactly it's not certain yet.
+	Subroutine,
+	/// The parser is within a subroutine uniform definition.
+	SubroutineUniform,
+	/// The parser is within a subroutine type declaration.
+	SubroutineType,
+	/// The parser is within an associated subroutine function.
+	SubroutineAssociatedFn,
+	/// The parser is within a struct definition.
+	StructDef,
+	/// The parser is analyzing a struct field definition.
+	StructField,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ForRemoval {
+	/// We need to remove something that isn't a well-defined grammar item. This is sometimes generated when
+	/// searching for a landmark.
+	Something,
+	/// A singular keyword.
+	Keyword(&'static str),
+	/// A subroutine association list.
+	AssociationList,
+	/// An expression.
+	Expr,
+	/// The initialization part of a variable specifier.
+	VarInitialization,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ExpectedGrammar {
+	/// A keyword.
+	Keyword(&'static str),
+	/// Something after qualifiers. Could be one of:
+	/// - a type specifier for a variable definition or function declaration/definition,
+	/// - a semi-colon for just a set of qualifiers on their own.
+	AfterQualifiers,
+	/// Something after a type specifier. Could be one of:
+	/// - a new variable specifier for a variable definition,
+	/// - an identifier and opening parenthesis for a function declaration or definition.
+	/// - a semi-colon for just a type specifier on its own.
+	AfterType,
+	/// Something after subroutine qualifiers. Could be one of:
+	/// - a type specifier for a subroutine type declaration or an associated function definition,
+	/// - a subroutine type specifier for a subroutine uniform definition.
+	AfterSubroutineQualifiers,
+	/// Something after a type specifier in a subroutine-related statement. Could be one of:
+	/// - a new variable specifier for a subroutine uniform,
+	/// - an identifier and opening parenthesis for a subroutine type declaration or an  associated function
+	///   definition.
+	AfterSubroutineType,
+	/// A struct name after the `struct` keyword.
+	AfterStructKw,
+	/// A new variable specifier after a (subroutine) type specifier.
+	NewVarSpecifier,
+	/// A parameter.
+	Parameter,
+	/// A struct field.
+	StructField,
+	/// An interface field.
+	InterfaceField,
+	/// A subroutine association list.
+	AssociationList,
+	/// A subroutine typename, **not specifier**.
+	SubroutineTypename,
+	/// One or more specific qualifiers before an interface block definition.
+	QualifierBeforeInterfaceBlock,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum StmtType {
+	/// A function declaration.
+	FnDecl,
+	/// A function definition.
+	FnDef,
+	/// A struct definition.
+	Struct,
+	/// An interface block definition.
+	Interface,
+	/// A subroutine type declaration.
+	SubType,
+	/// A subroutine uniform definition.
+	SubUniform,
+}
 
 /// All syntax diagnostics.
 #[derive(Debug, Clone, PartialEq, Eq)]

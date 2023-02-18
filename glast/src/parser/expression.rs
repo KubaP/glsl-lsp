@@ -32,7 +32,7 @@ use crate::{
 	diag::{ExprDiag, Semantic, Syntax},
 	lexer::{self, Token},
 	parser::ast,
-	Either, Either3, Span,
+	Either, Either3, NonEmpty, Span,
 };
 use std::collections::VecDeque;
 
@@ -131,9 +131,10 @@ pub(super) fn try_parse_new_var_specifiers<'a, P: TokenStreamProvider<'a>>(
 	ctx: &mut Ctx,
 	end_tokens: impl AsRef<[Token]>,
 	name_highlighting: SyntaxType,
+	only_one: bool,
 ) -> Result<
 	(
-		Vec<super::NewVarSpecifier>,
+		NonEmpty<super::NewVarSpecifier>,
 		Vec<Syntax>,
 		Vec<Semantic>,
 		Vec<SyntaxToken>,
@@ -150,7 +151,11 @@ pub(super) fn try_parse_new_var_specifiers<'a, P: TokenStreamProvider<'a>>(
 			Some((_, span)) => span.start,
 			None => return Err((None, Vec::new(), Vec::new(), Vec::new())),
 		},
-		Mode::Default,
+		if only_one {
+			Mode::DisallowTopLevelList
+		} else {
+			Mode::Default
+		},
 	);
 	yard.parse(walker, end_tokens.as_ref());
 
@@ -2483,7 +2488,9 @@ impl ShuntingYard {
 			}
 
 			walker.advance_expr_parser(
-				&mut self.syntax_diags,
+				// FIXME:
+				//&mut self.syntax_diags,
+				&mut Vec::new(),
 				&mut self.semantic_diags,
 				&mut self.syntax_tokens,
 			);
@@ -3009,7 +3016,7 @@ impl ShuntingYard {
 		Some(expr)
 	}
 
-	/// Converts the **internal** expression representation into an AST expression.
+	/// Converts the **internal** expression representation into an AST expression.e
 	///
 	/// All identifiers are coloured in accordance with the expression name-resolution rules.
 	fn create_expr<'a, P: TokenStreamProvider<'a>>(
@@ -3022,7 +3029,6 @@ impl ShuntingYard {
 
 		let mut new_colours = Vec::new();
 		let expr = expr.convert(walker, ctx, &mut new_colours);
-		dbg!(&new_colours);
 
 		if !new_colours.is_empty() {
 			let mut current_new = new_colours.remove(0);
@@ -3085,7 +3091,7 @@ impl ShuntingYard {
 		walker: &mut Walker<'a, P>,
 		ctx: &mut Ctx,
 		syntax_for_var_idents: SyntaxType,
-	) -> Result<Vec<super::NewVarSpecifier>, Option<ast::Expr>> {
+	) -> Result<NonEmpty<super::NewVarSpecifier>, Option<ast::Expr>> {
 		use super::NewVarSpecifier;
 
 		if self.stack.is_empty() {
@@ -3111,6 +3117,7 @@ impl ShuntingYard {
 				ExprTy::Index { item, i } => {
 					let mut current_item = item;
 					let mut stack: Vec<ast::Omittable<ast::Expr>> = Vec::new();
+					let arr_span_end = current_item.span.end;
 					stack.push(
 						ShuntingYard::create_expr(
 							yard,
@@ -3145,8 +3152,13 @@ impl ShuntingYard {
 					// notation is in line with our intuition.
 					stack.reverse();
 					Ok(NewVarSpecifier {
+						arr: Some((
+							stack,
+							// FIXME: Is this always correct? We currently do not track the spans of the brackets
+							// in the index operator. If this isn't correct we will need to do so.
+							Span::new(ident.span.end, arr_span_end),
+						)),
 						ident,
-						arr: Some(stack),
 						eq_span: None,
 						init_expr: None,
 						span: expr.span,
@@ -3166,6 +3178,7 @@ impl ShuntingYard {
 							let mut current_item = item;
 							let mut stack: Vec<ast::Omittable<ast::Expr>> =
 								Vec::new();
+							let arr_span_end = current_item.span.end;
 							stack.push(
 								ShuntingYard::create_expr(
 									yard,
@@ -3199,7 +3212,15 @@ impl ShuntingYard {
 							// is at the top and the inner-most is at the bottom. We want to reverse this so that
 							// the type array notation is in line with our intuition.
 							stack.reverse();
-							(ident, Some(stack))
+							(
+								ident.clone(),
+								Some((
+									stack,
+									// FIXME: Is this always correct? We currently do not track the spans of the
+									// brackets in the index operator. If this isn't correct we will need to do so.
+									Span::new(ident.span.end, arr_span_end),
+								)),
+							)
 						}
 						_ => return Err(()),
 					};
@@ -3227,7 +3248,7 @@ impl ShuntingYard {
 		let vars = match &expr.ty {
 			ExprTy::Ident(_) | ExprTy::Index { .. } | ExprTy::Binary { .. } => {
 				match convert(self, walker, ctx, &expr) {
-					Ok(i) => vec![i],
+					Ok(i) => NonEmpty::new(i),
 					Err(_) => {
 						return Err(self.create_expr(walker, ctx, Some(expr)))
 					}
@@ -3261,7 +3282,7 @@ impl ShuntingYard {
 						}
 					}
 				}
-				v
+				NonEmpty::from_vec(v).unwrap()
 			}
 			_ => return Err(self.create_expr(walker, ctx, Some(expr))),
 		};
@@ -3286,11 +3307,11 @@ impl ShuntingYard {
 		for token in self.syntax_tokens.iter_mut() {
 			// The original tokens are chronologically ordered, and so are the individual variable identifiers.
 			// Hence, we only need to check the current token span against the current variable identifier.
-			// Panic: `vars` has a length of at least 1.
+			// Panic: `vars` is `NonEmpty`, so has at least one element.
 			if token.span == vars[i].ident.span {
 				token.ty = syntax_for_var_idents;
 				i += 1;
-				if vars.len() == i {
+				if vars.len().get() == i {
 					break;
 				}
 			}
@@ -3404,6 +3425,8 @@ impl ShuntingYard {
 
 		Ok((
 			ast::Type {
+				ty_specifier_span: expr.span,
+				disjointed_span: ast::Omittable::None,
 				ty: if let Some(mut arr) = arr {
 					if arr.len() == 1 {
 						ast::TypeTy::Array(
@@ -3456,8 +3479,7 @@ impl ShuntingYard {
 				} else {
 					ast::TypeTy::Single(type_ty)
 				},
-				qualifiers: Vec::new(),
-				span: expr.span,
+				qualifiers: ast::Omittable::None,
 			},
 			syntax_diags,
 		))
@@ -3580,6 +3602,9 @@ impl ShuntingYard {
 
 		let type_ = match type_ {
 			Either::Left(handle) => Either::Left(ast::SubroutineType {
+				ident_span: ident.span,
+				ty_specifier_span: expr.span,
+				disjointed_span: ast::Omittable::None,
 				ty: if let Some(mut arr) = arr {
 					if arr.len() == 1 {
 						ast::SubroutineTypeTy::Array(
@@ -3632,10 +3657,11 @@ impl ShuntingYard {
 				} else {
 					ast::SubroutineTypeTy::Single(handle)
 				},
-				qualifiers: Vec::new(),
-				span: expr.span,
+				qualifiers: ast::Omittable::None,
 			}),
 			Either::Right(type_ty) => Either::Right(ast::Type {
+				ty_specifier_span: expr.span,
+				disjointed_span: ast::Omittable::None,
 				ty: if let Some(mut arr) = arr {
 					if arr.len() == 1 {
 						ast::TypeTy::Array(
@@ -3688,8 +3714,7 @@ impl ShuntingYard {
 				} else {
 					ast::TypeTy::Single(type_ty)
 				},
-				qualifiers: Vec::new(),
-				span: expr.span,
+				qualifiers: ast::Omittable::None,
 			}),
 		};
 
@@ -4192,7 +4217,7 @@ impl Expr {
 			};
 		};
 
-		let var_handle = match obj.ty {
+		let (var_handle, var_ident) = match obj.ty {
 			ExprTy::Ident(ident) => {
 				let (handle, new_colour) = ctx.resolve_variable(&ident);
 				if handle.is_unresolved() {
@@ -4205,7 +4230,7 @@ impl Expr {
 					};
 				}
 				new_colours.push((ident.span, new_colour));
-				handle
+				(handle, ident)
 			}
 			_ => {
 				// Object access can begin only with a variable.
@@ -4232,7 +4257,7 @@ impl Expr {
 			match current.ty {
 				ExprTy::Ident(ident) => {
 					// We can have either: a) vector swizzling, b) struct member access.
-					match previous_type.variant() {
+					match previous_type.type_handle() {
 						Either::Left(primitive) => {
 							use ast::Primitive;
 							match primitive {
@@ -4339,27 +4364,34 @@ impl Expr {
 								requested_size = i + 1;
 							}
 
-							leafs.push(Either3::C(ast::Swizzle {
-								buf,
-								len: requested_size as u8,
-								span: ident.span,
-							}));
+							leafs.push((
+								ident.clone(),
+								Either3::C(ast::Swizzle {
+									buf,
+									len: requested_size as u8,
+									span: ident.span,
+								}),
+							));
 							new_colours.push((ident.span, SyntaxType::Field));
 							ctx.swizzle_refs.push(ident.span);
 							previous_type = ast::Type {
-								span: Span::new(0, 0),
+								ty_specifier_span: Span::new_zero_width(0),
+								disjointed_span: ast::Omittable::None,
 								ty: ast::TypeTy::Single(Either::Left(
 									match requested_size {
 										// We don't need to worry about the difference between vecn, bvecn, ivecn,
 										// etc. because none of the logic in this conversion checks or depends on
 										// the specific type of vector; only the size is relevant.
+										1 => ast::Primitive::Float,
 										2 => ast::Primitive::Vec2,
 										3 => ast::Primitive::Vec3,
 										4 => ast::Primitive::Vec4,
-										_ => unreachable!(),
+										_ => unreachable!(
+											"Ensured by above for-loop"
+										),
 									},
 								)),
-								qualifiers: Vec::new(),
+								qualifiers: ast::Omittable::None,
 							};
 							continue;
 						}
@@ -4382,11 +4414,12 @@ impl Expr {
 								matched_field
 							{
 								// We have a resolved struct field.
-								leafs.push(Either3::A(
-									super::StructFieldHandle(
+								leafs.push((
+									ident.clone(),
+									Either3::A(super::StructFieldHandle(
 										struct_handle.0,
 										field_idx,
-									),
+									)),
 								));
 								new_colours
 									.push((ident.span, SyntaxType::Field));
@@ -4409,7 +4442,7 @@ impl Expr {
 				}
 				ExprTy::Index { item, i } => {
 					// We can only have struct member access, since primitives don't have members.
-					let struct_handle = match previous_type.variant() {
+					let struct_handle = match previous_type.type_handle() {
 						Either::Left(_) => {
 							// TODO: Error
 							return ast::Expr {
@@ -4460,10 +4493,13 @@ impl Expr {
 
 					if let Some((field_idx, field_symbol)) = matched_field {
 						// We have a resolved struct field.
-						leafs.push(Either3::A(super::StructFieldHandle(
-							struct_handle.0,
-							field_idx,
-						)));
+						leafs.push((
+							ident.clone(),
+							Either3::A(super::StructFieldHandle(
+								struct_handle.0,
+								field_idx,
+							)),
+						));
 						new_colours.push((ident.span, SyntaxType::Field));
 						previous_type = field_symbol.type_.clone();
 						continue;
@@ -4483,7 +4519,7 @@ impl Expr {
 				}
 				ExprTy::FnCall { ident, args } => {
 					// We can only have built-in `.length()` method calls for certain primitives and all arrays.
-					match previous_type.variant() {
+					match previous_type.type_handle() {
 						Either::Left(primitive) => {
 							if &ident.name != "length" {
 								walker.push_semantic_diag(
@@ -4556,13 +4592,14 @@ impl Expr {
 						}
 					}
 					new_colours.push((ident.span, SyntaxType::Function));
-					leafs.push(Either3::B(()));
+					leafs.push((ident, Either3::B(())));
 					previous_type = ast::Type {
-						span: Span::new(0, 0),
+						ty_specifier_span: Span::new_zero_width(0),
+						disjointed_span: ast::Omittable::None,
 						ty: ast::TypeTy::Single(Either::Left(
 							ast::Primitive::Int,
 						)),
-						qualifiers: Vec::new(),
+						qualifiers: ast::Omittable::None,
 					};
 					continue;
 				}
@@ -4579,7 +4616,7 @@ impl Expr {
 		ast::Expr {
 			span: self.span,
 			ty: ast::ExprTy::ObjAccess {
-				obj: var_handle,
+				obj: (var_ident, var_handle),
 				leafs,
 			},
 		}

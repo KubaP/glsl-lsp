@@ -5,7 +5,9 @@
 //! - [`Expr`] and [`ExprTy`] - A node representing an expression; this will never be found standalone but part of
 //!   a `Node` of some kind.
 //! - [`Ident`] - A general identifier of some kind.
-//! - [`Omittable`] - A type representing optional grammar elements.
+//! - [`Type`] and [`TypeTy`] - Type information.
+//! - [`Omittable`] - An enum representing optional grammar elements. Note that this differs from an `Option` in
+//!   semantic meaning; see docs for details.
 //!
 //! In general, types are laid out as follows:
 //! ```ignore
@@ -29,7 +31,7 @@ use super::{NodeHandle, StructHandle, VariableTableHandle};
 use crate::{
 	diag::Syntax,
 	lexer::{NumType, Token},
-	Either, Either3, Span, Spanned,
+	Either, Either3, NonEmpty, Span, Spanned,
 };
 
 /// This type represents a value which can be omitted in accordance to the GLSL specification.
@@ -49,7 +51,7 @@ pub enum Omittable<T> {
 }
 
 /// An identifier.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Ident {
 	pub name: String,
 	pub span: Span,
@@ -62,7 +64,6 @@ pub struct Node {
 	pub span: Span,
 }
 
-// FIXME: Idents only used at definition/declaration sites. Everything else uses TypeId, FnId, VarId, etc.
 #[derive(Debug, Clone, PartialEq)]
 pub enum NodeTy {
 	/// A translation unit, i.e. the entire abstract syntax tree.
@@ -76,26 +77,16 @@ pub enum NodeTy {
 	/// A standalone type specifier, e.g. `float;`.
 	TypeSpecifier(Type),
 	/// One or more standalone qualifiers, e.g. `layout(points) in;`.
-	Qualifiers(Vec<Qualifier>),
-	/// A variable definition, e.g. `int i;`.
-	VarDef { type_: Type, ident: Ident },
-	/// A variable definition with initialization, e.g. `int i = 5;`
-	VarDefInit {
+	Qualifiers(NonEmpty<Qualifier>),
+	/// A variable definition, e.g. `int i;` or `float f = 5.0;`.
+	VarDef {
 		type_: Type,
 		ident: Ident,
-		value: Expr,
+		eq_span: Omittable<Span>,
+		init_expr: Omittable<Expr>,
 	},
-	/// A variable definition containing multiple variables, e.g. `int i, j, k;`.
-	VarDefs(Vec<(Type, Ident)>),
-	/// A variable definition with initialization, containing multiple variables, e.g. `int i = 0, j, k = 3;`.
-	VarDefsInits(Vec<(Type, Ident, Option<Expr>)>),
-	/// An interface block definition, e.g. `out V { vec2 pos; } v_out;`.
-	InterfaceDef {
-		qualifiers: Vec<Qualifier>,
-		ident: Ident,
-		body: Scope,
-		instance: Omittable<Expr>,
-	},
+	/// A variable definition containing multiple variables, e.g. `int i, j = 1, k;`.
+	VarDefs(Vec<(Type, Ident, Omittable<Span>, Omittable<Expr>)>),
 	/// A function declaration, e.g. `int foo(int i);`.
 	FnDecl {
 		return_type: Type,
@@ -117,7 +108,7 @@ pub enum NodeTy {
 	},
 	/// A subroutine associated function definition, e.g. `subroutine(foo) int foo_1(int i) {/*...*/}`.
 	SubroutineFnDefAssociation {
-		associations: Vec<Ident>,
+		associations: Vec<(super::SubroutineHandle, Ident)>,
 		return_type: Type,
 		ident: Ident,
 		params: Vec<Param>,
@@ -125,20 +116,27 @@ pub enum NodeTy {
 	},
 	/// A subroutine uniform definition, e.g. `subroutine uniform foo my_foo;`.
 	SubroutineUniformDef { type_: SubroutineType, ident: Ident },
-	/// A subroutine uniform definition containing multiple variables, e.g. `subroutine uniform foo m1, m2;`.
+	/// A subroutine uniform definition containing multiple variables, e.g. `subroutine uniform foo f1, f2;`.
 	SubroutineUniformDefs(Vec<(SubroutineType, Ident)>),
 	/// A struct declaration, e.g. `struct FooBar;`. This is an illegal GLSL statement, however it is modelled here
 	/// for completeness sake.
 	StructDecl {
-		qualifiers: Vec<Qualifier>,
+		qualifiers: Omittable<NonEmpty<Qualifier>>,
 		name: Ident,
 	},
 	/// A struct definition, e.g. `struct FooBar { mat4 m; };`.
 	StructDef {
-		qualifiers: Vec<Qualifier>,
+		qualifiers: Omittable<NonEmpty<Qualifier>>,
 		name: Ident,
-		body: Scope,
-		instances: Vec<Type>,
+		fields: Vec<(Type, Omittable<Ident>)>,
+		instances: Vec<(Ident, Omittable<Spanned<Vec<ArrSize>>>)>,
+	},
+	/// An interface block definition, e.g. `out V { vec2 pos; } v_out;`.
+	InterfaceDef {
+		qualifiers: Option<NonEmpty<Qualifier>>,
+		name: Ident,
+		fields: Vec<(Type, Omittable<Ident>)>,
+		instances: Vec<(Ident, Omittable<Spanned<Vec<ArrSize>>>)>,
 	},
 	/// An if statement, e.g. `if (true) {/*...*/} else {/*...*/}`.
 	If(Vec<IfBranch>),
@@ -243,8 +241,14 @@ pub struct SwitchCase {
 #[derive(Debug, Clone, PartialEq)]
 pub struct SubroutineType {
 	pub ty: SubroutineTypeTy,
-	pub qualifiers: Vec<Qualifier>,
-	pub span: Span,
+	pub qualifiers: Omittable<NonEmpty<Qualifier>>,
+	/// The span of the typname itself. E.g. span of `foo` in `subroutine uniform foo my_foo;`
+	pub ident_span: Span,
+	/// The span of the type specifier itself. E.g. span of `int[1]` in `const int[1] foo[3]`.
+	pub ty_specifier_span: Span,
+	/// The span of a disjointed type specifier if one is present. E.g. the span of `[3][2]` in `const int
+	/// foo[3][2]`.
+	pub disjointed_span: Omittable<Span>,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -268,8 +272,12 @@ pub enum SubroutineTypeTy {
 #[derive(Debug, Clone, PartialEq)]
 pub struct Type {
 	pub ty: TypeTy,
-	pub qualifiers: Vec<Qualifier>,
-	pub span: Span,
+	pub qualifiers: Omittable<NonEmpty<Qualifier>>,
+	/// The span of the type specifier itself. E.g. span of `int` in `const int foo[3]`.
+	pub ty_specifier_span: Span,
+	/// The span of a disjointed type specifier if one is present. E.g. the span of `[3][2]` in `const int
+	/// foo[3][2]`.
+	pub disjointed_span: Omittable<Span>,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -560,6 +568,69 @@ impl<T> Omittable<T> {
 	pub const fn is_none(&self) -> bool {
 		!self.is_some()
 	}
+
+	#[inline]
+	pub fn as_ref(&self) -> Omittable<&T> {
+		match self {
+			Self::Some(x) => Omittable::Some(&x),
+			Self::None => Omittable::None,
+		}
+	}
+
+	#[inline]
+	pub fn as_mut(&mut self) -> Omittable<&mut T> {
+		match self {
+			Self::Some(x) => Omittable::Some(x),
+			Self::None => Omittable::None,
+		}
+	}
+
+	/// Maps an `Omittable<T>` to an `Omittable<U>` by applying a function to a contained value.
+	#[inline]
+	pub fn map<U, F>(self, f: F) -> Omittable<U>
+	where
+		F: FnOnce(T) -> U,
+	{
+		match self {
+			Self::Some(x) => Omittable::Some(f(x)),
+			Self::None => Omittable::None,
+		}
+	}
+
+	/// Applies a function to the contained value, or returns the provided default.
+	#[inline]
+	pub fn map_or<U, F>(self, default: U, f: F) -> U
+	where
+		F: FnOnce(T) -> U,
+	{
+		match self {
+			Self::Some(x) => f(x),
+			Self::None => default,
+		}
+	}
+
+	/// Returns the contained [`Some`](Omittable::Some) value, or panics.
+	///
+	/// # Panics
+	/// Panics if self is [`None`](Omittable::None).
+	#[inline]
+	pub fn unwrap(self) -> T {
+		match self {
+			Self::Some(x) => x,
+			Self::None => {
+				panic!("called `Omittable::unwrap()` on a `None` value")
+			}
+		}
+	}
+
+	/// Returns the contained [`Some`](Omittable::Some) value or a provided default.
+	#[inline]
+	pub fn unwrap_or(self, default: T) -> T {
+		match self {
+			Self::Some(x) => x,
+			Self::None => default,
+		}
+	}
 }
 
 impl<T> From<Option<T>> for Omittable<T> {
@@ -567,6 +638,36 @@ impl<T> From<Option<T>> for Omittable<T> {
 		match opt {
 			Some(val) => Omittable::Some(val),
 			None => Omittable::None,
+		}
+	}
+}
+
+impl Type {
+	/// Returns the type handle of this type.
+	pub(crate) fn type_handle(&self) -> Either<Primitive, StructHandle> {
+		match self.ty {
+			TypeTy::Single(e) => e,
+			TypeTy::Array(e, _) => e,
+			TypeTy::Array2D(e, _, _) => e,
+			TypeTy::ArrayND(e, _) => e,
+		}
+	}
+
+	/// Returns whether this type is an array.
+	pub(crate) fn is_array(&self) -> bool {
+		match self.ty {
+			TypeTy::Single(_) => false,
+			TypeTy::Array(_, _)
+			| TypeTy::Array2D(_, _, _)
+			| TypeTy::ArrayND(_, _) => true,
+		}
+	}
+
+	pub(crate) fn span_start(&self) -> usize {
+		if let Omittable::Some(qualifiers) = &self.qualifiers {
+			qualifiers.first().span.start
+		} else {
+			self.ty_specifier_span.start
 		}
 	}
 }
@@ -580,24 +681,12 @@ impl SubroutineType {
 			| SubroutineTypeTy::ArrayND(h, _) => h,
 		}
 	}
-}
 
-impl Type {
-	pub(crate) fn variant(&self) -> Either<Primitive, StructHandle> {
-		match self.ty {
-			TypeTy::Single(e) => e,
-			TypeTy::Array(e, _) => e,
-			TypeTy::Array2D(e, _, _) => e,
-			TypeTy::ArrayND(e, _) => e,
-		}
-	}
-
-	pub(crate) fn is_array(&self) -> bool {
-		match self.ty {
-			TypeTy::Single(_) => false,
-			TypeTy::Array(_, _)
-			| TypeTy::Array2D(_, _, _)
-			| TypeTy::ArrayND(_, _) => true,
+	pub(crate) fn span_start(&self) -> usize {
+		if let Omittable::Some(qualifiers) = &self.qualifiers {
+			qualifiers.first().span.start
+		} else {
+			self.ty_specifier_span.start
 		}
 	}
 }
@@ -746,7 +835,7 @@ pub enum ExprTy {
 	/// A literal constant.
 	Lit(Lit),
 	/// A variable.
-	Local{
+	Local {
 		name: Ident,
 		handle: super::VariableHandle,
 	},
@@ -770,11 +859,11 @@ pub enum ExprTy {
 	Parens { expr: Box<Expr> },
 	/// Object access.
 	ObjAccess {
-		obj: super::VariableHandle,
+		obj: (Ident, super::VariableHandle),
 		/// - `A` - struct field,
 		/// - `B` - `length()` method (only on supported types),
 		/// - `C` - swizzle (only on vectors).
-		leafs: Vec<Either3<super::StructFieldHandle, (), Swizzle>>,
+		leafs: Vec<(Ident, Either3<super::StructFieldHandle, (), Swizzle>)>,
 	},
 	/// An index operation.
 	Index {

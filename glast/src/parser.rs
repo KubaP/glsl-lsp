@@ -46,7 +46,7 @@ pub mod conditional_eval;
 mod conditional_expression;
 mod expression;
 mod grammar;
-//mod printing;
+mod printing;
 #[cfg(test)]
 mod walker_tests;
 
@@ -786,9 +786,8 @@ pub fn parse_from_token_stream(
 ///     )
 /// )
 /// ```
-pub fn print_ast(_ast: &[ast::Node]) -> String {
-	//printing::print_ast(ast)
-	todo!()
+pub fn print_ast(ast: &Ast) -> String {
+	printing::print_ast(ast, ast.root_handle)
 }
 
 /// The error type for parsing operations.

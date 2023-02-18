@@ -1,15 +1,30 @@
 //! Functionality for pretty-printing the abstract syntax tree.
 
-use super::ast::*;
-use crate::Either;
+use super::{ast::*, NodeHandle};
+use crate::{Either, Either3};
+use generational_arena::Arena;
 use std::fmt::Write;
 
-pub(super) fn print_ast(ast: &[Node]) -> String {
+struct PrintCtx<'a> {
+	arena: &'a Arena<Node>,
+	structs: &'a [super::StructSymbol],
+	subroutines: &'a [super::SubroutineSymbol],
+}
+
+pub(super) fn print_ast(
+	ast: &super::Ast,
+	root_handle: generational_arena::Index,
+) -> String {
 	let mut writer = Writer {
 		buffer: String::with_capacity(1_000),
 		indent: 0,
 	};
-	for node in ast {
+
+	let root_node = ast.arena.get(root_handle).expect("Ensured by parser");
+
+	let NodeTy::TranslationUnit(scope) = &root_node.ty else { unreachable!("Ensured by parser"); };
+
+	for handle in &scope.contents {
 		write!(
 			writer.buffer,
 			"{:indent$}",
@@ -17,8 +32,17 @@ pub(super) fn print_ast(ast: &[Node]) -> String {
 			indent = writer.indent * INDENT
 		)
 		.unwrap();
-		print_node(&mut writer, node);
+		print_node(
+			&mut writer,
+			&PrintCtx {
+				arena: &ast.arena,
+				structs: &ast.structs,
+				subroutines: &ast.subroutines,
+			},
+			*handle,
+		);
 	}
+
 	writer.buffer.shrink_to_fit();
 	writer.buffer
 }
@@ -73,110 +97,76 @@ macro_rules! continue_eol {
 	};
 }
 
-fn print_node(w: &mut Writer, node: &Node) {
+fn print_node<'a>(w: &mut Writer, ctx: &PrintCtx<'a>, handle: NodeHandle) {
+	let node = ctx.arena.get(handle.0).unwrap();
 	match &node.ty {
+		NodeTy::TranslationUnit(_) => unreachable!(),
 		NodeTy::Empty => continue_eol!(w, "Empty"),
 		NodeTy::Expr(expr) => {
 			continue_eol!(w, "Expr(");
 			w.indent();
 			new_line_part!(w);
-			print_expr(w, expr);
+			print_expr(w, ctx, expr);
 			w.de_indent();
 			new_line_whole!(w, ")");
 		}
 		NodeTy::Block(body) => {
 			continue_eol!(w, "Block(");
-			print_scope(w, body);
+			print_scope(w, ctx, body);
 			new_line_whole!(w, ")");
 		}
-		NodeTy::VarDef { type_, ident } => {
-			continue_eol!(w, "VarDef(");
+		NodeTy::TypeSpecifier(type_) => {
+			continue_eol!(w, "Type(");
 			w.indent();
-			new_line_part!(w, "type: ");
-			print_type(w, type_);
-			new_line_whole!(w, "ident: {}", print_ident(ident));
+			print_type(w, ctx, type_);
 			w.de_indent();
 			new_line_whole!(w, ")");
 		}
-		NodeTy::VarDefs(v) => {
-			continue_eol!(w, "VarDef(");
-			w.indent();
-			for (type_, ident) in v {
-				new_line_whole!(w, "(");
-				w.indent();
-				new_line_part!(w, "type: ");
-				print_type(w, type_);
-				new_line_whole!(w, "ident: {}", print_ident(ident));
-				w.de_indent();
-				new_line_whole!(w, ")");
-			}
-			w.de_indent();
-			new_line_whole!(w, ")");
-		}
-		NodeTy::VarDefInit {
+		NodeTy::VarDef {
 			type_,
 			ident,
-			value,
+			eq_span: _,
+			init_expr,
 		} => {
 			continue_eol!(w, "VarDef(");
 			w.indent();
 			new_line_part!(w, "type: ");
-			print_type(w, type_);
+			print_type(w, ctx, type_);
 			new_line_whole!(w, "ident: {}", print_ident(ident));
-			if let Some(value) = value {
-				new_line_part!(w, "value: ");
-				print_expr(w, value);
-			}
-			w.de_indent();
-			new_line_whole!(w, ")");
-		}
-		NodeTy::VarDefInits(v, value) => {
-			continue_eol!(w, "VarDef(");
-			w.indent();
-			for (type_, ident) in v {
-				new_line_whole!(w, "(");
+			if let Omittable::Some(expr) = init_expr {
+				new_line_part!(w, "init_expr: ");
 				w.indent();
-				new_line_part!(w, "type: ");
-				print_type(w, type_);
-				new_line_whole!(w, "ident: {}", print_ident(ident));
+				print_expr(w, ctx, expr);
 				w.de_indent();
-				new_line_whole!(w, ")");
-			}
-			if let Some(value) = value {
-				new_line_part!(w, "value: ");
-				print_expr(w, value);
-			}
-			w.de_indent();
-			new_line_whole!(w, ")");
-		}
-		NodeTy::InterfaceDef {
-			qualifiers,
-			ident,
-			body,
-			instance,
-		} => {
-			continue_eol!(w, "InterfaceDef(");
-			w.indent();
-			if !qualifiers.is_empty() {
-				new_line_whole!(w, "qualifiers: [");
-				print_qualifiers(w, qualifiers);
-				new_line_whole!(w, "]");
-			}
-			new_line_whole!(w, "name: {}", print_ident(ident));
-			new_line_whole!(w, "body: [");
-			print_scope(w, body);
-			new_line_whole!(w, "]");
-			if let Omittable::Some(instance) = instance {
-				new_line_part!(w, "instance: ");
-				print_expr(w, instance);
 			}
 			w.de_indent();
 			new_line_whole!(w, ")");
 		}
 		NodeTy::Qualifiers(qualifiers) => {
 			continue_eol!(w, "Qualifiers: [");
-			print_qualifiers(w, qualifiers);
+			print_qualifiers(w, ctx, qualifiers);
 			new_line_whole!(w, "]");
+		}
+		NodeTy::VarDefs(vars) => {
+			continue_eol!(w, "VarDef(");
+			w.indent();
+			for (type_, ident, _, init_expr) in vars {
+				new_line_whole!(w, "(");
+				w.indent();
+				new_line_part!(w, "type: ");
+				print_type(w, ctx, type_);
+				new_line_whole!(w, "ident: {}", print_ident(ident));
+				if let Omittable::Some(expr) = init_expr {
+					new_line_part!(w, "init_expr: ");
+					w.indent();
+					print_expr(w, ctx, expr);
+					w.de_indent();
+				}
+				w.de_indent();
+				new_line_whole!(w, ")");
+			}
+			w.de_indent();
+			new_line_whole!(w, ")");
 		}
 		NodeTy::FnDecl {
 			return_type,
@@ -186,9 +176,9 @@ fn print_node(w: &mut Writer, node: &Node) {
 			continue_eol!(w, "FnDecl(");
 			w.indent();
 			new_line_part!(w, "return type: ");
-			print_type(w, return_type);
+			print_type(w, ctx, return_type);
 			new_line_whole!(w, "ident: {}", print_ident(ident));
-			print_params(w, params);
+			print_params(w, ctx, params);
 			w.de_indent();
 			new_line_whole!(w, ")");
 		}
@@ -201,11 +191,11 @@ fn print_node(w: &mut Writer, node: &Node) {
 			continue_eol!(w, "FnDef(");
 			w.indent();
 			new_line_part!(w, "return type: ");
-			print_type(w, return_type);
+			print_type(w, ctx, return_type);
 			new_line_whole!(w, "ident: {}", print_ident(ident));
-			print_params(w, params);
+			print_params(w, ctx, params);
 			new_line_whole!(w, "body: Scope(");
-			print_scope(w, body);
+			print_scope(w, ctx, body);
 			new_line_whole!(w, ")");
 			w.de_indent();
 			new_line_whole!(w, ")");
@@ -218,13 +208,13 @@ fn print_node(w: &mut Writer, node: &Node) {
 			continue_eol!(w, "SubroutineTypeDecl(");
 			w.indent();
 			new_line_part!(w, "return type: ");
-			print_type(w, return_type);
+			print_type(w, ctx, return_type);
 			new_line_whole!(w, "ident: {}", print_ident(ident));
-			print_params(w, params);
+			print_params(w, ctx, params);
 			w.de_indent();
 			new_line_whole!(w, ")");
 		}
-		NodeTy::SubroutineFnDef {
+		NodeTy::SubroutineFnDefAssociation {
 			associations,
 			return_type,
 			ident,
@@ -235,20 +225,18 @@ fn print_node(w: &mut Writer, node: &Node) {
 			w.indent();
 			new_line_whole!(w, "associations: [");
 			w.indent();
-			for ident in associations {
+			for (_, ident) in associations {
 				new_line_whole!(w, "{}", print_ident(ident));
 			}
 			w.de_indent();
 			new_line_whole!(w, "]");
 			new_line_part!(w, "return type: ");
-			print_type(w, return_type);
+			print_type(w, ctx, return_type);
 			new_line_whole!(w, "ident: {}", print_ident(ident));
-			print_params(w, params);
-			if let Some(body) = body {
-				new_line_whole!(w, "body: Scope(");
-				print_scope(w, body);
-				new_line_whole!(w, ")");
-			}
+			print_params(w, ctx, params);
+			new_line_whole!(w, "body: Scope(");
+			print_scope(w, ctx, body);
+			new_line_whole!(w, ")");
 			w.de_indent();
 			new_line_whole!(w, ")");
 		}
@@ -256,42 +244,114 @@ fn print_node(w: &mut Writer, node: &Node) {
 			continue_eol!(w, "SubroutineUniformDef(");
 			w.indent();
 			new_line_part!(w, "type: ");
-			print_type(w, type_);
+			print_sub_type(w, ctx, type_);
 			new_line_whole!(w, "ident: {}", print_ident(ident));
 			w.de_indent();
 			new_line_whole!(w, ")");
 		}
-		NodeTy::StructDecl { qualifiers, ident } => {
+		NodeTy::SubroutineUniformDefs(vars) => {
+			continue_eol!(w, "SubroutineUniformDef(");
+			w.indent();
+			for (type_, ident) in vars {
+				new_line_whole!(w, "(");
+				w.indent();
+				new_line_part!(w, "type: ");
+				print_sub_type(w, ctx, type_);
+				new_line_whole!(w, "ident: {}", print_ident(ident));
+				w.de_indent();
+				new_line_whole!(w, ")");
+			}
+			w.de_indent();
+			new_line_whole!(w, ")");
+		}
+		NodeTy::StructDecl { qualifiers, name } => {
 			continue_eol!(w, "StructDecl(");
 			w.indent();
-			if !qualifiers.is_empty() {
+			if let Omittable::Some(qualifiers) = qualifiers {
 				new_line_whole!(w, "qualifiers: [");
-				print_qualifiers(w, qualifiers);
+				print_qualifiers(w, ctx, qualifiers);
 				new_line_whole!(w, "]");
 			}
-			new_line_whole!(w, "name: {}", print_ident(ident));
+			new_line_whole!(w, "name: {}", print_ident(name));
 			w.de_indent();
 			new_line_whole!(w, ")");
 		}
 		NodeTy::StructDef {
 			qualifiers,
-			ident,
-			body,
-			instance,
+			name,
+			fields,
+			instances,
 		} => {
 			continue_eol!(w, "StructDef(");
 			w.indent();
-			if !qualifiers.is_empty() {
+			if let Omittable::Some(qualifiers) = qualifiers {
 				new_line_whole!(w, "qualifiers: [");
-				print_qualifiers(w, qualifiers);
+				print_qualifiers(w, ctx, qualifiers);
 				new_line_whole!(w, "]");
 			}
-			new_line_whole!(w, "name: {}", print_ident(ident));
-			new_line_whole!(w, "body: [");
-			print_scope(w, body);
+			new_line_whole!(w, "name: {}", print_ident(name));
+			new_line_whole!(w, "fields: [");
+			w.indent();
+			for (type_, ident) in fields.iter() {
+				new_line_part!(w, "type: ");
+				print_type(w, ctx, type_);
+				if let Omittable::Some(ident) = ident {
+					write!(w.buffer, " , ident: {}", print_ident(ident));
+				}
+			}
+			w.de_indent();
 			new_line_whole!(w, "]");
-			if let Omittable::Some(instance) = instance {
-				new_line_whole!(w, "instance: {}", print_ident(instance));
+			if !instances.is_empty() {
+				new_line_whole!(w, "instances: [");
+				w.indent();
+				for (ident, arr_size) in instances {
+					new_line_part!(w, "ident: {}", print_ident(ident));
+					if let Omittable::Some(arr_size) = arr_size {
+						//continue_eol!(w, " , arr_size: ");
+					}
+				}
+				w.de_indent();
+				new_line_whole!(w, "]");
+			}
+			w.de_indent();
+			new_line_whole!(w, ")");
+		}
+		NodeTy::InterfaceDef {
+			qualifiers,
+			name,
+			fields,
+			instances,
+		} => {
+			continue_eol!(w, "InterfaceDef(");
+			w.indent();
+			if let Some(qualifiers) = qualifiers {
+				new_line_whole!(w, "qualifiers: [");
+				print_qualifiers(w, ctx, qualifiers);
+				new_line_whole!(w, "]");
+			}
+			new_line_whole!(w, "name: {}", print_ident(name));
+			new_line_whole!(w, "fields: [");
+			w.indent();
+			for (type_, ident) in fields.iter() {
+				new_line_part!(w, "type: ");
+				print_type(w, ctx, type_);
+				if let Omittable::Some(ident) = ident {
+					write!(w.buffer, " , ident: {}", print_ident(ident));
+				}
+			}
+			w.de_indent();
+			new_line_whole!(w, "]");
+			if !instances.is_empty() {
+				new_line_whole!(w, "instances: [");
+				w.indent();
+				for (ident, arr_size) in instances {
+					new_line_part!(w, "ident: {}", print_ident(ident));
+					if let Omittable::Some(arr_size) = arr_size {
+						//continue_eol!(w, " , arr_size: ");
+					}
+				}
+				w.de_indent();
+				new_line_whole!(w, "]");
 			}
 			w.de_indent();
 			new_line_whole!(w, ")");
@@ -306,11 +366,11 @@ fn print_node(w: &mut Writer, node: &Node) {
 						w.indent();
 						if let Some(cond) = e {
 							new_line_part!(w, "cond: ");
-							print_expr(w, &cond);
+							print_expr(w, ctx, &cond);
 						}
 						if let Some(ref body) = branch.body {
 							new_line_whole!(w, "body: Scope(");
-							print_scope(w, &body);
+							print_scope(w, ctx, &body);
 							new_line_whole!(w, ")");
 						}
 						w.de_indent();
@@ -321,11 +381,11 @@ fn print_node(w: &mut Writer, node: &Node) {
 						w.indent();
 						if let Some(cond) = e {
 							new_line_part!(w, "cond: ");
-							print_expr(w, &cond);
+							print_expr(w, ctx, &cond);
 						}
 						if let Some(ref body) = branch.body {
 							new_line_whole!(w, "body: Scope(");
-							print_scope(w, &body);
+							print_scope(w, ctx, &body);
 							new_line_whole!(w, ")");
 						}
 						w.de_indent();
@@ -336,7 +396,7 @@ fn print_node(w: &mut Writer, node: &Node) {
 						w.indent();
 						if let Some(ref body) = branch.body {
 							new_line_whole!(w, "body: Scope(");
-							print_scope(w, &body);
+							print_scope(w, ctx, &body);
 							new_line_whole!(w, ")");
 						}
 						w.de_indent();
@@ -352,7 +412,7 @@ fn print_node(w: &mut Writer, node: &Node) {
 			w.indent();
 			if let Some(cond) = cond {
 				new_line_part!(w, "cond: ");
-				print_expr(w, cond);
+				print_expr(w, ctx, cond);
 			}
 			new_line_whole!(w, "cases: [");
 			w.indent();
@@ -363,11 +423,11 @@ fn print_node(w: &mut Writer, node: &Node) {
 						w.indent();
 						if let Some(ref expr) = e {
 							new_line_part!(w, "expr: ");
-							print_expr(w, &expr);
+							print_expr(w, ctx, &expr);
 						}
 						new_line_whole!(w, "body: Scope(");
 						if let Some(ref body) = case.body {
-							print_scope(w, &body);
+							print_scope(w, ctx, &body);
 						}
 						new_line_whole!(w, ")");
 						w.de_indent();
@@ -376,7 +436,7 @@ fn print_node(w: &mut Writer, node: &Node) {
 					Either::Right(_) => {
 						new_line_whole!(w, "default: Scope(");
 						if let Some(ref body) = case.body {
-							print_scope(w, &body);
+							print_scope(w, ctx, &body);
 						}
 						new_line_whole!(w, ")");
 					}
@@ -397,19 +457,19 @@ fn print_node(w: &mut Writer, node: &Node) {
 			w.indent();
 			if let Some(init) = init {
 				new_line_part!(w, "init: ");
-				print_node(w, &init);
+				//print_node(w, &init);
 			}
 			if let Some(cond) = cond {
 				new_line_part!(w, "cond: ");
-				print_node(w, &cond);
+				//print_node(w, &cond);
 			}
 			if let Some(inc) = inc {
 				new_line_part!(w, "inc: ");
-				print_node(w, &inc);
+				//print_node(w, &inc);
 			}
 			if let Some(body) = body {
 				new_line_whole!(w, "body: Scope(");
-				print_scope(w, body);
+				print_scope(w, ctx, body);
 				new_line_whole!(w, ")");
 			}
 			w.de_indent();
@@ -420,10 +480,10 @@ fn print_node(w: &mut Writer, node: &Node) {
 			w.indent();
 			if let Some(cond) = cond {
 				new_line_part!(w, "cond: ");
-				print_expr(w, cond);
+				print_expr(w, ctx, cond);
 			}
 			new_line_whole!(w, "body: Scope(");
-			print_scope(w, body);
+			print_scope(w, ctx, body);
 			new_line_whole!(w, ")");
 			w.de_indent();
 			new_line_whole!(w, ")");
@@ -432,11 +492,11 @@ fn print_node(w: &mut Writer, node: &Node) {
 			continue_eol!(w, "Do-While(");
 			w.indent();
 			new_line_whole!(w, "body: Scope(");
-			print_scope(w, body);
+			print_scope(w, ctx, body);
 			new_line_whole!(w, ")");
 			if let Some(cond) = cond {
 				new_line_part!(w, "cond: ");
-				print_expr(w, cond);
+				print_expr(w, ctx, cond);
 			}
 			w.de_indent();
 			new_line_whole!(w, ")");
@@ -455,7 +515,7 @@ fn print_node(w: &mut Writer, node: &Node) {
 				continue_eol!(w, "Return(");
 				w.indent();
 				new_line_part!(w);
-				print_expr(w, value);
+				print_expr(w, ctx, value);
 				w.de_indent();
 				new_line_whole!(w, ")");
 			} else {
@@ -598,23 +658,23 @@ fn print_node(w: &mut Writer, node: &Node) {
 	}
 }
 
-fn print_scope(w: &mut Writer, scope: &Scope) {
+fn print_scope<'a>(w: &mut Writer, ctx: &PrintCtx<'a>, scope: &Scope) {
 	w.indent();
-	for node in scope.contents.iter() {
+	for handle in scope.contents.iter() {
 		new_line_part!(w);
-		print_node(w, node);
+		print_node(w, ctx, *handle);
 	}
 	w.de_indent();
 }
 
-fn print_params(w: &mut Writer, params: &[Param]) {
+fn print_params<'a>(w: &mut Writer, ctx: &PrintCtx<'a>, params: &[Param]) {
 	new_line_whole!(w, "params: [");
 	w.indent();
 	for param in params {
 		new_line_whole!(w, "(");
 		w.indent();
 		new_line_part!(w, "type: ");
-		print_type(w, &param.type_);
+		print_type(w, ctx, &param.type_);
 		if let Omittable::Some(ref ident) = param.ident {
 			new_line_whole!(w, "ident: {}", print_ident(ident));
 		}
@@ -629,8 +689,9 @@ fn print_ident(ident: &Ident) -> &str {
 	&ident.name
 }
 
-fn print_expr(w: &mut Writer, expr: &Expr) {
+fn print_expr<'a>(w: &mut Writer, ctx: &PrintCtx<'a>, expr: &Expr) {
 	match &expr.ty {
+		ExprTy::Invalid => continue_eol!(w, "{{invalid}}"),
 		ExprTy::Lit(l) => match l {
 			Lit::Bool(b) => continue_eol!(w, "{b}"),
 			Lit::Int(i) => continue_eol!(w, "{i}"),
@@ -639,15 +700,13 @@ fn print_expr(w: &mut Writer, expr: &Expr) {
 			Lit::Double(d) => continue_eol!(w, "{d}"),
 			Lit::InvalidNum => continue_eol!(w, "{{invalid_num}}"),
 		},
-		ExprTy::Ident(i) => continue_eol!(w, "{}", i.name),
+		ExprTy::Local { name, .. } => continue_eol!(w, "{}", name.name),
 		ExprTy::Prefix { op, expr } => {
 			continue_eol!(w, "Pre(");
 			w.indent();
 			new_line_whole!(w, "op: {}", print_pre_op(op));
-			if let Some(expr) = expr {
-				new_line_part!(w);
-				print_expr(w, &expr);
-			}
+			new_line_part!(w);
+			print_expr(w, ctx, &expr);
 			w.de_indent();
 			new_line_whole!(w, ")");
 		}
@@ -656,7 +715,7 @@ fn print_expr(w: &mut Writer, expr: &Expr) {
 			w.indent();
 			new_line_whole!(w, "op: {}", print_post_op(op));
 			new_line_part!(w);
-			print_expr(w, &expr);
+			print_expr(w, ctx, &expr);
 			w.de_indent();
 			new_line_whole!(w, ")");
 		}
@@ -665,11 +724,9 @@ fn print_expr(w: &mut Writer, expr: &Expr) {
 			w.indent();
 			new_line_whole!(w, "op: {}", print_bin_op(op));
 			new_line_part!(w, "left: ");
-			print_expr(w, &left);
-			if let Some(right) = right {
-				new_line_part!(w, "right: ");
-				print_expr(w, &right);
-			}
+			print_expr(w, ctx, &left);
+			new_line_part!(w, "right: ");
+			print_expr(w, ctx, &right);
 			w.de_indent();
 			new_line_whole!(w, ")");
 		}
@@ -681,37 +738,44 @@ fn print_expr(w: &mut Writer, expr: &Expr) {
 			continue_eol!(w, "Ternary(");
 			w.indent();
 			new_line_part!(w, "cond: ");
-			print_expr(w, &cond);
-			if let Some(true_) = true_ {
-				new_line_part!(w, "true: ");
-				print_expr(w, &true_);
-			}
-			if let Some(false_) = false_ {
-				new_line_part!(w, "false: ");
-				print_expr(w, &false_);
-			}
+			print_expr(w, ctx, &cond);
+			new_line_part!(w, "true: ");
+			print_expr(w, ctx, &true_);
+			new_line_part!(w, "false: ");
+			print_expr(w, ctx, &false_);
 			w.de_indent();
 			new_line_whole!(w, ")");
 		}
 		ExprTy::Parens { expr } => {
 			continue_eol!(w, "Paren(");
 			w.indent();
-			if let Some(expr) = expr {
-				new_line_part!(w);
-				print_expr(w, &expr);
-			}
+			new_line_part!(w);
+			print_expr(w, ctx, &expr);
 			w.de_indent();
 			new_line_whole!(w, ")");
 		}
-		ExprTy::ObjAccess { obj, leaf } => {
-			continue_eol!(w, "DotAccess(");
+		ExprTy::ObjAccess {
+			obj: (obj, _),
+			leafs,
+		} => {
+			continue_eol!(w, "ObjAccess(");
 			w.indent();
-			new_line_part!(w, "obj: ");
-			print_expr(w, &obj);
-			if let Some(leaf) = leaf {
-				new_line_part!(w, "leaf: ");
-				print_expr(w, &leaf);
+			new_line_part!(w, "var: ");
+			print_ident(&obj);
+			w.indent();
+			for (ident, type_) in leafs.iter() {
+				new_line_whole!(
+					w,
+					"{}{}",
+					ident.name,
+					match type_ {
+						Either3::A(_) => " (field)",
+						Either3::B(_) => " (method)",
+						Either3::C(_) => " (swizzle)",
+					}
+				);
 			}
+			w.de_indent();
 			w.de_indent();
 			new_line_whole!(w, ")");
 		}
@@ -719,49 +783,91 @@ fn print_expr(w: &mut Writer, expr: &Expr) {
 			continue_eol!(w, "Index(");
 			w.indent();
 			new_line_part!(w, "item: ");
-			print_expr(w, &item);
-			if let Some(i) = i {
+			print_expr(w, ctx, &item);
+			if let Omittable::Some(i) = i {
 				new_line_part!(w, "i: ");
-				print_expr(w, &i);
+				print_expr(w, ctx, &i);
 			}
 			w.de_indent();
 			new_line_whole!(w, ")");
 		}
-		ExprTy::FnCall { ident, args } => {
+		ExprTy::FnCall {
+			name,
+			handle: _,
+			args,
+		} => {
 			continue_eol!(w, "Fn(");
 			w.indent();
-			new_line_whole!(w, "ident: {}", print_ident(ident));
-			new_line_whole!(w, "params: [");
+			new_line_whole!(w, "ident: {}", print_ident(name));
+			new_line_whole!(w, "args: [");
 			w.indent();
 			for arg in args {
 				new_line_part!(w);
-				print_expr(w, arg);
+				print_expr(w, ctx, arg);
 			}
 			w.de_indent();
 			new_line_whole!(w, "]");
 			w.de_indent();
 			new_line_whole!(w, ")");
 		}
-		ExprTy::InitList { args } => {
+		ExprTy::SubroutineCall {
+			name,
+			handle: _,
+			args,
+		} => {
+			continue_eol!(w, "Subroutine(");
+			w.indent();
+			new_line_whole!(w, "ident: {}", print_ident(name));
+			new_line_whole!(w, "args: [");
+			w.indent();
+			for arg in args {
+				new_line_part!(w);
+				print_expr(w, ctx, arg);
+			}
+			w.de_indent();
+			new_line_whole!(w, "]");
+			w.de_indent();
+			new_line_whole!(w, ")");
+		}
+		ExprTy::StructConstructor {
+			name,
+			handle: _,
+			args,
+		} => {
+			continue_eol!(w, "Struct(");
+			w.indent();
+			new_line_whole!(w, "ident: {}", print_ident(name));
+			new_line_whole!(w, "args: [");
+			w.indent();
+			for arg in args {
+				new_line_part!(w);
+				print_expr(w, ctx, arg);
+			}
+			w.de_indent();
+			new_line_whole!(w, "]");
+			w.de_indent();
+			new_line_whole!(w, ")");
+		}
+		ExprTy::Initializer { args } => {
 			continue_eol!(w, "Initializer([");
 			w.indent();
 			for arg in args {
 				new_line_part!(w);
-				print_expr(w, arg);
+				print_expr(w, ctx, arg);
 			}
 			w.de_indent();
 			new_line_whole!(w, "])");
 		}
-		ExprTy::ArrConstructor { arr, args } => {
+		ExprTy::ArrConstructor { type_, args } => {
 			continue_eol!(w, "ArrayConstructor(");
 			w.indent();
 			new_line_part!(w, "type: ");
-			print_expr(w, &arr);
+			print_type(w, ctx, type_);
 			new_line_whole!(w, "params: [");
 			w.indent();
 			for arg in args {
 				new_line_part!(w);
-				print_expr(w, arg);
+				print_expr(w, ctx, arg);
 			}
 			w.de_indent();
 			new_line_whole!(w, "]");
@@ -773,39 +879,38 @@ fn print_expr(w: &mut Writer, expr: &Expr) {
 			w.indent();
 			for item in items {
 				new_line_part!(w);
-				print_expr(w, item);
+				print_expr(w, ctx, item);
 			}
 			w.de_indent();
 			new_line_whole!(w, "])");
 		}
-		ExprTy::Separator => {}
 	}
 }
 
-fn print_type(w: &mut Writer, type_: &Type) {
+fn print_type<'a>(w: &mut Writer, ctx: &PrintCtx<'a>, type_: &Type) {
 	match &type_.ty {
-		TypeTy::Single(p) => continue_eol!(w, "{}", print_primitive(p)),
+		TypeTy::Single(p) => continue_eol!(w, "{}", print_type_handle(ctx, p)),
 		TypeTy::Array(p, a) => {
-			continue_eol!(w, "{}", print_primitive(p));
+			continue_eol!(w, "{}", print_type_handle(ctx, p));
 			w.indent();
 			if let Omittable::Some(expr) = a {
 				new_line_whole!(w, "[");
 				w.indent();
 				new_line_part!(w);
-				print_expr(w, &expr);
+				print_expr(w, ctx, &expr);
 				w.de_indent();
 				new_line_whole!(w, "]");
 			}
 			w.de_indent();
 		}
 		TypeTy::Array2D(p, a, b) => {
-			continue_eol!(w, "{}", print_primitive(p));
+			continue_eol!(w, "{}", print_type_handle(ctx, p));
 			w.indent();
 			if let Omittable::Some(expr) = a {
 				new_line_whole!(w, "[");
 				w.indent();
 				new_line_part!(w);
-				print_expr(w, &expr);
+				print_expr(w, ctx, &expr);
 				w.de_indent();
 				new_line_whole!(w, "]");
 			}
@@ -813,21 +918,21 @@ fn print_type(w: &mut Writer, type_: &Type) {
 				new_line_whole!(w, "[");
 				w.indent();
 				new_line_part!(w);
-				print_expr(w, &expr);
+				print_expr(w, ctx, &expr);
 				w.de_indent();
 				new_line_whole!(w, "]");
 			}
 			w.de_indent();
 		}
 		TypeTy::ArrayND(p, v) => {
-			continue_eol!(w, "{}", print_primitive(p));
+			continue_eol!(w, "{}", print_type_handle(ctx, p));
 			w.indent();
 			for i in v {
 				if let Omittable::Some(expr) = i {
 					new_line_part!(w, "[");
 					w.indent();
 					new_line_part!(w);
-					print_expr(w, &expr);
+					print_expr(w, ctx, &expr);
 					w.de_indent();
 					new_line_whole!(w, "]");
 				}
@@ -835,11 +940,84 @@ fn print_type(w: &mut Writer, type_: &Type) {
 			w.de_indent();
 		}
 	}
-	if !type_.qualifiers.is_empty() {
+	if let Omittable::Some(qualifiers) = &type_.qualifiers {
 		new_line_whole!(w, "+ qualifiers: [");
-		print_qualifiers(w, &type_.qualifiers);
+		print_qualifiers(w, ctx, &qualifiers);
 		new_line_whole!(w, "]");
 	}
+}
+
+fn print_sub_type<'a>(
+	w: &mut Writer,
+	ctx: &PrintCtx<'a>,
+	type_: &SubroutineType,
+) {
+	match &type_.ty {
+		SubroutineTypeTy::Single(p) => {
+			continue_eol!(w, "{}", print_sub_type_handle(ctx, p))
+		}
+		SubroutineTypeTy::Array(p, a) => {
+			continue_eol!(w, "{}", print_sub_type_handle(ctx, p));
+			w.indent();
+			if let Omittable::Some(expr) = a {
+				new_line_whole!(w, "[");
+				w.indent();
+				new_line_part!(w);
+				print_expr(w, ctx, &expr);
+				w.de_indent();
+				new_line_whole!(w, "]");
+			}
+			w.de_indent();
+		}
+		SubroutineTypeTy::Array2D(p, a, b) => {
+			continue_eol!(w, "{}", print_sub_type_handle(ctx, p));
+			w.indent();
+			if let Omittable::Some(expr) = a {
+				new_line_whole!(w, "[");
+				w.indent();
+				new_line_part!(w);
+				print_expr(w, ctx, &expr);
+				w.de_indent();
+				new_line_whole!(w, "]");
+			}
+			if let Omittable::Some(expr) = b {
+				new_line_whole!(w, "[");
+				w.indent();
+				new_line_part!(w);
+				print_expr(w, ctx, &expr);
+				w.de_indent();
+				new_line_whole!(w, "]");
+			}
+			w.de_indent();
+		}
+		SubroutineTypeTy::ArrayND(p, v) => {
+			continue_eol!(w, "{}", print_sub_type_handle(ctx, p));
+			w.indent();
+			for i in v {
+				if let Omittable::Some(expr) = i {
+					new_line_part!(w, "[");
+					w.indent();
+					new_line_part!(w);
+					print_expr(w, ctx, &expr);
+					w.de_indent();
+					new_line_whole!(w, "]");
+				}
+			}
+			w.de_indent();
+		}
+	}
+	if let Omittable::Some(qualifiers) = &type_.qualifiers {
+		new_line_whole!(w, "+ qualifiers: [");
+		print_qualifiers(w, ctx, &qualifiers);
+		new_line_whole!(w, "]");
+	}
+}
+
+fn print_sub_type_handle<'a>(
+	ctx: &PrintCtx<'a>,
+	handle: &super::SubroutineHandle,
+) -> &'a str {
+	&ctx.subroutines[handle.0].name
 }
 
 fn print_pre_op(op: &PreOp) -> String {
@@ -897,213 +1075,144 @@ fn print_bin_op(op: &BinOp) -> String {
 	.to_owned()
 }
 
-fn print_primitive(primitive: &Primitive) -> &str {
-	if let Primitive::Struct(ident) = primitive {
-		return &ident.name;
-	}
-
+fn print_type_handle<'a>(
+	ctx: &PrintCtx<'a>,
+	handle: &Either<Primitive, super::StructHandle>,
+) -> &'a str {
+	let primitive = match handle {
+		Either::Left(p) => p,
+		Either::Right(handle) => {
+			return &ctx.structs[handle.0].name;
+		}
+	};
 	match primitive {
-		Primitive::Scalar(Fundamental::Void) => "void",
-		Primitive::Scalar(Fundamental::Bool) => "bool",
-		Primitive::Scalar(Fundamental::Int) => "int",
-		Primitive::Scalar(Fundamental::UInt) => "uint",
-		Primitive::Scalar(Fundamental::Float) => "float",
-		Primitive::Scalar(Fundamental::Double) => "double",
-		Primitive::Vector(Fundamental::Float, 2) => "vec2",
-		Primitive::Vector(Fundamental::Float, 3) => "vec3",
-		Primitive::Vector(Fundamental::Float, 4) => "vec4",
-		Primitive::Vector(Fundamental::Bool, 2) => "bvec2",
-		Primitive::Vector(Fundamental::Bool, 3) => "bvec3",
-		Primitive::Vector(Fundamental::Bool, 4) => "bvec4",
-		Primitive::Vector(Fundamental::Int, 2) => "ivec2",
-		Primitive::Vector(Fundamental::Int, 3) => "ivec3",
-		Primitive::Vector(Fundamental::Int, 4) => "ivec4",
-		Primitive::Vector(Fundamental::UInt, 2) => "uvec2",
-		Primitive::Vector(Fundamental::UInt, 3) => "uvec3",
-		Primitive::Vector(Fundamental::UInt, 4) => "uvec4",
-		Primitive::Vector(Fundamental::Double, 2) => "dvec2",
-		Primitive::Vector(Fundamental::Double, 3) => "dvec3",
-		Primitive::Vector(Fundamental::Double, 4) => "dvec4",
-		Primitive::Matrix(2, 2) => "mat2x2",
-		Primitive::Matrix(2, 3) => "mat2x3",
-		Primitive::Matrix(2, 4) => "mat2x4",
-		Primitive::Matrix(3, 2) => "mat3x2",
-		Primitive::Matrix(3, 3) => "mat3x3",
-		Primitive::Matrix(3, 4) => "mat3x4",
-		Primitive::Matrix(4, 2) => "mat4x2",
-		Primitive::Matrix(4, 3) => "mat4x3",
-		Primitive::Matrix(4, 4) => "mat4x4",
-		Primitive::DMatrix(2, 2) => "dmat2x2",
-		Primitive::DMatrix(2, 3) => "dmat2x3",
-		Primitive::DMatrix(2, 4) => "dmat2x4",
-		Primitive::DMatrix(3, 2) => "dmat3x2",
-		Primitive::DMatrix(3, 3) => "dmat3x3",
-		Primitive::DMatrix(3, 4) => "dmat3x4",
-		Primitive::DMatrix(4, 2) => "dmat4x2",
-		Primitive::DMatrix(4, 3) => "dmat4x3",
-		Primitive::DMatrix(4, 4) => "dmat4x4",
-		Primitive::Sampler(Fundamental::Float, TexType::D1) => "sampler1D",
-		Primitive::Sampler(Fundamental::Float, TexType::D2) => "sampler2D",
-		Primitive::Sampler(Fundamental::Float, TexType::D3) => "sampler3D",
-		Primitive::Sampler(Fundamental::Float, TexType::Cube) => "samplerCube",
-		Primitive::Sampler(Fundamental::Float, TexType::D2Rect) => {
-			"sampler2DRect"
-		}
-		Primitive::Sampler(Fundamental::Float, TexType::D1Array) => {
-			"sampler1DArray"
-		}
-		Primitive::Sampler(Fundamental::Float, TexType::D2Array) => {
-			"sampler2DArray"
-		}
-		Primitive::Sampler(Fundamental::Float, TexType::CubeArray) => {
-			"samplerCubeArray"
-		}
-		Primitive::Sampler(Fundamental::Float, TexType::Buffer) => {
-			"samplerBuffer"
-		}
-		Primitive::Sampler(Fundamental::Float, TexType::D2Multisample) => {
-			"sampler2DMS"
-		}
-		Primitive::Sampler(Fundamental::Float, TexType::D2MultisampleArray) => {
-			"sampler2DMSArray"
-		}
-		Primitive::Sampler(Fundamental::Int, TexType::D1) => "isampler1D",
-		Primitive::Sampler(Fundamental::Int, TexType::D2) => "isampler2D",
-		Primitive::Sampler(Fundamental::Int, TexType::D3) => "isampler3D",
-		Primitive::Sampler(Fundamental::Int, TexType::Cube) => "isamplerCube",
-		Primitive::Sampler(Fundamental::Int, TexType::D2Rect) => {
-			"isampler2DRect"
-		}
-		Primitive::Sampler(Fundamental::Int, TexType::D1Array) => {
-			"isampler1DArray"
-		}
-		Primitive::Sampler(Fundamental::Int, TexType::D2Array) => {
-			"isampler2DArray"
-		}
-		Primitive::Sampler(Fundamental::Int, TexType::CubeArray) => {
-			"isamplerCubeArray"
-		}
-		Primitive::Sampler(Fundamental::Int, TexType::Buffer) => {
-			"isamplerBuffer"
-		}
-		Primitive::Sampler(Fundamental::Int, TexType::D2Multisample) => {
-			"isampler2DMS"
-		}
-		Primitive::Sampler(Fundamental::Int, TexType::D2MultisampleArray) => {
-			"isampler2DMSArray"
-		}
-		Primitive::Sampler(Fundamental::UInt, TexType::D1) => "usampler1D",
-		Primitive::Sampler(Fundamental::UInt, TexType::D2) => "usampler2D",
-		Primitive::Sampler(Fundamental::UInt, TexType::D3) => "usampler3D",
-		Primitive::Sampler(Fundamental::UInt, TexType::Cube) => "usamplerCube",
-		Primitive::Sampler(Fundamental::UInt, TexType::D2Rect) => {
-			"usampler2DRect"
-		}
-		Primitive::Sampler(Fundamental::UInt, TexType::D1Array) => {
-			"usampler1DArray"
-		}
-		Primitive::Sampler(Fundamental::UInt, TexType::D2Array) => {
-			"usampler2DArray"
-		}
-		Primitive::Sampler(Fundamental::UInt, TexType::CubeArray) => {
-			"usamplerCubeArray"
-		}
-		Primitive::Sampler(Fundamental::UInt, TexType::Buffer) => {
-			"usamplerBuffer"
-		}
-		Primitive::Sampler(Fundamental::UInt, TexType::D2Multisample) => {
-			"usampler2DMS"
-		}
-		Primitive::Sampler(Fundamental::UInt, TexType::D2MultisampleArray) => {
-			"usampler2DMSArray"
-		}
-		Primitive::Sampler(Fundamental::Float, TexType::D1Shadow) => {
-			"sampler1DShadow"
-		}
-		Primitive::Sampler(Fundamental::Float, TexType::D2Shadow) => {
-			"sampler2DShadow"
-		}
-		Primitive::Sampler(Fundamental::Float, TexType::CubeShadow) => {
-			"samplerCubeShadow"
-		}
-		Primitive::Sampler(Fundamental::Float, TexType::D2RectShadow) => {
-			"sampler2DRectShadow"
-		}
-		Primitive::Sampler(Fundamental::Float, TexType::D1ArrayShadow) => {
-			"sampler1DArrayShadow"
-		}
-		Primitive::Sampler(Fundamental::Float, TexType::D2ArrayShadow) => {
-			"sampler2DArrayShadow"
-		}
-		Primitive::Sampler(Fundamental::Float, TexType::CubeArrayShadow) => {
-			"samplerCubeArrayShadow"
-		}
-		Primitive::Image(Fundamental::Float, TexType::D1) => "image1D",
-		Primitive::Image(Fundamental::Float, TexType::D2) => "image2D",
-		Primitive::Image(Fundamental::Float, TexType::D3) => "image3D",
-		Primitive::Image(Fundamental::Float, TexType::Cube) => "imageCube",
-		Primitive::Image(Fundamental::Float, TexType::D2Rect) => "image2DRect",
-		Primitive::Image(Fundamental::Float, TexType::D1Array) => {
-			"image1DArray"
-		}
-		Primitive::Image(Fundamental::Float, TexType::D2Array) => {
-			"image2DArray"
-		}
-		Primitive::Image(Fundamental::Float, TexType::CubeArray) => {
-			"imageCubeArray"
-		}
-		Primitive::Image(Fundamental::Float, TexType::Buffer) => "imageBuffer",
-		Primitive::Image(Fundamental::Float, TexType::D2Multisample) => {
-			"image2DMS"
-		}
-		Primitive::Image(Fundamental::Float, TexType::D2MultisampleArray) => {
-			"image2DMSArray"
-		}
-		Primitive::Image(Fundamental::Int, TexType::D1) => "iimage1D",
-		Primitive::Image(Fundamental::Int, TexType::D2) => "iimage2D",
-		Primitive::Image(Fundamental::Int, TexType::D3) => "iimage3D",
-		Primitive::Image(Fundamental::Int, TexType::Cube) => "iimageCube",
-		Primitive::Image(Fundamental::Int, TexType::D2Rect) => "iimage2DRect",
-		Primitive::Image(Fundamental::Int, TexType::D1Array) => "iimage1DArray",
-		Primitive::Image(Fundamental::Int, TexType::D2Array) => "iimage2DArray",
-		Primitive::Image(Fundamental::Int, TexType::CubeArray) => {
-			"iimageCubeArray"
-		}
-		Primitive::Image(Fundamental::Int, TexType::Buffer) => "iimageBuffer",
-		Primitive::Image(Fundamental::Int, TexType::D2Multisample) => {
-			"iimage2DMS"
-		}
-		Primitive::Image(Fundamental::Int, TexType::D2MultisampleArray) => {
-			"iimage2DMSArray"
-		}
-		Primitive::Image(Fundamental::UInt, TexType::D1) => "uimage1D",
-		Primitive::Image(Fundamental::UInt, TexType::D2) => "uimage2D",
-		Primitive::Image(Fundamental::UInt, TexType::D3) => "uimage3D",
-		Primitive::Image(Fundamental::UInt, TexType::Cube) => "uimageCube",
-		Primitive::Image(Fundamental::UInt, TexType::D2Rect) => "uimage2DRect",
-		Primitive::Image(Fundamental::UInt, TexType::D1Array) => {
-			"uimage1DArray"
-		}
-		Primitive::Image(Fundamental::UInt, TexType::D2Array) => {
-			"uimage2DArray"
-		}
-
-		Primitive::Image(Fundamental::UInt, TexType::CubeArray) => {
-			"uimageCubeArray"
-		}
-		Primitive::Image(Fundamental::UInt, TexType::Buffer) => "uimageBuffer",
-		Primitive::Image(Fundamental::UInt, TexType::D2Multisample) => {
-			"uimage2DMS"
-		}
-		Primitive::Image(Fundamental::UInt, TexType::D2MultisampleArray) => {
-			"uimage2DMSArray"
-		}
-		Primitive::Atomic => "atomic_uint",
-		_ => unreachable!(),
+		Primitive::Void => "void",
+		Primitive::Bool => "bool",
+		Primitive::Int => "int",
+		Primitive::Uint => "uint",
+		Primitive::Float => "float",
+		Primitive::Double => "double",
+		Primitive::Vec2 => "vec2",
+		Primitive::Vec3 => "vec3",
+		Primitive::Vec4 => "vec4",
+		Primitive::BVec2 => "bvec2",
+		Primitive::BVec3 => "bvec3",
+		Primitive::BVec4 => "bvec4",
+		Primitive::IVec2 => "ivec2",
+		Primitive::IVec3 => "ivec3",
+		Primitive::IVec4 => "ivec4",
+		Primitive::UVec2 => "uvec2",
+		Primitive::UVec3 => "uvec3",
+		Primitive::UVec4 => "uvec4",
+		Primitive::DVec2 => "dvec2",
+		Primitive::DVec3 => "dvec3",
+		Primitive::DVec4 => "dvec4",
+		Primitive::Mat2x2 => "mat2",
+		Primitive::Mat2x2 => "mat2x2",
+		Primitive::Mat2x3 => "mat2x3",
+		Primitive::Mat2x4 => "mat2x4",
+		Primitive::Mat3x2 => "mat3x2",
+		Primitive::Mat3x3 => "mat3",
+		Primitive::Mat3x3 => "mat3x3",
+		Primitive::Mat3x4 => "mat3x4",
+		Primitive::Mat4x2 => "mat4x2",
+		Primitive::Mat4x3 => "mat4x3",
+		Primitive::Mat4x4 => "mat4",
+		Primitive::Mat4x4 => "mat4x4",
+		Primitive::DMat2x2 => "dmat2",
+		Primitive::DMat2x2 => "dmat2x2",
+		Primitive::DMat2x3 => "dmat2x3",
+		Primitive::DMat2x4 => "dmat2x4",
+		Primitive::DMat3x2 => "dmat3x2",
+		Primitive::DMat3x3 => "dmat3",
+		Primitive::DMat3x3 => "dmat3x3",
+		Primitive::DMat3x4 => "dmat3x4",
+		Primitive::DMat4x2 => "dmat4x2",
+		Primitive::DMat4x3 => "dmat4x3",
+		Primitive::DMat4x4 => "dmat4",
+		Primitive::DMat4x4 => "dmat4x4",
+		Primitive::Sampler1d => "sampler1D",
+		Primitive::Sampler2d => "sampler2D",
+		Primitive::Sampler3d => "sampler3D",
+		Primitive::SamplerCube => "samplerCube",
+		Primitive::Sampler2dRect => "sampler2DRect",
+		Primitive::Sampler1dArray => "sampler1DArray",
+		Primitive::Sampler2dArray => "sampler2DArray",
+		Primitive::SamplerCubeArray => "samplerCubeArray",
+		Primitive::SamplerBuffer => "samplerBuffer",
+		Primitive::Sampler2dms => "sampler2DMS",
+		Primitive::Sampler2dmsArray => "sampler2DMSArray",
+		Primitive::ISampler1d => "isampler1D",
+		Primitive::ISampler2d => "isampler2D",
+		Primitive::ISampler3d => "isampler3D",
+		Primitive::ISamplerCube => "isamplerCube",
+		Primitive::ISampler2dRect => "isampler2DRect",
+		Primitive::ISampler1dArray => "isampler1DArray",
+		Primitive::ISampler2dArray => "isampler2DArray",
+		Primitive::ISamplerCubeArray => "isamplerCubeArray",
+		Primitive::ISamplerBuffer => "isamplerBuffer",
+		Primitive::ISampler2dms => "isampler2DMS",
+		Primitive::ISampler2dmsArray => "isampler2DMSArray",
+		Primitive::USampler1d => "usampler1D",
+		Primitive::USampler2d => "usampler2D",
+		Primitive::USampler3d => "usampler3D",
+		Primitive::USamplerCube => "usamplerCube",
+		Primitive::USampler2dRect => "usampler2DRect",
+		Primitive::USampler1dArray => "usampler1DArray",
+		Primitive::USampler2dArray => "usampler2DArray",
+		Primitive::USamplerCubeArray => "usamplerCubeArray",
+		Primitive::USamplerBuffer => "usamplerBuffer",
+		Primitive::USampler2dms => "usampler2DMS",
+		Primitive::USampler2dmsArray => "usampler2DMSArray",
+		Primitive::Sampler1dShadow => "sampler1DShadow",
+		Primitive::Sampler2dShadow => "sampler2DShadow",
+		Primitive::SamplerCubeShadow => "samplerCubeShadow",
+		Primitive::Sampler2dRectShadow => "sampler2DRectShadow",
+		Primitive::Sampler1dArrayShadow => "sampler1DArrayShadow",
+		Primitive::Sampler2dArrayShadow => "sampler2DArrayShadow",
+		Primitive::SamplerCubeArrayShadow => "samplerCubeArrayShadow",
+		Primitive::Image1d => "image1D",
+		Primitive::Image2d => "image2D",
+		Primitive::Image3d => "image3D",
+		Primitive::ImageCube => "imageCube",
+		Primitive::Image2dRect => "image2DRect",
+		Primitive::Image1dArray => "image1DArray",
+		Primitive::Image2dArray => "image2DArray",
+		Primitive::ImageCubeArray => "imageCubeArray",
+		Primitive::ImageBuffer => "imageBuffer",
+		Primitive::Image2dms => "image2DMS",
+		Primitive::Image2dmsArray => "image2DMSArray",
+		Primitive::IImage1d => "iimage1D",
+		Primitive::IImage2d => "iimage2D",
+		Primitive::IImage3d => "iimage3D",
+		Primitive::IImageCube => "iimageCube",
+		Primitive::IImage2dRect => "iimage2DRect",
+		Primitive::IImage1dArray => "iimage1DArray",
+		Primitive::IImage2dArray => "iimage2DArray",
+		Primitive::IImageCubeArray => "iimageCubeArray",
+		Primitive::IImageBuffer => "iimageBuffer",
+		Primitive::IImage2dms => "iimage2DMS",
+		Primitive::IImage2dmsArray => "iimage2DMSArray",
+		Primitive::UImage1d => "uimage1D",
+		Primitive::UImage2d => "uimage2D",
+		Primitive::UImage3d => "uimage3D",
+		Primitive::UImageCube => "uimageCube",
+		Primitive::UImage2dRect => "uimage2DRect",
+		Primitive::UImage1dArray => "uimage1DArray",
+		Primitive::UImage2dArray => "uimage2DArray",
+		Primitive::UImageCubeArray => "uimageCubeArray",
+		Primitive::UImageBuffer => "uimageBuffer",
+		Primitive::UImage2dms => "uimage2DMS",
+		Primitive::UImage2dmsArray => "uimage2DMSArray",
+		Primitive::AtomicUint => "atomic_uint",
 	}
 }
 
-fn print_qualifiers(w: &mut Writer, qualifiers: &[Qualifier]) {
+fn print_qualifiers<'a>(
+	w: &mut Writer,
+	ctx: &PrintCtx<'a>,
+	qualifiers: &[Qualifier],
+) {
 	w.indent();
 	for qualifier in qualifiers {
 		if let QualifierTy::Layout(layouts) = &qualifier.ty {
@@ -1121,7 +1230,7 @@ fn print_qualifiers(w: &mut Writer, qualifiers: &[Qualifier]) {
 						if let Some(expr) = expr {
 							new_line_whole!(w, "binding: ");
 							new_line_part!(w);
-							print_expr(w, expr);
+							print_expr(w, ctx, expr);
 						} else {
 							new_line_whole!(w, "binding");
 						}
@@ -1130,7 +1239,7 @@ fn print_qualifiers(w: &mut Writer, qualifiers: &[Qualifier]) {
 						if let Some(expr) = expr {
 							new_line_whole!(w, "offset: ");
 							new_line_part!(w);
-							print_expr(w, expr);
+							print_expr(w, ctx, expr);
 						} else {
 							new_line_whole!(w, "offset");
 						}
@@ -1139,7 +1248,7 @@ fn print_qualifiers(w: &mut Writer, qualifiers: &[Qualifier]) {
 						if let Some(expr) = expr {
 							new_line_whole!(w, "align: ");
 							new_line_part!(w);
-							print_expr(w, expr);
+							print_expr(w, ctx, expr);
 						} else {
 							new_line_whole!(w, "align");
 						}
@@ -1148,7 +1257,7 @@ fn print_qualifiers(w: &mut Writer, qualifiers: &[Qualifier]) {
 						if let Some(expr) = expr {
 							new_line_whole!(w, "location: ");
 							new_line_part!(w);
-							print_expr(w, expr);
+							print_expr(w, ctx, expr);
 						} else {
 							new_line_whole!(w, "location");
 						}
@@ -1157,7 +1266,7 @@ fn print_qualifiers(w: &mut Writer, qualifiers: &[Qualifier]) {
 						if let Some(expr) = expr {
 							new_line_whole!(w, "component: ");
 							new_line_part!(w);
-							print_expr(w, expr);
+							print_expr(w, ctx, expr);
 						} else {
 							new_line_whole!(w, "component");
 						}
@@ -1166,7 +1275,7 @@ fn print_qualifiers(w: &mut Writer, qualifiers: &[Qualifier]) {
 						if let Some(expr) = expr {
 							new_line_whole!(w, "index: ");
 							new_line_part!(w);
-							print_expr(w, expr);
+							print_expr(w, ctx, expr);
 						} else {
 							new_line_whole!(w, "index");
 						}
@@ -1200,7 +1309,7 @@ fn print_qualifiers(w: &mut Writer, qualifiers: &[Qualifier]) {
 						if let Some(expr) = expr {
 							new_line_whole!(w, "invocations: ");
 							new_line_part!(w);
-							print_expr(w, expr);
+							print_expr(w, ctx, expr);
 						} else {
 							new_line_whole!(w, "invocations");
 						}
@@ -1218,7 +1327,7 @@ fn print_qualifiers(w: &mut Writer, qualifiers: &[Qualifier]) {
 						if let Some(expr) = expr {
 							new_line_whole!(w, "local size x: ");
 							new_line_part!(w);
-							print_expr(w, expr);
+							print_expr(w, ctx, expr);
 						} else {
 							new_line_whole!(w, "local size x");
 						}
@@ -1227,7 +1336,7 @@ fn print_qualifiers(w: &mut Writer, qualifiers: &[Qualifier]) {
 						if let Some(expr) = expr {
 							new_line_whole!(w, "local size y: ");
 							new_line_part!(w);
-							print_expr(w, expr);
+							print_expr(w, ctx, expr);
 						} else {
 							new_line_whole!(w, "local size y");
 						}
@@ -1236,7 +1345,7 @@ fn print_qualifiers(w: &mut Writer, qualifiers: &[Qualifier]) {
 						if let Some(expr) = expr {
 							new_line_whole!(w, "local size z: ");
 							new_line_part!(w);
-							print_expr(w, expr);
+							print_expr(w, ctx, expr);
 						} else {
 							new_line_whole!(w, "local size z");
 						}
@@ -1245,7 +1354,7 @@ fn print_qualifiers(w: &mut Writer, qualifiers: &[Qualifier]) {
 						if let Some(expr) = expr {
 							new_line_whole!(w, "xfb buffer: ");
 							new_line_part!(w);
-							print_expr(w, expr);
+							print_expr(w, ctx, expr);
 						} else {
 							new_line_whole!(w, "xfb buffer");
 						}
@@ -1254,7 +1363,7 @@ fn print_qualifiers(w: &mut Writer, qualifiers: &[Qualifier]) {
 						if let Some(expr) = expr {
 							new_line_whole!(w, "xfv stride: ");
 							new_line_part!(w);
-							print_expr(w, expr);
+							print_expr(w, ctx, expr);
 						} else {
 							new_line_whole!(w, "xfv stride");
 						}
@@ -1263,7 +1372,7 @@ fn print_qualifiers(w: &mut Writer, qualifiers: &[Qualifier]) {
 						if let Some(expr) = expr {
 							new_line_whole!(w, "xfb offset: ");
 							new_line_part!(w);
-							print_expr(w, expr);
+							print_expr(w, ctx, expr);
 						} else {
 							new_line_whole!(w, "xfb offset");
 						}
@@ -1272,7 +1381,7 @@ fn print_qualifiers(w: &mut Writer, qualifiers: &[Qualifier]) {
 						if let Some(expr) = expr {
 							new_line_whole!(w, "vertices: ");
 							new_line_part!(w);
-							print_expr(w, expr);
+							print_expr(w, ctx, expr);
 						} else {
 							new_line_whole!(w, "vertices");
 						}
@@ -1285,7 +1394,7 @@ fn print_qualifiers(w: &mut Writer, qualifiers: &[Qualifier]) {
 						if let Some(expr) = expr {
 							new_line_whole!(w, "max vertices: ");
 							new_line_part!(w);
-							print_expr(w, expr);
+							print_expr(w, ctx, expr);
 						} else {
 							new_line_whole!(w, "max vertices");
 						}
@@ -1294,7 +1403,7 @@ fn print_qualifiers(w: &mut Writer, qualifiers: &[Qualifier]) {
 						if let Some(expr) = expr {
 							new_line_whole!(w, "stream: ");
 							new_line_part!(w);
-							print_expr(w, expr);
+							print_expr(w, ctx, expr);
 						} else {
 							new_line_whole!(w, "stream");
 						}

@@ -4120,12 +4120,14 @@ impl Expr {
 			ExprTy::FnCall { ident, args } => {
 				match ctx.resolve_function(&ident) {
 					Either3::A(handle) => {
-						if handle.is_unresolved() {
+						if handle.is_resolved_symbol() {
+							new_colours
+								.push((ident.span, SyntaxType::Function));
+						} else {
 							walker.push_semantic_diag(
 								Semantic::UnresolvedFunction(ident.span),
 							);
 						}
-						new_colours.push((ident.span, SyntaxType::Function));
 						ast::Expr {
 							span: self.span,
 							ty: ast::ExprTy::FnCall {
@@ -4217,7 +4219,7 @@ impl Expr {
 			};
 		};
 
-		let (var_handle, var_ident) = match obj.ty {
+		let (obj, mut previous_type) = match obj.ty {
 			ExprTy::Ident(ident) => {
 				let (handle, new_colour) = ctx.resolve_variable(&ident);
 				if handle.is_unresolved() {
@@ -4230,7 +4232,75 @@ impl Expr {
 					};
 				}
 				new_colours.push((ident.span, new_colour));
-				(handle, ident)
+				(
+					ast::Expr {
+						span: obj.span,
+						ty: ast::ExprTy::Local {
+							name: ident,
+							handle,
+						},
+					},
+					ctx.variables[handle.0][handle.1].type_.clone(),
+				)
+			}
+			ExprTy::FnCall { ident, args } => {
+				match ctx.resolve_function(&ident) {
+					Either3::A(handle) => {
+						// TODO: We need to figure out the correct function overload to know what type it returns,
+						// in order to be able to resolve the leafs correctly. That means we need to implement type
+						// checking in the main parser pass as well. Fun stuff :))))))    fml
+						walker.push_semantic_diag(
+							Semantic::UnresolvedFunction(obj.span),
+						);
+						return ast::Expr {
+							span: self.span,
+							ty: ast::ExprTy::Invalid,
+						};
+					}
+					Either3::B(handle) => {
+						new_colours.push((ident.span, SyntaxType::Struct));
+						(
+							ast::Expr {
+								span: obj.span,
+								ty: ast::ExprTy::StructConstructor {
+									name: ident,
+									handle,
+									args: args
+										.into_iter()
+										.map(|e| {
+											e.convert(walker, ctx, new_colours)
+										})
+										.collect(),
+								},
+							},
+							ast::Type {
+								ty: ast::TypeTy::Single(Either::Right(handle)),
+								qualifiers: ast::Omittable::None,
+								ty_specifier_span: Span::new(0, 0),
+								disjointed_span: ast::Omittable::None,
+							},
+						)
+					}
+					Either3::C(handle) => {
+						new_colours.push((ident.span, SyntaxType::Subroutine));
+						(
+							ast::Expr {
+								span: obj.span,
+								ty: ast::ExprTy::SubroutineCall {
+									name: ident,
+									handle,
+									args: args
+										.into_iter()
+										.map(|e| {
+											e.convert(walker, ctx, new_colours)
+										})
+										.collect(),
+								},
+							},
+							ctx.subroutines[handle.0].return_type.clone(),
+						)
+					}
+				}
 			}
 			_ => {
 				// Object access can begin only with a variable.
@@ -4245,9 +4315,6 @@ impl Expr {
 				};
 			}
 		};
-
-		let root_symbol = &ctx.variables[var_handle.0][var_handle.1];
-		let mut previous_type = root_symbol.type_.clone();
 
 		let mut expr_stack = VecDeque::new();
 		expr_stack.push_back(*leaf);
@@ -4616,7 +4683,7 @@ impl Expr {
 		ast::Expr {
 			span: self.span,
 			ty: ast::ExprTy::ObjAccess {
-				obj: (var_ident, var_handle),
+				obj: Box::from(obj),
 				leafs,
 			},
 		}

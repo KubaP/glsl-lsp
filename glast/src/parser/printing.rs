@@ -754,14 +754,11 @@ fn print_expr<'a>(w: &mut Writer, ctx: &PrintCtx<'a>, expr: &Expr) {
 			w.de_indent();
 			new_line_whole!(w, ")");
 		}
-		ExprTy::ObjAccess {
-			obj: (obj, _),
-			leafs,
-		} => {
+		ExprTy::ObjAccess { obj, leafs } => {
 			continue_eol!(w, "ObjAccess(");
 			w.indent();
-			new_line_part!(w, "var: ");
-			print_ident(&obj);
+			new_line_part!(w, "obj: ");
+			print_expr(w, ctx, &obj);
 			w.indent();
 			for (ident, type_) in leafs.iter() {
 				new_line_whole!(

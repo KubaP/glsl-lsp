@@ -859,7 +859,15 @@ pub enum ExprTy {
 	Parens { expr: Box<Expr> },
 	/// Object access.
 	ObjAccess {
-		obj: (Ident, super::VariableHandle),
+		/// The root object that is accessed.
+		///
+		/// # Invariants
+		/// This will be one of the following:
+		/// - `ExprTy::Local`,
+		/// - `ExprTy::FnCall` (currently unimplemented),
+		/// - `ExprTy::SubroutineCall`,
+		/// - `ExprTy::StructConstructor`.
+		obj: Box<Expr>,
 		/// - `A` - struct field,
 		/// - `B` - `length()` method (only on supported types),
 		/// - `C` - swizzle (only on vectors).

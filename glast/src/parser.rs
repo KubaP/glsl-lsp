@@ -47,8 +47,11 @@ mod conditional_expression;
 mod expression;
 mod grammar;
 mod printing;
+mod symbols;
 #[cfg(test)]
 mod walker_tests;
+
+pub use symbols::*;
 
 use crate::{
 	diag::{
@@ -3250,146 +3253,6 @@ pub enum CurrentlyActive {
 	Variable(VariableHandle),
 }
 
-/// A struct symbol.
-#[derive(Debug)]
-pub struct StructSymbol {
-	/// Handle to the `StructDecl` or `StructDef` node, or to an `InterfaceDef` node if `self.is_interface = true`.
-	def_node: NodeHandle,
-	/// The name.
-	name: String,
-	/// The fields. Unlike the node itself, which can contain any child nodes within, this only contains field
-	/// information and nothing else.
-	fields: Vec<StructField>,
-	/// All references to this struct. This includes the name in the struct declaration/definition itself.
-	refs: Vec<Span>,
-	/// Whether this struct is an interface block.
-	is_interface: bool,
-}
-
-/// An interface block symbol.
-///
-/// Unlike the [`StructSymbol`], this symbol does not have references because interface block names cannot be used
-/// anywhere else in the same shader. An interface block **is not** a type, unlike a struct.
-#[derive(Debug)]
-pub struct InterfaceSymbol {
-	/// Handle to the `InterfaceDef` node.
-	def_node: NodeHandle,
-	/// The name.
-	name: String,
-	/// The fields. Unlike the node itself, which can contain any child nodes within, this only contains field
-	/// information and nothing else.
-	fields: Vec<StructField>,
-}
-
-/// A field within a struct symbol.
-#[derive(Debug)]
-pub struct StructField {
-	/// The type.
-	type_: ast::Type,
-	/// The name. A field can lack a name, in which case it is un-referencable and really just in the struct
-	/// definition for padding purposes.
-	name: ast::Omittable<String>,
-	/// All references to this field. This includes the field name itself.
-	refs: Vec<Span>,
-}
-
-/// A function symbol.
-#[derive(Debug)]
-pub struct FunctionSymbol {
-	/// Whether this function is built-in.
-	built_in: bool,
-	/// The name.
-	name: String,
-	/// All function signatures that share this name. If there is more than one signature, that means this function
-	/// is overloaded.
-	signatures: Vec<FunctionSignature>,
-	/// All references of this function. This includes the name in all signature declarations/definitions
-	/// themselves.
-	refs: Vec<Span>,
-}
-
-/// A function signature. There can be more than one function signature for a given function symbol if that symbol
-/// is overloaded.
-#[derive(Debug)]
-pub struct FunctionSignature {
-	/// Handles to any `FnDecl` nodes.
-	decl_nodes: Vec<NodeHandle>,
-	/// Handle to a `FnDef` node, or to a `SubroutineFnDefAssociation` node (only if this symbol is sourced from a
-	/// [`SubroutineSymbol`]). Only one definition is allowed per function signature.
-	def_node: Option<NodeHandle>,
-	/// The name.
-	name: String,
-	/// The parameters for this overload.
-	params: Vec<FunctionParam>,
-	/// The return type for this overload.
-	return_type: ast::Type,
-}
-
-/// A parameter within a function symbol.
-#[derive(Debug, PartialEq)]
-pub struct FunctionParam {
-	/// The type.
-	type_: ast::Type,
-	/// The name. A parameter can lack a name, in which case it is un-referencable.
-	name: ast::Omittable<String>,
-	/// All references to this parameter. This includes the parameter name itself.
-	refs: Vec<Span>,
-}
-
-/// A subroutine symbol.
-#[derive(Debug)]
-pub struct SubroutineSymbol {
-	/// Handle to a `SubroutineTypeDecl` node.
-	decl_node: NodeHandle,
-	/// The name
-	name: String,
-	/// The parameters.
-	params: Vec<FunctionParam>,
-	/// The return type.
-	return_type: ast::Type,
-	/// All uniforms for this subroutine.
-	uniforms: Vec<SubroutineUniformHandle>,
-	/// All associated functions for this subroutine.
-	associated_fns: Vec<FunctionHandle>,
-	/// All references to this subroutine type. This includes the name in the subroutine type declaration itself.
-	refs: Vec<Span>,
-}
-
-/// A subroutine uniform symbol. This is handled separately from a [`VariableSymbol`] because, unlike normal
-/// variables, this is treated as a callable function, i.e. a subroutine uniform `my_choice` is used/referenced by
-/// `my_choice()`.
-#[derive(Debug)]
-pub struct SubroutineUniformSymbol {
-	/// Handle to a `SubroutineUniformDef`/`SubroutineUniformDefs` node.
-	def_node: NodeHandle,
-	/// The type. Contains a handle to the [`SubroutineSymbol`].
-	type_: ast::SubroutineType,
-	/// The name of the subroutine uniform.
-	name: String,
-	/// All references to this callable uniform variable. This includes the name in the variable definition itself.
-	refs: Vec<Span>,
-}
-
-/// A variable symbol.
-#[derive(Debug)]
-pub struct VariableSymbol {
-	/// Handle to one of the following nodes:
-	/// - `VarDef`/`VarDefs`/`VarDefInit`/`VarDefsInits`,
-	/// - `StructDef`; means that at least `node.instances[0]` exists.
-	/// - `FnDef`; means that at least `node.params[0]` exists.
-	/// - `InterfaceDef`;
-	def_node: NodeHandle,
-	/// The type.
-	type_: ast::Type,
-	/// The name.
-	name: String,
-	/// The syntax highlighting token for this variable. The information for this could be found just by looking
-	/// through the `type_` and `def_node` fields, but by storing it here we remove lookup costs.
-	syntax: (SyntaxType, SyntaxModifiers),
-	/// All references to this variable. This includes the name in the variable definition itself.
-	refs: Vec<Span>,
-}
-
 // region: Handles
 /// A handle to a node stored within the [`Ast`]/[`Ctx`].
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -3689,7 +3552,7 @@ impl Ctx {
 						Vec::new()
 					},
 					name: ident.map(|i| i.name).into(),
-					type_,
+					type_: type_.into(),
 				})
 				.collect(),
 			refs: vec![ident.span],
@@ -3761,7 +3624,8 @@ impl Ctx {
 						qualifiers: qualifiers.clone(),
 					},
 					arr,
-				),
+				)
+				.into(),
 				name: ident.name.clone(),
 				syntax: (SyntaxType::Variable, SyntaxModifiers::empty()),
 				refs: vec![ident.span],
@@ -3847,7 +3711,7 @@ impl Ctx {
 					} else {
 						Vec::new()
 					},
-					type_,
+					type_: type_.into(),
 					name: ident.map(|i| i.name).into(),
 				})
 				.collect(),
@@ -3872,7 +3736,7 @@ impl Ctx {
 							Vec::new()
 						},
 						name: ident.map(|i| i.name).into(),
-						type_,
+						type_: type_.into(),
 					})
 					.collect(),
 				refs: vec![ident.span],
@@ -3930,7 +3794,8 @@ impl Ctx {
 							qualifiers: qualifiers.clone().into(),
 						},
 						arr,
-					),
+					)
+					.into(),
 					name: ident.name.clone(),
 					syntax: (SyntaxType::Variable, SyntaxModifiers::empty()),
 					refs: vec![ident.span],
@@ -3975,7 +3840,7 @@ impl Ctx {
 
 				self.variables[th.0].push(VariableSymbol {
 					def_node: node_handle,
-					type_,
+					type_: type_.into(),
 					name: ident.name,
 					syntax: (SyntaxType::Variable, SyntaxModifiers::empty()),
 					refs: vec![ident.span],
@@ -4037,7 +3902,7 @@ impl Ctx {
 					(ast::Omittable::None, Vec::new())
 				};
 				FunctionParam {
-					type_: p.type_,
+					type_: p.type_.into(),
 					name,
 					refs,
 				}
@@ -4064,31 +3929,32 @@ impl Ctx {
 					);
 					return;
 				}
-				let fn_handle =
-					match fn_.signatures.iter_mut().enumerate().find(
-						|(_, sig)| {
-							&sig.params == &params
-								&& &sig.return_type == &return_type
-						},
-					) {
-						Some((sig_i, signature)) => {
-							// We already have a matching signature.
-							signature.decl_nodes.push(node_handle);
-							FunctionHandle(i, sig_i)
-						}
-						None => {
-							// We don't have this specific signature yet.
-							let fn_handle = FunctionHandle(i, usize::MAX);
-							fn_.signatures.push(FunctionSignature {
-								decl_nodes: vec![node_handle],
-								def_node: None,
-								name: ident.name.clone(),
-								params,
-								return_type,
-							});
-							fn_handle
-						}
-					};
+				let fn_handle = match fn_
+					.signatures
+					.iter_mut()
+					.enumerate()
+					.find(|(_, sig)| {
+						&sig.params == &params
+							&& &sig.return_type == &return_type.clone().into()
+					}) {
+					Some((sig_i, signature)) => {
+						// We already have a matching signature.
+						signature.decl_nodes.push(node_handle);
+						FunctionHandle(i, sig_i)
+					}
+					None => {
+						// We don't have this specific signature yet.
+						let fn_handle = FunctionHandle(i, usize::MAX);
+						fn_.signatures.push(FunctionSignature {
+							decl_nodes: vec![node_handle],
+							def_node: None,
+							name: ident.name.clone(),
+							params,
+							return_type: return_type.into(),
+						});
+						fn_handle
+					}
+				};
 				fn_.refs.push(ident.span);
 				fn_handle
 			}
@@ -4103,7 +3969,7 @@ impl Ctx {
 						def_node: None,
 						name: ident.name.clone(),
 						params,
-						return_type,
+						return_type: return_type.into(),
 					}],
 					refs: vec![ident.span],
 				});
@@ -4198,7 +4064,7 @@ impl Ctx {
 					(ast::Omittable::None, Vec::new())
 				};
 				FunctionParam {
-					type_: p.type_,
+					type_: p.type_.into(),
 					name,
 					refs,
 				}
@@ -4225,36 +4091,37 @@ impl Ctx {
 					);
 					return;
 				}
-				let fn_handle =
-					match fn_.signatures.iter_mut().enumerate().find(
-						|(_, sig)| {
-							&sig.params == &params
-								&& &sig.return_type == &return_type
-						},
-					) {
-						Some((sig_i, signature)) => {
-							// We already have a matching signature.
+				let fn_handle = match fn_
+					.signatures
+					.iter_mut()
+					.enumerate()
+					.find(|(_, sig)| {
+						&sig.params == &params
+							&& &sig.return_type == &return_type.clone().into()
+					}) {
+					Some((sig_i, signature)) => {
+						// We already have a matching signature.
 
-							if signature.def_node.is_some() {
-								// TODO: Semantic error.
-								return;
-							}
-							signature.def_node = Some(node_handle);
-							FunctionHandle(i, sig_i)
+						if signature.def_node.is_some() {
+							// TODO: Semantic error.
+							return;
 						}
-						None => {
-							// We don't have this specific signature yet.
-							let fn_handle = FunctionHandle(i, usize::MAX);
-							fn_.signatures.push(FunctionSignature {
-								decl_nodes: Vec::new(),
-								def_node: Some(node_handle),
-								name: ident.name.clone(),
-								params,
-								return_type,
-							});
-							fn_handle
-						}
-					};
+						signature.def_node = Some(node_handle);
+						FunctionHandle(i, sig_i)
+					}
+					None => {
+						// We don't have this specific signature yet.
+						let fn_handle = FunctionHandle(i, usize::MAX);
+						fn_.signatures.push(FunctionSignature {
+							decl_nodes: Vec::new(),
+							def_node: Some(node_handle),
+							name: ident.name.clone(),
+							params,
+							return_type: return_type.into(),
+						});
+						fn_handle
+					}
+				};
 				fn_.refs.push(ident.span);
 				fn_handle
 			}
@@ -4269,7 +4136,7 @@ impl Ctx {
 						def_node: Some(node_handle),
 						name: ident.name.clone(),
 						params,
-						return_type,
+						return_type: return_type.into(),
 					}],
 					refs: vec![ident.span],
 				});
@@ -4374,13 +4241,13 @@ impl Ctx {
 							(ast::Omittable::None, Vec::new())
 						};
 					FunctionParam {
-						type_: p.type_,
+						type_: p.type_.into(),
 						name,
 						refs,
 					}
 				})
 				.collect(),
-			return_type,
+			return_type: return_type.into(),
 			uniforms: Vec::new(),
 			associated_fns: Vec::new(),
 			refs: vec![ident.span],
@@ -4453,7 +4320,7 @@ impl Ctx {
 					(ast::Omittable::None, Vec::new())
 				};
 				FunctionParam {
-					type_: p.type_,
+					type_: p.type_.into(),
 					name,
 					refs,
 				}
@@ -4485,7 +4352,7 @@ impl Ctx {
 					.enumerate()
 					.find(|(_, sig)| {
 						&sig.params == &params
-							&& &sig.return_type == &return_type
+							&& &sig.return_type == &return_type.clone().into()
 					}) {
 					Some((sig_i, signature)) => {
 						// We already have a matching signature.
@@ -4505,7 +4372,7 @@ impl Ctx {
 							def_node: Some(node_handle),
 							name: ident.name.clone(),
 							params,
-							return_type,
+							return_type: return_type.clone().into(),
 						});
 						fn_handle
 					}
@@ -4524,7 +4391,7 @@ impl Ctx {
 						def_node: Some(node_handle),
 						name: ident.name.clone(),
 						params,
-						return_type,
+						return_type: return_type.into(),
 					}],
 					refs: vec![ident.span],
 				});
@@ -4802,7 +4669,8 @@ impl Ctx {
 
 			self.variables[th.0].push(VariableSymbol {
 				def_node: node_handle,
-				type_: grammar::combine_type_with_arr(type_.clone(), var.arr),
+				type_: grammar::combine_type_with_arr(type_.clone(), var.arr)
+					.into(),
 				syntax,
 				name: var.ident.name,
 				refs: vec![var.ident.span],
@@ -4839,7 +4707,7 @@ impl Ctx {
 					);
 					self.variables[new_table_handle.0].push(VariableSymbol {
 						def_node: new_handle,
-						type_: type_.clone(),
+						type_: type_.clone().into(),
 						name: ident.name.clone(),
 						syntax: (
 							SyntaxType::Parameter,
@@ -4991,7 +4859,11 @@ impl Ctx {
 	fn resolve_function(
 		&mut self,
 		ident: &ast::Ident,
-	) -> Either3<FunctionHandle, StructHandle, SubroutineHandle> {
+		args: &[Type],
+	) -> (
+		Either3<FunctionHandle, StructHandle, SubroutineHandle>,
+		Type,
+	) {
 		// A function can either be an actual function (built-in or user-defined), or a struct constructor, so we
 		// to check the if either match. If both match, we want to select the latest one to be declared/defined.
 		let fn_ = self
@@ -5046,21 +4918,45 @@ impl Ctx {
 		}
 
 		match i {
-			-1 => Either3::A(FunctionHandle(usize::MAX, usize::MAX)),
+			-1 => (
+				Either3::A(FunctionHandle(usize::MAX, usize::MAX)),
+				Type::new_nat(),
+			),
 			0 => {
 				let (i, fn_) = fn_.unwrap();
 				fn_.refs.push(ident.span);
-				Either3::A(FunctionHandle(i, usize::MAX))
+				let type_ = fn_
+					.signatures
+					.iter()
+					.find(|sig| {
+						for (a, b) in sig.params.iter().zip(args) {
+							if &a.type_ != b {
+								return false;
+							}
+						}
+						true
+					})
+					.map(|sig| sig.return_type.clone());
+				(
+					Either3::A(FunctionHandle(i, usize::MAX)),
+					type_.clone().unwrap_or(Type::new_nat()),
+				)
 			}
 			1 => {
 				let (i, struct_) = struct_.unwrap();
 				struct_.refs.push(ident.span);
-				Either3::B(StructHandle(i))
+				(
+					Either3::B(StructHandle(i)),
+					Type::new_struct(StructHandle(i)),
+				)
 			}
 			2 => {
 				let (i, subroutine_) = subroutine_.unwrap();
 				subroutine_.refs.push(ident.span);
-				Either3::C(SubroutineHandle(i))
+				let type_ = self.subroutines[subroutine_.type_.handle().0]
+					.return_type
+					.clone();
+				(Either3::C(SubroutineHandle(i)), type_)
 			}
 			_ => unreachable!(),
 		}

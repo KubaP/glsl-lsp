@@ -218,6 +218,7 @@ version = "0.1.0"
 dependencies = [
  "bitflags",
  "generational-arena",
+ "tinyvec",
 ]
 
 [[package]]

@@ -16,3 +16,4 @@ categories = ["parser-implementations", "rendering"]
 [dependencies]
 bitflags = "1.3.2"
 generational-arena = "0.2.8"
+tinyvec = { version = "1.6.0", features = ["alloc", "rustc_1_57"] }

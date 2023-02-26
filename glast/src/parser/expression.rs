@@ -26,7 +26,8 @@ https://matklad.github.io/2020/04/15/from-pratt-to-dijkstra.html
 
 use super::{
 	ast::{BinOp, BinOpTy, Ident, Lit, PostOp, PostOpTy, PreOp, PreOpTy},
-	Ctx, SyntaxModifiers, SyntaxToken, SyntaxType, TokenStreamProvider, Walker,
+	Ctx, SyntaxModifiers, SyntaxToken, SyntaxType, TokenStreamProvider, Type,
+	Walker,
 };
 use crate::{
 	diag::{ExprDiag, Semantic, Syntax},
@@ -35,6 +36,7 @@ use crate::{
 	Either, Either3, NonEmpty, Span,
 };
 use std::collections::VecDeque;
+use tinyvec::TinyVec;
 
 /// Tries to parse an expression beginning at the current position.
 pub(super) fn parse_expr<'a, P: TokenStreamProvider<'a>>(
@@ -211,9 +213,12 @@ pub(super) fn try_parse_type_specifier<'a, P: TokenStreamProvider<'a>>(
 	yard.parse(walker, end_tokens.as_ref());
 
 	match yard.try_create_type_specifier(walker, ctx) {
-		Ok((type_, syntax)) => {
-			Ok((type_, vec![], yard.semantic_diags, yard.syntax_tokens))
-		}
+		Ok((type_, ast_type)) => Ok((
+			ast_type,
+			yard.syntax_diags,
+			yard.semantic_diags,
+			yard.syntax_tokens,
+		)),
 		Err(expr) => Err((
 			expr,
 			yard.syntax_diags,
@@ -3028,7 +3033,7 @@ impl ShuntingYard {
 		let Some(expr) = expr else { return None; };
 
 		let mut new_colours = Vec::new();
-		let expr = expr.convert(walker, ctx, &mut new_colours);
+		let (expr, _) = expr.convert(walker, ctx, &mut new_colours);
 
 		if !new_colours.is_empty() {
 			let mut current_new = new_colours.remove(0);
@@ -3328,7 +3333,7 @@ impl ShuntingYard {
 		&mut self,
 		walker: &mut Walker<'a, P>,
 		ctx: &mut Ctx,
-	) -> Result<(ast::Type, Vec<Syntax>), Option<ast::Expr>> {
+	) -> Result<(Type, ast::Type), Option<ast::Expr>> {
 		use super::StructHandle;
 
 		if self.stack.is_empty() {
@@ -3380,9 +3385,7 @@ impl ShuntingYard {
 		// - type_name[const + 1]
 		// - type_name[const[0]]
 
-		let mut syntax_diags = Vec::new();
-
-		let (type_ty, new_syntax_type) =
+		let (handle, new_syntax_type) =
 			match super::ast::Primitive::parse(ident) {
 				Some(p) => {
 					match ctx.primitive_refs.get_mut(&p) {
@@ -3423,14 +3426,32 @@ impl ShuntingYard {
 			}
 		});
 
+		let type_ = match handle {
+			Either::Left(p) => {
+				let mut t = Type::new_prim(p);
+				if let Some(arr) = &arr {
+					t.arr.resize_with(arr.len(), || 0);
+				}
+				t
+			}
+			Either::Right(handle) => {
+				let mut t = Type::new_struct(handle);
+				if let Some(arr) = &arr {
+					t.arr.resize_with(arr.len(), || 0);
+				}
+				t
+			}
+		};
+
 		Ok((
+			type_,
 			ast::Type {
 				ty_specifier_span: expr.span,
 				disjointed_span: ast::Omittable::None,
 				ty: if let Some(mut arr) = arr {
 					if arr.len() == 1 {
 						ast::TypeTy::Array(
-							type_ty,
+							handle,
 							arr.remove(0)
 								.cloned()
 								.map(|e| {
@@ -3441,7 +3462,7 @@ impl ShuntingYard {
 						)
 					} else if arr.len() == 2 {
 						ast::TypeTy::Array2D(
-							type_ty,
+							handle,
 							arr.remove(0)
 								.cloned()
 								.map(|e| {
@@ -3459,7 +3480,7 @@ impl ShuntingYard {
 						)
 					} else {
 						ast::TypeTy::ArrayND(
-							type_ty,
+							handle,
 							arr.into_iter()
 								.map(|o| {
 									o.cloned()
@@ -3477,11 +3498,10 @@ impl ShuntingYard {
 						)
 					}
 				} else {
-					ast::TypeTy::Single(type_ty)
+					ast::TypeTy::Single(handle)
 				},
 				qualifiers: ast::Omittable::None,
 			},
-			syntax_diags,
 		))
 	}
 
@@ -3967,159 +3987,316 @@ impl Expr {
 		walker: &mut Walker<'a, P>,
 		ctx: &mut Ctx,
 		new_colours: &mut Vec<(Span, SyntaxType)>,
-	) -> ast::Expr {
+	) -> (ast::Expr, Type) {
 		match self.ty {
-			ExprTy::Lit(l) => ast::Expr {
-				span: self.span,
-				ty: ast::ExprTy::Lit(l),
-			},
+			ExprTy::Lit(l) => {
+				let type_ = match l {
+					Lit::Bool(_) => Type::new_prim(ast::Primitive::Bool),
+					Lit::Int(_) => Type::new_prim(ast::Primitive::Int),
+					Lit::UInt(_) => Type::new_prim(ast::Primitive::Uint),
+					Lit::Float(_) => Type::new_prim(ast::Primitive::Float),
+					Lit::Double(_) => Type::new_prim(ast::Primitive::Double),
+					_ => {
+						return (
+							ast::Expr {
+								span: self.span,
+								ty: ast::ExprTy::Invalid,
+							},
+							Type::new_nat(),
+						);
+					}
+				};
+				(
+					ast::Expr {
+						span: self.span,
+						ty: ast::ExprTy::Lit(l),
+					},
+					type_,
+				)
+			}
 			ExprTy::Ident(ident) => {
 				if let Some(_) = ast::Primitive::parse(&ident) {
 					// TODO: Syntax error.
-					ast::Expr {
-						span: self.span,
-						ty: ast::ExprTy::Invalid,
-					}
+					return (
+						ast::Expr {
+							span: self.span,
+							ty: ast::ExprTy::Invalid,
+						},
+						Type::new_nat(),
+					);
+				}
+				let (handle, new_colour) = ctx.resolve_variable(&ident);
+				if handle.is_resolved() {
+					new_colours.push((self.span, new_colour));
+					(
+						ast::Expr {
+							span: self.span,
+							ty: ast::ExprTy::Local {
+								name: ident,
+								handle,
+							},
+						},
+						ctx.variables[handle.0][handle.1].type_.clone(),
+					)
 				} else {
-					let (handle, new_colour) = ctx.resolve_variable(&ident);
-					if handle.is_resolved() {
-						new_colours.push((self.span, new_colour));
-					} else {
-						match ctx.resolve_function(&ident) {
-							Either3::A(_) | Either3::B(_) => walker
-								.push_semantic_diag(
-									Semantic::UnresolvedVariable(ident.span),
-								),
-							Either3::C(_) => walker.push_semantic_diag(
+					let type_ = match ctx.resolve_function(&ident, &[]) {
+						(Either3::A(_), _) | (Either3::B(_), _) => {
+							walker.push_semantic_diag(
+								Semantic::UnresolvedVariable(ident.span),
+							);
+							Type::new_nat()
+						}
+						(Either3::C(_), type_) => {
+							walker.push_semantic_diag(
 								Semantic::SubUniformTreatedAsVariable(
 									ident.span,
 								),
-							),
+							);
+							type_
 						}
-					}
-					ast::Expr {
-						span: self.span,
-						ty: ast::ExprTy::Local {
-							name: ident,
-							handle,
+					};
+					(
+						ast::Expr {
+							span: self.span,
+							ty: ast::ExprTy::Local {
+								name: ident,
+								handle,
+							},
 						},
-					}
+						type_,
+					)
 				}
 			}
 			ExprTy::Prefix { op, expr } => {
 				if let Some(expr) = expr {
-					ast::Expr {
-						span: self.span,
-						ty: ast::ExprTy::Prefix {
-							op,
-							expr: Box::from(expr.convert(
-								walker,
-								ctx,
-								new_colours,
-							)),
-						},
+					let (expr, type_) = expr.convert(walker, ctx, new_colours);
+					if type_.can_apply_preop(op.ty.clone()) {
+						return (
+							ast::Expr {
+								span: self.span,
+								ty: ast::ExprTy::Prefix {
+									op,
+									expr: Box::from(expr),
+								},
+							},
+							type_,
+						);
 					}
-				} else {
+					return (
+						ast::Expr {
+							span: self.span,
+							ty: ast::ExprTy::Prefix {
+								op,
+								expr: Box::from(expr),
+							},
+						},
+						Type::new_nat(),
+					);
+				}
+				(
 					ast::Expr {
 						span: self.span,
 						ty: ast::ExprTy::Invalid,
-					}
-				}
+					},
+					Type::new_nat(),
+				)
 			}
-			ExprTy::Postfix { expr, op } => ast::Expr {
-				span: self.span,
-				ty: ast::ExprTy::Postfix {
-					expr: Box::from(expr.convert(walker, ctx, new_colours)),
-					op,
-				},
-			},
-			ExprTy::Binary { left, op, right } => {
-				if let Some(right) = right {
+			ExprTy::Postfix { expr, op } => {
+				let (expr, type_) = expr.convert(walker, ctx, new_colours);
+				if type_.can_apply_postop() {
+					return (
+						ast::Expr {
+							span: self.span,
+							ty: ast::ExprTy::Postfix {
+								expr: Box::from(expr),
+								op,
+							},
+						},
+						type_,
+					);
+				}
+				(
 					ast::Expr {
 						span: self.span,
-						ty: ast::ExprTy::Binary {
-							left: Box::from(left.convert(
-								walker,
-								ctx,
-								new_colours,
-							)),
+						ty: ast::ExprTy::Postfix {
+							expr: Box::from(expr),
 							op,
-							right: Box::from(right.convert(
-								walker,
-								ctx,
-								new_colours,
-							)),
 						},
-					}
-				} else {
-					left.convert(walker, ctx, new_colours);
+					},
+					Type::new_nat(),
+				)
+			}
+			ExprTy::Binary { left, op, right } => {
+				let (left, type_l) = left.convert(walker, ctx, new_colours);
+				if let Some(right) = right {
+					let (right, type_r) =
+						right.convert(walker, ctx, new_colours);
+
+					return match Type::coerce_binary_types(&type_l, &type_r) {
+						Ok(new_type) => (
+							ast::Expr {
+								span: self.span,
+								ty: ast::ExprTy::Binary {
+									left: Box::from(left),
+									op,
+									right: Box::from(right),
+								},
+							},
+							new_type,
+						),
+						_ => (
+							ast::Expr {
+								span: self.span,
+								ty: ast::ExprTy::Binary {
+									left: Box::from(left),
+									op,
+									right: Box::from(right),
+								},
+							},
+							Type::new_nat(),
+						),
+					};
+				}
+				(
 					ast::Expr {
 						span: self.span,
 						ty: ast::ExprTy::Invalid,
-					}
-				}
+					},
+					Type::new_nat(),
+				)
 			}
 			ExprTy::Ternary {
 				cond,
 				true_,
 				false_,
 			} => match (true_, false_) {
-				(Some(true_), Some(false_)) => ast::Expr {
-					span: self.span,
-					ty: ast::ExprTy::Ternary {
-						cond: Box::from(cond.convert(walker, ctx, new_colours)),
-						true_: Box::from(true_.convert(
-							walker,
-							ctx,
-							new_colours,
-						)),
-						false_: Box::from(false_.convert(
-							walker,
-							ctx,
-							new_colours,
-						)),
-					},
-				},
-				_ => ast::Expr {
-					span: self.span,
-					ty: ast::ExprTy::Invalid,
-				},
-			},
-			ExprTy::Parens { expr } => {
-				if let Some(expr) = expr {
-					ast::Expr {
-						span: self.span,
-						ty: ast::ExprTy::Parens {
-							expr: Box::from(expr.convert(
-								walker,
-								ctx,
-								new_colours,
-							)),
+				(Some(true_), Some(false_)) => {
+					let (cond, cond_t) = cond.convert(walker, ctx, new_colours);
+					// TODO: Check cond_t is bool
+					let (true_, type_t) =
+						true_.convert(walker, ctx, new_colours);
+					let (false_, type_f) =
+						false_.convert(walker, ctx, new_colours);
+
+					let type_ =
+						match Type::coerce_binary_types(&type_t, &type_f) {
+							Ok(t) => t,
+							Err(_) => Type::new_nat(),
+						};
+					(
+						ast::Expr {
+							span: self.span,
+							ty: ast::ExprTy::Ternary {
+								cond: Box::from(cond),
+								true_: Box::from(true_),
+								false_: Box::from(false_),
+							},
 						},
-					}
-				} else {
+						type_,
+					)
+				}
+				_ => (
 					ast::Expr {
 						span: self.span,
 						ty: ast::ExprTy::Invalid,
-					}
+					},
+					Type::new_nat(),
+				),
+			},
+			ExprTy::Parens { expr } => {
+				if let Some(expr) = expr {
+					let (expr, type_) = expr.convert(walker, ctx, new_colours);
+					return (
+						ast::Expr {
+							span: self.span,
+							ty: ast::ExprTy::Parens {
+								expr: Box::from(expr),
+							},
+						},
+						type_,
+					);
 				}
+				(
+					ast::Expr {
+						span: self.span,
+						ty: ast::ExprTy::Invalid,
+					},
+					Type::new_nat(),
+				)
 			}
 			ExprTy::ObjAccess { .. } => {
 				self.convert_obj_access(walker, ctx, new_colours)
 			}
-			ExprTy::Index { item, i } => ast::Expr {
-				span: self.span,
-				ty: ast::ExprTy::Index {
-					item: Box::from(item.convert(walker, ctx, new_colours)),
-					i: i.map(|e| {
-						Box::from(e.convert(walker, ctx, new_colours))
-					})
-					.into(),
-				},
-			},
-			ExprTy::FnCall { ident, args } => {
-				match ctx.resolve_function(&ident) {
-					Either3::A(handle) => {
+			ExprTy::Index { item, i } => {
+				let (item, type_) = item.convert(walker, ctx, new_colours);
+
+				let i = i
+					.map(|e| Box::from(e.convert(walker, ctx, new_colours).0))
+					.into();
+				return match type_.index_into() {
+					Ok(type_) => (
+						ast::Expr {
+							span: self.span,
+							ty: ast::ExprTy::Index {
+								item: Box::from(item),
+								i,
+							},
+						},
+						type_,
+					),
+					Err(_) => (
+						ast::Expr {
+							span: self.span,
+							ty: ast::ExprTy::Index {
+								item: Box::from(item),
+								i,
+							},
+						},
+						Type::new_nat(),
+					),
+				};
+				(
+					ast::Expr {
+						span: self.span,
+						ty: ast::ExprTy::Invalid,
+					},
+					Type::new_nat(),
+				)
+			}
+			ExprTy::FnCall {
+				ident,
+				args: arg_exprs,
+			} => {
+				let mut args = Vec::with_capacity(arg_exprs.len());
+				let mut types = Vec::with_capacity(arg_exprs.len());
+				let mut abort = false;
+				for arg in arg_exprs.into_iter() {
+					let (expr, type_) = arg.convert(walker, ctx, new_colours);
+					args.push(expr);
+					if type_.is_not_a_type() {
+						abort = true;
+					}
+					types.push(type_);
+					continue;
+				}
+				if abort {
+					return (
+						ast::Expr {
+							span: self.span,
+							ty: ast::ExprTy::FnCall {
+								name: ident,
+								handle: super::FunctionHandle(
+									usize::MAX,
+									usize::MAX,
+								),
+								args,
+							},
+						},
+						Type::new_nat(),
+					);
+				}
+				match ctx.resolve_function(&ident, &types) {
+					(Either3::A(handle), type_) => {
 						if handle.is_resolved_symbol() {
 							new_colours
 								.push((ident.span, SyntaxType::Function));
@@ -4128,75 +4305,84 @@ impl Expr {
 								Semantic::UnresolvedFunction(ident.span),
 							);
 						}
-						ast::Expr {
-							span: self.span,
-							ty: ast::ExprTy::FnCall {
-								name: ident,
-								handle,
-								args: args
-									.into_iter()
-									.map(|arg| {
-										arg.convert(walker, ctx, new_colours)
-									})
-									.collect(),
+						(
+							ast::Expr {
+								span: self.span,
+								ty: ast::ExprTy::FnCall {
+									name: ident,
+									handle,
+									args,
+								},
 							},
-						}
+							type_,
+						)
 					}
-					Either3::B(handle) => {
+					(Either3::B(handle), type_) => {
 						new_colours.push((ident.span, SyntaxType::Struct));
-						ast::Expr {
-							span: self.span,
-							ty: ast::ExprTy::StructConstructor {
-								name: ident,
-								handle,
-								args: args
-									.into_iter()
-									.map(|arg| {
-										arg.convert(walker, ctx, new_colours)
-									})
-									.collect(),
+						(
+							ast::Expr {
+								span: self.span,
+								ty: ast::ExprTy::StructConstructor {
+									name: ident,
+									handle,
+									args,
+								},
 							},
-						}
+							type_,
+						)
 					}
-					Either3::C(handle) => {
+					(Either3::C(handle), type_) => {
 						new_colours.push((ident.span, SyntaxType::Subroutine));
-						ast::Expr {
-							span: self.span,
-							ty: ast::ExprTy::SubroutineCall {
-								name: ident,
-								handle,
-								args: args
-									.into_iter()
-									.map(|arg| {
-										arg.convert(walker, ctx, new_colours)
-									})
-									.collect(),
+						(
+							ast::Expr {
+								span: self.span,
+								ty: ast::ExprTy::SubroutineCall {
+									name: ident,
+									handle,
+									args,
+								},
 							},
-						}
+							type_,
+						)
 					}
 				}
 			}
-			ExprTy::InitList { args } => ast::Expr {
-				span: self.span,
-				ty: ast::ExprTy::Initializer {
-					args: args
-						.into_iter()
-						.map(|arg| arg.convert(walker, ctx, new_colours))
-						.collect(),
+			ExprTy::InitList { args } => (
+				// When it comes to evaluating the type of an initializer list, we return `None` because it doesn't
+				// really have a representable type. More importantly, an initializer list cannot be used inside a
+				// more complex expression anyway, so we can ignore the type since we will always produce a syntax
+				// error.
+				ast::Expr {
+					span: self.span,
+					ty: ast::ExprTy::Initializer {
+						args: args
+							.into_iter()
+							.map(|arg| arg.convert(walker, ctx, new_colours).0)
+							.collect(),
+					},
 				},
-			},
+				Type::new_nat(),
+			),
 			ExprTy::ArrConstructor { .. } => {
 				self.convert_arr_constructor(walker, ctx, new_colours)
 			}
-			ExprTy::List { items } => ast::Expr {
-				span: self.span,
-				ty: ast::ExprTy::List {
-					items: items
-						.into_iter()
-						.map(|item| item.convert(walker, ctx, new_colours))
-						.collect(),
-				},
-			},
+			ExprTy::List { items } => {
+				// The evaluated type of a list is the type of the last expression within the list.
+				let mut v = Vec::with_capacity(items.len());
+				let mut last_type = Type::new_nat();
+				for item in items.into_iter() {
+					let (expr, type_) = item.convert(walker, ctx, new_colours);
+					v.push(expr);
+					last_type = type_;
+				}
+				(
+					ast::Expr {
+						span: self.span,
+						ty: ast::ExprTy::List { items: v },
+					},
+					last_type,
+				)
+			}
 			ExprTy::Separator => unreachable!(),
 		}
 	}
@@ -4207,16 +4393,16 @@ impl Expr {
 		walker: &mut Walker<'a, P>,
 		ctx: &mut Ctx,
 		new_colours: &mut Vec<(Span, SyntaxType)>,
-	) -> ast::Expr {
+	) -> (ast::Expr, Type) {
 		let ExprTy::ObjAccess { obj, leaf } = self.ty else { unreachable!("Checked by caller"); };
 
 		let Some(leaf) = leaf else {
 			// TODO: Syntax error
 			obj.convert(walker, ctx, new_colours);
-			return ast::Expr {
+			return (ast::Expr {
 				span: self.span,
 				ty: ast::ExprTy::Invalid,
-			};
+			}, Type::new_nat());
 		};
 
 		let (obj, mut previous_type) = match obj.ty {
@@ -4226,10 +4412,13 @@ impl Expr {
 					walker.push_semantic_diag(Semantic::UnresolvedVariable(
 						ident.span,
 					));
-					return ast::Expr {
-						span: self.span,
-						ty: ast::ExprTy::Invalid,
-					};
+					return (
+						ast::Expr {
+							span: self.span,
+							ty: ast::ExprTy::Invalid,
+						},
+						Type::new_nat(),
+					);
 				}
 				new_colours.push((ident.span, new_colour));
 				(
@@ -4243,21 +4432,39 @@ impl Expr {
 					ctx.variables[handle.0][handle.1].type_.clone(),
 				)
 			}
-			ExprTy::FnCall { ident, args } => {
-				match ctx.resolve_function(&ident) {
-					Either3::A(handle) => {
+			ExprTy::FnCall {
+				ident,
+				args: arg_exprs,
+			} => {
+				let mut args = Vec::with_capacity(arg_exprs.len());
+				let mut types = Vec::with_capacity(arg_exprs.len());
+				let mut abort = false;
+				for arg in arg_exprs.into_iter() {
+					let (expr, type_) = arg.convert(walker, ctx, new_colours);
+					args.push(expr);
+					if type_.is_not_a_type() {
+						abort = true;
+					}
+					types.push(type_);
+					continue;
+				}
+				match ctx.resolve_function(&ident, &types) {
+					(Either3::A(handle), type_) => {
 						// TODO: We need to figure out the correct function overload to know what type it returns,
 						// in order to be able to resolve the leafs correctly. That means we need to implement type
 						// checking in the main parser pass as well. Fun stuff :))))))    fml
 						walker.push_semantic_diag(
 							Semantic::UnresolvedFunction(obj.span),
 						);
-						return ast::Expr {
-							span: self.span,
-							ty: ast::ExprTy::Invalid,
-						};
+						return (
+							ast::Expr {
+								span: self.span,
+								ty: ast::ExprTy::Invalid,
+							},
+							type_,
+						);
 					}
-					Either3::B(handle) => {
+					(Either3::B(handle), type_) => {
 						new_colours.push((ident.span, SyntaxType::Struct));
 						(
 							ast::Expr {
@@ -4265,23 +4472,13 @@ impl Expr {
 								ty: ast::ExprTy::StructConstructor {
 									name: ident,
 									handle,
-									args: args
-										.into_iter()
-										.map(|e| {
-											e.convert(walker, ctx, new_colours)
-										})
-										.collect(),
+									args,
 								},
 							},
-							ast::Type {
-								ty: ast::TypeTy::Single(Either::Right(handle)),
-								qualifiers: ast::Omittable::None,
-								ty_specifier_span: Span::new(0, 0),
-								disjointed_span: ast::Omittable::None,
-							},
+							type_,
 						)
 					}
-					Either3::C(handle) => {
+					(Either3::C(handle), type_) => {
 						new_colours.push((ident.span, SyntaxType::Subroutine));
 						(
 							ast::Expr {
@@ -4289,15 +4486,10 @@ impl Expr {
 								ty: ast::ExprTy::SubroutineCall {
 									name: ident,
 									handle,
-									args: args
-										.into_iter()
-										.map(|e| {
-											e.convert(walker, ctx, new_colours)
-										})
-										.collect(),
+									args,
 								},
 							},
-							ctx.subroutines[handle.0].return_type.clone(),
+							type_,
 						)
 					}
 				}
@@ -4309,10 +4501,13 @@ impl Expr {
 				));
 				obj.convert(walker, ctx, new_colours);
 				leaf.convert(walker, ctx, new_colours);
-				return ast::Expr {
-					span: self.span,
-					ty: ast::ExprTy::Invalid,
-				};
+				return (
+					ast::Expr {
+						span: self.span,
+						ty: ast::ExprTy::Invalid,
+					},
+					Type::new_nat(),
+				);
 			}
 		};
 
@@ -4324,7 +4519,7 @@ impl Expr {
 			match current.ty {
 				ExprTy::Ident(ident) => {
 					// We can have either: a) vector swizzling, b) struct member access.
-					match previous_type.type_handle() {
+					match previous_type.ty {
 						Either::Left(primitive) => {
 							use ast::Primitive;
 							match primitive {
@@ -4349,10 +4544,13 @@ impl Expr {
 											ident.span, ident.name,
 										),
 									);
-									return ast::Expr {
-										span: self.span,
-										ty: ast::ExprTy::Invalid,
-									};
+									return (
+										ast::Expr {
+											span: self.span,
+											ty: ast::ExprTy::Invalid,
+										},
+										Type::new_nat(),
+									);
 								}
 							}
 
@@ -4374,10 +4572,13 @@ impl Expr {
 											ident.span, ident.name,
 										),
 									);
-									return ast::Expr {
-										span: self.span,
-										ty: ast::ExprTy::Invalid,
-									};
+									return (
+										ast::Expr {
+											span: self.span,
+											ty: ast::ExprTy::Invalid,
+										},
+										Type::new_nat(),
+									);
 								}
 
 								if i == 0 {
@@ -4387,10 +4588,13 @@ impl Expr {
 										's' | 't' | 'p' | 'q' => Notation::STPQ,
 										_ => {
 											walker.push_semantic_diag(Semantic::InvalidFieldAccessOnPrimitive(ident.span, ident.name));
-											return ast::Expr {
-												span: self.span,
-												ty: ast::ExprTy::Invalid,
-											};
+											return (
+												ast::Expr {
+													span: self.span,
+													ty: ast::ExprTy::Invalid,
+												},
+												Type::new_nat(),
+											);
 										}
 									};
 								} else {
@@ -4422,10 +4626,13 @@ impl Expr {
 									'w' | 'a' | 'q' => buf[i] = ast::Axis::W,
 									_ => {
 										walker.push_semantic_diag(Semantic::InvalidFieldAccessOnPrimitive(ident.span, ident.name));
-										return ast::Expr {
-											span: self.span,
-											ty: ast::ExprTy::Invalid,
-										};
+										return (
+											ast::Expr {
+												span: self.span,
+												ty: ast::ExprTy::Invalid,
+											},
+											Type::new_nat(),
+										);
 									}
 								}
 								requested_size = i + 1;
@@ -4441,25 +4648,16 @@ impl Expr {
 							));
 							new_colours.push((ident.span, SyntaxType::Field));
 							ctx.swizzle_refs.push(ident.span);
-							previous_type = ast::Type {
-								ty_specifier_span: Span::new_zero_width(0),
-								disjointed_span: ast::Omittable::None,
-								ty: ast::TypeTy::Single(Either::Left(
-									match requested_size {
-										// We don't need to worry about the difference between vecn, bvecn, ivecn,
-										// etc. because none of the logic in this conversion checks or depends on
-										// the specific type of vector; only the size is relevant.
-										1 => ast::Primitive::Float,
-										2 => ast::Primitive::Vec2,
-										3 => ast::Primitive::Vec3,
-										4 => ast::Primitive::Vec4,
-										_ => unreachable!(
-											"Ensured by above for-loop"
-										),
-									},
-								)),
-								qualifiers: ast::Omittable::None,
-							};
+							previous_type =
+								Type::new_prim(match requested_size {
+									1 => ast::Primitive::Float,
+									2 => ast::Primitive::Vec2,
+									3 => ast::Primitive::Vec3,
+									4 => ast::Primitive::Vec4,
+									_ => unreachable!(
+										"Ensured by above for-loop"
+									),
+								});
 							continue;
 						}
 						Either::Right(struct_handle) => {
@@ -4499,23 +4697,29 @@ impl Expr {
 										current.span,
 									),
 								);
-								return ast::Expr {
-									span: self.span,
-									ty: ast::ExprTy::Invalid,
-								};
+								return (
+									ast::Expr {
+										span: self.span,
+										ty: ast::ExprTy::Invalid,
+									},
+									Type::new_nat(),
+								);
 							}
 						}
 					}
 				}
 				ExprTy::Index { item, i } => {
 					// We can only have struct member access, since primitives don't have members.
-					let struct_handle = match previous_type.type_handle() {
+					let struct_handle = match previous_type.ty {
 						Either::Left(_) => {
 							// TODO: Error
-							return ast::Expr {
-								span: self.span,
-								ty: ast::ExprTy::Invalid,
-							};
+							return (
+								ast::Expr {
+									span: self.span,
+									ty: ast::ExprTy::Invalid,
+								},
+								Type::new_nat(),
+							);
 						}
 						Either::Right(handle) => handle,
 					};
@@ -4532,10 +4736,13 @@ impl Expr {
 							}
 							// TODO: Error
 							_ => {
-								return ast::Expr {
-									span: self.span,
-									ty: ast::ExprTy::Invalid,
-								}
+								return (
+									ast::Expr {
+										span: self.span,
+										ty: ast::ExprTy::Invalid,
+									},
+									Type::new_nat(),
+								);
 							}
 						}
 					};
@@ -4572,10 +4779,13 @@ impl Expr {
 						continue;
 					} else {
 						// We have an unresolved struct field, so we can't resolve any further.
-						return ast::Expr {
-							span: self.span,
-							ty: ast::ExprTy::Invalid,
-						};
+						return (
+							ast::Expr {
+								span: self.span,
+								ty: ast::ExprTy::Invalid,
+							},
+							Type::new_nat(),
+						);
 					}
 				}
 				ExprTy::ObjAccess { obj, leaf } => {
@@ -4586,16 +4796,19 @@ impl Expr {
 				}
 				ExprTy::FnCall { ident, args } => {
 					// We can only have built-in `.length()` method calls for certain primitives and all arrays.
-					match previous_type.type_handle() {
+					match previous_type.ty {
 						Either::Left(primitive) => {
 							if &ident.name != "length" {
 								walker.push_semantic_diag(
 									Semantic::FoundMethod(current.span),
 								);
-								return ast::Expr {
-									span: self.span,
-									ty: ast::ExprTy::Invalid,
-								};
+								return (
+									ast::Expr {
+										span: self.span,
+										ty: ast::ExprTy::Invalid,
+									},
+									Type::new_nat(),
+								);
 							}
 
 							// Vectors and matrices have `.length()`. All array types have `.length()`.
@@ -4639,10 +4852,13 @@ impl Expr {
 									| Primitive::DMat4x4 => {} // Ok
 									_ => {
 										walker.push_semantic_diag(Semantic::LengthMethodNotOnValidType(current.span));
-										return ast::Expr {
-											span: self.span,
-											ty: ast::ExprTy::Invalid,
-										};
+										return (
+											ast::Expr {
+												span: self.span,
+												ty: ast::ExprTy::Invalid,
+											},
+											Type::new_nat(),
+										);
 									}
 								}
 							}
@@ -4652,41 +4868,43 @@ impl Expr {
 							walker.push_semantic_diag(Semantic::FoundMethod(
 								current.span,
 							));
-							return ast::Expr {
-								span: self.span,
-								ty: ast::ExprTy::Invalid,
-							};
+							return (
+								ast::Expr {
+									span: self.span,
+									ty: ast::ExprTy::Invalid,
+								},
+								Type::new_nat(),
+							);
 						}
 					}
 					new_colours.push((ident.span, SyntaxType::Function));
 					leafs.push((ident, Either3::B(())));
-					previous_type = ast::Type {
-						ty_specifier_span: Span::new_zero_width(0),
-						disjointed_span: ast::Omittable::None,
-						ty: ast::TypeTy::Single(Either::Left(
-							ast::Primitive::Int,
-						)),
-						qualifiers: ast::Omittable::None,
-					};
+					previous_type = Type::new_prim(ast::Primitive::Int);
 					continue;
 				}
 				_ => {
 					// TODO: Syntax error.
-					return ast::Expr {
-						span: self.span,
-						ty: ast::ExprTy::Invalid,
-					};
+					return (
+						ast::Expr {
+							span: self.span,
+							ty: ast::ExprTy::Invalid,
+						},
+						Type::new_nat(),
+					);
 				}
 			}
 		}
 
-		ast::Expr {
-			span: self.span,
-			ty: ast::ExprTy::ObjAccess {
-				obj: Box::from(obj),
-				leafs,
+		(
+			ast::Expr {
+				span: self.span,
+				ty: ast::ExprTy::ObjAccess {
+					obj: Box::from(obj),
+					leafs,
+				},
 			},
-		}
+			previous_type,
+		)
 	}
 
 	/// Converts this `ExprTy::ArrConstructor` expression node into an AST expression node.
@@ -4695,9 +4913,127 @@ impl Expr {
 		walker: &mut Walker<'a, P>,
 		ctx: &mut Ctx,
 		new_colours: &mut Vec<(Span, SyntaxType)>,
-	) -> ast::Expr {
+	) -> (ast::Expr, Type) {
 		let ExprTy::ArrConstructor { arr, args  } = self.ty else { unreachable!("Checked by caller"); };
 
-		todo!()
+		let ast_type = match arr.ty {
+			ExprTy::Index { item, i } => {
+				let mut current_index_item = &item;
+				let mut stack = Vec::new();
+				stack.push(i.as_deref());
+				let ident = loop {
+					match &current_index_item.ty {
+						ExprTy::Ident(i) => break i,
+						ExprTy::Index { item, i } => {
+							stack.push(i.as_deref());
+							current_index_item = item;
+						}
+						// TODO: Error
+						_ => {
+							return (
+								ast::Expr {
+									span: self.span,
+									ty: ast::ExprTy::Invalid,
+								},
+								Type::new_nat(),
+							);
+						}
+					}
+				};
+				stack.reverse();
+
+				let handle = match ast::Primitive::parse(&ident) {
+					Some(p) => {
+						match ctx.primitive_refs.get_mut(&p) {
+							Some(v) => v.push(ident.span),
+							None => {
+								ctx.primitive_refs.insert(p, vec![ident.span]);
+							}
+						}
+						walker.push_colour(ident.span, SyntaxType::Primitive);
+						Either::Left(p)
+					}
+					None => {
+						let handle = ctx.resolve_struct(&ident);
+						if handle.is_unresolved() {
+							return (
+								ast::Expr {
+									span: self.span,
+									ty: ast::ExprTy::Invalid,
+								},
+								Type::new_nat(),
+							);
+						} else {
+							walker.push_colour(ident.span, SyntaxType::Struct);
+							Either::Right(handle)
+						}
+					}
+				};
+
+				ast::Type {
+					ty: if stack.len() == 0 {
+						ast::TypeTy::Single(handle)
+					} else if stack.len() == 1 {
+						ast::TypeTy::Array(
+							handle,
+							stack
+								.remove(0)
+								.cloned()
+								.map(|e| e.convert(walker, ctx, new_colours).0)
+								.into(),
+						)
+					} else if stack.len() == 2 {
+						ast::TypeTy::Array2D(
+							handle,
+							stack
+								.remove(0)
+								.cloned()
+								.map(|e| e.convert(walker, ctx, new_colours).0)
+								.into(),
+							stack
+								.remove(0)
+								.cloned()
+								.map(|e| e.convert(walker, ctx, new_colours).0)
+								.into(),
+						)
+					} else {
+						ast::TypeTy::ArrayND(
+							handle,
+							stack
+								.into_iter()
+								.map(|o| {
+									o.cloned()
+										.map(|e| {
+											e.convert(walker, ctx, new_colours)
+												.0
+										})
+										.into()
+								})
+								.collect(),
+						)
+					},
+					qualifiers: ast::Omittable::None,
+					ty_specifier_span: arr.span,
+					disjointed_span: ast::Omittable::None,
+				}
+			}
+			_ => unreachable!("Ensured by shunting yard"),
+		};
+
+		let type_ = ast_type.clone().into();
+
+		(
+			ast::Expr {
+				span: self.span,
+				ty: ast::ExprTy::ArrConstructor {
+					type_: Box::from(ast_type),
+					args: args
+						.into_iter()
+						.map(|e| e.convert(walker, ctx, new_colours).0)
+						.collect(),
+				},
+			},
+			type_,
+		)
 	}
 }

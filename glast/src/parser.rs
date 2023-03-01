@@ -55,8 +55,8 @@ pub use symbols::*;
 
 use crate::{
 	diag::{
-		DiagCtx, ForRemoval, PreprocConditionalDiag, PreprocDefineDiag,
-		Semantic, StmtDiag, StmtType, Syntax, Syntax2,
+		DiagCtx, ExpectedGrammar, ForRemoval, NameTy, PreprocConditionalDiag,
+		PreprocDefineDiag, Semantic, StmtDiag, StmtType, Syntax, Syntax2,
 	},
 	lexer::{
 		self,
@@ -68,6 +68,28 @@ use crate::{
 	Either, Either3, GlslVersion, NonEmpty, Span, SpanEncoding, Spanned,
 };
 use std::collections::{HashMap, HashSet};
+
+/*
+This module is quite large and encompasses a lot of functionality. Here is an overview of the contents in
+top-to-bottom order:
+- Public API functionality.
+- `TokenTree` - this is for resolving conditional compilation before the parser runs.
+- `Walker` - this is for iterating through the token stream, takes care of macro expansion, stores diagnostics and
+	syntax tokens.
+- `TokenStreamProvider`s - providers for token streams depending on the conditional compilation functionality.
+- `Ctx` - context object for the parser, stores nodes, tracks symbols, resolves names.
+
+The reason why the Walker and Ctx are split is in order to improve ergonomics. The functions of the `Walker` and
+of the `Ctx` are perpendicular to one another and don't inter-depend in any way. Each respectively is already
+large and complex in size, so keeping them separate makes it easier to navigate/refactor/add features without
+causing too big of a headache. Also, by passing them as two separate objects into functions, we avoid the issue
+where a struct gets borrowed mutably and immutably simultaneously, which could occur if we have borrowed a token
+immutably but then we need to mutably borrow the context to register a symbol for example. The reason the `Walker`
+stores things such as diagnostics and syntax tokens is because macro expansion can produce diagnostics and syntax
+highlighting information, so it can't be in the `Ctx`. The `Ctx` does however store semantic diagnostics in
+relation to unresolved names, because whenever we add a new symbol to the context we need to check if such a name
+was previously requested to produce better diagnostics.
+*/
 
 /// The result of a parsed GLSL token tree.
 #[derive(Debug)]
@@ -90,6 +112,36 @@ pub struct ParseResult {
 	/// been included. This vector is populated only if entire-file syntax highlighting was enabled, otherwise it
 	/// will be empty.
 	pub disabled_code_regions: Vec<Span>,
+}
+
+/// An abstract syntax tree.
+#[derive(Debug)]
+pub struct Ast {
+	/// Arena of nodes.
+	arena: generational_arena::Arena<ast::Node>,
+	/// Handle to the root of the AST.
+	///
+	/// # Invariants
+	/// This points to a `NodeTy::TranslationUnit` node.
+	root_handle: generational_arena::Index,
+
+	/// All references to primitives.
+	primitive_refs: HashMap<ast::Primitive, Vec<Span>>,
+	/// All references to vector swizzles.
+	swizzle_refs: Vec<Span>,
+	/// All user-defined struct symbols.
+	structs: Vec<StructSymbol>,
+	/// All user-defined interface block symbols.
+	interfaces: Vec<InterfaceSymbol>,
+	/// All built-in and user-defined function symbols. This also includes all function symbols that are associated
+	/// with a subroutine.
+	functions: Vec<FunctionSymbol>,
+	/// All subroutine symbols.
+	subroutines: Vec<SubroutineSymbol>,
+	/// All subroutine uniform symbols.
+	subroutine_uniforms: Vec<SubroutineUniformSymbol>,
+	/// All variable symbol tables, each containing all variable symbols for that given table.
+	variables: Vec<Vec<VariableSymbol>>,
 }
 
 /// Parses a GLSL source string into a tree of tokens that can be then parsed into an abstract syntax tree.
@@ -1086,7 +1138,7 @@ impl TokenTree {
 		// FIXME:
 		//walker.syntax_diags.append(&mut self.syntax_diags.clone());
 		let (ast, syntax_diags, semantic_diags, mut root_tokens) = (
-			ctx.into_ast(),
+			ctx.into_ast(&mut walker.semantic_diags),
 			walker.syntax_diags,
 			walker.semantic_diags,
 			walker.syntax_tokens,
@@ -1241,7 +1293,7 @@ impl TokenTree {
 		let eval_key = walker.token_provider.chosen_key;
 		let eval_regions = walker.token_provider.chosen_regions;
 		let (ast, syntax_diags, semantic_diags, eval_tokens) = (
-			ctx.into_ast(),
+			ctx.into_ast(&mut walker.semantic_diags),
 			walker.syntax_diags,
 			walker.semantic_diags,
 			walker.syntax_tokens,
@@ -1527,10 +1579,9 @@ impl TokenTree {
 		}
 		// FIXME:
 		//walker.syntax_diags.append(&mut self.syntax_diags.clone());
-
 		(
 			ParseResult {
-				ast: ctx.into_ast(),
+				ast: ctx.into_ast(&mut walker.semantic_diags),
 				syntax_diags: walker.syntax_diags,
 				semantic_diags: walker.semantic_diags,
 				syntax_tokens: walker.syntax_tokens,
@@ -2008,6 +2059,699 @@ trait TokenStreamProvider<'a>: Clone {
 	fn get_end_span(&self) -> Span;
 }
 
+/// Allows for stepping through a token stream. Takes care of dealing with irrelevant details from the perspective
+/// of the parser, such as comments and macro expansion.
+struct Walker<'a, Provider: TokenStreamProvider<'a>> {
+	/// The token stream provider.
+	token_provider: Provider,
+	_phantom: std::marker::PhantomData<&'a ()>,
+	/// The active token streams.
+	///
+	/// - `0` - The macro identifier, (for the root source stream this is just `""`).
+	/// - `1` - The token stream.
+	/// - `2` - The cursor.
+	streams: Vec<(String, TokenStream, usize)>,
+
+	/// The currently defined macros.
+	///
+	/// Key: The macro identifier.
+	///
+	/// Value:
+	/// - `0` - The span of the macro signature.
+	/// - `1` - Macro information.
+	macros: HashMap<String, (Span, Macro)>,
+	/// The span of an initial macro call site. Only the first macro call site is registered here.
+	macro_call_site: Option<Span>,
+	/// The actively-called macro identifiers.
+	active_macros: HashSet<String>,
+
+	/// Syntax diagnostics created from the tokens parsed so-far.
+	syntax_diags: Vec<Syntax2>,
+	/// Semantic diagnostics created from the tokens parsed so-far. Note that some `Unresolved*` semantic
+	/// diagnostics are stored in the [`Ctx`].
+	semantic_diags: Vec<Semantic>,
+
+	/// Syntax highlighting tokens created from the tokens parsed so-far.
+	syntax_tokens: Vec<SyntaxToken>,
+	/// The type of encoding of spans.
+	span_encoding: SpanEncoding,
+
+	/// Whether we are parsing a struct body. This is necessary to switch between colouring variable definitions
+	/// as variables vs as members. If the parser only parsed member definitions within a struct body this wouldn't
+	/// be necessary, but in order to deal with broken syntax more gracefully the parser parses any valid statement
+	/// within a struct body and only validates afterwards.
+	parsing_struct: bool,
+}
+
+/// Data for a macro.
+#[derive(Debug, Clone)]
+enum Macro {
+	Object(TokenStream),
+	Function {
+		params: Vec<ast::Ident>,
+		body: TokenStream,
+	},
+}
+
+impl<'a, Provider: TokenStreamProvider<'a>> Walker<'a, Provider> {
+	/// Constructs a new walker.
+	fn new(mut token_provider: Provider, span_encoding: SpanEncoding) -> Self {
+		let macros = HashMap::new();
+		let mut syntax_diags = Vec::new();
+		let mut syntax_tokens = Vec::new();
+
+		// Get the first stream.
+		let streams = match token_provider.get_next_stream(
+			&macros,
+			&mut syntax_diags,
+			&mut syntax_tokens,
+			span_encoding,
+		) {
+			Some(stream) => vec![("".into(), stream, 0)],
+			None => vec![],
+		};
+
+		let mut active_macros = HashSet::new();
+		// Invariant: A macro cannot have no name (an empty identifier), so this won't cause any hashing clashes
+		// with valid macros. By using "" we can avoid having a special case for the root source stream.
+		active_macros.insert("".into());
+
+		Self {
+			token_provider,
+			_phantom: Default::default(),
+			streams,
+			macros,
+			macro_call_site: None,
+			active_macros,
+			syntax_diags,
+			semantic_diags: Vec::new(),
+			syntax_tokens,
+			span_encoding,
+			parsing_struct: false,
+		}
+	}
+
+	/// Returns a reference to the current token under the cursor, without advancing the cursor.
+	fn peek(&self) -> Option<Spanned<&Token>> {
+		if self.streams.is_empty() {
+			None
+		} else if self.streams.len() == 1 {
+			let (_, stream, cursor) = self.streams.last().unwrap();
+			stream.get(*cursor).map(|(t, s)| (t, *s))
+		} else {
+			let (_, stream, cursor) = self.streams.last().unwrap();
+			match stream.get(*cursor).map(|(t, _)| t) {
+				Some(token) => Some((
+					token,
+					// Panic: This is guaranteed to be some if `self.streams.len() > 1`.
+					self.macro_call_site.unwrap(),
+				)),
+				None => None,
+			}
+		}
+	}
+
+	/// Returns the current token under the cursor, without advancing the cursor. (The token gets cloned).
+	fn get(&self) -> Option<Spanned<Token>> {
+		if self.streams.is_empty() {
+			None
+		} else if self.streams.len() == 1 {
+			let (_, stream, cursor) = self.streams.last().unwrap();
+			stream.get(*cursor).cloned()
+		} else {
+			let (_, stream, cursor) = self.streams.last().unwrap();
+			let token = stream.get(*cursor).map(|(t, _)| t).cloned();
+			token.map(|t| {
+				(
+					t,
+					// Panic: This is guaranteed to be some if `self.streams.len() > 1`.
+					self.macro_call_site.unwrap(),
+				)
+			})
+		}
+	}
+
+	/// Peeks the next token without advancing the cursor.
+	///
+	/// **This method is expensive** to call because it needs to correctly deal with macros. Avoid calling this
+	/// often.
+	///
+	/// This method correctly steps into/out-of macros, jumps between conditional compilation branches, and
+	/// consumes any comments.
+	fn lookahead_1(&self) -> Option<Spanned<Token>> {
+		let mut token_provider = self.token_provider.clone();
+		let mut streams = self.streams.clone();
+		let mut macros = self.macros.clone();
+		let mut active_macros = self.active_macros.clone();
+		let mut macro_call_site = self.macro_call_site.clone();
+		let mut syntax_diags = Vec::new();
+		let mut semantic_diags = Vec::new();
+		let mut syntax_tokens = Vec::new();
+		// PERF: Optimize for certain cases to prevent having to clone everything everytime.
+		Self::_move_cursor(
+			&mut token_provider,
+			&mut streams,
+			&mut macros,
+			&mut active_macros,
+			&mut macro_call_site,
+			&mut syntax_diags,
+			&mut semantic_diags,
+			&mut syntax_tokens,
+			self.span_encoding,
+		);
+
+		// Copy of `Self::get()`.
+		if streams.is_empty() {
+			None
+		} else if streams.len() == 1 {
+			let (_, stream, cursor) = streams.last().unwrap();
+			stream.get(*cursor).cloned()
+		} else {
+			let (_, stream, cursor) = streams.last().unwrap();
+			let token = stream.get(*cursor).map(|(t, _)| t).cloned();
+			token.map(|t| {
+				(
+					t,
+					// Panic: This is guaranteed to be some if `streams.len() > 1`.
+					macro_call_site.unwrap(),
+				)
+			})
+		}
+	}
+
+	/// Advances the cursor by one.
+	///
+	/// This method correctly steps into/out-of macros, jumps between conditional compilation branches, and
+	/// consumes any comments.
+	fn advance(&mut self) {
+		Self::_move_cursor(
+			&mut self.token_provider,
+			&mut self.streams,
+			&mut self.macros,
+			&mut self.active_macros,
+			&mut self.macro_call_site,
+			&mut self.syntax_diags,
+			&mut self.semantic_diags,
+			&mut self.syntax_tokens,
+			self.span_encoding,
+		);
+	}
+
+	/// Advances the cursor by one.
+	///
+	/// This method is identical to `advance()` apart from that diagnostics and syntax highlighting tokens are
+	/// returned. This is necessary because otherwise the spans could be produced in the wrong order, if, for
+	/// example, the walker consumes a comment but the expresion syntax tokens are appended after the fact.
+	fn advance_expr_parser(
+		&mut self,
+		syntax_diags: &mut Vec<Syntax2>,
+		semantic_diags: &mut Vec<Semantic>,
+		syntax_tokens: &mut Vec<SyntaxToken>,
+	) {
+		Self::_move_cursor(
+			&mut self.token_provider,
+			&mut self.streams,
+			&mut self.macros,
+			&mut self.active_macros,
+			&mut self.macro_call_site,
+			syntax_diags,
+			semantic_diags,
+			syntax_tokens,
+			self.span_encoding,
+		);
+	}
+
+	/// Returns whether the walker has reached the end of the token streams.
+	fn is_done(&self) -> bool {
+		self.streams.is_empty()
+	}
+
+	/// Returns the span of the last token in the token stream.
+	fn get_last_span(&self) -> Span {
+		self.token_provider.get_end_span()
+	}
+
+	/// (!) Internal: do not use outside of impl.
+	///
+	/// Moves the cursor to the next token. This function takes all the necessary data by parameter so that the
+	/// functionality can be re-used between the `Self::advance()` and `Self::lookahead_1()` methods.
+	fn _move_cursor(
+		token_provider: &mut Provider,
+		streams: &mut Vec<(String, TokenStream, usize)>,
+		macros: &mut HashMap<String, (Span, Macro)>,
+		active_macros: &mut HashSet<String>,
+		macro_call_site: &mut Option<Span>,
+		syntax_diags: &mut Vec<Syntax2>,
+		semantic_diags: &mut Vec<Semantic>,
+		syntax_tokens: &mut Vec<SyntaxToken>,
+		span_encoding: SpanEncoding,
+	) {
+		// When we enter a macro, we want to analyze the first token without incrementing immediately to the second
+		// token, hence the existence of this flag.
+		let mut dont_increment = false;
+		'outer: while let Some((identifier, stream, cursor)) =
+			streams.last_mut()
+		{
+			if !dont_increment {
+				*cursor += 1;
+			}
+			dont_increment = false;
+
+			if *cursor == stream.len() {
+				// We have reached the end of this stream. We close it and re-run the loop on the next stream, (if
+				// there is one).
+
+				let ident = identifier.clone();
+				if streams.len() == 1 {
+					// If we aren't in a macro, that means we've finished the current source stream. There may
+					// however be another stream, for which we need to query the provider for.
+					match token_provider.get_next_stream(
+						macros,
+						syntax_diags,
+						syntax_tokens,
+						span_encoding,
+					) {
+						Some(mut next_stream) => {
+							let (_, s, c) = &mut streams[0];
+							std::mem::swap(s, &mut next_stream);
+							*c = 0;
+							dont_increment = true;
+							continue;
+						}
+						None => {
+							// The provider didn't return anything, so that means we have reached the true end.
+							streams.remove(0);
+							break;
+						}
+					}
+				} else {
+					// Panic: Anytime a stream is added the identifier is inserted into the set.
+					active_macros.remove(&ident);
+					streams.remove(streams.len() - 1);
+					continue;
+				}
+			}
+
+			let (token, token_span) = stream.get(*cursor).unwrap();
+
+			match token {
+				// We check if the new token is a macro call site.
+				Token::Ident(ident) => {
+					let Some((signature_span, macro_)) = macros.get(ident) else { break; };
+
+					if active_macros.contains(ident) {
+						// We have already visited a macro with this identifier. Recursion is not supported so
+						// we don't continue.
+						break;
+					}
+
+					let ident_span = *token_span;
+
+					if let Macro::Function { params, body } = macro_ {
+						// We have an identifier that matches a function-like macro name, so we are expecting a
+						// parameter list in the current token stream before we do any switching.
+
+						// We don't need to worry about having to switch source streams because that would imply
+						// that a conditional compilation directive is in the middle of a function-like macro call
+						// site, which isn't valid. A function-like macro call cannot have preprocessor directives
+						// within, which means that the source stream won't be split up by a conditional directive,
+						// which means the entire invocation of the macro will be within this stream.
+
+						let mut tmp_cursor = *cursor + 1;
+						let mut syntax_spans = vec![SyntaxToken {
+							ty: SyntaxType::FunctionMacro,
+							modifiers: SyntaxModifiers::MACRO_CALLSITE,
+							span: ident_span,
+						}];
+						// There may be comments between the identifier and the argument list.
+						loop {
+							match stream.get(tmp_cursor) {
+								Some((token, token_span)) => match token {
+									Token::LineComment(_)
+									| Token::BlockComment { .. } => {
+										syntax_spans.push(SyntaxToken {
+											ty: SyntaxType::Comment,
+											modifiers:
+												SyntaxModifiers::MACRO_CALLSITE,
+											span: *token_span,
+										});
+										tmp_cursor += 1;
+									}
+									_ => break,
+								},
+								None => break 'outer,
+							}
+						}
+
+						// We expect an opening `(` parenthesis.
+						let l_paren_span = match stream.get(tmp_cursor) {
+							Some((token, token_span)) => match token {
+								Token::LParen => {
+									syntax_spans.push(SyntaxToken {
+										ty: SyntaxType::Punctuation,
+										modifiers:
+											SyntaxModifiers::MACRO_CALLSITE,
+										span: *token_span,
+									});
+									*cursor = tmp_cursor + 1;
+									*token_span
+								}
+								_ => {
+									// We did not immediately encounter a parenthesis, which means that this is
+									// not a call to a function-like macro even if the names match.
+									break 'outer;
+								}
+							},
+							None => break 'outer,
+						};
+
+						// Look for any arguments until we hit a closing `)` parenthesis. The preprocessor
+						// immediately switches to the next argument when a `,` is encountered, unless we are
+						// within a parenthesis group. Unlike with function parameter/argument lists, a
+						// function-like macro call argument can be empty; all that matters is that the argument
+						// and parameter count match.
+						let mut prev_span = l_paren_span;
+						let mut paren_groups = 0;
+						let mut args = Vec::new();
+						let mut current_arg = Vec::new();
+						let r_paren_span = loop {
+							let (token, token_span) = match stream.get(*cursor)
+							{
+								Some(t) => t,
+								None => {
+									// We expect a `)` to finish the argument list. The best error recovery
+									// strategy is to treat this as an unfinished function-like macro call, and
+									// ignore it rather than expand it.
+									// MAYBE: We could expand the macro if params == args?
+									syntax_diags.push(Syntax2::MissingPunct {
+										char: ')',
+										pos: prev_span.end,
+										ctx: DiagCtx::FunctionMacroArgList,
+									});
+									break 'outer;
+								}
+							};
+
+							match token {
+								Token::Comma => {
+									syntax_spans.push(SyntaxToken {
+										ty: SyntaxType::Punctuation,
+										modifiers:
+											SyntaxModifiers::MACRO_CALLSITE,
+										span: *token_span,
+									});
+									if paren_groups == 0 {
+										let arg =
+											std::mem::take(&mut current_arg);
+										args.push(arg);
+									}
+									prev_span = *token_span;
+									*cursor += 1;
+									continue;
+								}
+								Token::LParen => {
+									paren_groups += 1;
+								}
+								Token::RParen => {
+									if paren_groups == 0 {
+										// We have reached the end of this function-like macro call site.
+										syntax_spans.push(SyntaxToken {
+											ty: SyntaxType::Punctuation,
+											modifiers:
+												SyntaxModifiers::MACRO_CALLSITE,
+											span: *token_span,
+										});
+										let current_arg =
+											std::mem::take(&mut current_arg);
+										if l_paren_span.end != token_span.start
+										{
+											// If we have a `(` immediately followed by a `)`, we don't want to
+											// push an argument. However, if there is something between the
+											// parenthesis (including empty space) we do want to treat it as an
+											// argument.
+											args.push(current_arg);
+										}
+										// It is important that we don't increment the cursor to the next token
+										// after the macro call site. This is because once this macro is
+										// finished, and we return to the previous stream, we will
+										// automatically increment the cursor onto the next token which will be
+										// the first token after the macro call site. The object-like macro
+										// branch also doesn't perform this increment.
+										break *token_span;
+									}
+									paren_groups -= 1;
+								}
+								_ => {}
+							}
+
+							syntax_spans.push(SyntaxToken {
+								ty: token.non_semantic_colour(),
+								modifiers: SyntaxModifiers::MACRO_CALLSITE,
+								span: *token_span,
+							});
+							current_arg.push((token.clone(), *token_span));
+							*cursor += 1;
+						};
+						let call_site_span =
+							Span::new(ident_span.start, r_paren_span.end);
+
+						// We have a set of arguments now.
+						if params.len() != args.len() {
+							// If there is a mismatch in the argument/parameter count, we ignore this macro
+							// call and move onto the next token after the call site.
+							semantic_diags.push(
+								Semantic::FunctionMacroMismatchedArgCount {
+									call_site: call_site_span,
+									no_of_args: args.len(),
+									no_of_params: params.len(),
+									def: *signature_span,
+								},
+							);
+							continue;
+						}
+
+						// We now go through the replacement token list and replace any identifiers which match
+						// a parameter name with the relevant argument's tokens.
+						let mut param_map = HashMap::new();
+						params.iter().zip(args.into_iter()).for_each(
+							|(param_name, arg_tokens)| {
+								param_map.insert(&param_name.name, arg_tokens);
+							},
+						);
+						let mut new_body = Vec::with_capacity(body.len());
+						for (token, token_span) in body {
+							match token {
+								Token::Ident(str) => {
+									if let Some(arg) = param_map.get(&str) {
+										for token in arg {
+											new_body.push(token.clone());
+										}
+										continue;
+									}
+								}
+								_ => {}
+							}
+							new_body.push((token.clone(), *token_span));
+						}
+						// Then, we perform token concatenation.
+						let (new_body, mut syntax, mut semantic) =
+							lexer::preprocessor::concat_macro_body(
+								new_body,
+								span_encoding,
+							);
+						// FIXME: syntax_diags.append(&mut syntax);
+						semantic_diags.append(&mut semantic);
+
+						let ident = ident.to_owned();
+
+						// We only syntax highlight and note the macro call site when it is the first macro
+						// call.
+						if streams.len() == 1 {
+							*macro_call_site = Some(call_site_span);
+							syntax_tokens.append(&mut syntax_spans);
+						}
+
+						if body.is_empty() {
+							// The macro is empty, so we want to move to the next token of the existing stream.
+							semantic_diags.push(Semantic::EmptyMacroCallSite {
+								call_site: call_site_span,
+							});
+							continue;
+						}
+
+						active_macros.insert(ident.clone());
+						streams.push((ident, new_body, 0));
+
+						// The first token in the new stream could be another macro call, so we re-run the loop
+						// on this new stream in case.
+						dont_increment = true;
+						continue;
+					} else if let Macro::Object(stream) = macro_ {
+						// We have an identifier that matches an object-like macro name.
+
+						let ident = ident.to_owned();
+
+						// We only syntax highlight and note the macro call site when it is the first macro
+						// call.
+						if streams.len() == 1 {
+							*macro_call_site = Some(ident_span);
+							syntax_tokens.push(SyntaxToken {
+								ty: SyntaxType::ObjectMacro,
+								modifiers: SyntaxModifiers::MACRO_CALLSITE,
+								span: ident_span,
+							});
+						}
+
+						if stream.is_empty() {
+							// The macro is empty, so we want to move to the next token of the existing stream.
+							semantic_diags.push(Semantic::EmptyMacroCallSite {
+								call_site: ident_span,
+							});
+							continue;
+						}
+
+						active_macros.insert(ident.clone());
+						streams.push((ident, stream.clone(), 0));
+
+						// The first token in the new stream could be another macro call, so we re-run the loop
+						// on this new stream in case.
+						dont_increment = true;
+						continue;
+					}
+				}
+				// We want to consume any comments since they are semantically ignored.
+				Token::LineComment(_) => {
+					let token_span = *token_span;
+					if streams.len() == 1 {
+						// We only syntax highlight when we are not in a macro call.
+						syntax_tokens.push(SyntaxToken {
+							ty: SyntaxType::Comment,
+							modifiers: SyntaxModifiers::empty(),
+							span: token_span,
+						});
+					}
+				}
+				Token::BlockComment { contains_eof, .. } => {
+					if *contains_eof {
+						syntax_diags.push(Syntax2::ExpectedGrammar {
+							item: ExpectedGrammar::BlockCommentEnd,
+							pos: token_span.end,
+						});
+					}
+					let token_span = *token_span;
+					if streams.len() == 1 {
+						// We only syntax highlight when we are not in a macro call.
+						syntax_tokens.push(SyntaxToken {
+							ty: SyntaxType::Comment,
+							modifiers: SyntaxModifiers::empty(),
+							span: token_span,
+						});
+					}
+				}
+				_ => break,
+			}
+		}
+
+		if streams.len() <= 1 {
+			*macro_call_site = None;
+		}
+	}
+
+	/// Registers a define macro.
+	fn register_macro(
+		&mut self,
+		ident: String,
+		signature_span: Span,
+		macro_: Macro,
+	) {
+		if let Some(_prev) = self.macros.insert(ident, (signature_span, macro_))
+		{
+			// TODO: Emit error if the macros aren't identical (will require scanning the tokenstream to compare).
+		}
+	}
+
+	/// Un-registers a defined macro.
+	fn unregister_macro(&mut self, ident: &str, span: Span) {
+		match self.macros.remove(ident) {
+			Some((_, macro_)) => match macro_ {
+				Macro::Object(_) => self.push_colour_with_modifiers(
+					span,
+					SyntaxType::ObjectMacro,
+					SyntaxModifiers::UNDEFINE,
+				),
+				Macro::Function { .. } => self.push_colour_with_modifiers(
+					span,
+					SyntaxType::FunctionMacro,
+					SyntaxModifiers::UNDEFINE,
+				),
+			},
+			None => {
+				self.push_colour_with_modifiers(
+					span,
+					SyntaxType::UnresolvedIdent,
+					SyntaxModifiers::UNDEFINE,
+				);
+				self.push_semantic_diag(Semantic::UndefMacroNameUnresolved {
+					name: (ident.to_owned(), span),
+				});
+			}
+		}
+	}
+
+	/// Pushes a syntax diagnostic.
+	fn push_syntax_diag(&mut self, diag: Syntax) {
+		// TODO:
+	}
+
+	/// Pushes a syntax diagnostic.
+	fn push_nsyntax_diag(&mut self, diag: Syntax2) {
+		self.syntax_diags.push(diag);
+	}
+
+	/// Appends a collection of syntax diagnostics.
+	fn append_syntax_diags(&mut self, syntax: &mut Vec<Syntax>) {
+		// TODO:
+	}
+
+	/// Pushes a semantic diagnostic.
+	fn push_semantic_diag(&mut self, diag: Semantic) {
+		self.semantic_diags.push(diag);
+	}
+
+	/// Appends a collection of semantic diagnostics.
+	fn append_semantic_diags(&mut self, semantic: &mut Vec<Semantic>) {
+		self.semantic_diags.append(semantic);
+	}
+
+	/// Pushes a syntax highlighting token over the given span.
+	fn push_colour(&mut self, span: Span, token: SyntaxType) {
+		self.push_colour_with_modifiers(span, token, SyntaxModifiers::empty())
+	}
+
+	/// Pushes a syntax highlighting token with one or more modifiers over the given span.
+	fn push_colour_with_modifiers(
+		&mut self,
+		span: Span,
+		ty: SyntaxType,
+		modifiers: SyntaxModifiers,
+	) {
+		// When we are within a macro, we don't want to produce syntax tokens.
+		// Note: This functionality is duplicated in the `ShuntingYard::colour()` method.
+		if self.streams.len() == 1 {
+			self.syntax_tokens.push(SyntaxToken {
+				ty,
+				modifiers,
+				span,
+			});
+		}
+	}
+
+	/// Appends a collection of syntax highlighting tokens.
+	fn append_colours(&mut self, colours: &mut Vec<SyntaxToken>) {
+		self.syntax_tokens.append(colours);
+	}
+}
+
 /// A root token stream provider.
 #[derive(Debug, Clone)]
 struct RootTokenStreamProvider<'a> {
@@ -2431,728 +3175,6 @@ impl<'a> TokenStreamProvider<'a> for DynamicTokenStreamProvider<'a> {
 	}
 }
 
-/// Allows for stepping through a token stream. Takes care of dealing with irrelevant details from the perspective
-/// of the parser, such as comments and macro expansion.
-struct Walker<'a, Provider: TokenStreamProvider<'a>> {
-	/// The token stream provider.
-	token_provider: Provider,
-	_phantom: std::marker::PhantomData<&'a ()>,
-	/// The active token streams.
-	///
-	/// - `0` - The macro identifier, (for the root source stream this is just `""`).
-	/// - `1` - The token stream.
-	/// - `2` - The cursor.
-	streams: Vec<(String, TokenStream, usize)>,
-
-	/// The currently defined macros.
-	///
-	/// Key: The macro identifier.
-	///
-	/// Value:
-	/// - `0` - The span of the macro signature.
-	/// - `1` - Macro information.
-	macros: HashMap<String, (Span, Macro)>,
-	/// The span of an initial macro call site. Only the first macro call site is registered here.
-	macro_call_site: Option<Span>,
-	/// The actively-called macro identifiers.
-	active_macros: HashSet<String>,
-
-	/// Any syntax diagnostics created from the tokens parsed so-far.
-	syntax_diags: Vec<Syntax2>,
-	/// Any semantic diagnostics created from the tokens parsed so-far.
-	semantic_diags: Vec<Semantic>,
-
-	/// The syntax highlighting tokens created from the tokens parsed so-far.
-	syntax_tokens: Vec<SyntaxToken>,
-	/// The type of encoding of spans.
-	span_encoding: SpanEncoding,
-
-	/// Whether we are parsing a struct body. This is necessary to switch between colouring variable definitions
-	/// as variables vs as members. If the parser only parsed member definitions within a struct body this wouldn't
-	/// be necessary, but in order to deal with broken syntax more gracefully the parser parses any valid statement
-	/// within a struct body and only validates afterwards.
-	parsing_struct: bool,
-}
-
-/// Data for a macro.
-#[derive(Debug, Clone)]
-enum Macro {
-	Object(TokenStream),
-	Function {
-		params: Vec<ast::Ident>,
-		body: TokenStream,
-	},
-}
-
-impl<'a, Provider: TokenStreamProvider<'a>> Walker<'a, Provider> {
-	/// Constructs a new walker.
-	fn new(mut token_provider: Provider, span_encoding: SpanEncoding) -> Self {
-		let macros = HashMap::new();
-		let mut syntax_diags = Vec::new();
-		let mut syntax_tokens = Vec::new();
-
-		// Get the first stream.
-		let streams = match token_provider.get_next_stream(
-			&macros,
-			&mut syntax_diags,
-			&mut syntax_tokens,
-			span_encoding,
-		) {
-			Some(stream) => vec![("".into(), stream, 0)],
-			None => vec![],
-		};
-
-		let mut active_macros = HashSet::new();
-		// Invariant: A macro cannot have no name (an empty identifier), so this won't cause any hashing clashes
-		// with valid macros. By using "" we can avoid having a special case for the root source stream.
-		active_macros.insert("".into());
-
-		Self {
-			token_provider,
-			_phantom: Default::default(),
-			streams,
-			macros,
-			macro_call_site: None,
-			active_macros,
-			syntax_diags,
-			semantic_diags: Vec::new(),
-			syntax_tokens,
-			span_encoding,
-			parsing_struct: false,
-		}
-	}
-
-	/// Returns a reference to the current token under the cursor, without advancing the cursor.
-	fn peek(&self) -> Option<Spanned<&Token>> {
-		if self.streams.is_empty() {
-			None
-		} else if self.streams.len() == 1 {
-			let (_, stream, cursor) = self.streams.last().unwrap();
-			stream.get(*cursor).map(|(t, s)| (t, *s))
-		} else {
-			let (_, stream, cursor) = self.streams.last().unwrap();
-			match stream.get(*cursor).map(|(t, _)| t) {
-				Some(token) => Some((
-					token,
-					// Panic: This is guaranteed to be some if `self.streams.len() > 1`.
-					self.macro_call_site.unwrap(),
-				)),
-				None => None,
-			}
-		}
-	}
-
-	/// Returns the current token under the cursor, without advancing the cursor. (The token gets cloned).
-	fn get(&self) -> Option<Spanned<Token>> {
-		if self.streams.is_empty() {
-			None
-		} else if self.streams.len() == 1 {
-			let (_, stream, cursor) = self.streams.last().unwrap();
-			stream.get(*cursor).cloned()
-		} else {
-			let (_, stream, cursor) = self.streams.last().unwrap();
-			let token = stream.get(*cursor).map(|(t, _)| t).cloned();
-			token.map(|t| {
-				(
-					t,
-					// Panic: This is guaranteed to be some if `self.streams.len() > 1`.
-					self.macro_call_site.unwrap(),
-				)
-			})
-		}
-	}
-
-	/// Peeks the next token without advancing the cursor.
-	///
-	/// **This method is expensive** to call because it needs to correctly deal with macros. Avoid calling this
-	/// often.
-	///
-	/// This method correctly steps into/out-of macros, jumps between conditional compilation branches, and
-	/// consumes any comments.
-	fn lookahead_1(&self) -> Option<Spanned<Token>> {
-		let mut token_provider = self.token_provider.clone();
-		let mut streams = self.streams.clone();
-		let mut macros = self.macros.clone();
-		let mut active_macros = self.active_macros.clone();
-		let mut macro_call_site = self.macro_call_site.clone();
-		let mut syntax_diags = Vec::new();
-		let mut semantic_diags = Vec::new();
-		let mut syntax_tokens = Vec::new();
-		// PERF: Optimize for certain cases to prevent having to clone everything everytime.
-		Self::_move_cursor(
-			&mut token_provider,
-			&mut streams,
-			&mut macros,
-			&mut active_macros,
-			&mut macro_call_site,
-			&mut syntax_diags,
-			&mut semantic_diags,
-			&mut syntax_tokens,
-			self.span_encoding,
-		);
-
-		// Copy of `Self::get()`.
-		if streams.is_empty() {
-			None
-		} else if streams.len() == 1 {
-			let (_, stream, cursor) = streams.last().unwrap();
-			stream.get(*cursor).cloned()
-		} else {
-			let (_, stream, cursor) = streams.last().unwrap();
-			let token = stream.get(*cursor).map(|(t, _)| t).cloned();
-			token.map(|t| {
-				(
-					t,
-					// Panic: This is guaranteed to be some if `streams.len() > 1`.
-					macro_call_site.unwrap(),
-				)
-			})
-		}
-	}
-
-	/// Advances the cursor by one.
-	///
-	/// This method correctly steps into/out-of macros, jumps between conditional compilation branches, and
-	/// consumes any comments.
-	fn advance(&mut self) {
-		Self::_move_cursor(
-			&mut self.token_provider,
-			&mut self.streams,
-			&mut self.macros,
-			&mut self.active_macros,
-			&mut self.macro_call_site,
-			&mut self.syntax_diags,
-			&mut self.semantic_diags,
-			&mut self.syntax_tokens,
-			self.span_encoding,
-		);
-	}
-
-	/// Advances the cursor by one.
-	///
-	/// This method is identical to `advance()` apart from that diagnostics and syntax highlighting tokens are
-	/// returned. This is necessary because otherwise the spans could be produced in the wrong order, if, for
-	/// example, the walker consumes a comment but the expresion syntax tokens are appended after the fact.
-	fn advance_expr_parser(
-		&mut self,
-		syntax_diags: &mut Vec<Syntax2>,
-		semantic_diags: &mut Vec<Semantic>,
-		syntax_tokens: &mut Vec<SyntaxToken>,
-	) {
-		Self::_move_cursor(
-			&mut self.token_provider,
-			&mut self.streams,
-			&mut self.macros,
-			&mut self.active_macros,
-			&mut self.macro_call_site,
-			syntax_diags,
-			semantic_diags,
-			syntax_tokens,
-			self.span_encoding,
-		);
-	}
-
-	/// Returns whether the walker has reached the end of the token streams.
-	fn is_done(&self) -> bool {
-		self.streams.is_empty()
-	}
-
-	/// Returns the span of the last token in the token stream.
-	fn get_last_span(&self) -> Span {
-		self.token_provider.get_end_span()
-	}
-
-	/// Moves the cursor to the next token. This function takes all the necessary data by parameter so that the
-	/// functionality can be re-used between the `Self::advance()` and `Self::lookahead_1()` methods.
-	fn _move_cursor(
-		token_provider: &mut Provider,
-		streams: &mut Vec<(String, TokenStream, usize)>,
-		macros: &mut HashMap<String, (Span, Macro)>,
-		active_macros: &mut HashSet<String>,
-		macro_call_site: &mut Option<Span>,
-		syntax_diags: &mut Vec<Syntax2>,
-		semantic_diags: &mut Vec<Semantic>,
-		syntax_tokens: &mut Vec<SyntaxToken>,
-		span_encoding: SpanEncoding,
-	) {
-		let mut dont_increment = false;
-		'outer: while let Some((identifier, stream, cursor)) =
-			streams.last_mut()
-		{
-			if !dont_increment {
-				*cursor += 1;
-			}
-			dont_increment = false;
-
-			if *cursor == stream.len() {
-				// We have reached the end of this stream. We close it and re-run the loop on the next stream, (if
-				// there is one).
-
-				let ident = identifier.clone();
-				if streams.len() == 1 {
-					// If we aren't in a macro, that means we've finished the current source stream. There may
-					// however be another stream, for which we need to query the provider for.
-					match token_provider.get_next_stream(
-						macros,
-						syntax_diags,
-						syntax_tokens,
-						span_encoding,
-					) {
-						Some(mut next_stream) => {
-							let (_, s, c) = &mut streams[0];
-							std::mem::swap(s, &mut next_stream);
-							*c = 0;
-							dont_increment = true;
-							continue;
-						}
-						None => {
-							// The provider didn't return anything, so that means we have reached the final end.
-							streams.remove(0);
-							break;
-						}
-					}
-				} else {
-					// Panic: Anytime a stream is added the identifier is inserted into the set.
-					active_macros.remove(&ident);
-					streams.remove(streams.len() - 1);
-					continue;
-				}
-			}
-
-			let (token, token_span) = stream.get(*cursor).unwrap();
-
-			match token {
-				// We check if the new token is a macro call site.
-				Token::Ident(s) => {
-					if let Some((signature_span, macro_)) = macros.get(s) {
-						if active_macros.contains(s) {
-							// We have already visited a macro with this identifier. Recursion is not supported so
-							// we don't continue.
-							break;
-						}
-
-						let ident_span = *token_span;
-
-						if let Macro::Function { params, body } = macro_ {
-							// We have an identifier which matches a function-like macro, so we are expecting a
-							// parameter list in the current token stream before we do any switching.
-
-							// We don't need to worry about having to switch source streams because that would
-							// imply that a conditional compilation directive is in the middle of a function-like
-							// macro call site, which isn't valid. A function-like macro call cannot have
-							// preprocessor directives within, which means that the source stream won't be split up
-							// by a conditional, which means the entire invocation of the macro will be within this
-							// stream.
-
-							let mut tmp_cursor = *cursor + 1;
-							let mut syntax_spans = vec![SyntaxToken {
-								ty: SyntaxType::FunctionMacro,
-								modifiers: SyntaxModifiers::empty(),
-								span: ident_span,
-							}];
-							loop {
-								match stream.get(tmp_cursor) {
-									Some((token, token_span)) => match token {
-										Token::LineComment(_)
-										| Token::BlockComment { .. } => {
-											syntax_spans.push(SyntaxToken {
-												ty: SyntaxType::Comment,
-												modifiers:
-													SyntaxModifiers::empty(),
-												span: *token_span,
-											});
-											tmp_cursor += 1;
-										}
-										_ => break,
-									},
-									None => break 'outer,
-								}
-							}
-
-							// Consume the opening `(` parenthesis.
-							let l_paren_span = match stream.get(tmp_cursor) {
-								Some((token, token_span)) => match token {
-									Token::LParen => {
-										syntax_spans.push(SyntaxToken {
-											ty: SyntaxType::Punctuation,
-											modifiers: SyntaxModifiers::empty(),
-											span: *token_span,
-										});
-										*cursor = tmp_cursor + 1;
-										*token_span
-									}
-									_ => {
-										// We did not immediately encounter a parenthesis, which means that this is
-										// not a call to a function-like macro even if the names match.
-										break;
-									}
-								},
-								None => break,
-							};
-
-							// Look for any arguments until we hit a closing `)` parenthesis. The preprocessor
-							// immediately switches to the next argument when a `,` is encountered, unless we are
-							// within a parenthesis group.
-							/* #[derive(PartialEq)]
-							enum Prev {
-								None,
-								Param,
-								Comma,
-								Invalid,
-							}
-							let mut prev = Prev::None; */
-							let mut prev_span = l_paren_span;
-							let mut paren_groups = 0;
-							let mut args = Vec::new();
-							let mut arg = Vec::new();
-							let r_paren_span = loop {
-								let (token, token_span) =
-									match stream.get(*cursor) {
-										Some(t) => t,
-										None => {
-											// FIXME:
-											/* syntax_diags.push(Syntax::PreprocDefine(PreprocDefineDiag::ParamsExpectedRParen(
-												prev_span.next_single_width()
-											))); */
-											break 'outer;
-										}
-									};
-
-								match token {
-									Token::Comma => {
-										syntax_spans.push(SyntaxToken {
-											ty: SyntaxType::Punctuation,
-											modifiers: SyntaxModifiers::empty(),
-											span: *token_span,
-										});
-										if paren_groups == 0 {
-											let arg = std::mem::take(&mut arg);
-											args.push(arg);
-											/* prev = Prev::Comma; */
-										}
-										prev_span = *token_span;
-										*cursor += 1;
-										continue;
-									}
-									Token::LParen => {
-										paren_groups += 1;
-									}
-									Token::RParen => {
-										if paren_groups == 0 {
-											// We have reached the end of this function-like macro call site.
-											syntax_spans.push(SyntaxToken {
-												ty: SyntaxType::Punctuation,
-												modifiers:
-													SyntaxModifiers::empty(),
-												span: *token_span,
-											});
-											let arg = std::mem::take(&mut arg);
-											args.push(arg);
-											// It is important that we don't increment the cursor to the next token
-											// after the macro call site. This is because once this macro is
-											// finished, and we return to the previous stream, we will
-											// automatically increment the cursor onto the next token which will be
-											// the first token after the macro call site. The object-like macro
-											// branch also doesn't perform this increment.
-											// *cursor += 1;
-											break *token_span;
-										}
-										paren_groups -= 1;
-									}
-									_ => {}
-								}
-								syntax_spans.push(SyntaxToken {
-									ty: token.non_semantic_colour(),
-									modifiers: SyntaxModifiers::empty(),
-									span: *token_span,
-								});
-								arg.push((token.clone(), *token_span));
-								/* prev = Prev::Param; */
-								*cursor += 1;
-							};
-							let call_site_span =
-								Span::new(ident_span.start, r_paren_span.end);
-
-							// We have a set of arguments now.
-							if params.len() != args.len() {
-								// If there is a mismatch in the argument/parameter count, we ignore this macro
-								// call and move onto the next token after the call site.
-								semantic_diags.push(
-									Semantic::FunctionMacroMismatchedArgCount(
-										call_site_span,
-										*signature_span,
-									),
-								);
-								continue;
-							}
-							let mut param_map = HashMap::new();
-							params.iter().zip(args.into_iter()).for_each(
-								|(ident, tokens)| {
-									param_map.insert(&ident.name, tokens);
-								},
-							);
-
-							// We now go through the replacement token list and replace any identifiers which match
-							// a parameter name with the relevant argument's tokens.
-							let mut new_body = Vec::with_capacity(body.len());
-							for (token, token_span) in body {
-								match token {
-									Token::Ident(str) => {
-										if let Some(arg) = param_map.get(&str) {
-											for token in arg {
-												new_body.push(token.clone());
-											}
-											continue;
-										}
-									}
-									_ => {}
-								}
-								new_body.push((token.clone(), *token_span));
-							}
-							// Then, we perform token concatenation.
-							let (new_body, mut syntax, mut semantic) =
-								lexer::preprocessor::concat_macro_body(
-									new_body,
-									span_encoding,
-								);
-							// FIXME:
-							//syntax_diags.append(&mut syntax);
-							semantic_diags.append(&mut semantic);
-
-							if body.is_empty() {
-								// The macro is empty, so we want to move to the next token of the existing stream.
-								semantic_diags.push(
-									Semantic::EmptyMacroCallSite(
-										call_site_span,
-									),
-								);
-								if streams.len() == 1 {
-									// We only syntax highlight when it is the first macro call.
-									syntax_tokens.append(&mut syntax_spans);
-								}
-								continue;
-							}
-
-							let ident = s.to_owned();
-
-							// We only syntax highlight and note the macro call site when it is the first macro
-							// call.
-							if streams.len() == 1 {
-								*macro_call_site = Some(call_site_span);
-								syntax_tokens.append(&mut syntax_spans);
-							}
-
-							active_macros.insert(ident.clone());
-							streams.push((ident, new_body, 0));
-
-							// The first token in the new stream could be another macro call, so we re-run the loop
-							// on this new stream in case.
-							dont_increment = true;
-							continue;
-						} else if let Macro::Object(stream) = macro_ {
-							if stream.is_empty() {
-								// The macro is empty, so we want to move to the next token of the existing stream.
-								semantic_diags.push(
-									Semantic::EmptyMacroCallSite(ident_span),
-								);
-								if streams.len() == 1 {
-									// We only syntax highlight when it is the first macro call.
-									syntax_tokens.push(SyntaxToken {
-										ty: SyntaxType::ObjectMacro,
-										modifiers: SyntaxModifiers::empty(),
-										span: ident_span,
-									});
-								}
-								continue;
-							}
-
-							let ident = s.to_owned();
-
-							// We only syntax highlight and note the macro call site when it is the first macro
-							// call.
-							if streams.len() == 1 {
-								*macro_call_site = Some(ident_span);
-								syntax_tokens.push(SyntaxToken {
-									ty: SyntaxType::ObjectMacro,
-									modifiers: SyntaxModifiers::empty(),
-									span: ident_span,
-								});
-							}
-
-							active_macros.insert(ident.clone());
-							streams.push((ident, stream.clone(), 0));
-
-							// The first token in the new stream could be another macro call, so we re-run the loop
-							// on this new stream in case.
-							dont_increment = true;
-							continue;
-						}
-					}
-					break;
-				}
-				// We want to consume any comments since they are semantically ignored.
-				Token::LineComment(_) => {
-					let token_span = *token_span;
-					if streams.len() == 1 {
-						// We only syntax highlight when we are not in a macro call.
-						syntax_tokens.push(SyntaxToken {
-							ty: SyntaxType::Comment,
-							modifiers: SyntaxModifiers::empty(),
-							span: token_span,
-						});
-					}
-				}
-				Token::BlockComment { contains_eof, .. } => {
-					if *contains_eof {
-						// FIXME:
-						/* syntax_diags.push(Syntax::BlockCommentMissingEnd(
-							token_span.end_zero_width(),
-						)); */
-					}
-					let token_span = *token_span;
-					if streams.len() == 1 {
-						// We only syntax highlight when we are not in a macro call.
-						syntax_tokens.push(SyntaxToken {
-							ty: SyntaxType::Comment,
-							modifiers: SyntaxModifiers::empty(),
-							span: token_span,
-						});
-					}
-				}
-				_ => break,
-			}
-		}
-
-		if streams.len() <= 1 {
-			*macro_call_site = None;
-		}
-	}
-
-	/// Registers a define macro.
-	fn register_macro(
-		&mut self,
-		ident: String,
-		signature_span: Span,
-		macro_: Macro,
-	) {
-		if let Some(_prev) = self.macros.insert(ident, (signature_span, macro_))
-		{
-			// TODO: Emit error if the macros aren't identical (will require scanning the tokenstream to compare).
-		}
-	}
-
-	/// Un-registers a defined macro.
-	fn unregister_macro(&mut self, ident: &str, span: Span) {
-		match self.macros.remove(ident) {
-			Some((_, macro_)) => match macro_ {
-				Macro::Object(_) => self.push_colour_with_modifiers(
-					span,
-					SyntaxType::ObjectMacro,
-					SyntaxModifiers::UNDEFINE,
-				),
-				Macro::Function { .. } => self.push_colour_with_modifiers(
-					span,
-					SyntaxType::FunctionMacro,
-					SyntaxModifiers::UNDEFINE,
-				),
-			},
-			None => {
-				self.push_colour_with_modifiers(
-					span,
-					SyntaxType::UnresolvedIdent,
-					SyntaxModifiers::UNDEFINE,
-				);
-				self.push_semantic_diag(Semantic::UndefMacroNameUnresolved(
-					span,
-				));
-			}
-		}
-	}
-
-	/// Pushes a syntax diagnostic.
-	fn push_syntax_diag(&mut self, diag: Syntax) {
-		// TODO:
-	}
-
-	/// Pushes a syntax diagnostic.
-	fn push_nsyntax_diag(&mut self, diag: Syntax2) {
-		self.syntax_diags.push(diag);
-	}
-
-	/// Appends a collection of syntax diagnostics.
-	fn append_syntax_diags(&mut self, syntax: &mut Vec<Syntax>) {
-		// TODO:
-	}
-
-	/// Pushes a semantic diagnostic.
-	fn push_semantic_diag(&mut self, diag: Semantic) {
-		self.semantic_diags.push(diag);
-	}
-
-	/// Appends a collection of semantic diagnostics.
-	fn append_semantic_diags(&mut self, semantic: &mut Vec<Semantic>) {
-		self.semantic_diags.append(semantic);
-	}
-
-	/// Pushes a syntax highlighting token over the given span.
-	fn push_colour(&mut self, span: Span, token: SyntaxType) {
-		self.push_colour_with_modifiers(span, token, SyntaxModifiers::empty())
-	}
-
-	/// Pushes a syntax highlighting token with one or more modifiers over the given span.
-	fn push_colour_with_modifiers(
-		&mut self,
-		span: Span,
-		ty: SyntaxType,
-		modifiers: SyntaxModifiers,
-	) {
-		// When we are within a macro, we don't want to produce syntax tokens.
-		// Note: This functionality is duplicated in the `ShuntingYard::colour()` method.
-		if self.streams.len() == 1 {
-			self.syntax_tokens.push(SyntaxToken {
-				ty,
-				modifiers,
-				span,
-			});
-		}
-	}
-
-	/// Appends a collection of syntax highlighting tokens.
-	fn append_colours(&mut self, colours: &mut Vec<SyntaxToken>) {
-		self.syntax_tokens.append(colours);
-	}
-}
-
-/// An abstract syntax tree.
-#[derive(Debug)]
-pub struct Ast {
-	/// Arena of nodes.
-	arena: generational_arena::Arena<ast::Node>,
-	/// Handle to the root of the AST.
-	///
-	/// # Invariants
-	/// This points to a `NodeTy::TranslationUnit` node.
-	root_handle: generational_arena::Index,
-
-	/// All references to primitives.
-	primitive_refs: HashMap<ast::Primitive, Vec<Span>>,
-	/// All references to vector swizzles.
-	swizzle_refs: Vec<Span>,
-	/// All user-defined struct symbols.
-	structs: Vec<StructSymbol>,
-	/// All user-defined interface block symbols.
-	interfaces: Vec<InterfaceSymbol>,
-	/// All built-in and user-defined function symbols. This also includes all function symbols that are associated
-	/// with a subroutine.
-	functions: Vec<FunctionSymbol>,
-	/// All subroutine symbols.
-	subroutines: Vec<SubroutineSymbol>,
-	/// All subroutine uniform symbols.
-	subroutine_uniforms: Vec<SubroutineUniformSymbol>,
-	/// All variable symbol tables, each containing all variable symbols for that given table.
-	variables: Vec<Vec<VariableSymbol>>,
-}
-
 /// Context object for managing the parser state and pushing nodes into.
 ///
 /// # Name resolution
@@ -3218,39 +3240,54 @@ pub struct Ctx {
 	/// `self[0]` always exists and points to a `NodeTy::TranslationUnit`.
 	scope_stack: Vec<(NodeHandle, VariableTableHandle)>,
 
-	/// All references to primitives.
+	/// References to primitives.
 	primitive_refs: HashMap<ast::Primitive, Vec<Span>>,
-	/// All references to vector swizzles.
+	/// References to vector swizzles.
 	swizzle_refs: Vec<Span>,
-	/// All user-defined struct symbols.
+	/// User-defined struct symbols.
 	structs: Vec<StructSymbol>,
-	/// All user-defined interface block symbols.
+	/// User-defined interface block symbols.
 	interfaces: Vec<InterfaceSymbol>,
-	/// All built-in and user-defined function symbols. This also includes all function symbols that are associated
+	/// Built-in and user-defined function symbols. This also includes all function symbols that are associated
 	/// with a subroutine.
 	functions: Vec<FunctionSymbol>,
-	/// All subroutine symbols.
+	/// Subroutine symbols.
 	subroutines: Vec<SubroutineSymbol>,
-	/// All subroutine uniform symbols.
+	/// Subroutine uniform symbols.
 	subroutine_uniforms: Vec<SubroutineUniformSymbol>,
-	/// All variable symbol tables, each containing all variable symbols for that given table.
+	/// Variable symbol tables, each containing all variable symbols for that given table.
 	variables: Vec<Vec<VariableSymbol>>,
 	/// Currently active symbols, i.e. the most recent symbol for a given name.
 	///
 	/// All handles are always resolved.
 	current_active_symbols: HashMap<String, CurrentlyActive>,
-	// TODO: keep a list of unresolved names, and when we add a new symbol we can check if it was previously
-	// referenced to produce a nice error message: unresolved_names: Vec<Ident>
+
+	/// Any `UnresolvedVariable` and `UnresolvedFunction` semantic diagnostics. The reason they are stored here
+	/// separately from the `Walker` is so that we can improve the diagnostics if we happen to later create a new
+	/// symbol with a matching name.
+	unresolved_diags: Vec<(Semantic, VariableTableHandle)>,
 }
 
 /// A handle to the current active symbol under the given name.
 #[derive(Debug)]
-pub enum CurrentlyActive {
+enum CurrentlyActive {
 	Struct(StructHandle),
 	Function(FunctionHandle),
 	SubroutineType(SubroutineHandle),
 	SubroutineUniform(SubroutineUniformHandle),
 	Variable(VariableHandle),
+}
+
+impl CurrentlyActive {
+	fn ty(&self) -> NameTy {
+		match self {
+			CurrentlyActive::Struct(_) => NameTy::Struct,
+			CurrentlyActive::Function(_) => NameTy::Function,
+			CurrentlyActive::SubroutineType(_) => NameTy::SubroutineType,
+			CurrentlyActive::SubroutineUniform(_) => NameTy::SubroutineUniform,
+			CurrentlyActive::Variable(_) => NameTy::Variable,
+		}
+	}
 }
 
 // region: Handles
@@ -3371,12 +3408,12 @@ impl StructFieldHandle {
 
 impl FunctionHandle {
 	#[inline]
-	pub fn is_resolved_signature(self) -> bool {
+	pub fn is_resolved_overload(self) -> bool {
 		self.0 != usize::MAX && self.1 != usize::MAX
 	}
 
 	#[inline]
-	pub fn is_resolved_symbol(self) -> bool {
+	pub fn is_resolved_name(self) -> bool {
 		self.0 != usize::MAX
 	}
 
@@ -3424,7 +3461,7 @@ impl VariableHandle {
 // endregion: Handles
 
 impl Ctx {
-	/// Constructs a new context.
+	/// Constructs a new parser context.
 	fn new() -> Self {
 		let mut arena = generational_arena::Arena::new();
 		let variables = vec![vec![]];
@@ -3453,10 +3490,43 @@ impl Ctx {
 			subroutine_uniforms: Vec::new(),
 			variables,
 			current_active_symbols: HashMap::new(),
+			unresolved_diags: Vec::new(),
 		}
 	}
 
-	/// Pushes a node into the current scope. Doesn't do any syntax colouring or diagnostics.
+	/// Converts this context into the abstract syntax tree. This is done once parsing has finished in order to
+	/// remove fields that were only necessary during the parsing process itself, such as any stacks or
+	/// temporary/state-tracking variables.
+	fn into_ast(self, semantic_diags: &mut Vec<Semantic>) -> Ast {
+		semantic_diags.reserve(self.unresolved_diags.len());
+		for (diag, _) in self.unresolved_diags {
+			semantic_diags.push(diag);
+		}
+
+		Ast {
+			arena: self.arena,
+			root_handle: self.root_handle,
+			primitive_refs: self.primitive_refs,
+			swizzle_refs: self.swizzle_refs,
+			structs: self.structs,
+			interfaces: self.interfaces,
+			functions: self.functions,
+			subroutines: self.subroutines,
+			subroutine_uniforms: self.subroutine_uniforms,
+			variables: self.variables,
+		}
+	}
+
+	/// Pushes an `Unresolved*` semantic diagnostic.
+	fn push_unresolved_diag(&mut self, diag: Semantic) {
+		let var_table = self.__get_current_scope().variable_table;
+		self.unresolved_diags.push((diag, var_table));
+	}
+}
+
+/* Nodes, symbols, and name resolution functionality */
+impl Ctx {
+	/// Pushes a node into the current scope.
 	fn push_node(&mut self, node: ast::Node) -> NodeHandle {
 		let node_end = node.span.end;
 		let new_handle = NodeHandle(self.arena.insert(node));
@@ -3493,6 +3563,10 @@ impl Ctx {
 
 		let new_struct_handle = StructHandle(self.structs.len());
 
+		if walker.parsing_struct {
+			return;
+		}
+
 		// Check if the name is already in use.
 		if let Some(_) = ast::Primitive::parse(&ident) {
 			// With struct/function/variable names we always lookup the latest definition, but with primitive
@@ -3505,10 +3579,11 @@ impl Ctx {
 			return;
 		}
 		match self.__get_currently_active_symbol(&ident) {
-			Some((active, span)) => {
+			Some((active, active_span)) => {
 				walker.push_semantic_diag(Semantic::NameAlreadyInUse {
-					new: ident.span,
-					existing: span,
+					name: ident.name.clone(),
+					new: (NameTy::Struct, ident.span),
+					existing: (active.ty(), active_span),
 				});
 				*active = CurrentlyActive::Struct(new_struct_handle);
 			}
@@ -3583,7 +3658,8 @@ impl Ctx {
 			span: var_span,
 		} in instances.into_iter()
 		{
-			let new_var_handle = VariableHandle(th.0, self.variables.len());
+			let new_var_handle =
+				VariableHandle(th.0, self.variables[th.0].len());
 
 			// Check if the name is already in use.
 			if let Some(_) = ast::Primitive::parse(&ident) {
@@ -3597,10 +3673,11 @@ impl Ctx {
 				continue;
 			}
 			match self.__get_currently_active_symbol(&ident) {
-				Some((active, span)) => {
+				Some((active, active_span)) => {
 					walker.push_semantic_diag(Semantic::NameAlreadyInUse {
-						new: ident.span,
-						existing: span,
+						name: ident.name.clone(),
+						new: (NameTy::Struct, ident.span),
+						existing: (active.ty(), active_span),
 					});
 					*active = CurrentlyActive::Variable(new_var_handle);
 				}
@@ -3668,10 +3745,11 @@ impl Ctx {
 		}
 		match self.__get_currently_active_symbol(&ident) {
 			// Unlike with structs, since interfaces are un-referencable we don't set it as the active name.
-			Some((active, span)) => {
+			Some((active, active_span)) => {
 				walker.push_semantic_diag(Semantic::NameAlreadyInUse {
-					new: ident.span,
-					existing: span,
+					name: ident.name.clone(),
+					new: (NameTy::InterfaceBlock, ident.span),
+					existing: (active.ty(), active_span),
 				});
 			}
 			None => {}
@@ -3696,6 +3774,10 @@ impl Ctx {
 					.collect(),
 			},
 		});
+
+		if walker.parsing_struct {
+			return;
+		}
 
 		let new_interface_handle = InterfaceHandle(self.interfaces.len());
 
@@ -3753,7 +3835,8 @@ impl Ctx {
 				span: var_span,
 			} in instances.into_iter()
 			{
-				let new_var_handle = VariableHandle(th.0, self.variables.len());
+				let new_var_handle =
+					VariableHandle(th.0, self.variables[th.0].len());
 
 				// Check if the name is already in use.
 				if let Some(_) = ast::Primitive::parse(&ident) {
@@ -3767,10 +3850,11 @@ impl Ctx {
 					continue;
 				}
 				match self.__get_currently_active_symbol(&ident) {
-					Some((active, span)) => {
+					Some((active, active_span)) => {
 						walker.push_semantic_diag(Semantic::NameAlreadyInUse {
-							new: ident.span,
-							existing: span,
+							name: ident.name.clone(),
+							new: (NameTy::InterfaceBlock, ident.span),
+							existing: (active.ty(), active_span),
 						});
 						*active = CurrentlyActive::Variable(new_var_handle);
 					}
@@ -3807,7 +3891,8 @@ impl Ctx {
 			for (mut type_, ident) in fields.into_iter() {
 				let Some(ident) = ident else { continue; };
 
-				let new_var_handle = VariableHandle(th.0, self.variables.len());
+				let new_var_handle =
+					VariableHandle(th.0, self.variables[th.0].len());
 
 				// Check if the name is already in use.
 				if let Some(_) = ast::Primitive::parse(&ident) {
@@ -3821,10 +3906,11 @@ impl Ctx {
 					continue;
 				}
 				match self.__get_currently_active_symbol(&ident) {
-					Some((active, span)) => {
+					Some((active, active_span)) => {
 						walker.push_semantic_diag(Semantic::NameAlreadyInUse {
-							new: ident.span,
-							existing: span,
+							name: ident.name.clone(),
+							new: (NameTy::Variable, ident.span),
+							existing: (active.ty(), active_span),
 						});
 						*active = CurrentlyActive::Variable(new_var_handle);
 					}
@@ -3880,6 +3966,29 @@ impl Ctx {
 
 		let new_fn_decl_handle = FunctionHandle(self.functions.len(), 0);
 
+		// Check if we previously referenced this name but it was unresolved. For variables, we currently only
+		// do it for the current scope.
+		for (diag, diag_th) in self.unresolved_diags.iter_mut() {
+			match diag {
+				Semantic::UnresolvedVariable { .. } => {}
+				Semantic::UnresolvedFunction {
+					fn_: (fn_name, _),
+					later_match,
+				} => {
+					if later_match.is_some() {
+						continue;
+					}
+					if &ident.name == fn_name {
+						*later_match = Some(node_span);
+						break;
+					}
+				}
+				_ => unreachable!(
+					"Ensured by callers of `self.push_unresolved_diag()`"
+				),
+			}
+		}
+
 		// Check if the name is already in use.
 		if let Some(_) = ast::Primitive::parse(&ident) {
 			// With struct/function/variable names we always lookup the latest definition, but with primitive
@@ -3889,6 +3998,10 @@ impl Ctx {
 			walker.push_nsyntax_diag(Syntax2::ExpectedNameFoundPrimitive(
 				ident.span,
 			));
+			return;
+		}
+
+		if walker.parsing_struct {
 			return;
 		}
 
@@ -3979,15 +4092,16 @@ impl Ctx {
 
 		// Check if the name is already in use.
 		match self.__get_currently_active_symbol(&ident) {
-			Some((active, span)) => {
+			Some((active, active_span)) => {
 				match active {
 					CurrentlyActive::Struct(_)
 					| CurrentlyActive::SubroutineType(_)
 					| CurrentlyActive::SubroutineUniform(_)
 					| CurrentlyActive::Variable(_) => {
 						walker.push_semantic_diag(Semantic::NameAlreadyInUse {
-							new: ident.span,
-							existing: span,
+							name: ident.name.clone(),
+							new: (NameTy::Function, ident.span),
+							existing: (active.ty(), active_span),
 						});
 					}
 					_ => {}
@@ -4042,6 +4156,29 @@ impl Ctx {
 		}
 		let node_handle = scope_handle;
 
+		// Check if we previously referenced this name but it was unresolved. For variables, we currently only
+		// do it for the current scope.
+		for (diag, diag_th) in self.unresolved_diags.iter_mut() {
+			match diag {
+				Semantic::UnresolvedVariable { .. } => {}
+				Semantic::UnresolvedFunction {
+					fn_: (fn_name, _),
+					later_match,
+				} => {
+					if later_match.is_some() {
+						continue;
+					}
+					if &ident.name == fn_name {
+						*later_match = Some(node_span);
+						break;
+					}
+				}
+				_ => unreachable!(
+					"Ensured by callers of `self.push_unresolved_diag()`"
+				),
+			}
+		}
+
 		// Check if the name is already in use.
 		if let Some(_) = ast::Primitive::parse(&ident) {
 			// With struct/function/variable names we always lookup the latest definition, but with primitive
@@ -4051,6 +4188,10 @@ impl Ctx {
 			walker.push_nsyntax_diag(Syntax2::ExpectedNameFoundPrimitive(
 				ident.span,
 			));
+			return;
+		}
+
+		if walker.parsing_struct {
 			return;
 		}
 
@@ -4146,15 +4287,16 @@ impl Ctx {
 
 		// Check if the name is already in use.
 		match self.__get_currently_active_symbol(&ident) {
-			Some((active, span)) => {
+			Some((active, active_span)) => {
 				match active {
 					CurrentlyActive::Struct(_)
 					| CurrentlyActive::SubroutineType(_)
 					| CurrentlyActive::SubroutineUniform(_)
 					| CurrentlyActive::Variable(_) => {
 						walker.push_semantic_diag(Semantic::NameAlreadyInUse {
-							new: ident.span,
-							existing: span,
+							name: ident.name.clone(),
+							new: (NameTy::Function, ident.span),
+							existing: (active.ty(), active_span),
 						});
 					}
 					_ => {}
@@ -4202,10 +4344,11 @@ impl Ctx {
 			return;
 		}
 		match self.__get_currently_active_symbol(&ident) {
-			Some((active, span)) => {
+			Some((active, active_span)) => {
 				walker.push_semantic_diag(Semantic::NameAlreadyInUse {
-					new: ident.span,
-					existing: span,
+					name: ident.name.clone(),
+					new: (NameTy::SubroutineType, ident.span),
+					existing: (active.ty(), active_span),
 				});
 				*active =
 					CurrentlyActive::SubroutineType(new_subroutine_handle);
@@ -4227,6 +4370,10 @@ impl Ctx {
 				params: params.clone(),
 			},
 		});
+
+		if walker.parsing_struct {
+			return;
+		}
 
 		self.subroutines.push(SubroutineSymbol {
 			decl_node: node_handle,
@@ -4307,6 +4454,10 @@ impl Ctx {
 			walker.push_nsyntax_diag(Syntax2::ExpectedNameFoundPrimitive(
 				ident.span,
 			));
+			return;
+		}
+
+		if walker.parsing_struct {
 			return;
 		}
 
@@ -4401,15 +4552,16 @@ impl Ctx {
 
 		// Check if the name is already in use.
 		match self.__get_currently_active_symbol(&ident) {
-			Some((active, span)) => {
+			Some((active, active_span)) => {
 				match active {
 					CurrentlyActive::Struct(_)
 					| CurrentlyActive::SubroutineType(_)
 					| CurrentlyActive::SubroutineUniform(_)
 					| CurrentlyActive::Variable(_) => {
 						walker.push_semantic_diag(Semantic::NameAlreadyInUse {
-							new: ident.span,
-							existing: span,
+							name: ident.name.clone(),
+							new: (NameTy::Function, ident.span),
+							existing: (active.ty(), active_span),
 						});
 					}
 					_ => {}
@@ -4501,6 +4653,10 @@ impl Ctx {
 			}
 		});
 
+		if walker.parsing_struct {
+			return;
+		}
+
 		// Register the individual subroutine uniform symbols.
 		for var in var_specifiers.into_iter() {
 			let new_uniform_handle =
@@ -4518,10 +4674,11 @@ impl Ctx {
 				continue;
 			}
 			match self.__get_currently_active_symbol(&var.ident) {
-				Some((active, span)) => {
+				Some((active, active_span)) => {
 					walker.push_semantic_diag(Semantic::NameAlreadyInUse {
-						new: var.ident.span,
-						existing: span,
+						name: var.ident.name.clone(),
+						new: (NameTy::SubroutineUniform, var.ident.span),
+						existing: (active.ty(), active_span),
 					});
 					*active =
 						CurrentlyActive::SubroutineUniform(new_uniform_handle);
@@ -4598,10 +4755,38 @@ impl Ctx {
 			}
 		});
 
+		if walker.parsing_struct {
+			return;
+		}
+
 		// Register the individual variable symbols.
 		let th = self.__get_current_scope().variable_table;
 		for var in var_specifiers.into_iter() {
-			let new_var_handle = VariableHandle(th.0, self.variables.len());
+			let new_var_handle =
+				VariableHandle(th.0, self.variables[th.0].len());
+
+			// Check if we previously referenced this name but it was unresolved. For variables, we currently only
+			// do it for the current scope.
+			for (diag, diag_th) in self.unresolved_diags.iter_mut() {
+				match diag {
+					Semantic::UnresolvedVariable {
+						var: (var_name, _),
+						later_match,
+					} => {
+						if later_match.is_some() || th != *diag_th {
+							continue;
+						}
+						if &var.ident.name == var_name {
+							*later_match = Some(node_span);
+							break;
+						}
+					}
+					Semantic::UnresolvedFunction { .. } => {}
+					_ => unreachable!(
+						"Ensured by callers of `self.push_unresolved_diag()`"
+					),
+				}
+			}
 
 			// Check if the name is already in use.
 			if let Some(_) = ast::Primitive::parse(&var.ident) {
@@ -4616,7 +4801,7 @@ impl Ctx {
 			}
 			let is_in_top_scope = self.scope_stack.len() == 1;
 			match self.__get_currently_active_symbol(&var.ident) {
-				Some((active, span)) => {
+				Some((active, active_span)) => {
 					let mut collision = false;
 					match active {
 						CurrentlyActive::Struct(_)
@@ -4628,8 +4813,9 @@ impl Ctx {
 							// Variables can't shadow functions/structs/subroutine uniforms in the top-level scope.
 							walker.push_semantic_diag(
 								Semantic::NameAlreadyInUse {
-									new: var.ident.span,
-									existing: span,
+									name: var.ident.name.clone(),
+									new: (NameTy::Variable, var.ident.span),
+									existing: (active.ty(), active_span),
 								},
 							);
 						}
@@ -4652,8 +4838,9 @@ impl Ctx {
 							// (parent) scope.
 							walker.push_semantic_diag(
 								Semantic::NameAlreadyInUse {
-									new: var.ident.span,
-									existing: span,
+									name: var.ident.name.clone(),
+									new: (NameTy::Variable, var.ident.span),
+									existing: (NameTy::Variable, active_span),
 								},
 							);
 						}
@@ -4703,7 +4890,7 @@ impl Ctx {
 				if let ast::Omittable::Some(ident) = ident {
 					let new_var_handle = VariableHandle(
 						new_table_handle.0,
-						self.variables.len(),
+						self.variables[new_table_handle.0].len(),
 					);
 					self.variables[new_table_handle.0].push(VariableSymbol {
 						def_node: new_handle,
@@ -4802,13 +4989,14 @@ impl Ctx {
 		StructHandle(usize::MAX)
 	}
 
+	/// Returns a handle to a subroutine, and registers the use site.
 	fn resolve_subroutine_type(
 		&mut self,
 		ident: &ast::Ident,
 	) -> SubroutineHandle {
 		for (i, symbol) in self.subroutines.iter_mut().enumerate().rev() {
 			if &ident.name == &symbol.name {
-				//symbol.refs.push(ident.name);
+				symbol.refs.push(ident.span);
 				return SubroutineHandle(i);
 			}
 		}
@@ -4854,8 +5042,8 @@ impl Ctx {
 		)
 	}
 
-	/// Returns a handle either to a function symbol or a struct symbol (for struct constructors), and registers
-	/// the use site.
+	/// Returns a handle either to a function symbol, a struct symbol (for struct constructors), or a subroutine
+	/// symbol (for a subroutine call), and registers the use site.
 	fn resolve_function(
 		&mut self,
 		ident: &ast::Ident,
@@ -4959,24 +5147,6 @@ impl Ctx {
 				(Either3::C(SubroutineHandle(i)), type_)
 			}
 			_ => unreachable!(),
-		}
-	}
-
-	/// Converts this context into the abstract syntax tree. This is done once parsing has finished in order to
-	/// remove fields that were only necessary during the parsing process itself, such as any stacks or
-	/// temporary/state-tracking variables.
-	fn into_ast(self) -> Ast {
-		Ast {
-			arena: self.arena,
-			root_handle: self.root_handle,
-			primitive_refs: self.primitive_refs,
-			swizzle_refs: self.swizzle_refs,
-			structs: self.structs,
-			interfaces: self.interfaces,
-			functions: self.functions,
-			subroutines: self.subroutines,
-			subroutine_uniforms: self.subroutine_uniforms,
-			variables: self.variables,
 		}
 	}
 

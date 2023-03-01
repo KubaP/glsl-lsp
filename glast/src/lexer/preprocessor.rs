@@ -1964,7 +1964,9 @@ pub(crate) fn concat_macro_body(
 							// We had two tokens which didn't concatenate, so we can just push them back into the
 							// stack as-is.
 							semantic_diags.push(
-								Semantic::TokenConcatUnnecessary(token.1),
+								Semantic::UnnecessaryTokenConcat {
+									op: token.1,
+								},
 							);
 							stack.push(prev);
 							stack.push(next);

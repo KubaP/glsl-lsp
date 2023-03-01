@@ -27,103 +27,172 @@ pub enum Severity {
 #[derive(Debug, Clone, PartialEq, Eq)]
 #[non_exhaustive]
 pub enum Semantic {
+	/* NAME RESOLUTION */
+	/// E??? - When registering a new function symbol, we found a name that is a built-in function. You cannot
+	/// overload built-in functions.
+	CannotOverloadBuiltInFn { name: ast::Ident },
+	/// E003 - A typename could not be found.
+	UnresolvedType {
+		ty: Spanned<String>,
+		/// TODO:
+		later_match: Option<Span>,
+	},
+	/// E003 - A subroutine typename could not be found.
+	UnresolvedSubroutineType {
+		ty: Spanned<String>,
+		/// TODO:
+		later_match: Option<String>,
+	},
+	/// E003 - A variable name could not be found.
+	UnresolvedVariable {
+		/// The variable, part of an expression.
+		var: Spanned<String>,
+		/// The span of the later variable definition statement.
+		later_match: Option<Span>,
+	},
+	/// E003 - A function name could not be found. A function name is checked against existing functions, structs,
+	/// or subroutine uniforms.
+	UnresolvedFunction {
+		/// The function, part of an expression.
+		fn_: Spanned<String>,
+		/// The span of the later function definition statement.
+		later_match: Option<Span>,
+	},
+	/// E003 - A struct field name could not be found.
+	UnresolvedStructField {
+		/// The field, part of an expression.
+		field: Spanned<String>,
+		/// The name of the struct.
+		struct_name: String,
+		/// The span of the definition node.
+		struct_def: Span,
+	},
+	/// E004 - A name is already in use and cannot shadow an existing item. Note that this excludes
+	/// primitive typenames; for those the [`Syntax2::ExpectedNameFoundPrimitive`] error is emitted instead.
+	NameAlreadyInUse {
+		name: String,
+		/// The new name (the span is of the name in the new declaration/definition).
+		new: (NameTy, Span),
+		/// The existing name (the span is of the name in the existing declaration/definition).
+		existing: (NameTy, Span),
+	},
+	/// E006 - Found a dot-operator on a primitive type that doesn't support it. The only primitive types that
+	/// support dot-operator access are vector types, that allow swizzling.
+	InvalidFieldAccessOnPrimitive {
+		/// The field trying to be accessed.
+		field: Spanned<String>,
+		/// The type of the LHS expression of the dot-operator.
+		typename: String,
+	},
+	/// E007 - Found an invalid vector swizzle. This is for fields that aren't even valid swizzles.
+	InvalidFieldAccessOnVector {
+		/// The field trying to be accessed.
+		field: Spanned<String>,
+		/// The type of the vector.
+		typename: String,
+	},
+	/// E007 - Found an invalid vector swizzle. This is for swizzles that use dimensions that do not exist on the
+	/// vector type.
+	VectorSwizzleInvalidDim {
+		/// The swizzle.
+		swizzle: Spanned<String>,
+		/// The type of the vector.
+		typename: String,
+		/// The number of dimensions of the vector.
+		type_dim: usize,
+		/// The invalid dimension component.
+		invalid_component: char,
+	},
+	/// E007 - Found an invalid vector swizzle. This is for swizzles that have too many components.
+	VectorSwizzleTooLarge {
+		/// The swizzle.
+		swizzle: Spanned<String>,
+		/// The number of components in the swizzle.
+		size: usize,
+	},
+	/// E007 - Found an invalid vector swizzle. This is for swizzles that mix-and-match notations. Note that if all
+	/// three notations are used, only the mismatch between the last two will be reported.
+	VectorSwizzleMixedNotation {
+		/// The swizzle.
+		swizzle: Spanned<String>,
+		first_notation: &'static str,
+		second_notation: &'static str,
+	},
+	/// E - Found a method call. Methods, apart from a handful of built-in exemptions, are not a language
+	/// feature.
+	InvalidMethod(Span),
+	/// E - Found a `length()` method call on a type that does not support it.
+	LengthMethodNotOnValidType(Span),
+	/* SUBROUTINES */
+	/// E005 - A subroutine uniform variable was found in an expression without parenthesis. Subroutine uniforms,
+	/// whilst defined like variables, are treated like functions and need to be called.
+	SubUniformTreatedAsVariable {
+		/// The variable, part of an expression.
+		var: Spanned<String>,
+	},
+	/// E - Found a normal type specifier in a subroutine uniform definition.
+	SubUniformFoundNormalType(Span),
+	/// E - Found a subroutine type specifier in a subroutine type declaration.
+	SubTypeFoundSubType(Span),
+	/// E - Found a subroutine type specifier in an associated subroutine function definition.
+	SubFnFoundSubType(Span),
+	/* PREPROCESSOR */
 	/// WARNING - Found an empty preprocessor directive.
 	///
 	/// - `0` - The span of the line containing the directive.
 	EmptyDirective(Span),
-	/* NAME RESOLUTION */
-	/// E??? - When registering a new symbol, we found a name that is already in use. Note that this excludes
-	/// primitive typenames; for those the [`Syntax2::ExpectedNameFoundPrimitive`] error is emitted instead.
-	/// ```text
-	/// struct Foo { /*...*/ };
-	///
-	/// void Foo();
-	///      ~~~ `Foo` already exists
-	/// ```
-	NameAlreadyInUse { new: Span, existing: Span },
-	/// E??? - When registering a new function symbol, we found a name that is a built-in function. You cannot
-	/// overload built-in functions.
-	CannotOverloadBuiltInFn { name: ast::Ident },
-	/// E003 - Found an identifier in an expression that could not be resolved.
-	UnresolvedVariable(Span),
-	/// E003 - Found a function call in an expression that could not be resolved to either a function call, a
-	/// struct, or a subroutine uniform variable.
-	UnresolvedFunction(Span),
-	/// E003 - Found a typename that could not be resolved toL either a primitive or a struct.
-	UnresolvedType(Span),
-	/// E003 - Found a subroutine typename that could not be resolved.
-	UnresolvedSubroutineType(Span),
-	/// E003 - Found a struct field that could not be resolved.
-	UnresolvedStructField(Span),
-	/// E004 - Found a method call. Methods, apart from a handful of built-in exemptions, are not a language
-	/// feature.
-	FoundMethod(Span),
-	/// E005 - Found a `length()` method call on a type that does not support it.
-	LengthMethodNotOnValidType(Span),
-	/// E006 - Found invalid field access on a primitive type. The only valid field access is vector swizzling on
-	/// vector primitives (and generally on structs).
-	InvalidFieldAccessOnPrimitive(Span, String),
-	/// E007 - Found a swizzle which mixes the notation sets.
-	SwizzleMixesNotations(Span),
-	/* SUBROUTINES */
-	/// E002 - Found an identifier in an expression that matches the name of a subroutine uniform. Subroutine
-	/// uniforms, whilst defined like variables, are treated like functions and need to be called.
-	SubUniformTreatedAsVariable(Span),
-	/// E008 - Found a normal type specifier in a subroutine uniform definition.
-	SubUniformFoundNormalType(Span),
-	/// E009 - Found a subroutine type specifier in a subroutine type declaration.
-	SubTypeFoundSubType(Span),
-	/// E010 - Found a subroutine type specifier in an associated subroutine function definition.
-	SubFnFoundSubType(Span),
 	/* MACROS */
-	/// WARNING - Found a macro call site, but the macro contains no replacement tokens.
+	/// WARNING - A macro call site was found to expand to nothing.
 	///
-	/// - `0` - The span of the call site.
-	EmptyMacroCallSite(Span),
-	/// E001 - Found a function-like macro call site where the number of arguments doesn't match the number of
-	/// parameters in the definition.
-	///
-	/// - `0` - The span of the call site.
-	/// - `1` - The span of the macro definition.
-	FunctionMacroMismatchedArgCount(Span, Span),
-	/// WARNING - Found a token concatenation operator that is unnecessary. E.g.
-	/// ```c
-	/// #define FOO a ## = b
-	/// ```
-	///
-	/// - `0` - The span of the operator.
-	TokenConcatUnnecessary(Span),
-	/// WARNING - The macro name in an `#undef` directive could not be resolved.
-	///
-	/// - `0` - The span of the name.
-	UndefMacroNameUnresolved(Span),
+	/// Note that the reason we don't check for empty macro definitions is because an empty macro may be used
+	/// within a conditional directive, and that should not be a warning.
+	EmptyMacroCallSite { call_site: Span },
+	/// E001 - A mismatch was found between the number of arguments in a function-like macro call and the number of
+	/// parameters in the macro definition.
+	FunctionMacroMismatchedArgCount {
+		/// The span of the macro call site.
+		call_site: Span,
+		/// The number of arguments.
+		no_of_args: usize,
+		/// The number of expected parameters.
+		no_of_params: usize,
+		/// The span of the definition node.
+		def: Span,
+	},
+	/// WARNING - Found a token concatenation operator that is unnecessary.
+	UnnecessaryTokenConcat { op: Span },
+	/// WARNING - The macro name within an `#undef` directive could not be found.
+	UndefMacroNameUnresolved { name: Spanned<String> },
 }
 
 impl Semantic {
 	/// Returns the severity of a diagnostic.
 	pub fn severity(&self) -> Severity {
 		match self {
-			Self::EmptyDirective(_) => Severity::Warning,
 			/* NAME RESOLUTION */
-			Self::UnresolvedVariable(_) => Severity::Error,
-			Self::UnresolvedFunction(_) => Severity::Error,
-			Self::UnresolvedType(_) => Severity::Error,
-			Self::UnresolvedSubroutineType(_) => Severity::Error,
-			Self::UnresolvedStructField(_) => Severity::Error,
-			Self::FoundMethod(_) => Severity::Error,
-			Self::LengthMethodNotOnValidType(_) => Severity::Error,
-			Self::InvalidFieldAccessOnPrimitive(_, _) => Severity::Error,
-			Self::SwizzleMixesNotations(_) => Severity::Error,
+			Self::UnresolvedType { .. } => Severity::Error,
+			Self::UnresolvedSubroutineType { .. } => Severity::Error,
+			Self::UnresolvedVariable { .. } => Severity::Error,
+			Self::UnresolvedFunction { .. } => Severity::Error,
+			Self::UnresolvedStructField { .. } => Severity::Error,
+			Self::NameAlreadyInUse { .. } => Severity::Error,
+			Self::InvalidFieldAccessOnPrimitive { .. } => Severity::Error,
+			Self::InvalidFieldAccessOnVector { .. } => Severity::Error,
+			Self::VectorSwizzleInvalidDim { .. } => Severity::Error,
+			Self::VectorSwizzleTooLarge { .. } => Severity::Error,
+			Self::VectorSwizzleMixedNotation { .. } => Severity::Error,
 			/* SUBROUTINES */
-			Self::SubUniformTreatedAsVariable(_) => Severity::Error,
+			Self::SubUniformTreatedAsVariable { .. } => Severity::Error,
 			Self::SubUniformFoundNormalType(_) => Severity::Error,
 			Self::SubTypeFoundSubType(_) => Severity::Error,
 			Self::SubFnFoundSubType(_) => Severity::Error,
+			/* PREPROCESSOR */
+			Self::EmptyDirective(_) => Severity::Warning,
 			/* MACROS */
-			Self::EmptyMacroCallSite(_) => Severity::Warning,
-			Self::FunctionMacroMismatchedArgCount(_, _) => Severity::Error,
-			Self::TokenConcatUnnecessary(_) => Severity::Warning,
-			Self::UndefMacroNameUnresolved(_) => Severity::Warning,
+			Self::EmptyMacroCallSite { .. } => Severity::Warning,
+			Self::FunctionMacroMismatchedArgCount { .. } => Severity::Error,
+			Self::UnnecessaryTokenConcat { .. } => Severity::Warning,
+			Self::UndefMacroNameUnresolved { .. } => Severity::Warning,
 			_ => Severity::Error,
 		}
 	}
@@ -131,10 +200,36 @@ impl Semantic {
 	/// Returns an error code of a diagnostic. Only error diagnostics will return `Some`.
 	pub fn error_code(&self) -> Option<&'static str> {
 		match self {
-			// TODO: Implement
+			/* NAME RESOLUTION */
+			Self::UnresolvedType { .. }
+			| Self::UnresolvedSubroutineType { .. }
+			| Self::UnresolvedVariable { .. }
+			| Self::UnresolvedFunction { .. }
+			| Self::UnresolvedStructField { .. } => Some("E003"),
+			Self::NameAlreadyInUse { .. } => Some("E004"),
+			Self::InvalidFieldAccessOnPrimitive { .. } => Some("E006"),
+			Self::InvalidFieldAccessOnVector { .. }
+			| Self::VectorSwizzleInvalidDim { .. }
+			| Self::VectorSwizzleTooLarge { .. }
+			| Self::VectorSwizzleMixedNotation { .. } => Some("E007"),
+			/* SUBROUTINES */
+			Self::SubUniformTreatedAsVariable { .. } => Some("E005"),
+			/* MACROS */
+			Self::FunctionMacroMismatchedArgCount { .. } => Some("E001"),
 			_ => None,
 		}
 	}
+}
+
+/// The type of a name.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum NameTy {
+	Struct,
+	InterfaceBlock,
+	Function,
+	SubroutineType,
+	SubroutineUniform,
+	Variable,
 }
 
 /// A syntax error.
@@ -255,6 +350,8 @@ pub enum DiagCtx {
 	StructDef,
 	/// The parser is analyzing a struct field definition.
 	StructField,
+	/// The parser is within an fuction macro argument list.
+	FunctionMacroArgList,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -310,6 +407,8 @@ pub enum ExpectedGrammar {
 	SubroutineTypename,
 	/// One or more specific qualifiers before an interface block definition.
 	QualifierBeforeInterfaceBlock,
+	/// The end punctuation of a block comment (`*/`).
+	BlockCommentEnd,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

@@ -330,10 +330,12 @@ impl<'a> Walker<'a> {
 								// If there is a mismatch in the argument/parameter count, we ignore this macro
 								// call and move onto the next token after the call site.
 								self.semantic_diags.push(
-									Semantic::FunctionMacroMismatchedArgCount(
-										call_site_span,
-										*signature_span,
-									),
+									Semantic::FunctionMacroMismatchedArgCount {
+										call_site: call_site_span,
+										no_of_args: args.len(),
+										no_of_params: params.len(),
+										def: *signature_span,
+									},
 								);
 								continue;
 							}

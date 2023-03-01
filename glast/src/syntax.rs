@@ -66,9 +66,9 @@ pub enum SyntaxType {
 	/* PREPROCESSOR */
 	///// A line-continuator character (`\`).
 	//LineContinuator,
-	/// An object-like macro identifier. This is used at the macro definition, and at any call sites.
+	/// An object-like macro name. This is used at the macro definition and at call sites.
 	ObjectMacro,
-	/// A function-like macro identifier. This is used at the macro definition, and at any call sites.
+	/// A function-like macro name. This is used at the macro definition and at call sites.
 	FunctionMacro,
 	/// A general bit of text in a directive.
 	Directive,
@@ -100,7 +100,8 @@ bitflags! {
 	/// This is a `bitflag`. It contains:
 	/// - `MACRO_SIGNATURE` = `1`,
 	/// - `MACRO_BODY` = `2`,
-	/// - `UNDEFINE` = `4`,
+	/// - `MACRO_CALLSITE` = `4`,
+	/// - `UNDEFINE` = `8`,
 	/// - `CONDITIONAL` = `8`,
 	/// - `DECLARATION` = `16`,
 	/// - `DEFINITION` = `32`,
@@ -109,20 +110,16 @@ bitflags! {
 	/// - `SHADER_UNIFORM` = `256`.
 	pub struct SyntaxModifiers: u32 {
 		/// Tokens within the macro signature, e.g. the `BAR(A, B)` within `#define BAR(A, B) foo`.
-		const MACRO_SIGNATURE = 0b00000001;
+		const MACRO_SIGNATURE = 1;
 		/// Tokens within the macro body, e.g. the `foo + bar` within `#define FOO foo + bar`.
-		const MACRO_BODY = 0b00000010;
+		const MACRO_BODY = 2;
+		/// Tokens within a macro call site. e.g. the `TYPE(i)` within `void fn(TYPE(i) val);`.
+		const MACRO_CALLSITE = 4;
 		/// Tokens within the `#undef` directive, apart from the `#undef` part.
-		const UNDEFINE = 0b00000100;
+		const UNDEFINE = 8;
 		/// Tokens within a conditional directive, apart from the `#if`/`#elif`/etc. part.
-		const CONDITIONAL = 0b00001000;
-		const DECLARATION = 0b00010000;
-		const DEFINITION = 0b00100000;
-		/// Variable names that are defined as constants.
-		const CONST = 0b01000000;
-		/// Variable names that are shader inputs/outputs.
-		const SHADER_IN_OUT = 0b10000000;
-		/// Variable names that are shader uniforms.
-		const SHADER_UNIFORM = 0b100000000;
+		const CONDITIONAL = 8;
+		const DECLARATION = 16;
+		const DEFINITION = 32;
 	}
 }

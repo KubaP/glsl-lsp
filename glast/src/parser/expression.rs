@@ -30,12 +30,12 @@ use super::{
 	Walker,
 };
 use crate::{
-	diag::{ExprDiag, Semantic, Syntax},
+	diag::{ExprDiag, Semantic, Syntax, Syntax2},
 	lexer::{self, Token},
 	parser::ast,
 	Either, Either3, NonEmpty, Span,
 };
-use std::collections::VecDeque;
+use std::{collections::VecDeque, error};
 use tinyvec::TinyVec;
 
 /// Tries to parse an expression beginning at the current position.
@@ -4016,7 +4016,9 @@ impl Expr {
 			}
 			ExprTy::Ident(ident) => {
 				if let Some(_) = ast::Primitive::parse(&ident) {
-					// TODO: Syntax error.
+					walker.push_nsyntax_diag(
+						Syntax2::ExpectedNameFoundPrimitive(ident.span),
+					);
 					return (
 						ast::Expr {
 							span: self.span,
@@ -4041,16 +4043,19 @@ impl Expr {
 				} else {
 					let type_ = match ctx.resolve_function(&ident, &[]) {
 						(Either3::A(_), _) | (Either3::B(_), _) => {
-							walker.push_semantic_diag(
-								Semantic::UnresolvedVariable(ident.span),
+							ctx.push_unresolved_diag(
+								Semantic::UnresolvedVariable {
+									var: (ident.name.clone(), ident.span),
+									later_match: None,
+								},
 							);
 							Type::new_nat()
 						}
 						(Either3::C(_), type_) => {
 							walker.push_semantic_diag(
-								Semantic::SubUniformTreatedAsVariable(
-									ident.span,
-								),
+								Semantic::SubUniformTreatedAsVariable {
+									var: (ident.name.clone(), ident.span),
+								},
 							);
 							type_
 						}
@@ -4297,12 +4302,15 @@ impl Expr {
 				}
 				match ctx.resolve_function(&ident, &types) {
 					(Either3::A(handle), type_) => {
-						if handle.is_resolved_symbol() {
+						if handle.is_resolved_name() {
 							new_colours
 								.push((ident.span, SyntaxType::Function));
 						} else {
-							walker.push_semantic_diag(
-								Semantic::UnresolvedFunction(ident.span),
+							ctx.push_unresolved_diag(
+								Semantic::UnresolvedFunction {
+									fn_: (ident.name.clone(), ident.span),
+									later_match: None,
+								},
 							);
 						}
 						(
@@ -4409,9 +4417,10 @@ impl Expr {
 			ExprTy::Ident(ident) => {
 				let (handle, new_colour) = ctx.resolve_variable(&ident);
 				if handle.is_unresolved() {
-					walker.push_semantic_diag(Semantic::UnresolvedVariable(
-						ident.span,
-					));
+					ctx.push_unresolved_diag(Semantic::UnresolvedVariable {
+						var: (ident.name, ident.span),
+						later_match: None,
+					});
 					return (
 						ast::Expr {
 							span: self.span,
@@ -4450,11 +4459,11 @@ impl Expr {
 				}
 				match ctx.resolve_function(&ident, &types) {
 					(Either3::A(handle), type_) => {
-						// TODO: We need to figure out the correct function overload to know what type it returns,
-						// in order to be able to resolve the leafs correctly. That means we need to implement type
-						// checking in the main parser pass as well. Fun stuff :))))))    fml
-						walker.push_semantic_diag(
-							Semantic::UnresolvedFunction(obj.span),
+						ctx.push_unresolved_diag(
+							Semantic::UnresolvedFunction {
+								fn_: (ident.name, ident.span),
+								later_match: None,
+							},
 						);
 						return (
 							ast::Expr {
@@ -4522,27 +4531,25 @@ impl Expr {
 					match previous_type.ty {
 						Either::Left(primitive) => {
 							use ast::Primitive;
-							match primitive {
+							let vec_size = match primitive {
 								Primitive::Vec2
-								| Primitive::Vec3
-								| Primitive::Vec4
 								| Primitive::BVec2
-								| Primitive::BVec3
-								| Primitive::BVec4
 								| Primitive::IVec2
-								| Primitive::IVec3
-								| Primitive::IVec4
 								| Primitive::UVec2
+								| Primitive::DVec2 => 2,
+								Primitive::Vec3
+								| Primitive::BVec3
+								| Primitive::IVec3
 								| Primitive::UVec3
+								| Primitive::DVec3 => 3,
+								Primitive::Vec4
+								| Primitive::BVec4
+								| Primitive::IVec4
 								| Primitive::UVec4
-								| Primitive::DVec2
-								| Primitive::DVec3
-								| Primitive::DVec4 => {}
+								| Primitive::DVec4 => 4,
 								_ => {
 									walker.push_semantic_diag(
-										Semantic::InvalidFieldAccessOnPrimitive(
-											ident.span, ident.name,
-										),
+										Semantic::InvalidFieldAccessOnPrimitive { field: (ident.name.clone(), ident.span), typename: previous_type.type_name(&ctx) },
 									);
 									return (
 										ast::Expr {
@@ -4552,7 +4559,7 @@ impl Expr {
 										Type::new_nat(),
 									);
 								}
-							}
+							};
 
 							/// The different swizzle notations.
 							#[derive(PartialEq)]
@@ -4565,13 +4572,41 @@ impl Expr {
 							let mut requested_size = 0;
 							let mut naming = Notation::XYZW;
 							let mut buf = [ast::Axis::X; 4];
-							for (i, c) in ident.name.chars().enumerate() {
+							let mut error = None;
+							let mut iter = ident.name.chars().enumerate();
+							while let Some((i, c)) = iter.next() {
 								if i > 3 {
-									walker.push_semantic_diag(
-										Semantic::InvalidFieldAccessOnPrimitive(
-											ident.span, ident.name,
-										),
-									);
+									let mut contains_invalid = false;
+									let mut i = i;
+									while let Some((_i, c)) = iter.next() {
+										i = _i;
+										match c {
+											'x' | 'y' | 'z' | 'w' | 'r'
+											| 'g' | 'b' | 'a' | 's' | 't'
+											| 'p' | 'q' => {}
+											_ => {
+												contains_invalid = true;
+												break;
+											}
+										}
+									}
+									if contains_invalid {
+										walker.push_semantic_diag(Semantic::InvalidFieldAccessOnVector { field: (ident.name.clone(), ident.span), typename: previous_type.type_name(ctx) });
+									} else {
+										if let Some(error) = error {
+											walker.push_semantic_diag(error);
+										} else {
+											walker.push_semantic_diag(
+												Semantic::VectorSwizzleTooLarge {
+													swizzle: (
+														ident.name.clone(),
+														ident.span,
+													),
+													size: i + 1,
+												},
+											);
+										}
+									}
 									return (
 										ast::Expr {
 											span: self.span,
@@ -4581,13 +4616,36 @@ impl Expr {
 									);
 								}
 
+								match c {
+									'x' | 'r' | 's' => buf[i] = ast::Axis::X,
+									'y' | 'g' | 't' => buf[i] = ast::Axis::Y,
+									'z' | 'b' | 'p' => buf[i] = ast::Axis::Z,
+									'w' | 'a' | 'q' => buf[i] = ast::Axis::W,
+									_ => {
+										walker.push_semantic_diag(Semantic::InvalidFieldAccessOnVector {
+											field: (ident.name.clone(), ident.span),
+											typename: previous_type.type_name(ctx),
+										});
+										return (
+											ast::Expr {
+												span: self.span,
+												ty: ast::ExprTy::Invalid,
+											},
+											Type::new_nat(),
+										);
+									}
+								}
+
 								if i == 0 {
 									naming = match c {
 										'x' | 'y' | 'z' | 'w' => Notation::XYZW,
 										'r' | 'g' | 'b' | 'a' => Notation::RGBA,
 										's' | 't' | 'p' | 'q' => Notation::STPQ,
 										_ => {
-											walker.push_semantic_diag(Semantic::InvalidFieldAccessOnPrimitive(ident.span, ident.name));
+											walker.push_semantic_diag(Semantic::InvalidFieldAccessOnVector {
+												field: (ident.name.clone(), ident.span),
+												typename: previous_type.type_name(ctx),
+											});
 											return (
 												ast::Expr {
 													span: self.span,
@@ -4602,40 +4660,70 @@ impl Expr {
 										Notation::XYZW => match c {
 											'x' | 'y' | 'z' | 'w' => {}
 											_ => {
-												walker.push_semantic_diag(Semantic::SwizzleMixesNotations(ident.span));
+												error = Some(Semantic::VectorSwizzleMixedNotation { swizzle: (ident.name.clone(), ident.span), first_notation: "xyzw", second_notation: match c {
+													'r'|'g'|'b'|'a' => "rgba",
+													's'|'t'|'p'|'q'=>"stpq",
+													_ => unreachable!()
+												} });
 											}
 										},
 										Notation::RGBA => match c {
 											'r' | 'g' | 'b' | 'a' => {}
 											_ => {
-												walker.push_semantic_diag(Semantic::SwizzleMixesNotations(ident.span));
+												error = Some(Semantic::VectorSwizzleMixedNotation { swizzle: (ident.name.clone(), ident.span), first_notation: "rgba", second_notation: match c {
+													'x'|'y'|'z'|'w' => "xyzw",
+													's'|'t'|'p'|'q'=>"stpq",
+													_ => unreachable!()
+												} });
 											}
 										},
 										Notation::STPQ => match c {
 											's' | 't' | 'p' | 'q' => {}
 											_ => {
-												walker.push_semantic_diag(Semantic::SwizzleMixesNotations(ident.span));
+												error = Some(Semantic::VectorSwizzleMixedNotation { swizzle: (ident.name.clone(), ident.span), first_notation: "stpq", second_notation: match c {
+													'x'|'y'|'z'|'w'=>"xyzw",
+													'r'|'g'|'b'|'a' => "rgba",
+													_ => unreachable!()
+												} });
 											}
 										},
 									}
 								}
-								match c {
-									'x' | 'r' | 's' => buf[i] = ast::Axis::X,
-									'y' | 'g' | 't' => buf[i] = ast::Axis::Y,
-									'z' | 'b' | 'p' => buf[i] = ast::Axis::Z,
-									'w' | 'a' | 'q' => buf[i] = ast::Axis::W,
-									_ => {
-										walker.push_semantic_diag(Semantic::InvalidFieldAccessOnPrimitive(ident.span, ident.name));
-										return (
-											ast::Expr {
-												span: self.span,
-												ty: ast::ExprTy::Invalid,
-											},
-											Type::new_nat(),
-										);
-									}
-								}
 								requested_size = i + 1;
+							}
+							if let Some(error) = error {
+								walker.push_semantic_diag(error);
+							} else {
+								if buf.contains(&ast::Axis::Z) && vec_size == 2
+								{
+									walker.push_semantic_diag(
+										Semantic::VectorSwizzleInvalidDim {
+											swizzle: (
+												ident.name.clone(),
+												ident.span,
+											),
+											typename: previous_type
+												.type_name(ctx),
+											type_dim: 3,
+											invalid_component: 'z',
+										},
+									);
+								} else if buf.contains(&ast::Axis::W)
+									&& (vec_size == 2 || vec_size == 3)
+								{
+									walker.push_semantic_diag(
+										Semantic::VectorSwizzleInvalidDim {
+											swizzle: (
+												ident.name.clone(),
+												ident.span,
+											),
+											typename: previous_type
+												.type_name(ctx),
+											type_dim: 4,
+											invalid_component: 'w',
+										},
+									);
+								}
 							}
 
 							leafs.push((
@@ -4693,9 +4781,13 @@ impl Expr {
 							} else {
 								// We have an unresolved struct field, so we can't resolve any further.
 								walker.push_semantic_diag(
-									Semantic::UnresolvedStructField(
-										current.span,
-									),
+									Semantic::UnresolvedStructField {
+										field: (ident.name, ident.span),
+										struct_name: struct_symbol.name.clone(),
+										struct_def: ctx.arena
+											[struct_symbol.def_node.0]
+											.span,
+									},
 								);
 								return (
 									ast::Expr {
@@ -4800,7 +4892,7 @@ impl Expr {
 						Either::Left(primitive) => {
 							if &ident.name != "length" {
 								walker.push_semantic_diag(
-									Semantic::FoundMethod(current.span),
+									Semantic::InvalidMethod(current.span),
 								);
 								return (
 									ast::Expr {
@@ -4865,7 +4957,7 @@ impl Expr {
 						}
 						Either::Right(struct_handle_) => {
 							// Structs cannot have methods, so this cannot be valid.
-							walker.push_semantic_diag(Semantic::FoundMethod(
+							walker.push_semantic_diag(Semantic::InvalidMethod(
 								current.span,
 							));
 							return (

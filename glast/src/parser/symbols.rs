@@ -1,5 +1,5 @@
 use super::{
-	ast, FunctionHandle, NodeHandle, StructHandle, SubroutineUniformHandle,
+	ast, Ctx, FunctionHandle, NodeHandle, StructHandle, SubroutineUniformHandle,
 };
 use crate::{
 	syntax::{SyntaxModifiers, SyntaxType},
@@ -507,6 +507,17 @@ impl Type {
 			Ok(new)
 		} else {
 			Err(())
+		}
+	}
+
+	pub fn type_name(&self, ctx: &Ctx) -> String {
+		if self.is_not_a_type() {
+			return "{unknown}".to_owned();
+		}
+
+		match self.ty {
+			Either::Left(prim) => format!("{prim}"),
+			Either::Right(handle) => ctx.structs[handle.0].name.clone(),
 		}
 	}
 }

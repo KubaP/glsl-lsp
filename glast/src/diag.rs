@@ -98,8 +98,8 @@ pub enum Semantic {
 		swizzle: Spanned<String>,
 		/// The type of the vector.
 		typename: String,
-		/// The number of dimensions of the vector.
-		type_dim: usize,
+		/// The dimension number of the invalid component.
+		component_dim: usize,
 		/// The invalid dimension component.
 		invalid_component: char,
 	},
@@ -156,7 +156,7 @@ pub enum Semantic {
 		no_of_args: usize,
 		/// The number of expected parameters.
 		no_of_params: usize,
-		/// The span of the definition node.
+		/// The span of the macro's signature.
 		def: Span,
 	},
 	/// WARNING - Found a token concatenation operator that is unnecessary.
@@ -320,6 +320,8 @@ pub enum Syntax2 {
 		span: Span,
 	},
 	ExpectedNameFoundPrimitive(Span),
+	/// Expression-related syntax diagnostics.
+	Expr(ExprDiag),
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -367,6 +369,8 @@ pub enum ForRemoval {
 	Expr,
 	/// The initialization part of a variable specifier.
 	VarInitialization,
+	/// The `[second..=last]` variable specifiers in the situation that there is more than one.
+	MultipleVarSpecifiers,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -409,6 +413,10 @@ pub enum ExpectedGrammar {
 	QualifierBeforeInterfaceBlock,
 	/// The end punctuation of a block comment (`*/`).
 	BlockCommentEnd,
+	/// Something on the LHS of a token concatenator.
+	TokenConcatLHS,
+	/// Something on the RHS of a token concatenator.
+	TokenConcatRHS,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -487,23 +495,27 @@ pub enum Syntax {
 }
 
 /// Syntax diagnostics for expressions.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[non_exhaustive]
 pub enum ExprDiag {
-	// TODO: Track the spans of the suffixes and generate errors when a suffix mismatches the number type.
-
 	/* LITERALS */
-	/// ERROR - Found a number literal that has an invalid suffix.
-	///
-	/// - `0` - The span of the number.
-	InvalidNumber(Span),
-	/// ERROR - Found a number literal that has no digits, e.g. `0xu` or `.f`.
-	///
-	/// - `0` - The span of the number.
+	/// Found a number that has a prefix/suffix but no content. Some examples:
+	/// ```text
+	/// 0xu
+	///   ^ nothing between the prefix `0x` and suffix `u`
+	/// ```
 	EmptyNumber(Span),
-	/// ERROR - Found a number literal that could not be parsed.
-	///
-	/// - `0` - The span of the number.
+	/// Found a number that has an invalid suffix.
+	/// ```text
+	/// 500p
+	/// 1.0ab
+	/// .f
+	/// ```
+	InvalidNumberSuffix(Span),
+	/// Found a number that could not be parsed into an `i64`/`u64`.
+	/// ```text
+	/// 18_446_744_073_709_551_616
+	/// ```
 	UnparsableNumber(Span),
 
 	/* COMPOUND EXPRESSIONS */

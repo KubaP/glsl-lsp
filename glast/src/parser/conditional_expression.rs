@@ -6,7 +6,9 @@ use super::{
 	Macro, SyntaxModifiers, SyntaxToken, SyntaxType,
 };
 use crate::{
-	diag::{ExprDiag, PreprocDefineDiag, Semantic, Syntax},
+	diag::{
+		ExpectedGrammar, ExprDiag, PreprocDefineDiag, Semantic, Syntax, Syntax2,
+	},
 	lexer::preprocessor::ConditionToken,
 	Either, Span, SpanEncoding, Spanned,
 };
@@ -36,7 +38,7 @@ pub(super) fn cond_parser(
 	tokens: Vec<Spanned<ConditionToken>>,
 	macros: &HashMap<String, (Span, Macro)>,
 	span_encoding: SpanEncoding,
-) -> (Option<Expr>, Vec<Syntax>, Vec<SyntaxToken>) {
+) -> (Option<Expr>, Vec<Syntax2>, Vec<SyntaxToken>) {
 	let mut walker = Walker::new(tokens, macros, span_encoding);
 
 	let mut parser = ShuntingYard {
@@ -79,7 +81,7 @@ struct Walker<'a> {
 	disable_macro_expansion: bool,
 
 	/// Any syntax diagnostics created from the tokens parsed so-far.
-	syntax_diags: Vec<Syntax>,
+	syntax_diags: Vec<Syntax2>,
 	/// Any semantic diagnostics created from the tokens parsed so-far.
 	semantic_diags: Vec<Semantic>,
 
@@ -168,9 +170,13 @@ impl<'a> Walker<'a> {
 
 			match token {
 				// We check if the new token is a macro call site.
-				ConditionToken::Ident(s) if !self.disable_macro_expansion => {
-					if let Some((signature_span, macro_)) = self.macros.get(s) {
-						if self.active_macros.contains(s) {
+				ConditionToken::Ident(ident)
+					if !self.disable_macro_expansion =>
+				{
+					if let Some((signature_span, macro_)) =
+						self.macros.get(ident)
+					{
+						if self.active_macros.contains(ident) {
 							// We have already visited a macro with this identifier. Recursion is not supported so
 							// we don't continue.
 							break;
@@ -179,22 +185,24 @@ impl<'a> Walker<'a> {
 						let ident_span = *token_span;
 
 						if let Macro::Function { params, body } = macro_ {
-							// We have an identifier which matches a function-like macro, so we are expecting a
+							// We have an identifier that matches a function-like macro name, so we are expecting a
 							// parameter list in the current token stream before we do any switching.
 
 							// We don't need to worry about having to switch source streams because that would
 							// imply that a conditional compilation directive is in the middle of a function-like
 							// macro call site, which isn't valid. A function-like macro call cannot have
 							// preprocessor directives within, which means that the source stream won't be split up
-							// by a conditional, which means the entire invocation of the macro will be within this
-							// stream.
+							// by a conditional directive, which means the entire invocation of the macro will be
+							// within this stream.
 
 							let mut tmp_cursor = *cursor + 1;
 							let mut syntax_spans = vec![SyntaxToken {
 								ty: SyntaxType::FunctionMacro,
-								modifiers: SyntaxModifiers::empty(),
+								modifiers: SyntaxModifiers::MACRO_CALLSITE
+									| SyntaxModifiers::CONDITIONAL,
 								span: ident_span,
 							}];
+							// There may be comments between the identifier and the argument list.
 							loop {
 								match stream.get(tmp_cursor) {
 									Some((token, token_span)) => match token {
@@ -204,8 +212,8 @@ impl<'a> Walker<'a> {
 										} => {
 											syntax_spans.push(SyntaxToken {
 												ty: SyntaxType::Comment,
-												modifiers:
-													SyntaxModifiers::empty(),
+												modifiers: SyntaxModifiers::MACRO_CALLSITE
+													| SyntaxModifiers::CONDITIONAL,
 												span: *token_span,
 											});
 											tmp_cursor += 1;
@@ -216,13 +224,14 @@ impl<'a> Walker<'a> {
 								}
 							}
 
-							// Consume the opening `(` parenthesis.
+							// We expect an opening `(` parenthesis.
 							let l_paren_span = match stream.get(tmp_cursor) {
 								Some((token, token_span)) => match token {
 									ConditionToken::LParen => {
 										syntax_spans.push(SyntaxToken {
 											ty: SyntaxType::Punctuation,
-											modifiers: SyntaxModifiers::empty(),
+											modifiers: SyntaxModifiers::MACRO_CALLSITE
+												| SyntaxModifiers::CONDITIONAL,
 											span: *token_span,
 										});
 										*cursor = tmp_cursor + 1;
@@ -239,44 +248,44 @@ impl<'a> Walker<'a> {
 
 							// Look for any arguments until we hit a closing `)` parenthesis. The preprocessor
 							// immediately switches to the next argument when a `,` is encountered, unless we are
-							// within a parenthesis group.
-							/* #[derive(PartialEq)]
-							enum Prev {
-								None,
-								Param,
-								Comma,
-								Invalid,
-							}
-							let mut prev = Prev::None; */
+							// within a parenthesis group. Unlike with function parameter/argument lists, a
+							// function-like macro call argument can be empty; all that matters is that the
+							// argument and parameter count match.
 							let mut prev_span = l_paren_span;
 							let mut paren_groups = 0;
 							let mut args = Vec::new();
-							let mut arg = Vec::new();
-							let mut first_token = true;
+							let mut current_arg = Vec::new();
 							let r_paren_span = loop {
-								let (token, token_span) = match stream
-									.get(*cursor)
-								{
-									Some(t) => t,
-									None => {
-										self.syntax_diags.push(Syntax::PreprocDefine(PreprocDefineDiag::ParamsExpectedRParen(
-											prev_span.next_single_width()
-										)));
-										break 'outer;
-									}
-								};
+								let (token, token_span) =
+									match stream.get(*cursor) {
+										Some(t) => t,
+										None => {
+											// We expect a `)` to finish the argument list. The best error recovery
+											// strategy is to treat this as an unfinished function-like macro call,
+											// and ignore it rather than expand it. MAYBE: We could expand the
+											// macro if params == args?
+											self.syntax_diags.push(Syntax2::MissingPunct {
+												char: ')',
+												pos: prev_span.end,
+												ctx: crate::diag::DiagCtx::FunctionMacroArgList,
+											});
+											break 'outer;
+										}
+									};
 
 								match token {
 									ConditionToken::Comma => {
 										syntax_spans.push(SyntaxToken {
 											ty: SyntaxType::Punctuation,
-											modifiers: SyntaxModifiers::empty(),
+											modifiers: SyntaxModifiers::MACRO_CALLSITE
+												| SyntaxModifiers::CONDITIONAL,
 											span: *token_span,
 										});
 										if paren_groups == 0 {
-											let arg = std::mem::take(&mut arg);
+											let arg = std::mem::take(
+												&mut current_arg,
+											);
 											args.push(arg);
-											/* prev = Prev::Comma; */
 										}
 										prev_span = *token_span;
 										*cursor += 1;
@@ -290,14 +299,21 @@ impl<'a> Walker<'a> {
 											// We have reached the end of this function-like macro call site.
 											syntax_spans.push(SyntaxToken {
 												ty: SyntaxType::Punctuation,
-												modifiers:
-													SyntaxModifiers::empty(),
+												modifiers: SyntaxModifiers::MACRO_CALLSITE
+													| SyntaxModifiers::CONDITIONAL,
 												span: *token_span,
 											});
-											if !first_token {
-												let arg =
-													std::mem::take(&mut arg);
-												args.push(arg);
+											let current_arg = std::mem::take(
+												&mut current_arg,
+											);
+											if l_paren_span.end
+												!= token_span.start
+											{
+												// If we have a `(` immediately followed by a `)`, we don't want to
+												// push an argument. However, if there is something between the
+												// parenthesis (including empty space) we do want to treat it as an
+												// argument.
+												args.push(current_arg);
 											}
 											// It is important that we don't increment the cursor to the next token
 											// after the macro call site. This is because once this macro is
@@ -305,22 +321,21 @@ impl<'a> Walker<'a> {
 											// automatically increment the cursor onto the next token which will be
 											// the first token after the macro call site. The object-like macro
 											// branch also doesn't perform this increment.
-											// *cursor += 1;
 											break *token_span;
 										}
 										paren_groups -= 1;
 									}
 									_ => {}
 								}
+
 								syntax_spans.push(SyntaxToken {
 									ty: token.non_semantic_colour(),
-									modifiers: SyntaxModifiers::empty(),
+									modifiers: SyntaxModifiers::MACRO_CALLSITE
+										| SyntaxModifiers::CONDITIONAL,
 									span: *token_span,
 								});
-								arg.push((token.clone(), *token_span));
-								/* prev = Prev::Param; */
+								current_arg.push((token.clone(), *token_span));
 								*cursor += 1;
-								first_token = false;
 							};
 							let call_site_span =
 								Span::new(ident_span.start, r_paren_span.end);
@@ -339,18 +354,19 @@ impl<'a> Walker<'a> {
 								);
 								continue;
 							}
-							let mut param_map = HashMap::new();
-							params.iter().zip(args.into_iter()).for_each(
-								|(ident, tokens)| {
-									param_map.insert(&ident.name, tokens);
-								},
-							);
 
 							// We now go through the replacement token list and replace any identifiers which match
 							// a parameter name with the relevant argument's tokens.
+							let mut param_map = HashMap::new();
+							params.iter().zip(args.into_iter()).for_each(
+								|(param_name, arg_tokens)| {
+									param_map
+										.insert(&param_name.name, arg_tokens);
+								},
+							);
 							let mut new_body = Vec::with_capacity(body.len());
 							for (token, token_span) in body {
-								match &token {
+								match token {
 									crate::lexer::Token::Ident(str) => {
 										if let Some(arg) = param_map.get(&str) {
 											for token in arg {
@@ -361,51 +377,33 @@ impl<'a> Walker<'a> {
 									}
 									_ => {}
 								}
-								new_body.push((token.clone(), *token_span));
 							}
-
 							// Then, we perform token concatenation.
 							let (new_body, mut syntax, mut semantic) =
-								crate::lexer::preprocessor::concat_macro_body(
+								lexer::preprocessor::concat_macro_body(
 									new_body,
 									self.span_encoding,
 								);
 							self.syntax_diags.append(&mut syntax);
 							self.semantic_diags.append(&mut semantic);
 
-							if body.is_empty() {
-								let ident = s.to_owned();
-
-								if self.streams.len() == 1 {
-									// We only syntax highlight when it is the first macro call.
-									self.macro_call_site = Some(ident_span);
-									self.syntax_tokens
-										.append(&mut syntax_spans);
-								}
-
-								self.active_macros.insert(ident.clone());
-								self.streams.push((
-									ident,
-									vec![(
-										ConditionToken::Num(1),
-										signature_span.end_zero_width(),
-									)],
-									0,
-								));
-
-								// The first token in a new stream could be another macro call, so we re-run the
-								// loop on this new stream in case.
-								dont_increment = true;
-								continue;
-							}
-
-							let ident = s.to_owned();
+							let ident = ident.to_owned();
 
 							// We only syntax highlight and note the macro call site when it is the first macro
 							// call.
 							if self.streams.len() == 1 {
 								self.macro_call_site = Some(call_site_span);
 								self.syntax_tokens.append(&mut syntax_spans);
+							}
+
+							if body.is_empty() {
+								// The macro is empty, so we want to move to the next token of the existing stream.
+								self.semantic_diags.push(
+									Semantic::EmptyMacroCallSite {
+										call_site: call_site_span,
+									},
+								);
+								continue;
 							}
 
 							self.active_macros.insert(ident.clone());
@@ -433,36 +431,9 @@ impl<'a> Walker<'a> {
 							dont_increment = true;
 							continue;
 						} else if let Macro::Object(stream) = macro_ {
-							if stream.is_empty() {
-								let ident = s.to_owned();
+							// We have an identifier that matches an object-like macro name.
 
-								if self.streams.len() == 1 {
-									// We only syntax highlight when it is the first macro call.
-									self.macro_call_site = Some(ident_span);
-									self.syntax_tokens.push(SyntaxToken {
-										ty: SyntaxType::ObjectMacro,
-										modifiers: SyntaxModifiers::CONDITIONAL,
-										span: ident_span,
-									});
-								}
-
-								self.active_macros.insert(ident.clone());
-								self.streams.push((
-									ident,
-									vec![(
-										ConditionToken::Num(1),
-										signature_span.end_zero_width(),
-									)],
-									0,
-								));
-
-								// The first token in a new stream could be another macro call, so we re-run the
-								// loop on this new stream in case.
-								dont_increment = true;
-								continue;
-							}
-
-							let ident = s.to_owned();
+							let ident = ident.to_owned();
 
 							// We only syntax highlight and note the macro call site when it is the first macro
 							// call.
@@ -470,9 +441,20 @@ impl<'a> Walker<'a> {
 								self.macro_call_site = Some(ident_span);
 								self.syntax_tokens.push(SyntaxToken {
 									ty: SyntaxType::ObjectMacro,
-									modifiers: SyntaxModifiers::CONDITIONAL,
+									modifiers: SyntaxModifiers::MACRO_CALLSITE
+										| SyntaxModifiers::CONDITIONAL,
 									span: ident_span,
 								});
+							}
+
+							if stream.is_empty() {
+								// The macro is empty, so we want to move to the next token of the existing stream.
+								self.semantic_diags.push(
+									Semantic::EmptyMacroCallSite {
+										call_site: ident_span,
+									},
+								);
+								continue;
 							}
 
 							self.active_macros.insert(ident.clone());
@@ -518,9 +500,10 @@ impl<'a> Walker<'a> {
 				}
 				ConditionToken::BlockComment { contains_eof, .. } => {
 					if *contains_eof {
-						self.syntax_diags.push(Syntax::BlockCommentMissingEnd(
-							token_span.end_zero_width(),
-						));
+						self.syntax_diags.push(Syntax2::ExpectedGrammar {
+							item: ExpectedGrammar::BlockCommentEnd,
+							pos: token_span.end,
+						});
 					}
 					let token_span = *token_span;
 					if self.streams.len() == 1 {
@@ -917,7 +900,7 @@ impl ShuntingYard {
 					walker.push_colour(span, SyntaxType::Number);
 				}
 				ConditionToken::Num(_) if state == State::AfterOperand => {
-					walker.syntax_diags.push(Syntax::Expr(
+					walker.syntax_diags.push(Syntax2::Expr(
 						ExprDiag::FoundOperandAfterOperand(
 							self.get_previous_span().unwrap(),
 							span,
@@ -943,7 +926,7 @@ impl ShuntingYard {
 					walker.push_colour(span, SyntaxType::Ident);
 				}
 				ConditionToken::Ident(_) if state == State::AfterOperand => {
-					walker.syntax_diags.push(Syntax::Expr(
+					walker.syntax_diags.push(Syntax2::Expr(
 						ExprDiag::FoundOperandAfterOperand(
 							self.get_previous_span().unwrap(),
 							span,
@@ -983,7 +966,7 @@ impl ShuntingYard {
 				ConditionToken::Not | ConditionToken::Flip
 					if state == State::AfterOperand =>
 				{
-					walker.syntax_diags.push(Syntax::Expr(
+					walker.syntax_diags.push(Syntax2::Expr(
 						ExprDiag::InvalidBinOrPostOperator(span),
 					));
 					invalidate_rest = true;
@@ -1000,7 +983,7 @@ impl ShuntingYard {
 					walker.push_colour(span, SyntaxType::Punctuation);
 				}
 				ConditionToken::LParen if state == State::AfterOperand => {
-					walker.syntax_diags.push(Syntax::Expr(
+					walker.syntax_diags.push(Syntax2::Expr(
 						ExprDiag::FoundOperandAfterOperand(
 							self.get_previous_span().unwrap(),
 							span,
@@ -1035,14 +1018,14 @@ impl ShuntingYard {
 					}
 
 					if just_started_paren {
-						walker.syntax_diags.push(Syntax::Expr(
+						walker.syntax_diags.push(Syntax2::Expr(
 							ExprDiag::FoundEmptyParens(Span::new(
 								prev_op_span.unwrap().start,
 								span.end,
 							)),
 						));
 					} else {
-						walker.syntax_diags.push(Syntax::Expr(
+						walker.syntax_diags.push(Syntax2::Expr(
 							ExprDiag::FoundRParenInsteadOfOperand(
 								prev_op_span.unwrap(),
 								span,
@@ -1064,7 +1047,7 @@ impl ShuntingYard {
 					let (token, token_span) = match walker.peek() {
 						Some(t) => t,
 						None => {
-							walker.syntax_diags.push(Syntax::Expr(
+							walker.syntax_diags.push(Syntax2::Expr(
 								ExprDiag::ExpectedIdentOrLParenAfterDefinedOp(
 									defined_kw_span.next_single_width(),
 								),
@@ -1102,7 +1085,7 @@ impl ShuntingYard {
 							let (token, token_span) = match walker.peek() {
 								Some(t) => t,
 								None => {
-									walker.syntax_diags.push(Syntax::Expr(ExprDiag::ExpectedIdentAfterDefineOpLParen(l_paren_span.next_single_width())));
+									walker.syntax_diags.push(Syntax2::Expr(ExprDiag::ExpectedIdentAfterDefineOpLParen(l_paren_span.next_single_width())));
 									break 'main;
 								}
 							};
@@ -1122,7 +1105,7 @@ impl ShuntingYard {
 									)
 								}
 								_ => {
-									walker.syntax_diags.push(Syntax::Expr(ExprDiag::ExpectedIdentAfterDefineOpLParen(l_paren_span.next_single_width())));
+									walker.syntax_diags.push(Syntax2::Expr(ExprDiag::ExpectedIdentAfterDefineOpLParen(l_paren_span.next_single_width())));
 									break 'main;
 								}
 							};
@@ -1132,14 +1115,14 @@ impl ShuntingYard {
 							let (token, token_span) = match walker.peek() {
 								Some(t) => t,
 								None => {
-									walker.syntax_diags.push(Syntax::Expr(ExprDiag::ExpectedRParenAfterDefineOpIdent(ident_span.next_single_width())));
+									walker.syntax_diags.push(Syntax2::Expr(ExprDiag::ExpectedRParenAfterDefineOpIdent(ident_span.next_single_width())));
 									break 'main;
 								}
 							};
 							match token {
 								ConditionToken::RParen => {}
 								_ => {
-									walker.syntax_diags.push(Syntax::Expr(ExprDiag::ExpectedRParenAfterDefineOpIdent(ident_span.next_single_width())));
+									walker.syntax_diags.push(Syntax2::Expr(ExprDiag::ExpectedRParenAfterDefineOpIdent(ident_span.next_single_width())));
 									break 'main;
 								}
 							}
@@ -1156,7 +1139,7 @@ impl ShuntingYard {
 							continue 'main;
 						}
 						_ => {
-							walker.syntax_diags.push(Syntax::Expr(
+							walker.syntax_diags.push(Syntax2::Expr(
 								ExprDiag::ExpectedIdentOrLParenAfterDefinedOp(
 									defined_kw_span.next_single_width(),
 								),
@@ -1166,7 +1149,7 @@ impl ShuntingYard {
 					}
 				}
 				ConditionToken::Defined if state == State::AfterOperand => {
-					walker.syntax_diags.push(Syntax::Expr(
+					walker.syntax_diags.push(Syntax2::Expr(
 						ExprDiag::FoundOperandAfterOperand(
 							self.get_previous_span().unwrap(),
 							span,
@@ -1183,7 +1166,7 @@ impl ShuntingYard {
 					// We have encountered an unexpected token that's not allowed to be part of an expression.
 					walker
 						.syntax_diags
-						.push(Syntax::Expr(ExprDiag::FoundInvalidToken(span)));
+						.push(Syntax2::Expr(ExprDiag::FoundInvalidToken(span)));
 					invalidate_rest = true;
 					break 'main;
 				}
@@ -1194,7 +1177,7 @@ impl ShuntingYard {
 					walker.push_colour(span, SyntaxType::Operator);
 				}
 				_ if state == State::Operand => {
-					walker.syntax_diags.push(Syntax::Expr(
+					walker.syntax_diags.push(Syntax2::Expr(
 						ExprDiag::InvalidPrefixOperator(span),
 					));
 					invalidate_rest = true;
@@ -1227,7 +1210,7 @@ impl ShuntingYard {
 			while let Some(group) = self.groups.last() {
 				match group {
 					Group::Paren(_, l_paren) => {
-						walker.syntax_diags.push(Syntax::Expr(
+						walker.syntax_diags.push(Syntax2::Expr(
 							ExprDiag::UnclosedParens(*l_paren, group_end),
 						));
 					}
@@ -1415,7 +1398,7 @@ mod tests {
 	//! that is a prerequisite.
 
 	use crate::{
-		diag::{ExprDiag, Syntax},
+		diag::{ExprDiag, Syntax2},
 		lexer::{NumType, OpTy, Token},
 		parser::{
 			ast::{conditional::*, Ident},
@@ -1554,7 +1537,7 @@ mod tests {
 				ty: ExprTy::Num(50),
 				span: span(0, 2),
 			},
-			Syntax::Expr(ExprDiag::FoundOperandAfterOperand(
+			Syntax2::Expr(ExprDiag::FoundOperandAfterOperand(
 				span(0, 2),
 				span(3, 4),
 			))
@@ -1565,7 +1548,7 @@ mod tests {
 				ty: ExprTy::Num(50),
 				span: span(0, 2),
 			},
-			Syntax::Expr(ExprDiag::FoundOperandAfterOperand(
+			Syntax2::Expr(ExprDiag::FoundOperandAfterOperand(
 				span(0, 2),
 				span(3, 6),
 			))
@@ -1694,7 +1677,7 @@ mod tests {
 				ty: ExprTy::Num(5),
 				span: span(0, 1),
 			},
-			Syntax::Expr(ExprDiag::InvalidBinOrPostOperator(span(1, 2)))
+			Syntax2::Expr(ExprDiag::InvalidBinOrPostOperator(span(1, 2)))
 		);
 		assert_expr_err!(
 			"5~",
@@ -1702,7 +1685,7 @@ mod tests {
 				ty: ExprTy::Num(5),
 				span: span(0, 1),
 			},
-			Syntax::Expr(ExprDiag::InvalidBinOrPostOperator(span(1, 2)))
+			Syntax2::Expr(ExprDiag::InvalidBinOrPostOperator(span(1, 2)))
 		);
 		assert_expr_err!(
 			"-- *",
@@ -1725,7 +1708,7 @@ mod tests {
 				},
 				span: span(0, 2),
 			},
-			Syntax::Expr(ExprDiag::InvalidPrefixOperator(span(3, 4)))
+			Syntax2::Expr(ExprDiag::InvalidPrefixOperator(span(3, 4)))
 		);
 	}
 
@@ -1769,31 +1752,31 @@ mod tests {
 		);
 		assert_err!(
 			"defined",
-			Syntax::Expr(ExprDiag::ExpectedIdentOrLParenAfterDefinedOp(span(
+			Syntax2::Expr(ExprDiag::ExpectedIdentOrLParenAfterDefinedOp(span(
 				7, 8
 			)))
 		);
 		assert_err!(
 			"defined  +",
-			Syntax::Expr(ExprDiag::ExpectedIdentOrLParenAfterDefinedOp(span(
+			Syntax2::Expr(ExprDiag::ExpectedIdentOrLParenAfterDefinedOp(span(
 				7, 8
 			)))
 		);
 		assert_err!(
 			"defined (",
-			Syntax::Expr(ExprDiag::ExpectedIdentAfterDefineOpLParen(span(
+			Syntax2::Expr(ExprDiag::ExpectedIdentAfterDefineOpLParen(span(
 				9, 10
 			)))
 		);
 		assert_err!(
 			"defined ( foo",
-			Syntax::Expr(ExprDiag::ExpectedRParenAfterDefineOpIdent(span(
+			Syntax2::Expr(ExprDiag::ExpectedRParenAfterDefineOpIdent(span(
 				13, 14
 			)))
 		);
 		assert_err!(
 			"defined (   +",
-			Syntax::Expr(ExprDiag::ExpectedIdentAfterDefineOpLParen(span(
+			Syntax2::Expr(ExprDiag::ExpectedIdentAfterDefineOpLParen(span(
 				9, 10
 			)))
 		);
@@ -1968,7 +1951,7 @@ mod tests {
 				},
 				span: span(0, 5),
 			},
-			Syntax::Expr(ExprDiag::InvalidBinOrPostOperator(span(6, 7)))
+			Syntax2::Expr(ExprDiag::InvalidBinOrPostOperator(span(6, 7)))
 		);
 		assert_expr_err!(
 			"0 - * 5",
@@ -1986,7 +1969,7 @@ mod tests {
 				},
 				span: span(0, 3),
 			},
-			Syntax::Expr(ExprDiag::InvalidPrefixOperator(span(4, 5)))
+			Syntax2::Expr(ExprDiag::InvalidPrefixOperator(span(4, 5)))
 		);
 	}
 
@@ -2012,7 +1995,7 @@ mod tests {
 				ty: ExprTy::Num(0),
 				span: span(0, 3),
 			},
-			Syntax::Expr(ExprDiag::FoundOperandAfterOperand(
+			Syntax2::Expr(ExprDiag::FoundOperandAfterOperand(
 				span(0, 3),
 				span(4, 7)
 			))
@@ -2104,7 +2087,7 @@ mod tests {
 				ty: ExprTy::Num(0),
 				span: span(0, 3)
 			},
-			Syntax::Expr(ExprDiag::FoundOperandAfterOperand(
+			Syntax2::Expr(ExprDiag::FoundOperandAfterOperand(
 				span(0, 3),
 				span(3, 4)
 			))
@@ -2249,7 +2232,7 @@ mod tests {
 				},
 				span: span(0, 6),
 			},
-			Syntax::Expr(ExprDiag::FoundOperandAfterOperand(
+			Syntax2::Expr(ExprDiag::FoundOperandAfterOperand(
 				span(0, 6),
 				span(7, 13)
 			))

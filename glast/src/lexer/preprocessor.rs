@@ -1892,10 +1892,10 @@ pub(crate) fn concat_macro_body(
 	span_encoding: SpanEncoding,
 ) -> (
 	super::TokenStream,
-	Vec<crate::diag::Syntax>,
+	Vec<crate::diag::Syntax2>,
 	Vec<crate::diag::Semantic>,
 ) {
-	use crate::diag::{PreprocDefineDiag, Semantic, Syntax};
+	use crate::diag::{ExpectedGrammar, Semantic, Syntax2};
 
 	let mut stack = Vec::new();
 	let mut syntax_diags = Vec::new();
@@ -1912,9 +1912,10 @@ pub(crate) fn concat_macro_body(
 					if next.0 == super::Token::MacroConcat {
 						// We have something like `foobar ## ##`. We cannot concatenate two concat operators, so we
 						// just emit the tokens as-is.
-						syntax_diags.push(Syntax::PreprocDefine(
-							PreprocDefineDiag::TokenConcatMissingRHS(token.1),
-						));
+						syntax_diags.push(Syntax2::ExpectedGrammar {
+							item: ExpectedGrammar::TokenConcatRHS,
+							pos: token.1.end,
+						});
 						stack.push(prev);
 						stack.push((
 							super::Token::Invalid('#'),
@@ -1974,21 +1975,24 @@ pub(crate) fn concat_macro_body(
 					}
 				}
 				(Some(prev), None) => {
-					syntax_diags.push(Syntax::PreprocDefine(
-						PreprocDefineDiag::TokenConcatMissingRHS(token.1),
-					));
+					syntax_diags.push(Syntax2::ExpectedGrammar {
+						item: ExpectedGrammar::TokenConcatRHS,
+						pos: token.1.end,
+					});
 					stack.push(prev);
 				}
 				(None, Some(next)) => {
-					syntax_diags.push(Syntax::PreprocDefine(
-						PreprocDefineDiag::TokenConcatMissingLHS(token.1),
-					));
+					syntax_diags.push(Syntax2::ExpectedGrammar {
+						item: ExpectedGrammar::TokenConcatLHS,
+						pos: token.1.start - 1,
+					});
 					if next.0 == super::Token::MacroConcat {
 						// We begin the replacement-list with `## ##`. We cannot concatenate two concat operators,
 						// so we just emit the tokens as-is.
-						syntax_diags.push(Syntax::PreprocDefine(
-							PreprocDefineDiag::TokenConcatMissingRHS(token.1),
-						));
+						syntax_diags.push(Syntax2::ExpectedGrammar {
+							item: ExpectedGrammar::TokenConcatRHS,
+							pos: token.1.end,
+						});
 						stack.push((
 							super::Token::Invalid('#'),
 							token.1.first_char(),
@@ -2010,12 +2014,14 @@ pub(crate) fn concat_macro_body(
 				}
 				(None, None) => {
 					// The entire replacement-list is just `##`.
-					syntax_diags.push(Syntax::PreprocDefine(
-						PreprocDefineDiag::TokenConcatMissingLHS(token.1),
-					));
-					syntax_diags.push(Syntax::PreprocDefine(
-						PreprocDefineDiag::TokenConcatMissingRHS(token.1),
-					));
+					syntax_diags.push(Syntax2::ExpectedGrammar {
+						item: ExpectedGrammar::TokenConcatLHS,
+						pos: token.1.start - 1,
+					});
+					syntax_diags.push(Syntax2::ExpectedGrammar {
+						item: ExpectedGrammar::TokenConcatRHS,
+						pos: token.1.end,
+					});
 					stack.push((
 						super::Token::Invalid('#'),
 						token.1.first_char(),

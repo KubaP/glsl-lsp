@@ -29,7 +29,7 @@
 
 use super::{NodeHandle, StructHandle, VariableTableHandle};
 use crate::{
-	diag::Syntax,
+	diag::Syntax2,
 	lexer::{NumType, Token},
 	Either, Either3, NonEmpty, Span, Spanned,
 };
@@ -1025,7 +1025,7 @@ impl Lit {
 	///
 	/// # Panics
 	/// This function assumes the token is a `Num` or `Bool` variant.
-	pub fn parse(token: &Token, span: Span) -> Result<Self, (Self, Syntax)> {
+	pub fn parse(token: &Token, span: Span) -> Result<Self, (Self, Syntax2)> {
 		use crate::diag::ExprDiag;
 
 		match token {
@@ -1042,7 +1042,7 @@ impl Lit {
 				if s == "" {
 					return Err((
 						Self::InvalidNum,
-						Syntax::Expr(ExprDiag::EmptyNumber(span)),
+						Syntax2::Expr(ExprDiag::EmptyNumber(span)),
 					));
 				}
 				match type_ {
@@ -1062,7 +1062,7 @@ impl Lit {
 		s: &str,
 		suffix: Option<&str>,
 		span: Span,
-	) -> Result<Self, (Self, Syntax)> {
+	) -> Result<Self, (Self, Syntax2)> {
 		use crate::diag::ExprDiag;
 
 		if let Some(suffix) = suffix {
@@ -1073,7 +1073,7 @@ impl Lit {
 			} else {
 				return Err((
 					Self::InvalidNum,
-					Syntax::Expr(ExprDiag::InvalidNumber(span)),
+					Syntax2::Expr(ExprDiag::InvalidNumberSuffix(span)),
 				));
 			}
 		} else {
@@ -1084,7 +1084,7 @@ impl Lit {
 
 		Err((
 			Self::InvalidNum,
-			Syntax::Expr(ExprDiag::UnparsableNumber(span)),
+			Syntax2::Expr(ExprDiag::UnparsableNumber(span)),
 		))
 	}
 
@@ -1092,7 +1092,7 @@ impl Lit {
 		s: &str,
 		suffix: Option<&str>,
 		span: Span,
-	) -> Result<Self, (Self, Syntax)> {
+	) -> Result<Self, (Self, Syntax2)> {
 		use crate::diag::ExprDiag;
 
 		if let Some(suffix) = suffix {
@@ -1103,7 +1103,7 @@ impl Lit {
 			} else {
 				return Err((
 					Self::InvalidNum,
-					Syntax::Expr(ExprDiag::InvalidNumber(span)),
+					Syntax2::Expr(ExprDiag::InvalidNumberSuffix(span)),
 				));
 			}
 		} else {
@@ -1114,7 +1114,7 @@ impl Lit {
 
 		Err((
 			Self::InvalidNum,
-			Syntax::Expr(ExprDiag::UnparsableNumber(span)),
+			Syntax2::Expr(ExprDiag::UnparsableNumber(span)),
 		))
 	}
 
@@ -1122,7 +1122,7 @@ impl Lit {
 		s: &str,
 		suffix: Option<&str>,
 		span: Span,
-	) -> Result<Self, (Self, Syntax)> {
+	) -> Result<Self, (Self, Syntax2)> {
 		use crate::diag::ExprDiag;
 
 		if let Some(suffix) = suffix {
@@ -1133,7 +1133,7 @@ impl Lit {
 			} else {
 				return Err((
 					Self::InvalidNum,
-					Syntax::Expr(ExprDiag::InvalidNumber(span)),
+					Syntax2::Expr(ExprDiag::InvalidNumberSuffix(span)),
 				));
 			}
 		} else {
@@ -1144,7 +1144,7 @@ impl Lit {
 
 		Err((
 			Self::InvalidNum,
-			Syntax::Expr(ExprDiag::UnparsableNumber(span)),
+			Syntax2::Expr(ExprDiag::UnparsableNumber(span)),
 		))
 	}
 
@@ -1152,7 +1152,7 @@ impl Lit {
 		s: &str,
 		suffix: Option<&str>,
 		span: Span,
-	) -> Result<Self, (Self, Syntax)> {
+	) -> Result<Self, (Self, Syntax2)> {
 		use crate::diag::ExprDiag;
 
 		if let Some(suffix) = suffix {
@@ -1167,7 +1167,7 @@ impl Lit {
 			} else {
 				return Err((
 					Self::InvalidNum,
-					Syntax::Expr(ExprDiag::InvalidNumber(span)),
+					Syntax2::Expr(ExprDiag::InvalidNumberSuffix(span)),
 				));
 			}
 		} else {
@@ -1178,7 +1178,7 @@ impl Lit {
 
 		Err((
 			Self::InvalidNum,
-			Syntax::Expr(ExprDiag::UnparsableNumber(span)),
+			Syntax2::Expr(ExprDiag::UnparsableNumber(span)),
 		))
 	}
 }

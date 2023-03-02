@@ -102,7 +102,7 @@ bitflags! {
 	/// - `MACRO_BODY` = `2`,
 	/// - `MACRO_CALLSITE` = `4`,
 	/// - `UNDEFINE` = `8`,
-	/// - `CONDITIONAL` = `8`,
+	/// - `CONDITIONAL` = `16`,
 	/// - `DECLARATION` = `16`,
 	/// - `DEFINITION` = `32`,
 	/// - `CONST` = `64`,
@@ -118,7 +118,7 @@ bitflags! {
 		/// Tokens within the `#undef` directive, apart from the `#undef` part.
 		const UNDEFINE = 8;
 		/// Tokens within a conditional directive, apart from the `#if`/`#elif`/etc. part.
-		const CONDITIONAL = 8;
+		const CONDITIONAL = 16;
 		const DECLARATION = 16;
 		const DEFINITION = 32;
 	}

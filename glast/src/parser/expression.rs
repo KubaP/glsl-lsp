@@ -46,7 +46,7 @@ pub(super) fn parse_expr<'a, P: TokenStreamProvider<'a>>(
 	end_tokens: impl AsRef<[Token]>,
 ) -> (
 	Option<ast::Expr>,
-	Vec<Syntax>,
+	Vec<Syntax2>,
 	Vec<Semantic>,
 	Vec<SyntaxToken>,
 ) {
@@ -81,7 +81,7 @@ pub(super) fn try_parse_new_name<'a, P: TokenStreamProvider<'a>>(
 	(Ident, Vec<Semantic>),
 	(
 		Option<ast::Expr>,
-		Vec<Syntax>,
+		Vec<Syntax2>,
 		Vec<Semantic>,
 		Vec<SyntaxToken>,
 	),
@@ -91,7 +91,7 @@ pub(super) fn try_parse_new_name<'a, P: TokenStreamProvider<'a>>(
 			Some((_, span)) => span.start,
 			None => return Err((None, Vec::new(), Vec::new(), Vec::new())),
 		},
-		Mode::Default,
+		Mode::TakeOneUnit,
 	);
 	yard.parse(walker, end_tokens.as_ref());
 
@@ -137,13 +137,13 @@ pub(super) fn try_parse_new_var_specifiers<'a, P: TokenStreamProvider<'a>>(
 ) -> Result<
 	(
 		NonEmpty<super::NewVarSpecifier>,
-		Vec<Syntax>,
+		Vec<Syntax2>,
 		Vec<Semantic>,
 		Vec<SyntaxToken>,
 	),
 	(
 		Option<ast::Expr>,
-		Vec<Syntax>,
+		Vec<Syntax2>,
 		Vec<Semantic>,
 		Vec<SyntaxToken>,
 	),
@@ -194,11 +194,12 @@ pub(super) fn try_parse_type_specifier<'a, P: TokenStreamProvider<'a>>(
 	walker: &mut Walker<'a, P>,
 	ctx: &mut Ctx,
 	end_tokens: impl AsRef<[Token]>,
+	in_param_list: bool,
 ) -> Result<
-	(ast::Type, Vec<Syntax>, Vec<Semantic>, Vec<SyntaxToken>),
+	(ast::Type, Vec<Syntax2>, Vec<Semantic>, Vec<SyntaxToken>),
 	(
 		Option<ast::Expr>,
-		Vec<Syntax>,
+		Vec<Syntax2>,
 		Vec<Semantic>,
 		Vec<SyntaxToken>,
 	),
@@ -208,7 +209,13 @@ pub(super) fn try_parse_type_specifier<'a, P: TokenStreamProvider<'a>>(
 			Some((_, span)) => span.start,
 			None => return Err((None, Vec::new(), Vec::new(), Vec::new())),
 		},
-		Mode::Default,
+		if in_param_list {
+			Mode::DisallowTopLevelList
+		} else {
+			// In case we don't have a valid type specifier in the surrounding context, we will take the maximal
+			// expression possible.
+			Mode::Default
+		},
 	);
 	yard.parse(walker, end_tokens.as_ref());
 
@@ -251,13 +258,13 @@ pub(super) fn try_parse_subroutine_type_specifier<
 ) -> Result<
 	(
 		Either<ast::SubroutineType, ast::Type>,
-		Vec<Syntax>,
+		Vec<Syntax2>,
 		Vec<Semantic>,
 		Vec<SyntaxToken>,
 	),
 	(
 		Option<ast::Expr>,
-		Vec<Syntax>,
+		Vec<Syntax2>,
 		Vec<Semantic>,
 		Vec<SyntaxToken>,
 	),
@@ -267,7 +274,7 @@ pub(super) fn try_parse_subroutine_type_specifier<
 			Some((_, span)) => span.start,
 			None => return Err((None, Vec::new(), Vec::new(), Vec::new())),
 		},
-		Mode::Default,
+		Mode::TakeOneUnit,
 	);
 	yard.parse(walker, end_tokens.as_ref());
 
@@ -634,7 +641,7 @@ struct ShuntingYard {
 	mode: Mode,
 
 	/// Syntax diagnostics encountered during the parser execution.
-	syntax_diags: Vec<Syntax>,
+	syntax_diags: Vec<Syntax2>,
 	/// Semantic diagnostics encountered during the parser execution; (these will only be related to macros).
 	semantic_diags: Vec<Semantic>,
 
@@ -1647,16 +1654,16 @@ impl ShuntingYard {
 					arity_state = Arity::PotentialEnd;
 
 					match Lit::parse(token, span) {
-						Ok(l) => self.stack.push_back(Either::Left(Node {
-							ty: NodeTy::Lit(l),
+						Ok(lit) => self.stack.push_back(Either::Left(Node {
+							ty: NodeTy::Lit(lit),
 							span,
 						})),
-						Err((l, d)) => {
+						Err((liy, diag)) => {
 							self.stack.push_back(Either::Left(Node {
-								ty: NodeTy::Lit(l),
+								ty: NodeTy::Lit(liy),
 								span,
 							}));
-							self.syntax_diags.push(d);
+							self.syntax_diags.push(diag);
 						}
 					}
 
@@ -1697,7 +1704,7 @@ impl ShuntingYard {
 					} else {
 						// We are not in a delimited arity group. We don't perform error recovery because in this
 						// situation it's not as obvious what the behaviour should be, so we avoid any surprises.
-						self.syntax_diags.push(Syntax::Expr(
+						self.syntax_diags.push(Syntax2::Expr(
 							ExprDiag::FoundOperandAfterOperand(
 								self.get_previous_span().unwrap(),
 								span,
@@ -1785,7 +1792,7 @@ impl ShuntingYard {
 					} else {
 						// We are not in a delimited arity group. We don't perform error recovery because in this
 						// situation it's not as obvious what the behaviour should be, so we avoid any surprises.
-						self.syntax_diags.push(Syntax::Expr(
+						self.syntax_diags.push(Syntax2::Expr(
 							ExprDiag::FoundOperandAfterOperand(
 								self.get_previous_span().unwrap(),
 								span,
@@ -1842,7 +1849,7 @@ impl ShuntingYard {
 							self.set_op_rhs_toggle();
 						}
 						_ => {
-							self.syntax_diags.push(Syntax::Expr(
+							self.syntax_diags.push(Syntax2::Expr(
 								ExprDiag::InvalidPrefixOperator(span),
 							));
 							break 'main;
@@ -1891,7 +1898,7 @@ impl ShuntingYard {
 
 					match op {
 						lexer::OpTy::Flip | lexer::OpTy::Not => {
-							self.syntax_diags.push(Syntax::Expr(
+							self.syntax_diags.push(Syntax2::Expr(
 								ExprDiag::InvalidBinOrPostOperator(span),
 							));
 							break 'main;
@@ -2000,7 +2007,7 @@ impl ShuntingYard {
 							// this situation it's not as obvious what the behaviour should be, so we avoid any
 							// surprises.
 							if self.mode != Mode::TakeOneUnit {
-								self.syntax_diags.push(Syntax::Expr(
+								self.syntax_diags.push(Syntax2::Expr(
 									ExprDiag::FoundOperandAfterOperand(
 										self.get_previous_span().unwrap(),
 										span,
@@ -2069,7 +2076,7 @@ impl ShuntingYard {
 					}
 
 					if just_started_paren {
-						self.syntax_diags.push(Syntax::Expr(
+						self.syntax_diags.push(Syntax2::Expr(
 							ExprDiag::FoundEmptyParens(Span::new(
 								prev_op_span.unwrap().start,
 								span.end,
@@ -2077,7 +2084,7 @@ impl ShuntingYard {
 						));
 					} else if just_started_fn_arr_init {
 					} else {
-						self.syntax_diags.push(Syntax::Expr(
+						self.syntax_diags.push(Syntax2::Expr(
 							ExprDiag::FoundRParenInsteadOfOperand(
 								prev_op_span.unwrap(),
 								span,
@@ -2110,7 +2117,7 @@ impl ShuntingYard {
 				}
 				Token::LBracket if state == State::Operand => {
 					if self.mode != Mode::TakeOneUnit {
-						self.syntax_diags.push(Syntax::Expr(
+						self.syntax_diags.push(Syntax2::Expr(
 							ExprDiag::FoundLBracketInsteadOfOperand(
 								self.get_previous_span(),
 								span,
@@ -2154,7 +2161,7 @@ impl ShuntingYard {
 							}
 						}
 
-						self.syntax_diags.push(Syntax::Expr(
+						self.syntax_diags.push(Syntax2::Expr(
 							ExprDiag::FoundRBracketInsteadOfOperand(
 								prev_op_span.unwrap(),
 								span,
@@ -2211,7 +2218,7 @@ impl ShuntingYard {
 						self.register_arity_argument(span.start_zero_width());
 					} else {
 						if self.mode != Mode::TakeOneUnit {
-							self.syntax_diags.push(Syntax::Expr(
+							self.syntax_diags.push(Syntax2::Expr(
 								ExprDiag::FoundOperandAfterOperand(
 									self.get_previous_span().unwrap(),
 									span,
@@ -2279,7 +2286,7 @@ impl ShuntingYard {
 					}
 
 					if !empty_group && prev_arity != Arity::PotentialEnd {
-						self.syntax_diags.push(Syntax::Expr(
+						self.syntax_diags.push(Syntax2::Expr(
 							ExprDiag::FoundRBraceInsteadOfOperand(
 								prev_op_span.unwrap(),
 								span,
@@ -2335,7 +2342,7 @@ impl ShuntingYard {
 					// the list analysis will produce an error anyway, and we don't want two errors for the same
 					// incorrect syntax.
 					if !self.operators.is_empty() {
-						self.syntax_diags.push(Syntax::Expr(
+						self.syntax_diags.push(Syntax2::Expr(
 							ExprDiag::FoundCommaInsteadOfOperand(
 								self.get_previous_span().unwrap(),
 								span,
@@ -2348,7 +2355,7 @@ impl ShuntingYard {
 						})) = self.stack.back()
 						{
 						} else {
-							self.syntax_diags.push(Syntax::Expr(
+							self.syntax_diags.push(Syntax2::Expr(
 								ExprDiag::FoundCommaInsteadOfOperand(
 									self.get_previous_span().unwrap(),
 									span,
@@ -2412,7 +2419,7 @@ impl ShuntingYard {
 					//
 					// MAYBE: Should we make this a recoverable situation? (If so we need to consider arity)
 
-					self.syntax_diags.push(Syntax::Expr(
+					self.syntax_diags.push(Syntax2::Expr(
 						ExprDiag::FoundDotInsteadOfOperand(
 							self.get_previous_span(),
 							span,
@@ -2423,7 +2430,7 @@ impl ShuntingYard {
 				Token::Question => {
 					if state == State::Operand {
 						// We have encountered something like: `foo + ?`.
-						self.syntax_diags.push(Syntax::Expr(
+						self.syntax_diags.push(Syntax2::Expr(
 							ExprDiag::FoundQuestionInsteadOfOperand(
 								self.get_previous_span(),
 								span,
@@ -2454,7 +2461,7 @@ impl ShuntingYard {
 
 					if state == State::Operand {
 						// We have encountered something like: `foo ? a + :`.
-						self.syntax_diags.push(Syntax::Expr(
+						self.syntax_diags.push(Syntax2::Expr(
 							ExprDiag::FoundColonInsteadOfOperand(
 								self.get_previous_span(),
 								span,
@@ -2480,7 +2487,7 @@ impl ShuntingYard {
 				_ => {
 					// We have encountered an unexpected token that's not allowed to be part of an expression.
 					self.syntax_diags
-						.push(Syntax::Expr(ExprDiag::FoundInvalidToken(span)));
+						.push(Syntax2::Expr(ExprDiag::FoundInvalidToken(span)));
 					break 'main;
 				}
 			}
@@ -2529,13 +2536,13 @@ impl ShuntingYard {
 				let group = self.groups.pop().unwrap();
 				match group {
 					Group::Paren(_, l_paren) => {
-						self.syntax_diags.push(Syntax::Expr(
+						self.syntax_diags.push(Syntax2::Expr(
 							ExprDiag::UnclosedParens(l_paren, group_end),
 						));
 						self.collapse_paren(group, group_end);
 					}
 					Group::Index(_, l_bracket) => {
-						self.syntax_diags.push(Syntax::Expr(
+						self.syntax_diags.push(Syntax2::Expr(
 							ExprDiag::UnclosedIndexOperator(
 								l_bracket, group_end,
 							),
@@ -2543,13 +2550,13 @@ impl ShuntingYard {
 						self.collapse_index(group, group_end)
 					}
 					Group::FnCall(_, l_paren) => {
-						self.syntax_diags.push(Syntax::Expr(
+						self.syntax_diags.push(Syntax2::Expr(
 							ExprDiag::UnclosedFunctionCall(l_paren, group_end),
 						));
 						self.collapse_fn(group, group_end)
 					}
 					Group::Init(_, l_brace) => {
-						self.syntax_diags.push(Syntax::Expr(
+						self.syntax_diags.push(Syntax2::Expr(
 							ExprDiag::UnclosedInitializerList(
 								l_brace, group_end,
 							),
@@ -2557,7 +2564,7 @@ impl ShuntingYard {
 						self.collapse_init(group, group_end)
 					}
 					Group::ArrInit(_, l_paren) => {
-						self.syntax_diags.push(Syntax::Expr(
+						self.syntax_diags.push(Syntax2::Expr(
 							ExprDiag::UnclosedArrayConstructor(
 								l_paren, group_end,
 							),
@@ -3419,7 +3426,7 @@ impl ShuntingYard {
 		}
 
 		self.syntax_diags.retain(|e| {
-			if let Syntax::Expr(ExprDiag::FoundOperandAfterOperand(_, _)) = e {
+			if let Syntax2::Expr(ExprDiag::FoundOperandAfterOperand(_, _)) = e {
 				false
 			} else {
 				true
@@ -3613,7 +3620,7 @@ impl ShuntingYard {
 		}
 
 		self.syntax_diags.retain(|e| {
-			if let Syntax::Expr(ExprDiag::FoundOperandAfterOperand(_, _)) = e {
+			if let Syntax2::Expr(ExprDiag::FoundOperandAfterOperand(_, _)) = e {
 				false
 			} else {
 				true
@@ -3744,7 +3751,7 @@ impl ShuntingYard {
 
 fn process_fn_arr_constructor_args(
 	mut list: VecDeque<Expr>,
-	diags: &mut Vec<Syntax>,
+	diags: &mut Vec<Syntax2>,
 	opening_delim: Span,
 ) -> Vec<Expr> {
 	let mut args = Vec::new();
@@ -3760,14 +3767,14 @@ fn process_fn_arr_constructor_args(
 			ExprTy::Separator => {
 				match previous {
 					Prev::Comma(span) => {
-						diags.push(Syntax::Expr(
+						diags.push(Syntax2::Expr(
 							ExprDiag::ExpectedArgAfterComma(Span::new_between(
 								span, arg.span,
 							)),
 						));
 					}
 					Prev::None => {
-						diags.push(Syntax::Expr(
+						diags.push(Syntax2::Expr(
 							ExprDiag::ExpectedArgBetweenParenComma(
 								Span::new_between(opening_delim, arg.span),
 							),
@@ -3780,7 +3787,7 @@ fn process_fn_arr_constructor_args(
 			_ => {
 				match previous {
 					Prev::Item(span) => {
-						diags.push(Syntax::Expr(
+						diags.push(Syntax2::Expr(
 							ExprDiag::ExpectedCommaAfterArg(Span::new_between(
 								span, arg.span,
 							)),
@@ -3795,7 +3802,7 @@ fn process_fn_arr_constructor_args(
 	}
 
 	if let Prev::Comma(span) = previous {
-		diags.push(Syntax::Expr(ExprDiag::ExpectedArgAfterComma(
+		diags.push(Syntax2::Expr(ExprDiag::ExpectedArgAfterComma(
 			span.next_single_width(),
 		)));
 	}
@@ -3805,7 +3812,7 @@ fn process_fn_arr_constructor_args(
 
 fn process_initializer_list_args(
 	mut list: VecDeque<Expr>,
-	diags: &mut Vec<Syntax>,
+	diags: &mut Vec<Syntax2>,
 	opening_delim: Span,
 ) -> Vec<Expr> {
 	let mut args = Vec::new();
@@ -3821,14 +3828,14 @@ fn process_initializer_list_args(
 			ExprTy::Separator => {
 				match previous {
 					Prev::Comma(span) => {
-						diags.push(Syntax::Expr(
+						diags.push(Syntax2::Expr(
 							ExprDiag::ExpectedArgAfterComma(Span::new_between(
 								span, arg.span,
 							)),
 						));
 					}
 					Prev::None => {
-						diags.push(Syntax::Expr(
+						diags.push(Syntax2::Expr(
 							ExprDiag::ExpectedArgBetweenParenComma(
 								Span::new_between(opening_delim, arg.span),
 							),
@@ -3841,7 +3848,7 @@ fn process_initializer_list_args(
 			_ => {
 				match previous {
 					Prev::Item(span) => {
-						diags.push(Syntax::Expr(
+						diags.push(Syntax2::Expr(
 							ExprDiag::ExpectedCommaAfterArg(Span::new_between(
 								span, arg.span,
 							)),
@@ -3860,7 +3867,7 @@ fn process_initializer_list_args(
 
 fn process_list_args(
 	mut list: VecDeque<Expr>,
-	diags: &mut Vec<Syntax>,
+	diags: &mut Vec<Syntax2>,
 ) -> Vec<Expr> {
 	let mut args = Vec::new();
 
@@ -3875,14 +3882,14 @@ fn process_list_args(
 			ExprTy::Separator => {
 				match previous {
 					Prev::Comma(span) => {
-						diags.push(Syntax::Expr(
+						diags.push(Syntax2::Expr(
 							ExprDiag::ExpectedExprAfterComma(
 								Span::new_between(span, arg.span),
 							),
 						));
 					}
 					Prev::None => {
-						diags.push(Syntax::Expr(
+						diags.push(Syntax2::Expr(
 							ExprDiag::ExpectedExprBeforeComma(
 								arg.span.previous_single_width(),
 							),
@@ -3895,7 +3902,7 @@ fn process_list_args(
 			_ => {
 				match previous {
 					Prev::Item(span) => {
-						diags.push(Syntax::Expr(
+						diags.push(Syntax2::Expr(
 							ExprDiag::ExpectedCommaAfterExpr(
 								Span::new_between(span, arg.span),
 							),
@@ -3910,7 +3917,7 @@ fn process_list_args(
 	}
 
 	if let Prev::Comma(span) = previous {
-		diags.push(Syntax::Expr(ExprDiag::ExpectedExprAfterComma(
+		diags.push(Syntax2::Expr(ExprDiag::ExpectedExprAfterComma(
 			span.next_single_width(),
 		)));
 	}
@@ -4704,7 +4711,7 @@ impl Expr {
 											),
 											typename: previous_type
 												.type_name(ctx),
-											type_dim: 3,
+											component_dim: 3,
 											invalid_component: 'z',
 										},
 									);
@@ -4719,7 +4726,7 @@ impl Expr {
 											),
 											typename: previous_type
 												.type_name(ctx),
-											type_dim: 4,
+											component_dim: 4,
 											invalid_component: 'w',
 										},
 									);

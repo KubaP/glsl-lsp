@@ -79,8 +79,8 @@ top-to-bottom order:
 - `TokenStreamProvider`s - providers for token streams depending on the conditional compilation functionality.
 - `Ctx` - context object for the parser, stores nodes, tracks symbols, resolves names.
 
-The reason why the Walker and Ctx are split is in order to improve ergonomics. The functions of the `Walker` and
-of the `Ctx` are perpendicular to one another and don't inter-depend in any way. Each respectively is already
+The reason why the Walker and Ctx are split is in order to improve ergonomics. The functionality of the `Walker`
+and of the `Ctx` is perpendicular to one another and don't inter-depend in any way. Each respectively is already
 large and complex in size, so keeping them separate makes it easier to navigate/refactor/add features without
 causing too big of a headache. Also, by passing them as two separate objects into functions, we avoid the issue
 where a struct gets borrowed mutably and immutably simultaneously, which could occur if we have borrowed a token
@@ -2095,12 +2095,6 @@ struct Walker<'a, Provider: TokenStreamProvider<'a>> {
 	syntax_tokens: Vec<SyntaxToken>,
 	/// The type of encoding of spans.
 	span_encoding: SpanEncoding,
-
-	/// Whether we are parsing a struct body. This is necessary to switch between colouring variable definitions
-	/// as variables vs as members. If the parser only parsed member definitions within a struct body this wouldn't
-	/// be necessary, but in order to deal with broken syntax more gracefully the parser parses any valid statement
-	/// within a struct body and only validates afterwards.
-	parsing_struct: bool,
 }
 
 /// Data for a macro.
@@ -2147,7 +2141,6 @@ impl<'a, Provider: TokenStreamProvider<'a>> Walker<'a, Provider> {
 			semantic_diags: Vec::new(),
 			syntax_tokens,
 			span_encoding,
-			parsing_struct: false,
 		}
 	}
 
@@ -2559,7 +2552,7 @@ impl<'a, Provider: TokenStreamProvider<'a>> Walker<'a, Provider> {
 								new_body,
 								span_encoding,
 							);
-						// FIXME: syntax_diags.append(&mut syntax);
+						syntax_diags.append(&mut syntax);
 						semantic_diags.append(&mut semantic);
 
 						let ident = ident.to_owned();
@@ -2709,8 +2702,8 @@ impl<'a, Provider: TokenStreamProvider<'a>> Walker<'a, Provider> {
 	}
 
 	/// Appends a collection of syntax diagnostics.
-	fn append_syntax_diags(&mut self, syntax: &mut Vec<Syntax>) {
-		// TODO:
+	fn append_syntax_diags(&mut self, mut syntax: Vec<Syntax2>) {
+		self.syntax_diags.append(&mut syntax);
 	}
 
 	/// Pushes a semantic diagnostic.
@@ -2719,8 +2712,8 @@ impl<'a, Provider: TokenStreamProvider<'a>> Walker<'a, Provider> {
 	}
 
 	/// Appends a collection of semantic diagnostics.
-	fn append_semantic_diags(&mut self, semantic: &mut Vec<Semantic>) {
-		self.semantic_diags.append(semantic);
+	fn append_semantic_diags(&mut self, mut semantic: Vec<Semantic>) {
+		self.semantic_diags.append(&mut semantic);
 	}
 
 	/// Pushes a syntax highlighting token over the given span.
@@ -2747,8 +2740,8 @@ impl<'a, Provider: TokenStreamProvider<'a>> Walker<'a, Provider> {
 	}
 
 	/// Appends a collection of syntax highlighting tokens.
-	fn append_colours(&mut self, colours: &mut Vec<SyntaxToken>) {
-		self.syntax_tokens.append(colours);
+	fn append_colours(&mut self, mut colours: Vec<SyntaxToken>) {
+		self.syntax_tokens.append(&mut colours);
 	}
 }
 
@@ -3563,10 +3556,6 @@ impl Ctx {
 
 		let new_struct_handle = StructHandle(self.structs.len());
 
-		if walker.parsing_struct {
-			return;
-		}
-
 		// Check if the name is already in use.
 		if let Some(_) = ast::Primitive::parse(&ident) {
 			// With struct/function/variable names we always lookup the latest definition, but with primitive
@@ -3774,10 +3763,6 @@ impl Ctx {
 					.collect(),
 			},
 		});
-
-		if walker.parsing_struct {
-			return;
-		}
 
 		let new_interface_handle = InterfaceHandle(self.interfaces.len());
 
@@ -4001,10 +3986,6 @@ impl Ctx {
 			return;
 		}
 
-		if walker.parsing_struct {
-			return;
-		}
-
 		let params = params
 			.into_iter()
 			.map(|p| {
@@ -4191,10 +4172,6 @@ impl Ctx {
 			return;
 		}
 
-		if walker.parsing_struct {
-			return;
-		}
-
 		let params = params
 			.into_iter()
 			.map(|p| {
@@ -4371,10 +4348,6 @@ impl Ctx {
 			},
 		});
 
-		if walker.parsing_struct {
-			return;
-		}
-
 		self.subroutines.push(SubroutineSymbol {
 			decl_node: node_handle,
 			name: ident.name,
@@ -4454,10 +4427,6 @@ impl Ctx {
 			walker.push_nsyntax_diag(Syntax2::ExpectedNameFoundPrimitive(
 				ident.span,
 			));
-			return;
-		}
-
-		if walker.parsing_struct {
 			return;
 		}
 
@@ -4653,10 +4622,6 @@ impl Ctx {
 			}
 		});
 
-		if walker.parsing_struct {
-			return;
-		}
-
 		// Register the individual subroutine uniform symbols.
 		for var in var_specifiers.into_iter() {
 			let new_uniform_handle =
@@ -4754,10 +4719,6 @@ impl Ctx {
 				}
 			}
 		});
-
-		if walker.parsing_struct {
-			return;
-		}
 
 		// Register the individual variable symbols.
 		let th = self.__get_current_scope().variable_table;

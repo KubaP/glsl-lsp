@@ -127,6 +127,9 @@ pub struct SubroutineUniformSymbol {
 	pub refs: Vec<Span>,
 }
 
+/// A variable symbol table.
+pub type VariableSymbolTable = Vec<VariableSymbol>;
+
 /// A variable symbol.
 #[derive(Debug)]
 pub struct VariableSymbol {

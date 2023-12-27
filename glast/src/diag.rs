@@ -12,7 +12,7 @@
 //! order to provide very specific and precise diagnostics without having to hardcode `&'static` strings
 //! everywhere. In order to make the amount more managable, most diagnostics are split into nested enums.
 
-use crate::{parser::ast, Span, Spanned};
+use crate::{Span, Spanned};
 
 /// The severity of a diagnostic.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -28,9 +28,6 @@ pub enum Severity {
 #[non_exhaustive]
 pub enum Semantic {
 	/* NAME RESOLUTION */
-	/// E??? - When registering a new function symbol, we found a name that is a built-in function. You cannot
-	/// overload built-in functions.
-	CannotOverloadBuiltInFn { name: ast::Ident },
 	/// E003 - A typename could not be found.
 	UnresolvedType {
 		ty: Spanned<String>,
@@ -118,6 +115,12 @@ pub enum Semantic {
 		first_notation: &'static str,
 		second_notation: &'static str,
 	},
+	/// E010 - Found a function definition that would overload a built-in function. Overloading built-in functions
+	/// is not allowed.
+	CannotOverloadBuiltinFn {
+		/// The name in the function declaration/definition.
+		fn_: Spanned<String>,
+	},
 	/// E - Found a method call. Methods, apart from a handful of built-in exemptions, are not a language
 	/// feature.
 	InvalidMethod(Span),
@@ -137,10 +140,20 @@ pub enum Semantic {
 	/// E - Found a subroutine type specifier in an associated subroutine function definition.
 	SubFnFoundSubType(Span),
 	/* PREPROCESSOR */
-	/// WARNING - Found an empty preprocessor directive.
+	/// WARNING - Found an empty or useless preprocessor directive.
+	///
+	/// A directive can be empty if it's just `#` on its own line. An `#undef` directive can be useless if it
+	/// doesn't include a name of a macro to undefine (which is still legal).
 	///
 	/// - `0` - The span of the line containing the directive.
-	EmptyDirective(Span),
+	UnnecessaryDirective(Span),
+	///
+	UnsupportedGlslVersion {
+		/// The specified (unsupported) version.
+		version: usize,
+		/// The span of the version number.
+		version_span: Span,
+	},
 	/* MACROS */
 	/// WARNING - A macro call site was found to expand to nothing.
 	///
@@ -181,13 +194,14 @@ impl Semantic {
 			Self::VectorSwizzleInvalidDim { .. } => Severity::Error,
 			Self::VectorSwizzleTooLarge { .. } => Severity::Error,
 			Self::VectorSwizzleMixedNotation { .. } => Severity::Error,
+			Self::CannotOverloadBuiltinFn { .. } => Severity::Error,
 			/* SUBROUTINES */
 			Self::SubUniformTreatedAsVariable { .. } => Severity::Error,
 			Self::SubUniformFoundNormalType(_) => Severity::Error,
 			Self::SubTypeFoundSubType(_) => Severity::Error,
 			Self::SubFnFoundSubType(_) => Severity::Error,
 			/* PREPROCESSOR */
-			Self::EmptyDirective(_) => Severity::Warning,
+			Self::UnnecessaryDirective(_) => Severity::Warning,
 			/* MACROS */
 			Self::EmptyMacroCallSite { .. } => Severity::Warning,
 			Self::FunctionMacroMismatchedArgCount { .. } => Severity::Error,
@@ -212,6 +226,7 @@ impl Semantic {
 			| Self::VectorSwizzleInvalidDim { .. }
 			| Self::VectorSwizzleTooLarge { .. }
 			| Self::VectorSwizzleMixedNotation { .. } => Some("E007"),
+			Self::CannotOverloadBuiltinFn { .. } => Some("E010"),
 			/* SUBROUTINES */
 			Self::SubUniformTreatedAsVariable { .. } => Some("E005"),
 			/* MACROS */
@@ -233,25 +248,56 @@ pub enum NameTy {
 }
 
 /// A syntax error.
+///
+/// ## Design Approach
+/// You may be wondering why errors are grouped into a few broad categories of types of syntax errors. After all,
+/// what is the difference between modelling syntax errors as a single enum with no nesting:
+/// ```ignore
+/// enum Syntax {
+///     ExpectedSemiColonAfterStmt,
+///     ExpectedRParenAfterParamList,
+///     /* ... */
+/// }
+/// ```
+/// Whilst, ultimately, the same amount of unique syntax errors exist, the current approach offers one major
+/// advantage; it makes it obvious what sort of action is required to fix the problem. This is very useful for
+/// implementing the LSP. Rather than having to hardcode what sort of action should be taken to fix each possible
+/// syntax error, you can now, for instance, define that any `Syntax::MissingPunct` error should insert the given
+/// character at the given position. This semantic grouping may have other use cases as well, and it's this
+/// semantic information that would be lost with the alternative approach.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Syntax2 {
-	/// Missing a punctuation symbol that would make a grammar item fully valid. For the purposes of
-	/// parsing, this punctuation symbol has been infered and the relevant grammar item parsed. Some examples:
-	/// ```text
-	/// foo + bar
-	///          ^ missing `;` to make this a valid expression statement
-	///
-	/// void foo(int bar ;
-	///                 ^ missing `)` to make this a valid parameter list
-	///
-	/// void foo(int i float);
-	///               ^ missing a `,` to make this a valid parameter list
-	/// ```
 	MissingPunct {
 		/// The missing character.
 		char: char,
 		/// The position where it should be inserted at.
 		pos: usize,
+		/// The parser context.
+		ctx: DiagCtx,
+	},
+	/// Missing a punctuation symbol that would make a grammar item fully valid. For the purposes of parsing, this
+	/// punctuation symbol has been inferred and the relevant grammar item parsed successfully. Some examples:
+	/// ```text
+	/// foo + bar
+	///          ^ missing `;` to make this a valid expression statement
+	///
+	/// void foo(int bar ;
+	///                 ^ missing `)` to make this a valid function declaration
+	///
+	/// void foo(int i float);
+	///               ^ missing a `,` to make this a valid parameter list
+	/// ```
+	MissingPunct2 {
+		/// The missing punctuation.
+		missing: MissingPunct,
+		/// The position where it should be inserted at.
+		span: Span,
+	},
+	ForRemoval {
+		/// The item to remove.
+		item: ForRemoval,
+		/// The span of the text.
+		span: Span,
 		/// The parser context.
 		ctx: DiagCtx,
 	},
@@ -264,14 +310,24 @@ pub enum Syntax2 {
 	///
 	/// void foo(int i + 7, float f);
 	///              ~~~~~ removing makes this a valid parameter list
+	///
+	/// #version 450 core foobar
+	///                   ~~~~~~ removing makes this a valid preprocessor version directive
 	/// ```
-	ForRemoval {
+	ForRemoval2 {
 		/// The item to remove.
-		item: ForRemoval,
-		/// The span of the text.
+		item: ForRemoval2,
+		/// The span of the item.
 		span: Span,
-		/// The parser context.
-		ctx: DiagCtx,
+	},
+	/// Found something unexpected, but it is not clear what should happen to fix it. A non-simple set of tokens
+	/// needs to be added or replace existing tokens.
+	FoundUnexpected {
+		/// The item found and what was expected.
+		ty: Found,
+		/// The span of the item to remove (if an item was found), or a zero-sized span where the expected item
+		/// should be inserted at.
+		span: Span,
 	},
 	/// Missing some grammar to make a valid grammar item. The missing piece of grammar may be one of a few
 	/// possibilities if the flexiblity allows for multiple possible grammar items. For the purposes of aprsing,
@@ -294,8 +350,7 @@ pub enum Syntax2 {
 		/// The expected grammar.
 		item: ExpectedGrammar,
 		/// The position where the item should be inserted at.
-		/// MAYBE: Allow for a span for slightly nicer error squiggles in certain cases?
-		pos: usize,
+		span: Span,
 	},
 	/// Found a piece of grammar that is in an incorrect order.
 	IncorrectOrder {
@@ -322,6 +377,247 @@ pub enum Syntax2 {
 	ExpectedNameFoundPrimitive(Span),
 	/// Expression-related syntax diagnostics.
 	Expr(ExprDiag),
+	/// Found a directive that can't even be treated as a custom directive, i.e. doesn't follow the `#<keyword>
+	/// <content>` format.
+	InvalidDirective {
+		/// The span of the entire directive.
+		span: Span,
+	},
+	InvalidVersionNumber {
+		version: usize,
+		version_span: Span,
+	},
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum MissingPunct {
+	/* === GENERAL === */
+	/// Missing a closing parenthesis `)` to finish a parameter list.
+	///
+	/// ```text
+	/// void foo(int a
+	///               ^ missing )
+	/// ```
+	EndOfParamList,
+	/// Missing a comma `,` somewhere within a parameter list.
+	///
+	/// ```text
+	/// void foo(int a float b);
+	///               ^ missing ,
+	/// ```
+	CommaInParamList,
+	/* === PREPROCESSOR - EXTENSION === */
+	/// Missing a colon `:` between a GLSL extension name and extension behaviour.
+	///
+	/// ```text
+	/// #extension foobar enable
+	///                  ^ missing colon
+	/// ```
+	ColonBetweenGlslExtNameBehaviour,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ForRemoval2 {
+	/* === GENERAL === */
+	/// Found something invalid in a parameter list.
+	SomethingInParamList,
+	/* === PREPROCESSOR === */
+	/// Found an invalid preprocessor directive.
+	InvalidDirective,
+	/// Found invalid trailing tokens in a preprocessor directive.
+	DirectiveTrailingTokens,
+	/* === PREPROCESSOR - UNDEF === */
+	/// Found something invalid in an `#undef` directive, but expected a macro name or nothing.
+	/// ```text
+	/// #undef @
+	///        ~ remove this
+	/// ```
+	SomethingInUndef,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Found {
+	/* === GENERAL === */
+	/// Found nothing but expected a parameter.
+	///
+	/// ```text
+	/// void foo(int a, , float b);
+	///                ^ expected parameter
+	/// ```
+	NothingExpectedParam,
+	/* === PREPROCESSOR - VERSION === */
+	/// Found nothing but expected a GLSL version.
+	///
+	/// ```text
+	/// #version
+	///          ^ expected GLSL version
+	/// ```
+	NothingExpectedGlslVersion,
+	/// Found something but expected a GLSL version.
+	///
+	/// ```text
+	/// #version foobar
+	///          ~~~~~~ expected GLSL version
+	/// ```
+	SomethingExpectedGlslVersion,
+	/// Found a GLSL profile but expected a GLSL version.
+	///
+	/// ```text
+	/// #version compatability
+	///         ^ expected GLSL version
+	/// ```
+	GlslProfileExpectedVersion,
+	/// Found an invalid GLSL version.
+	///
+	/// ```text
+	/// #version 720
+	///          ~~~ invalid version
+	/// ```
+	InvalidGlslVersion {
+		/// The invalid version value.
+		version: usize,
+	},
+	/// Found something but expected a GLSL profile.
+	///
+	/// ```text
+	/// #version 450 foobar
+	///              ~~~~~~ expected GLSL profile
+	/// ```
+	SomethingExpectedGlslProfile,
+	/// Found an invalid GLSL profile, where the casing of the profile name is wrong.
+	///
+	/// ```text
+	/// #version 450 cOmPaTaBiLiTy
+	///              ~~~~~~~~~~~~~ invalid profile; inferred match is: compatability
+	/// ```
+	IncorrectGlslProfileCasing {
+		/// The correct casing of the profile.
+		correct_casing: &'static str,
+	},
+	/* === PREPROCESSOR - EXTENSION === */
+	/// Found nothing but expected a GLSL extension name.
+	///
+	/// ```text
+	/// #extension
+	///            ^ expected GLSL extension name
+	/// ```
+	NothingExpectedGlslExtName,
+	/// Found something but expected a GLSL extension name.
+	///
+	/// ```text
+	/// #extension +5
+	///            ~~ expected GLSL extension name
+	/// ```
+	SomethingExpectedGlslExtName,
+	/// Found a GLSL extension behaviour but expected a GLSL extension name.
+	///
+	/// ```text
+	/// #extension enable
+	///           ^ expected GLSL extension name
+	/// ```
+	GlslExtBehaviourExpectedExtName,
+	/// Found a colon `:` but expected a GLSL extension name.
+	///
+	/// ```text
+	/// #extension :
+	///           ^ expected GLSL extension name
+	/// ```
+	ColonExpectedExtName,
+	/// Found an invalid GLSL extension behaviour, where the casing of the behaviour is wrong.
+	///
+	/// ```text
+	/// #extension foobar : eNaBlE
+	///                     ~~~~~~ invalid behaviour; inferred match is: enable
+	/// ```
+	IncorrectGlslExtBehaviourCasing {
+		/// The correct casing of the behaviour.
+		correct_casing: &'static str,
+	},
+	/// Found nothing but expected a colon for a GLSL extension.
+	///
+	/// ```text
+	/// #extension foobar
+	///                   ^ expected colon
+	NothingExpectedGlslExtColon,
+	/// Found something but expected a colon for a GLSL extension.
+	///
+	/// ```text
+	/// #extension foobar @
+	///                   ~ expected colon
+	/// ```
+	SomethingExpectedGlslExtColon,
+	/// Found nothing but expected a colon for a GLSL extension.
+	///
+	/// ```text
+	/// #extension foobar :
+	///                     ^ expected behaviour
+	/// ```
+	NothingExpectedGlslExtBehaviour,
+	/// Found something but expected a colon for a GLSL extension.
+	///
+	/// ```text
+	/// #extension foobar : qux
+	///                     ~~~ expected behaviour
+	/// ```
+	SomethingExpectedGlslExtBehaviour,
+	/* === PREPROCESSOR - LINE === */
+	/// Found nothing but expected a line number.
+	///
+	/// ```text
+	/// #line
+	///       ^ expected line number
+	/// ```
+	NothingExpectedLineNumber,
+	/// Found something but expected a line number.
+	///
+	/// ```text
+	/// #line foo
+	///       ~~~ expected line number
+	/// ```
+	SomethingExpectedLineNumber,
+	/// Found nothing but expected a source string number.
+	///
+	/// ```text
+	/// #line 5
+	///         ^ expected source string number
+	/// ```
+	NothingExpectedSrcStrNumber,
+	/// Found something but expected a soruce string number.
+	///
+	/// ```text
+	/// #line 5 foo
+	///         ~~~ expected source string number
+	/// ```
+	SomethingExpectedSrcStrNumber,
+	/* === PREPROCESSOR - DEFINE === */
+	/// Found nothing but expected a macro name.
+	///
+	/// ```text
+	/// #define
+	///         ^ expected macro name
+	/// ```
+	NothingExpectedMacroName,
+	/// Found something but expected a macro name.
+	///
+	/// ```text
+	/// #define @
+	///         ~ expected macro name
+	/// ```
+	SomethingExpectedMacroName,
+	/// Found nothing to the right-hand side of a token concatenator.
+	///
+	/// ```text
+	/// #define FOO a ##
+	///                 ^ expected something
+	/// ```
+	NothingOnRhsOfConcat,
+	/// Found nothing tothe left-hand side of a token concatenator.
+	///
+	/// ```text
+	/// #define FOO ## a
+	///            ^ expected something
+	/// ```
+	NothingOnLhsOfConcat,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -354,6 +650,22 @@ pub enum DiagCtx {
 	StructField,
 	/// The parser is within an fuction macro argument list.
 	FunctionMacroArgList,
+	WhileStmt,
+	DoStmt,
+	/// The parser is within a return statement.
+	BreakStmt,
+	/// The parser is within a return statement.
+	DiscardStmt,
+	/// The parser is within a return statement.
+	ContinueStmt,
+	/// The parser is within a return statement.
+	ReturnStmt,
+	/// A brace scope of some kind.
+	BraceScope,
+	/// The parser is within a parameter list of a function-like macro definition within a define directive.
+	MacroParamList,
+	/// The parser is within an undefine directive.
+	Undefine,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -371,6 +683,12 @@ pub enum ForRemoval {
 	VarInitialization,
 	/// The `[second..=last]` variable specifiers in the situation that there is more than one.
 	MultipleVarSpecifiers,
+	/// One or more qualifiers.
+	Qualifiers,
+	/// A struct declaration, since it's not a legal statement.
+	StructDecl,
+	/// Trailing tokens in a preprocessor directive.
+	DirectiveTrailing,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -401,10 +719,12 @@ pub enum ExpectedGrammar {
 	NewVarSpecifier,
 	/// A parameter.
 	Parameter,
+	/// The body of a struct definition, i.e. the `{...}` in `struct S {...};`.
+	StructBody,
 	/// A struct field.
-	StructField,
+	AtLeastOneStructField,
 	/// An interface field.
-	InterfaceField,
+	AtLeastOneInterfaceField,
 	/// A subroutine association list.
 	AssociationList,
 	/// A subroutine typename, **not specifier**.
@@ -413,6 +733,16 @@ pub enum ExpectedGrammar {
 	QualifierBeforeInterfaceBlock,
 	/// The end punctuation of a block comment (`*/`).
 	BlockCommentEnd,
+	/* PREPROCESSOR */
+	/// Expected a GLSL version after the `version` keyword.
+	///
+	/// ```text
+	/// #version  core
+	///         ~~ expected GLSL version
+	/// ```
+	GlslVersion,
+	/// A name of a macro after the `define` keyword.
+	DefineMacroName,
 	/// Something on the LHS of a token concatenator.
 	TokenConcatLHS,
 	/// Something on the RHS of a token concatenator.

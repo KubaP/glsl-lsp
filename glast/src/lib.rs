@@ -114,6 +114,9 @@
 //! Currently, this crate does not have extensive testing. Some parts of the crate have good unit test coverage,
 //! but other parts lack any tests completely and there are no integration tests yet. This is an important goal
 //! that is being progressively worked towards.
+//!
+//! # Dependencies
+//! Dependencies are kept to a minimum. Currently they consist of: `bitflags`, `generational-arena`, and `tinyvec`.
 
 pub mod diag;
 pub mod lexer;
@@ -459,5 +462,7 @@ mod checks {
 			size_of::<Option<Vec<i32>>>(),
 			size_of::<Omittable<NonEmpty<i32>>>()
 		);
+
+		// TODO: Check `symbol::Type` booleans are optimized into bitflag.
 	}
 }

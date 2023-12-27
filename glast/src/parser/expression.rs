@@ -6,7 +6,115 @@
 //! - [`try_parse_type_specifier()`]
 //! - [`try_parse_subroutine_type_specifier()`]
 
+use super::{
+	ast::{BinOp, BinOpTy, Ident, Lit, PostOp, PostOpTy, PreOp, PreOpTy},
+	Ctx, SyntaxModifiers, SyntaxToken, SyntaxType, TokenStreamProvider, Type,
+	Walker,
+};
+use crate::{
+	diag::{ExprDiag, Semantic, Syntax, Syntax2},
+	lexer::{self, Token},
+	parser::ast,
+	Either, Either3, NonEmpty, Span,
+};
+use std::{collections::VecDeque, error};
+use tinyvec::TinyVec;
+
 /*
+This is an overview of how the expression-based parser works. Because we can't know whether to expect a
+type specifier or a new variable specifier, many of these parsing functions have a specific grammar item that is
+a priority, but if it fails to parse the function falls back onto another grammar item. The reason we need to
+fallback is because otherwise we would loose the tokens forever. This (whole) parser doesn't implement backtracking
+because that would make the macro expansion and dynamic conditional compilation logic much more complicated (and
+likely more expensive perf-wise than it is already).
+
+1. Shunting yard parses an expression-based grammar item.
+   Only macro expansion-related semantic diagnostics are produced. Any such diagnostics produced are always pushed
+   to the `walker`, irrespective of the chosen branch.
+
+   A. If nothing can be parsed because the first token isn't valid, nothing is returned.
+   B. An expression-based item is produced. During this, syntax errors may be produced, related to:
+	  - general expression syntax errors,
+	  - parsing of literals (such as invalid number notations).
+
+	  Syntax tokens are also produced. All identifiers are marked as `UnresolvedIdent`.
+
+
+This step is then followed by one of the following - (2), (3), (4), (5) or (6):
+
+
+2. parse_expr:
+   A. Converts the internal representation into an AST expression.
+	  This pushes the syntax errors from (1.B) to the `walker`.
+
+	  This performs expression name resolution. Upon successful resolution, the relevant `UnresolvedIdent` syntax
+	  token from (1.B) is replaced with an appropriate token. Upon unsuccessful resolution, semantic diagnostics
+	  are pushed into the `walker`.
+
+	  This pushes syntax errors if encountering a primitive type for an identifier to the `walker`.
+
+	  This pushes the syntax tokens from (1.B) into the `walker`.
+
+	  This returns an AST expression and the type the expression evaluated to no matter what. In the sitatution
+	  where the type could not be evaluated, a not-a-type is returned.
+
+
+3. try_parse_new_name:
+   A. If (1.B) contains only a single identifier:
+	  This pushes the syntax token for the new name into the `walker`.
+
+	  This returns the identifier.
+
+   B. If (1.B) contains more than a single identifier:
+	  This performs (2).
+
+
+4. try_parse_new_var_specifiers:
+   A. If (1.B) contains an expression that can be valid var specifiers:
+	  This replaces the relevant `UnresolvedIdent` syntax token from (1.B) with a the specified token.
+
+	  This pushes the syntax errors from (1.B) to the `walker`.
+
+	  This pushes the syntax tokens from (1.B) to the `walker`.
+
+	  This returns the variable specifier.
+
+   B. If (1.B) contains an expression that can't be valid var specifiers:
+	  This performs (5).
+
+
+5. try_parse_type_specifier:
+   A. If (1.B) contains an expression that can be a valid type specifier:
+	  This performs typename resolution. Upon successfuly resolution, the relevant `UnresolvedIdent` syntax token
+	  from (1.B) is replaced with an appropriate token. Upon unsuccessful resolution, this attempt is abandonded
+	  and this performs (2).
+
+	  This pushes the syntax errors from (1.B) to the `walker`.
+
+	  This pushes the syntax tokens from (1.B) in the `walker`.
+
+	  This returns the type.
+
+   B. If (1.B) contains an expression that can't be a type specifier:
+	  This performs (2).
+
+
+6. try_parse_subroutine_type_specifier:
+   A. If (1.B) contains an expression that can be a valid type specifier:
+	  This performs subroutine typename resolution. Upon successfuly resolution, the relevant `UnresolvedIdent`
+	  syntax token from (1.B) is replaced with an appropriate token. Upon unsuccessful resolution, this performs
+	  normal typename resolution. If that is still unsuccessful, this attempt is abandonded and this performs (2).
+
+	  This pushes the syntax errors from (1.B) to the `walker`.
+
+	  This pushes the syntax tokens from (1.B) into the `walker`.
+
+	  This returns the type.
+
+   B. If (1.B) contains an expression that can't be a type specifier:
+	  This performs (2).
+
+
 Useful reading links related to expression parsing:
 
 https://petermalmgren.com/three-rust-parsers/
@@ -24,48 +132,25 @@ https://matklad.github.io/2020/04/15/from-pratt-to-dijkstra.html
 	  different approach
 */
 
-use super::{
-	ast::{BinOp, BinOpTy, Ident, Lit, PostOp, PostOpTy, PreOp, PreOpTy},
-	Ctx, SyntaxModifiers, SyntaxToken, SyntaxType, TokenStreamProvider, Type,
-	Walker,
-};
-use crate::{
-	diag::{ExprDiag, Semantic, Syntax, Syntax2},
-	lexer::{self, Token},
-	parser::ast,
-	Either, Either3, NonEmpty, Span,
-};
-use std::{collections::VecDeque, error};
-use tinyvec::TinyVec;
-
 /// Tries to parse an expression beginning at the current position.
 pub(super) fn parse_expr<'a, P: TokenStreamProvider<'a>>(
 	walker: &mut Walker<'a, P>,
 	ctx: &mut Ctx,
 	mode: Mode,
 	end_tokens: impl AsRef<[Token]>,
-) -> (
-	Option<ast::Expr>,
-	Vec<Syntax2>,
-	Vec<Semantic>,
-	Vec<SyntaxToken>,
-) {
+) -> Option<ast::Expr> {
 	let mut yard = ShuntingYard::new(
 		match walker.peek() {
 			Some((_, span)) => span.start,
-			None => return (None, Vec::new(), Vec::new(), Vec::new()),
+			None => return None,
 		},
 		mode,
 	);
 	yard.parse(walker, end_tokens.as_ref());
-	let ast = yard.create_internal_expr(ctx);
+	walker.append_semantic_diags(&mut yard.macro_diags);
 
-	(
-		yard.create_expr(walker, ctx, ast),
-		yard.syntax_diags,
-		yard.semantic_diags,
-		yard.syntax_tokens,
-	)
+	let repr = yard.create_internal_repr(ctx);
+	yard.create_expr(walker, ctx, repr)
 }
 
 /// Tries to parse a new name for a declaration/definition of some kind, i.e. the symbol doesn't exist yet.
@@ -77,32 +162,20 @@ pub(super) fn try_parse_new_name<'a, P: TokenStreamProvider<'a>>(
 	ctx: &mut Ctx,
 	end_tokens: impl AsRef<[Token]>,
 	name_highlighting: SyntaxType,
-) -> Result<
-	(Ident, Vec<Semantic>),
-	(
-		Option<ast::Expr>,
-		Vec<Syntax2>,
-		Vec<Semantic>,
-		Vec<SyntaxToken>,
-	),
-> {
+) -> Result<Ident, Option<ast::Expr>> {
 	let mut yard = ShuntingYard::new(
 		match walker.peek() {
 			Some((_, span)) => span.start,
-			None => return Err((None, Vec::new(), Vec::new(), Vec::new())),
+			None => return Err(None),
 		},
 		Mode::TakeOneUnit,
 	);
 	yard.parse(walker, end_tokens.as_ref());
+	walker.append_semantic_diags(&mut yard.macro_diags);
 
-	match yard.try_create_new_ident(walker, ctx, name_highlighting) {
-		Ok(ident) => Ok((ident, yard.semantic_diags)),
-		Err(expr) => Err((
-			expr,
-			yard.syntax_diags,
-			yard.semantic_diags,
-			yard.syntax_tokens,
-		)),
+	match yard.try_create_new_name(walker, ctx, name_highlighting) {
+		Ok(ident) => Ok(ident),
+		Err(expr) => Err(expr),
 	}
 }
 
@@ -134,24 +207,12 @@ pub(super) fn try_parse_new_var_specifiers<'a, P: TokenStreamProvider<'a>>(
 	end_tokens: impl AsRef<[Token]>,
 	name_highlighting: SyntaxType,
 	only_one: bool,
-) -> Result<
-	(
-		NonEmpty<super::NewVarSpecifier>,
-		Vec<Syntax2>,
-		Vec<Semantic>,
-		Vec<SyntaxToken>,
-	),
-	(
-		Option<ast::Expr>,
-		Vec<Syntax2>,
-		Vec<Semantic>,
-		Vec<SyntaxToken>,
-	),
-> {
+) -> Result<NonEmpty<super::NewVarSpecifier>, Either3<ast::Type, ast::Expr, ()>>
+{
 	let mut yard = ShuntingYard::new(
 		match walker.peek() {
 			Some((_, span)) => span.start,
-			None => return Err((None, Vec::new(), Vec::new(), Vec::new())),
+			None => return Err(Either3::C(())),
 		},
 		if only_one {
 			Mode::DisallowTopLevelList
@@ -160,20 +221,15 @@ pub(super) fn try_parse_new_var_specifiers<'a, P: TokenStreamProvider<'a>>(
 		},
 	);
 	yard.parse(walker, end_tokens.as_ref());
+	walker.append_semantic_diags(&mut yard.macro_diags);
 
 	match yard.try_create_new_var_specifiers(walker, ctx, name_highlighting) {
-		Ok(vars) => Ok((
-			vars,
-			yard.syntax_diags,
-			yard.semantic_diags,
-			yard.syntax_tokens,
-		)),
-		Err(expr) => Err((
-			expr,
-			yard.syntax_diags,
-			yard.semantic_diags,
-			yard.syntax_tokens,
-		)),
+		Ok(vars) => Ok(vars),
+		Err(e) => Err(match e {
+			Ok((_, type_)) => Either3::A(type_),
+			Err(Some(expr)) => Either3::B(expr),
+			Err(None) => Either3::C(()),
+		}),
 	}
 }
 
@@ -195,43 +251,31 @@ pub(super) fn try_parse_type_specifier<'a, P: TokenStreamProvider<'a>>(
 	ctx: &mut Ctx,
 	end_tokens: impl AsRef<[Token]>,
 	in_param_list: bool,
-) -> Result<
-	(ast::Type, Vec<Syntax2>, Vec<Semantic>, Vec<SyntaxToken>),
-	(
-		Option<ast::Expr>,
-		Vec<Syntax2>,
-		Vec<Semantic>,
-		Vec<SyntaxToken>,
-	),
-> {
+) -> Result<ast::Type, Option<ast::Expr>> {
 	let mut yard = ShuntingYard::new(
 		match walker.peek() {
 			Some((_, span)) => span.start,
-			None => return Err((None, Vec::new(), Vec::new(), Vec::new())),
+			None => return Err(None),
 		},
 		if in_param_list {
 			Mode::DisallowTopLevelList
 		} else {
-			// In case we don't have a valid type specifier in the surrounding context, we will take the maximal
-			// expression possible.
+			// In the case that we don't have a valid type specifier in the surrounding context, we will take the
+			// maximally large expression possible.
 			Mode::Default
 		},
 	);
 	yard.parse(walker, end_tokens.as_ref());
+	walker.append_semantic_diags(&mut yard.macro_diags);
 
-	match yard.try_create_type_specifier(walker, ctx) {
-		Ok((type_, ast_type)) => Ok((
-			ast_type,
-			yard.syntax_diags,
-			yard.semantic_diags,
-			yard.syntax_tokens,
-		)),
-		Err(expr) => Err((
-			expr,
-			yard.syntax_diags,
-			yard.semantic_diags,
-			yard.syntax_tokens,
-		)),
+	if yard.stack.is_empty() {
+		return Err(None);
+	}
+	let Some(repr) = yard.create_internal_repr(ctx) else { return Err(None); };
+
+	match yard.try_create_type_specifier(walker, ctx, repr) {
+		Ok((type_, ast_type)) => Ok((ast_type)),
+		Err(expr) => Err(expr),
 	}
 }
 
@@ -255,39 +299,20 @@ pub(super) fn try_parse_subroutine_type_specifier<
 	walker: &mut Walker<'a, P>,
 	ctx: &mut Ctx,
 	end_tokens: impl AsRef<[Token]>,
-) -> Result<
-	(
-		Either<ast::SubroutineType, ast::Type>,
-		Vec<Syntax2>,
-		Vec<Semantic>,
-		Vec<SyntaxToken>,
-	),
-	(
-		Option<ast::Expr>,
-		Vec<Syntax2>,
-		Vec<Semantic>,
-		Vec<SyntaxToken>,
-	),
-> {
+) -> Result<Either<ast::SubroutineType, ast::Type>, Option<ast::Expr>> {
 	let mut yard = ShuntingYard::new(
 		match walker.peek() {
 			Some((_, span)) => span.start,
-			None => return Err((None, Vec::new(), Vec::new(), Vec::new())),
+			None => return Err(None),
 		},
 		Mode::TakeOneUnit,
 	);
 	yard.parse(walker, end_tokens.as_ref());
+	walker.append_semantic_diags(&mut yard.macro_diags);
 
 	match yard.try_create_subroutine_type_specifier(walker, ctx) {
-		Ok((type_, syntax)) => {
-			Ok((type_, vec![], yard.semantic_diags, yard.syntax_tokens))
-		}
-		Err(expr) => Err((
-			expr,
-			yard.syntax_diags,
-			yard.semantic_diags,
-			yard.syntax_tokens,
-		)),
+		Ok(type_) => Ok(type_),
+		Err(expr) => Err(expr),
 	}
 }
 
@@ -332,6 +357,7 @@ pub(super) enum Mode {
 	NewIdents,
 }
 
+// region: Shunting yard during-parsing items
 /// A node; used in the parser stack.
 #[derive(Debug, Clone, PartialEq)]
 struct Node {
@@ -626,6 +652,7 @@ enum Group {
 	/// A ternary expression.
 	Ternary,
 }
+// endregion: Shunting yard during-parsing items
 
 /// The implementation of a shunting yard-based parser.
 struct ShuntingYard {
@@ -642,8 +669,10 @@ struct ShuntingYard {
 
 	/// Syntax diagnostics encountered during the parser execution.
 	syntax_diags: Vec<Syntax2>,
-	/// Semantic diagnostics encountered during the parser execution; (these will only be related to macros).
-	semantic_diags: Vec<Semantic>,
+	/// Semantic diagnostics related to macro expansion only. This vector is populated during the execution of this
+	/// shunting yard. Other semantic diagnostics, for example relating to name resolution, are produced in the
+	/// respective `Self::try_create_*()` methods and pushed directly into the `walker`.
+	macro_diags: Vec<Semantic>,
 
 	/// Syntax highlighting tokens created during the parser execution.
 	syntax_tokens: Vec<SyntaxToken>,
@@ -659,7 +688,7 @@ impl ShuntingYard {
 			start_position,
 			mode,
 			syntax_diags: Vec::new(),
-			semantic_diags: Vec::new(),
+			macro_diags: Vec::new(),
 			syntax_tokens: Vec::new(),
 		}
 	}
@@ -1704,12 +1733,12 @@ impl ShuntingYard {
 					} else {
 						// We are not in a delimited arity group. We don't perform error recovery because in this
 						// situation it's not as obvious what the behaviour should be, so we avoid any surprises.
-						self.syntax_diags.push(Syntax2::Expr(
+						/* self.syntax_diags.push(Syntax2::Expr(
 							ExprDiag::FoundOperandAfterOperand(
 								self.get_previous_span().unwrap(),
 								span,
 							),
-						));
+						)); */
 						break 'main;
 					}
 					arity_state = Arity::PotentialEnd;
@@ -1792,12 +1821,12 @@ impl ShuntingYard {
 					} else {
 						// We are not in a delimited arity group. We don't perform error recovery because in this
 						// situation it's not as obvious what the behaviour should be, so we avoid any surprises.
-						self.syntax_diags.push(Syntax2::Expr(
+						/* self.syntax_diags.push(Syntax2::Expr(
 							ExprDiag::FoundOperandAfterOperand(
 								self.get_previous_span().unwrap(),
 								span,
 							),
-						));
+						)); */
 						break 'main;
 					}
 					arity_state = Arity::PotentialEnd;
@@ -2006,14 +2035,14 @@ impl ShuntingYard {
 							// We are not in a delimited arity group. We don't perform error recovery because in
 							// this situation it's not as obvious what the behaviour should be, so we avoid any
 							// surprises.
-							if self.mode != Mode::TakeOneUnit {
+							/* if self.mode != Mode::TakeOneUnit {
 								self.syntax_diags.push(Syntax2::Expr(
 									ExprDiag::FoundOperandAfterOperand(
 										self.get_previous_span().unwrap(),
 										span,
 									),
 								));
-							}
+							} */
 							break 'main;
 						}
 
@@ -2217,14 +2246,14 @@ impl ShuntingYard {
 					{
 						self.register_arity_argument(span.start_zero_width());
 					} else {
-						if self.mode != Mode::TakeOneUnit {
+						/* if self.mode != Mode::TakeOneUnit {
 							self.syntax_diags.push(Syntax2::Expr(
 								ExprDiag::FoundOperandAfterOperand(
 									self.get_previous_span().unwrap(),
 									span,
 								),
 							));
-						}
+						} */
 						break 'main;
 					}
 					arity_state = Arity::Operator;
@@ -2486,8 +2515,8 @@ impl ShuntingYard {
 				}
 				_ => {
 					// We have encountered an unexpected token that's not allowed to be part of an expression.
-					self.syntax_diags
-						.push(Syntax2::Expr(ExprDiag::FoundInvalidToken(span)));
+					/* self.syntax_diags
+					.push(Syntax2::Expr(ExprDiag::FoundInvalidToken(span))); */
 					break 'main;
 				}
 			}
@@ -2503,7 +2532,7 @@ impl ShuntingYard {
 				// FIXME:
 				//&mut self.syntax_diags,
 				&mut Vec::new(),
-				&mut self.semantic_diags,
+				&mut self.macro_diags,
 				&mut self.syntax_tokens,
 			);
 		}
@@ -2587,9 +2616,9 @@ impl ShuntingYard {
 		}
 	}
 
-	/// Converts the internal RPN stack into a singular **internal** [`Expr`] node. This node must be further
-	/// processed into a different representation to be retunred out of this module.
-	fn create_internal_expr(&mut self, ctx: &mut Ctx) -> Option<Expr> {
+	/// Converts the internal RPN stack into a singular **internal** [`Expr`] node representation. This node must
+	/// be further processed into a different representation to be returned out of this module.
+	fn create_internal_repr(&mut self, ctx: &mut Ctx) -> Option<Expr> {
 		if self.stack.is_empty() {
 			return None;
 		}
@@ -3035,12 +3064,14 @@ impl ShuntingYard {
 		&mut self,
 		walker: &mut Walker<'a, P>,
 		ctx: &mut Ctx,
-		expr: Option<Expr>,
+		repr: Option<Expr>,
 	) -> Option<ast::Expr> {
-		let Some(expr) = expr else { return None; };
+		let Some(repr) = repr else { return None; };
+
+		walker.append_syntax_diags(&mut self.syntax_diags);
 
 		let mut new_colours = Vec::new();
-		let (expr, _) = expr.convert(walker, ctx, &mut new_colours);
+		let (expr, _) = repr.convert(walker, ctx, &mut new_colours);
 
 		if !new_colours.is_empty() {
 			let mut current_new = new_colours.remove(0);
@@ -3056,6 +3087,8 @@ impl ShuntingYard {
 			}
 		}
 
+		walker.append_colours(&mut self.syntax_tokens);
+
 		Some(expr)
 	}
 
@@ -3063,7 +3096,7 @@ impl ShuntingYard {
 	/// returned instead.
 	///
 	/// If this succeeds, the new name is coloured as specified.
-	fn try_create_new_ident<'a, P: TokenStreamProvider<'a>>(
+	fn try_create_new_name<'a, P: TokenStreamProvider<'a>>(
 		&mut self,
 		walker: &mut Walker<'a, P>,
 		ctx: &mut Ctx,
@@ -3073,20 +3106,24 @@ impl ShuntingYard {
 			return Err(None);
 		}
 
-		let Some(item) = self.stack.pop_front() else { unreachable!(); };
-		match item {
-			Either::Left(node) => match node.ty {
-				NodeTy::Ident(ident) => {
-					walker.push_colour(ident.span, colour);
-					return Ok(ident);
-				}
-				_ => {}
-			},
-			Either::Right(_) => {}
+		if self.stack.len() == 1 {
+			let item = self.stack.pop_front().unwrap();
+			match &item {
+				Either::Left(node) => match &node.ty {
+					NodeTy::Ident(ident) => {
+						walker.push_colour(ident.span, colour);
+						return Ok(ident.clone());
+					}
+					_ => {}
+				},
+				Either::Right(_) => {}
+			}
+			// We don't have what we want, so we return the item back to the stack.
+			self.stack.push_front(item);
 		}
 
-		let ast = self.create_internal_expr(ctx);
-		Err(self.create_expr(walker, ctx, ast))
+		let repr = self.create_internal_repr(ctx);
+		Err(self.create_expr(walker, ctx, repr))
 	}
 
 	/// Tries to convert the internal RPN stack into one or more new variable specifiers. If this fails at any
@@ -3103,11 +3140,14 @@ impl ShuntingYard {
 		walker: &mut Walker<'a, P>,
 		ctx: &mut Ctx,
 		syntax_for_var_idents: SyntaxType,
-	) -> Result<NonEmpty<super::NewVarSpecifier>, Option<ast::Expr>> {
+	) -> Result<
+		NonEmpty<super::NewVarSpecifier>,
+		Result<(Type, ast::Type), Option<ast::Expr>>,
+	> {
 		use super::NewVarSpecifier;
 
 		if self.stack.is_empty() {
-			return Err(None);
+			return Err(Err(None));
 		}
 
 		fn convert<'a, P: TokenStreamProvider<'a>>(
@@ -3118,13 +3158,21 @@ impl ShuntingYard {
 		) -> Result<super::NewVarSpecifier, ()> {
 			match &expr.ty {
 				// Standalone identifier, e.g. `foobar`.
-				ExprTy::Ident(i) => Ok(NewVarSpecifier {
-					ident: i.clone(),
-					arr: None,
-					eq_span: None,
-					init_expr: None,
-					span: expr.span,
-				}),
+				ExprTy::Ident(i) => {
+					// We can't have an identifier take the name of a primitive.
+					if let Some(_) = ast::Primitive::parse(&i) {
+						// We don't push an `Syntax2::ExpectedNameFoundPrimitive` error because the
+						// `self.create_expr()` function will do so, and that will run because we `Err(())`.
+						return Err(());
+					}
+					Ok(NewVarSpecifier {
+						ident: i.clone(),
+						arr: None,
+						eq_span: None,
+						init_expr: None,
+						span: expr.span,
+					})
+				}
 				// We are looking for an identifier with an array size, e.g. `foobar[2][3]`.
 				ExprTy::Index { item, i } => {
 					let mut current_item = item;
@@ -3256,13 +3304,15 @@ impl ShuntingYard {
 			}
 		}
 
-		let Some(expr) = self.create_internal_expr(ctx) else { return Err(None); };
-		let vars = match &expr.ty {
+		let Some(repr) = self.create_internal_repr(ctx) else { return Err(Err(None)); };
+		let vars = match &repr.ty {
 			ExprTy::Ident(_) | ExprTy::Index { .. } | ExprTy::Binary { .. } => {
-				match convert(self, walker, ctx, &expr) {
+				match convert(self, walker, ctx, &repr) {
 					Ok(i) => NonEmpty::new(i),
 					Err(_) => {
-						return Err(self.create_expr(walker, ctx, Some(expr)))
+						return Err(
+							self.try_create_type_specifier(walker, ctx, repr)
+						)
 					}
 				}
 			}
@@ -3278,25 +3328,20 @@ impl ShuntingYard {
 							// onto the next one. Would this produce better error diagnostics? Should we check that
 							// at least one valid variable expression has been found before allowing invalid ones?
 							Err(_) => {
-								return Err(self.create_expr(
-									walker,
-									ctx,
-									Some(expr),
-								))
+								return Err(self.try_create_type_specifier(
+									walker, ctx, repr,
+								));
 							}
 						},
 						_ => {
-							return Err(self.create_expr(
-								walker,
-								ctx,
-								Some(expr),
-							))
+							return Err(self
+								.try_create_type_specifier(walker, ctx, repr))
 						}
 					}
 				}
 				NonEmpty::from_vec(v).unwrap()
 			}
-			_ => return Err(self.create_expr(walker, ctx, Some(expr))),
+			_ => return Err(self.try_create_type_specifier(walker, ctx, repr)),
 		};
 
 		// We know we have something like:
@@ -3329,6 +3374,9 @@ impl ShuntingYard {
 			}
 		}
 
+		walker.append_syntax_diags(&mut self.syntax_diags);
+		walker.append_colours(&mut self.syntax_tokens);
+
 		Ok(vars)
 	}
 
@@ -3340,16 +3388,11 @@ impl ShuntingYard {
 		&mut self,
 		walker: &mut Walker<'a, P>,
 		ctx: &mut Ctx,
+		repr: Expr,
 	) -> Result<(Type, ast::Type), Option<ast::Expr>> {
 		use super::StructHandle;
 
-		if self.stack.is_empty() {
-			return Err(None);
-		}
-
-		let Some(expr) = self.create_internal_expr(ctx) else { return Err(None); };
-
-		let (ident, arr) = match &expr.ty {
+		let (ident, arr) = match &repr.ty {
 			ExprTy::Ident(i) => (i, None),
 			ExprTy::Index { item, i } => {
 				let mut current_item = item;
@@ -3368,7 +3411,7 @@ impl ShuntingYard {
 							return Err(self.create_expr(
 								walker,
 								ctx,
-								Some(expr),
+								Some(repr),
 							))
 						}
 					}
@@ -3381,7 +3424,7 @@ impl ShuntingYard {
 
 				(ident, Some(stack))
 			}
-			_ => return Err(self.create_expr(walker, ctx, Some(expr))),
+			_ => return Err(self.create_expr(walker, ctx, Some(repr))),
 		};
 
 		// We know we have a type specifier expression, i.e. something like:
@@ -3406,7 +3449,7 @@ impl ShuntingYard {
 				None => {
 					let handle = ctx.resolve_struct(&ident);
 					if handle.is_unresolved() {
-						return Err(self.create_expr(walker, ctx, Some(expr)));
+						return Err(self.create_expr(walker, ctx, Some(repr)));
 					} else {
 						(Either::Right(handle), SyntaxType::Struct)
 					}
@@ -3425,13 +3468,15 @@ impl ShuntingYard {
 			}
 		}
 
-		self.syntax_diags.retain(|e| {
+		/* self.syntax_diags.retain(|e| {
 			if let Syntax2::Expr(ExprDiag::FoundOperandAfterOperand(_, _)) = e {
 				false
 			} else {
 				true
 			}
-		});
+		}); */
+		walker.append_syntax_diags(&mut self.syntax_diags);
+		walker.append_colours(&mut self.syntax_tokens);
 
 		let type_ = match handle {
 			Either::Left(p) => {
@@ -3453,7 +3498,7 @@ impl ShuntingYard {
 		Ok((
 			type_,
 			ast::Type {
-				ty_specifier_span: expr.span,
+				ty_specifier_span: repr.span,
 				disjointed_span: ast::Omittable::None,
 				ty: if let Some(mut arr) = arr {
 					if arr.len() == 1 {
@@ -3520,19 +3565,16 @@ impl ShuntingYard {
 		&mut self,
 		walker: &mut Walker<'a, P>,
 		ctx: &mut Ctx,
-	) -> Result<
-		(Either<ast::SubroutineType, ast::Type>, Vec<Syntax>),
-		Option<ast::Expr>,
-	> {
+	) -> Result<Either<ast::SubroutineType, ast::Type>, Option<ast::Expr>> {
 		use super::{StructHandle, SubroutineHandle};
 
 		if self.stack.is_empty() {
 			return Err(None);
 		}
 
-		let Some(expr) = self.create_internal_expr(ctx) else { return Err(None); };
+		let Some(repr) = self.create_internal_repr(ctx) else { return Err(None); };
 
-		let (ident, arr) = match &expr.ty {
+		let (ident, arr) = match &repr.ty {
 			ExprTy::Ident(i) => (i, None),
 			ExprTy::Index { item, i } => {
 				let mut current_item = item;
@@ -3551,7 +3593,7 @@ impl ShuntingYard {
 							return Err(self.create_expr(
 								walker,
 								ctx,
-								Some(expr),
+								Some(repr),
 							))
 						}
 					}
@@ -3564,7 +3606,7 @@ impl ShuntingYard {
 
 				(ident, Some(stack))
 			}
-			_ => return Err(self.create_expr(walker, ctx, Some(expr))),
+			_ => return Err(self.create_expr(walker, ctx, Some(repr))),
 		};
 
 		// We know we have a type specifier expression, i.e. something like:
@@ -3574,8 +3616,6 @@ impl ShuntingYard {
 		// - type_name[const]
 		// - type_name[const + 1]
 		// - type_name[const[0]]
-
-		let mut syntax_diags = Vec::new();
 
 		let (type_, new_syntax_type) = match super::ast::Primitive::parse(ident)
 		{
@@ -3594,7 +3634,7 @@ impl ShuntingYard {
 					// If there is no subroutine, but there may be a struct.
 					let struct_handle = ctx.resolve_struct(&ident);
 					if struct_handle.is_unresolved() {
-						return Err(self.create_expr(walker, ctx, Some(expr)));
+						return Err(self.create_expr(walker, ctx, Some(repr)));
 					} else {
 						(
 							Either::Right(Either::Right(struct_handle)),
@@ -3619,18 +3659,20 @@ impl ShuntingYard {
 			}
 		}
 
-		self.syntax_diags.retain(|e| {
+		/* self.syntax_diags.retain(|e| {
 			if let Syntax2::Expr(ExprDiag::FoundOperandAfterOperand(_, _)) = e {
 				false
 			} else {
 				true
 			}
-		});
+		}); */
+		walker.append_syntax_diags(&mut self.syntax_diags);
+		walker.append_colours(&mut self.syntax_tokens);
 
 		let type_ = match type_ {
 			Either::Left(handle) => Either::Left(ast::SubroutineType {
 				ident_span: ident.span,
-				ty_specifier_span: expr.span,
+				ty_specifier_span: repr.span,
 				disjointed_span: ast::Omittable::None,
 				ty: if let Some(mut arr) = arr {
 					if arr.len() == 1 {
@@ -3687,7 +3729,7 @@ impl ShuntingYard {
 				qualifiers: ast::Omittable::None,
 			}),
 			Either::Right(type_ty) => Either::Right(ast::Type {
-				ty_specifier_span: expr.span,
+				ty_specifier_span: repr.span,
 				disjointed_span: ast::Omittable::None,
 				ty: if let Some(mut arr) = arr {
 					if arr.len() == 1 {
@@ -3745,7 +3787,7 @@ impl ShuntingYard {
 			}),
 		};
 
-		Ok((type_, syntax_diags))
+		Ok(type_)
 	}
 }
 
@@ -3927,7 +3969,7 @@ fn process_list_args(
 
 /// An **internal** expression node.
 ///
-/// Expression nodes within the AST are name resolved and contain handles. This representation is before name
+/// Expression nodes within the AST are name-resolved and contain handles. This representation is before name
 /// resolution, hence it differs enough that we need separate types to cleanly represent things. This
 /// representation is processed into either specific grammar items, such as type specifiers, or into expressions;
 /// it is never directly returned outside of this module.
@@ -4003,11 +4045,11 @@ impl Expr {
 					Lit::UInt(_) => Type::new_prim(ast::Primitive::Uint),
 					Lit::Float(_) => Type::new_prim(ast::Primitive::Float),
 					Lit::Double(_) => Type::new_prim(ast::Primitive::Double),
-					_ => {
+					Lit::InvalidNum => {
 						return (
 							ast::Expr {
 								span: self.span,
-								ty: ast::ExprTy::Invalid,
+								ty: ast::ExprTy::Lit(l),
 							},
 							Type::new_nat(),
 						);

@@ -1,4 +1,5 @@
 //! Syntax highlighting types.
+//! TODO: rename module to `highlight`, and remove syntax references to not confuse with other syntax meaning
 
 use crate::Span;
 use bitflags::bitflags;
@@ -92,34 +93,41 @@ pub enum SyntaxType {
 	DirectiveError,
 	/// The compiler option in a `#pragma` directive.
 	DirectivePragma,
+	String,
 }
 
 bitflags! {
-	/// The modifiers of a syntax highlighting token.
+	/// The modifiers for a syntax highlighting token.
 	///
-	/// This is a `bitflag`. It contains:
-	/// - `MACRO_SIGNATURE` = `1`,
-	/// - `MACRO_BODY` = `2`,
-	/// - `MACRO_CALLSITE` = `4`,
-	/// - `UNDEFINE` = `8`,
-	/// - `CONDITIONAL` = `16`,
-	/// - `DECLARATION` = `16`,
-	/// - `DEFINITION` = `32`,
-	/// - `CONST` = `64`,
-	/// - `SHADER_IN_OUT` = `128`,
-	/// - `SHADER_UNIFORM` = `256`.
+	/// For a more detailed breakdown of where modifiers are used, see: TODO (document)
+	///
+	/// This is a `bitflag`. It contains: TODO
 	pub struct SyntaxModifiers: u32 {
-		/// Tokens within the macro signature, e.g. the `BAR(A, B)` within `#define BAR(A, B) foo`.
-		const MACRO_SIGNATURE = 1;
-		/// Tokens within the macro body, e.g. the `foo + bar` within `#define FOO foo + bar`.
-		const MACRO_BODY = 2;
-		/// Tokens within a macro call site. e.g. the `TYPE(i)` within `void fn(TYPE(i) val);`.
-		const MACRO_CALLSITE = 4;
+		/* === PREPROCESSOR === */
+		/// Tokens within the `#version` directive, apart from the `#version` part.
+		const VERSION = 1;
+		/// Tokens within the `#extension` directive, apart from the `#extension` part.
+		const EXTENSION = 2;
+		/// Tokens within the `#line` directive, apart from the `#line` part.
+		const LINE = 4;
+		/// Tokens within the macro signature within a `#define` directive, e.g. the `BAR(A, B)` within `#define
+		/// BAR(A, B) foo`.
+		const MACRO_SIGNATURE = 8;
+		/// Tokens within the macro body within a `#define` directive, e.g. the `foo + bar` within `#define FOO foo
+		/// + bar`.
+		const MACRO_BODY = 16;
+		/// Tokens within a macro call site.
+		const MACRO_CALLSITE = 32;
 		/// Tokens within the `#undef` directive, apart from the `#undef` part.
-		const UNDEFINE = 8;
+		const UNDEF = 64;
+		/// Tokens within the `#error` directive, apart from the `#error` part.
+		const ERROR = 128;
+		/// Tokens within the `#pragma` directive, apart from the `#pragma` part.
+		const PRAGMA = 256;
 		/// Tokens within a conditional directive, apart from the `#if`/`#elif`/etc. part.
-		const CONDITIONAL = 16;
-		const DECLARATION = 16;
-		const DEFINITION = 32;
+		const CONDITIONAL = 0;
+		/* === GENERAL === */
+		const DECLARATION = 0;
+		const DEFINITION = 0;
 	}
 }

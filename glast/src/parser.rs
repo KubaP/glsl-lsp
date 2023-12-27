@@ -141,7 +141,7 @@ pub struct Ast {
 	/// All subroutine uniform symbols.
 	subroutine_uniforms: Vec<SubroutineUniformSymbol>,
 	/// All variable symbol tables, each containing all variable symbols for that given table.
-	variables: Vec<Vec<VariableSymbol>>,
+	variables: Vec<VariableSymbolTable>,
 }
 
 /// Parses a GLSL source string into a tree of tokens that can be then parsed into an abstract syntax tree.
@@ -594,7 +594,11 @@ pub fn parse_from_token_stream(
 						});
 						let node = tree.get_mut(top(&stack)).unwrap();
 						node.span.end = token_span.end;
-						let Either::Right(cond_block) = node.children.last_mut().unwrap() else { unreachable!() };
+						let Either::Right(cond_block) =
+							node.children.last_mut().unwrap()
+						else {
+							unreachable!()
+						};
 						cond_block.conditions.push((
 							Conditional::ElseIf,
 							token_span,
@@ -661,7 +665,11 @@ pub fn parse_from_token_stream(
 						});
 						let node = tree.get_mut(top(&stack)).unwrap();
 						node.span.end = token_span.end;
-						let Either::Right(cond_block) = node.children.last_mut().unwrap() else { unreachable!() };
+						let Either::Right(cond_block) =
+							node.children.last_mut().unwrap()
+						else {
+							unreachable!()
+						};
 						cond_block.conditions.push((
 							Conditional::Else,
 							token_span,
@@ -724,7 +732,11 @@ pub fn parse_from_token_stream(
 						// Close the condition block.
 						let node = tree.get_mut(top(&stack)).unwrap();
 						node.span.end = token_span.end;
-						let Either::Right(cond_block) = node.children.last_mut().unwrap() else { unreachable!() };
+						let Either::Right(cond_block) =
+							node.children.last_mut().unwrap()
+						else {
+							unreachable!()
+						};
 						cond_block.end = Some((
 							Conditional::End,
 							token_span,
@@ -768,7 +780,9 @@ pub fn parse_from_token_stream(
 	if stack.len() > 0 {
 		let node = tree.get_mut(top(&stack)).unwrap();
 		node.span.end = token_stream_end;
-		let Either::Right(cond) = node.children.last_mut().unwrap() else { unreachable!(); };
+		let Either::Right(cond) = node.children.last_mut().unwrap() else {
+			unreachable!();
+		};
 		syntax_diags.push(Syntax::PreprocConditional(
 			PreprocConditionalDiag::UnclosedBlock(
 				cond.conditions[0].1,
@@ -1141,7 +1155,7 @@ impl TokenTree {
 			ctx.into_ast(&mut walker.semantic_diags),
 			walker.syntax_diags,
 			walker.semantic_diags,
-			walker.syntax_tokens,
+			walker.highlighting_tokens,
 		);
 
 		if syntax_highlight_entire_source
@@ -1296,7 +1310,7 @@ impl TokenTree {
 			ctx.into_ast(&mut walker.semantic_diags),
 			walker.syntax_diags,
 			walker.semantic_diags,
-			walker.syntax_tokens,
+			walker.highlighting_tokens,
 		);
 
 		let (syntax_tokens, disabled_code_regions) =
@@ -1434,7 +1448,9 @@ impl TokenTree {
 					None => break,
 				};
 			let node = &self.tree[*node_id];
-			let Some(child) = node.children.get(*child_idx) else { break; };
+			let Some(child) = node.children.get(*child_idx) else {
+				break;
+			};
 
 			match child {
 				Either::Left(arena_id) => {
@@ -1584,7 +1600,7 @@ impl TokenTree {
 				ast: ctx.into_ast(&mut walker.semantic_diags),
 				syntax_diags: walker.syntax_diags,
 				semantic_diags: walker.semantic_diags,
-				syntax_tokens: walker.syntax_tokens,
+				syntax_tokens: walker.highlighting_tokens,
 				disabled_code_regions: Vec::new(),
 			},
 			chosen_regions,
@@ -1707,7 +1723,9 @@ impl TokenTree {
 			};
 
 			loop {
-				let Some(token) = tokens.get(0) else { break; };
+				let Some(token) = tokens.get(0) else {
+					break;
+				};
 
 				if token.span.is_before(&range) {
 					// This token is before the current range. We clearly have already gone past it, so it can
@@ -1790,7 +1808,13 @@ impl TokenTree {
 				match child {
 					Either::Left(_) => {}
 					Either::Right(block) => {
-						let Some((ty,_, _, span, _, _, _)) = block.conditions.iter().find(|(_,_, _, _, id, _, _)| node_id == id) else { continue; };
+						let Some((ty, _, _, span, _, _, _)) = block
+							.conditions
+							.iter()
+							.find(|(_, _, _, _, id, _, _)| node_id == id)
+						else {
+							continue;
+						};
 						directives.push((*ty, *span));
 					}
 				}
@@ -1810,9 +1834,11 @@ impl TokenTree {
 	) -> Vec<usize> {
 		// There is no existing key, so we need to construct one from scratch. Each node within the vector has
 		// a list of all prerequisite parents, so we can just use that, (removing the unneeded parent node IDs).
-		let Some((_new_selection_node_id, parent_info)) = self.order_by_appearance.get(chosen_conditional_directive) else {
-				return Vec::new();
-			};
+		let Some((_new_selection_node_id, parent_info)) =
+			self.order_by_appearance.get(chosen_conditional_directive)
+		else {
+			return Vec::new();
+		};
 
 		let mut key = parent_info
 			.iter()
@@ -1846,7 +1872,9 @@ impl TokenTree {
 					None => break,
 				};
 			let node = &self.tree[*node_id];
-			let Some(child) = node.children.get(*child_idx) else { break; };
+			let Some(child) = node.children.get(*child_idx) else {
+				break;
+			};
 
 			match child {
 				Either::Left(_) => {
@@ -2020,9 +2048,11 @@ impl TokenTree {
 				}
 
 				// This node doesn't even exist
-				let Some((_node_id, parent_info)) = self.order_by_appearance.get(*node) else {
-				return None;
-			};
+				let Some((_node_id, parent_info)) =
+					self.order_by_appearance.get(*node)
+				else {
+					return None;
+				};
 
 				// This node depends on the to-remove node.
 				if parent_info
@@ -2055,11 +2085,11 @@ trait TokenStreamProvider<'a>: Clone {
 		span_encoding: SpanEncoding,
 	) -> Option<TokenStream>;
 
-	/// Returns the zero-width span of the source string.
+	/// Returns a zero-width span at the end of the source string.
 	fn get_end_span(&self) -> Span;
 }
 
-/// Allows for stepping through a token stream. Takes care of dealing with irrelevant details from the perspective
+/// Allows stepping through a token stream. This takes care of dealing with irrelevant details from the perspective
 /// of the parser, such as comments and macro expansion.
 struct Walker<'a, Provider: TokenStreamProvider<'a>> {
 	/// The token stream provider.
@@ -2067,32 +2097,47 @@ struct Walker<'a, Provider: TokenStreamProvider<'a>> {
 	_phantom: std::marker::PhantomData<&'a ()>,
 	/// The active token streams.
 	///
-	/// - `0` - The macro identifier, (for the root source stream this is just `""`).
+	/// - `0` - The name of the stream. For the root source stream with is an empty string, but otherwise it will
+	///   be the name of a macro who's body we are iterating over.
 	/// - `1` - The token stream.
-	/// - `2` - The cursor.
+	/// - `2` - The position of the cursor.
 	streams: Vec<(String, TokenStream, usize)>,
+
+	/// A temporary buffer to hold a parsed item in the case of error recovery. When performing error recovery by
+	/// seeking to the next statement, if we encounter something that can be parsed as a type specifier or as an
+	/// expression, we store this here and return out of the error recovery function. Upon the next iteration of
+	/// the main parser loop, we check if this has something and act accordingly.
+	tmp_buf: Either3<(), ast::Type, ast::Expr>,
 
 	/// The currently defined macros.
 	///
-	/// Key: The macro identifier.
+	/// Key: The macro name.
 	///
 	/// Value:
-	/// - `0` - The span of the macro signature.
-	/// - `1` - Macro information.
+	/// - `0` - The span of this macro's signature.
+	/// - `1` - The data for this macro.
 	macros: HashMap<String, (Span, Macro)>,
-	/// The span of an initial macro call site. Only the first macro call site is registered here.
+	/// The span of the initial macro call site if we are inside of a macro. Only the first macro call site is
+	/// registered here, (the one that begins the expansion process), not any further nested macro call sites.
+	///
+	/// # Invariants
+	/// This is guaranteed to be `Some` if `self.streams.len() > 1`.
 	macro_call_site: Option<Span>,
-	/// The actively-called macro identifiers.
+	/// The names of all macros currently in the process of being expanded. This also includes an empty string for
+	/// the root source stream.
+	///
+	// Invariant: A macro cannot have no name (an empty identifier), so "" won't cause any clashes with valid
+	// macros. And by using "" we can avoid having to special case the root source stream.
 	active_macros: HashSet<String>,
 
-	/// Syntax diagnostics created from the tokens parsed so-far.
+	/// Syntax diagnostics.
 	syntax_diags: Vec<Syntax2>,
-	/// Semantic diagnostics created from the tokens parsed so-far. Note that some `Unresolved*` semantic
-	/// diagnostics are stored in the [`Ctx`].
+	/// Semantic diagnostics. Note that some `Semantic::Unresolved*` semantic diagnostics are stored separately in
+	/// the [`Ctx`].
 	semantic_diags: Vec<Semantic>,
+	/// Syntax highlighting tokens.
+	highlighting_tokens: Vec<SyntaxToken>,
 
-	/// Syntax highlighting tokens created from the tokens parsed so-far.
-	syntax_tokens: Vec<SyntaxToken>,
 	/// The type of encoding of spans.
 	span_encoding: SpanEncoding,
 }
@@ -2126,20 +2171,21 @@ impl<'a, Provider: TokenStreamProvider<'a>> Walker<'a, Provider> {
 		};
 
 		let mut active_macros = HashSet::new();
-		// Invariant: A macro cannot have no name (an empty identifier), so this won't cause any hashing clashes
-		// with valid macros. By using "" we can avoid having a special case for the root source stream.
+		// Invariant: A macro cannot have no name (an empty identifier), so this won't cause any clashes with valid
+		// macros. And by using "" we can avoid having to special case the root source stream.
 		active_macros.insert("".into());
 
 		Self {
 			token_provider,
 			_phantom: Default::default(),
 			streams,
+			tmp_buf: Either3::A(()),
 			macros,
 			macro_call_site: None,
 			active_macros,
 			syntax_diags,
 			semantic_diags: Vec::new(),
-			syntax_tokens,
+			highlighting_tokens: syntax_tokens,
 			span_encoding,
 		}
 	}
@@ -2156,7 +2202,7 @@ impl<'a, Provider: TokenStreamProvider<'a>> Walker<'a, Provider> {
 			match stream.get(*cursor).map(|(t, _)| t) {
 				Some(token) => Some((
 					token,
-					// Panic: This is guaranteed to be some if `self.streams.len() > 1`.
+					// Panic: `self.macro_call_site` is guaranteed to be some if `self.streams.len() > 1`.
 					self.macro_call_site.unwrap(),
 				)),
 				None => None,
@@ -2164,7 +2210,7 @@ impl<'a, Provider: TokenStreamProvider<'a>> Walker<'a, Provider> {
 		}
 	}
 
-	/// Returns the current token under the cursor, without advancing the cursor. (The token gets cloned).
+	/// Returns the current token under the cursor, without advancing the cursor; (the token gets cloned).
 	fn get(&self) -> Option<Spanned<Token>> {
 		if self.streams.is_empty() {
 			None
@@ -2177,7 +2223,7 @@ impl<'a, Provider: TokenStreamProvider<'a>> Walker<'a, Provider> {
 			token.map(|t| {
 				(
 					t,
-					// Panic: This is guaranteed to be some if `self.streams.len() > 1`.
+					// Panic: `self.macro_call_site` is guaranteed to be some if `self.streams.len() > 1`.
 					self.macro_call_site.unwrap(),
 				)
 			})
@@ -2245,7 +2291,7 @@ impl<'a, Provider: TokenStreamProvider<'a>> Walker<'a, Provider> {
 			&mut self.macro_call_site,
 			&mut self.syntax_diags,
 			&mut self.semantic_diags,
-			&mut self.syntax_tokens,
+			&mut self.highlighting_tokens,
 			self.span_encoding,
 		);
 	}
@@ -2258,7 +2304,7 @@ impl<'a, Provider: TokenStreamProvider<'a>> Walker<'a, Provider> {
 	fn advance_expr_parser(
 		&mut self,
 		syntax_diags: &mut Vec<Syntax2>,
-		semantic_diags: &mut Vec<Semantic>,
+		macro_diags: &mut Vec<Semantic>,
 		syntax_tokens: &mut Vec<SyntaxToken>,
 	) {
 		Self::_move_cursor(
@@ -2268,7 +2314,7 @@ impl<'a, Provider: TokenStreamProvider<'a>> Walker<'a, Provider> {
 			&mut self.active_macros,
 			&mut self.macro_call_site,
 			syntax_diags,
-			semantic_diags,
+			macro_diags,
 			syntax_tokens,
 			self.span_encoding,
 		);
@@ -2276,7 +2322,7 @@ impl<'a, Provider: TokenStreamProvider<'a>> Walker<'a, Provider> {
 
 	/// Returns whether the walker has reached the end of the token streams.
 	fn is_done(&self) -> bool {
-		self.streams.is_empty()
+		self.streams.is_empty() && matches!(self.tmp_buf, Either3::A(()))
 	}
 
 	/// Returns the span of the last token in the token stream.
@@ -2350,7 +2396,10 @@ impl<'a, Provider: TokenStreamProvider<'a>> Walker<'a, Provider> {
 			match token {
 				// We check if the new token is a macro call site.
 				Token::Ident(ident) => {
-					let Some((signature_span, macro_)) = macros.get(ident) else { break; };
+					let Some((signature_span, macro_)) = macros.get(ident)
+					else {
+						break;
+					};
 
 					if active_macros.contains(ident) {
 						// We have already visited a macro with this identifier. Recursion is not supported so
@@ -2628,7 +2677,7 @@ impl<'a, Provider: TokenStreamProvider<'a>> Walker<'a, Provider> {
 					if *contains_eof {
 						syntax_diags.push(Syntax2::ExpectedGrammar {
 							item: ExpectedGrammar::BlockCommentEnd,
-							pos: token_span.end,
+							span: token_span.end_zero_width(),
 						});
 					}
 					let token_span = *token_span;
@@ -2650,50 +2699,26 @@ impl<'a, Provider: TokenStreamProvider<'a>> Walker<'a, Provider> {
 		}
 	}
 
-	/// Registers a define macro.
+	/// Registers a macro.
 	fn register_macro(
 		&mut self,
-		ident: String,
+		name: String,
 		signature_span: Span,
 		macro_: Macro,
 	) {
-		if let Some(_prev) = self.macros.insert(ident, (signature_span, macro_))
+		if let Some(_prev) = self.macros.insert(name, (signature_span, macro_))
 		{
-			// TODO: Emit error if the macros aren't identical (will require scanning the tokenstream to compare).
 		}
 	}
 
-	/// Un-registers a defined macro.
-	fn unregister_macro(&mut self, ident: &str, span: Span) {
-		match self.macros.remove(ident) {
-			Some((_, macro_)) => match macro_ {
-				Macro::Object(_) => self.push_colour_with_modifiers(
-					span,
-					SyntaxType::ObjectMacro,
-					SyntaxModifiers::UNDEFINE,
-				),
-				Macro::Function { .. } => self.push_colour_with_modifiers(
-					span,
-					SyntaxType::FunctionMacro,
-					SyntaxModifiers::UNDEFINE,
-				),
-			},
-			None => {
-				self.push_colour_with_modifiers(
-					span,
-					SyntaxType::UnresolvedIdent,
-					SyntaxModifiers::UNDEFINE,
-				);
-				self.push_semantic_diag(Semantic::UndefMacroNameUnresolved {
-					name: (ident.to_owned(), span),
-				});
-			}
-		}
+	/// Unregisters a macro, and returns it if existed.
+	fn unregister_macro(&mut self, name: &str) -> Option<Macro> {
+		self.macros.remove(name).map(|(_, macro_)| macro_)
 	}
 
 	/// Pushes a syntax diagnostic.
 	fn push_syntax_diag(&mut self, diag: Syntax) {
-		// TODO:
+		// TODO: remove all calls to
 	}
 
 	/// Pushes a syntax diagnostic.
@@ -2702,8 +2727,8 @@ impl<'a, Provider: TokenStreamProvider<'a>> Walker<'a, Provider> {
 	}
 
 	/// Appends a collection of syntax diagnostics.
-	fn append_syntax_diags(&mut self, mut syntax: Vec<Syntax2>) {
-		self.syntax_diags.append(&mut syntax);
+	fn append_syntax_diags(&mut self, syntax: &mut Vec<Syntax2>) {
+		self.syntax_diags.append(syntax);
 	}
 
 	/// Pushes a semantic diagnostic.
@@ -2712,8 +2737,8 @@ impl<'a, Provider: TokenStreamProvider<'a>> Walker<'a, Provider> {
 	}
 
 	/// Appends a collection of semantic diagnostics.
-	fn append_semantic_diags(&mut self, mut semantic: Vec<Semantic>) {
-		self.semantic_diags.append(&mut semantic);
+	fn append_semantic_diags(&mut self, semantic: &mut Vec<Semantic>) {
+		self.semantic_diags.append(semantic);
 	}
 
 	/// Pushes a syntax highlighting token over the given span.
@@ -2729,9 +2754,9 @@ impl<'a, Provider: TokenStreamProvider<'a>> Walker<'a, Provider> {
 		modifiers: SyntaxModifiers,
 	) {
 		// When we are within a macro, we don't want to produce syntax tokens.
-		// Note: This functionality is duplicated in the `ShuntingYard::colour()` method.
+		// Note: This check is duplicated in the `ShuntingYard::colour()` method.
 		if self.streams.len() == 1 {
-			self.syntax_tokens.push(SyntaxToken {
+			self.highlighting_tokens.push(SyntaxToken {
 				ty,
 				modifiers,
 				span,
@@ -2740,8 +2765,8 @@ impl<'a, Provider: TokenStreamProvider<'a>> Walker<'a, Provider> {
 	}
 
 	/// Appends a collection of syntax highlighting tokens.
-	fn append_colours(&mut self, mut colours: Vec<SyntaxToken>) {
-		self.syntax_tokens.append(&mut colours);
+	fn append_colours(&mut self, colours: &mut Vec<SyntaxToken>) {
+		self.highlighting_tokens.append(colours);
 	}
 }
 
@@ -2941,7 +2966,9 @@ impl<'a> TokenStreamProvider<'a> for DynamicTokenStreamProvider<'a> {
 					}
 				};
 			let node = self.tree.get(*node_ptr).unwrap();
-			let Some(child) = node.children.get(*child_idx) else { return None; };
+			let Some(child) = node.children.get(*child_idx) else {
+				return None;
+			};
 
 			match child {
 				Either::Left(arena_id) => {
@@ -3213,8 +3240,9 @@ impl<'a> TokenStreamProvider<'a> for DynamicTokenStreamProvider<'a> {
 ///
 /// ## Variables
 /// A variable is only allowed to shadow an existing variable (incl. subroutine uniforms) if the previous variable
-/// is in a higher scope. A variable is allowed to shadow any other symbol as long as it is within a function
-/// scope, so not at the top-level scope where all other symbols (structs/functions/etc.) are defined.
+/// is in a higher scope. A variable is allowed to shadow any other symbol (apart from primitives) as long as it is
+/// within a function scope, so not at the top-level scope where all other symbols (structs/functions/etc.) are
+/// defined.
 #[derive(Debug)]
 pub struct Ctx {
 	/// Arena of nodes.
@@ -3230,12 +3258,12 @@ pub struct Ctx {
 	/// - `1` - Handle to the variable symbol table for this scope.
 	///
 	/// # Invariants
-	/// `self[0]` always exists and points to a `NodeTy::TranslationUnit`.
+	/// An item at index `0` always exists and points to a `NodeTy::TranslationUnit`, (same as `self.root_handle`).
 	scope_stack: Vec<(NodeHandle, VariableTableHandle)>,
 
-	/// References to primitives.
+	/// References to primitive symbols.
 	primitive_refs: HashMap<ast::Primitive, Vec<Span>>,
-	/// References to vector swizzles.
+	/// References to vector swizzles of all varieties.
 	swizzle_refs: Vec<Span>,
 	/// User-defined struct symbols.
 	structs: Vec<StructSymbol>,
@@ -3244,24 +3272,25 @@ pub struct Ctx {
 	/// Built-in and user-defined function symbols. This also includes all function symbols that are associated
 	/// with a subroutine.
 	functions: Vec<FunctionSymbol>,
-	/// Subroutine symbols.
+	/// User-defined subroutine symbols.
 	subroutines: Vec<SubroutineSymbol>,
-	/// Subroutine uniform symbols.
+	/// User-define subroutine uniform symbols.
 	subroutine_uniforms: Vec<SubroutineUniformSymbol>,
-	/// Variable symbol tables, each containing all variable symbols for that given table.
-	variables: Vec<Vec<VariableSymbol>>,
+	/// Variable symbol tables. Each table contains all relevant variable symbols for a given scope.
+	variables: Vec<VariableSymbolTable>,
 	/// Currently active symbols, i.e. the most recent symbol for a given name.
 	///
 	/// All handles are always resolved.
 	current_active_symbols: HashMap<String, CurrentlyActive>,
 
-	/// Any `UnresolvedVariable` and `UnresolvedFunction` semantic diagnostics. The reason they are stored here
-	/// separately from the `Walker` is so that we can improve the diagnostics if we happen to later create a new
-	/// symbol with a matching name.
+	/// Any `UnresolvedVariable` and `UnresolvedFunction` semantic diagnostics, along with a handle to the variable
+	/// table in which they were generated. The reason they are stored in this struct instead of in the
+	/// [`Walker`] is so that we can improve the diagnostics if we happen to later create a new symbol with a
+	/// matching name.
 	unresolved_diags: Vec<(Semantic, VariableTableHandle)>,
 }
 
-/// A handle to the current active symbol under the given name.
+/// A handle to a current active symbol.
 #[derive(Debug)]
 enum CurrentlyActive {
 	Struct(StructHandle),
@@ -3288,6 +3317,12 @@ impl CurrentlyActive {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct NodeHandle(generational_arena::Index);
 
+// The following handle types use `usize::MAX` as a sentinel to mean that the handle is unresolved. The reason why
+// we can't use something like `NonZeroUsize` is because these are used as indices into vectors, and vectors start
+// at `0`. Separately, no problem arizes from using `usize::MAX` because, whilst its technically possible to have
+// that many items in a vector, in reality it is impossible because no computer has that much RAM. Even assuming
+// that each item in the vector is only 1 byte large, to have that many items would require 2^64 − 1 bytes of RAM.
+
 /// A handle to a struct symbol stored within the [`Ast`]/[`Ctx`].
 ///
 /// # Invariants
@@ -3298,20 +3333,10 @@ pub struct StructHandle(
 	usize,
 );
 
-/// A handle to an interface block symbol stored within the [`Ast`]/[`Ctx`].
-///
-/// # Invariants
-/// If `self.0 == usize::MAX`, this handle is unresolved.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct InterfaceHandle(
-	/// Index into `ctx.interfaces`.
-	usize,
-);
-
 /// A handle to a struct field stored within the [`Ast`]/[`Ctx`].
 ///
 /// # Invariants
-/// If `self.0 == usize::MAX`, this handle is unresolved and `self.1` can be disregarded.
+/// If `self.0 == usize::MAX`, this handle is unresolved and the value of `self.1` should be ignored.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct StructFieldHandle(
 	/// Index into `ctx.structs`.
@@ -3323,8 +3348,9 @@ pub struct StructFieldHandle(
 /// A handle to a function symbol stored within the [`Ast`]/[`Ctx`].
 ///
 /// # Invariants
-/// If `self.0 == usize::MAX`, this handle is fully unresolved. If `self.0 != usize::MAX && self.1 == usize::MAX`,
-/// handle is partially resolved (to the function symbol, but not a specific signature/overload).
+/// If `self.0 == usize::MAX`, this handle is fully unresolved and the value of `self.1` should be ignored. If
+/// `self.0 != usize::MAX && self.1 == usize::MAX`, this handle is partialy resolved (to the function symbol, but
+/// not to a specific overload).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct FunctionHandle(
 	/// Index into `ctx.functions`.
@@ -3353,7 +3379,17 @@ pub struct SubroutineUniformHandle(
 	usize,
 );
 
-/// A handle to a variable table.
+/// A handle to an interface block symbol stored within the [`Ast`]/[`Ctx`].
+///
+/// # Invariants
+/// If `self.0 == usize::MAX`, this handle is unresolved.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct InterfaceHandle(
+	/// Index into `ctx.interfaces`.
+	usize,
+);
+
+/// A handle to a variable table stored within the [`Ast`]/[`Ctx`].
 ///
 /// # Invariants
 /// If `self.0 == usize::MAX`, this handle is unresolved.
@@ -3366,7 +3402,7 @@ pub struct VariableTableHandle(
 /// A handle to a variable symbol, (stored within a variable table), stored within the [`Ast`]/[`Ctx`].
 ///
 /// # Invariants
-/// If `self.0 == usize::MAX`, this handle is unresolved and `self.1` can be disregarded.
+/// If `self.0 == usize::MAX`, this handle is unresolved and the value of `self.1` should be ignored.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct VariableHandle(
 	/// Index into `ctx.variables`.
@@ -3460,7 +3496,7 @@ impl Ctx {
 		let variables = vec![vec![]];
 		let mut scope_stack = Vec::new();
 
-		let root_node = arena.insert(ast::Node {
+		let root_idx = arena.insert(ast::Node {
 			span: Span::new(0, 0),
 			ty: ast::NodeTy::TranslationUnit(ast::Scope {
 				span: Span::new(0, 0),
@@ -3468,11 +3504,11 @@ impl Ctx {
 				variable_table: VariableTableHandle(0),
 			}),
 		});
-		scope_stack.push((NodeHandle(root_node), VariableTableHandle(0)));
+		scope_stack.push((NodeHandle(root_idx), VariableTableHandle(0)));
 
 		Self {
 			arena,
-			root_handle: root_node,
+			root_handle: root_idx,
 			scope_stack,
 			primitive_refs: HashMap::new(),
 			swizzle_refs: Vec::new(),
@@ -3492,7 +3528,7 @@ impl Ctx {
 	/// temporary/state-tracking variables.
 	fn into_ast(self, semantic_diags: &mut Vec<Semantic>) -> Ast {
 		semantic_diags.reserve(self.unresolved_diags.len());
-		for (diag, _) in self.unresolved_diags {
+		for (diag, _) in self.unresolved_diags.into_iter() {
 			semantic_diags.push(diag);
 		}
 
@@ -3511,13 +3547,31 @@ impl Ctx {
 	}
 
 	/// Pushes an `Unresolved*` semantic diagnostic.
+	///
+	/// # Invariants
+	/// `diag` must be of a `Semantic::Unresolved*` variant.
 	fn push_unresolved_diag(&mut self, diag: Semantic) {
+		// Invariant: since this is only relevant internally to this module, it really should be manually ensured.
+		// This assertion is just a failsafe for when running tests.
+		#[cfg(debug_assertions)]
+		{
+			match &diag {
+				Semantic::UnresolvedType { .. }
+				| Semantic::UnresolvedSubroutineType { .. }
+				| Semantic::UnresolvedVariable { .. }
+				| Semantic::UnresolvedFunction { .. }
+				| Semantic::UnresolvedStructField { .. } => {}
+				_ => panic!(
+					"[Ctx::push_unresolved_diag] Invalid `Semantic::*` diagnostic"
+				),
+			}
+		}
 		let var_table = self.__get_current_scope().variable_table;
 		self.unresolved_diags.push((diag, var_table));
 	}
 }
 
-/* Nodes, symbols, and name resolution functionality */
+// Nodes, symbols, and name resolution functionality
 impl Ctx {
 	/// Pushes a node into the current scope.
 	fn push_node(&mut self, node: ast::Node) -> NodeHandle {
@@ -3874,7 +3928,9 @@ impl Ctx {
 			// We don't have instances. That means the fields in this interface block are global variables.
 			let th = self.__get_current_scope().variable_table;
 			for (mut type_, ident) in fields.into_iter() {
-				let Some(ident) = ident else { continue; };
+				let Some(ident) = ident else {
+					continue;
+				};
 
 				let new_var_handle =
 					VariableHandle(th.0, self.variables[th.0].len());
@@ -4017,8 +4073,8 @@ impl Ctx {
 				// allowed.
 				if fn_.built_in {
 					walker.push_semantic_diag(
-						Semantic::CannotOverloadBuiltInFn {
-							name: ident.clone(),
+						Semantic::CannotOverloadBuiltinFn {
+							fn_: (ident.name.clone(), ident.span),
 						},
 					);
 					return;
@@ -4203,8 +4259,8 @@ impl Ctx {
 				// not allowed.
 				if fn_.built_in {
 					walker.push_semantic_diag(
-						Semantic::CannotOverloadBuiltInFn {
-							name: ident.clone(),
+						Semantic::CannotOverloadBuiltinFn {
+							fn_: (ident.name.clone(), ident.span),
 						},
 					);
 					return;
@@ -4460,8 +4516,8 @@ impl Ctx {
 				// not allowed.
 				if fn_.built_in {
 					walker.push_semantic_diag(
-						Semantic::CannotOverloadBuiltInFn {
-							name: ident.clone(),
+						Semantic::CannotOverloadBuiltinFn {
+							fn_: (ident.name.clone(), ident.span),
 						},
 					);
 					return;
@@ -5111,7 +5167,9 @@ impl Ctx {
 		}
 	}
 
-	/// (!) Internal: do not use outside of impl.
+	/// Returns the currently active symbol for an identifier.
+	///
+	/// **(!) Internal: do not use outside of impl.**
 	fn __get_currently_active_symbol(
 		&mut self,
 		ident: &ast::Ident,
@@ -5138,7 +5196,9 @@ impl Ctx {
 		))
 	}
 
-	/// (!) Internal: do not use outside of impl.
+	/// Returns the current scope.
+	///
+	/// **(!) Internal: do not use outside of impl.**
 	fn __get_current_scope(&mut self) -> &mut ast::Scope {
 		use ast::NodeTy;
 		let scope_node = &mut self.arena[self.scope_stack.last().unwrap().0 .0];
@@ -5175,7 +5235,9 @@ struct NewVarSpecifier {
 impl NewVarSpecifier {
 	/// Whether this new-variable specifier contains (potentially incomplete) initialization.
 	fn contains_init(&self) -> Option<Span> {
-		let Some(eq_span) = self.eq_span else { return None; };
+		let Some(eq_span) = self.eq_span else {
+			return None;
+		};
 		match &self.init_expr {
 			Some(expr) => Some(Span::new(eq_span.start, expr.span.end)),
 			None => Some(eq_span),

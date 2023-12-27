@@ -147,9 +147,12 @@ pub enum NodeTy {
 	},
 	/// A for loop, e.g. `for (int i = 0; i<5; i++) {/*...*/}`.
 	For {
-		init: Option<NodeHandle>,
-		cond: Option<NodeHandle>,
-		inc: Option<NodeHandle>,
+		/// The initialization expression can either be an expression or a variable definition.
+		init: Omittable<
+			Either<Expr, Vec<(Type, Ident, Omittable<Span>, Omittable<Expr>)>>,
+		>,
+		cond: Omittable<Expr>,
+		inc: Omittable<Expr>,
 		body: Option<Scope>,
 	},
 	/// A while loop, e.g `while (true) {/*...*/}`.

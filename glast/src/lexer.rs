@@ -327,6 +327,7 @@ pub enum Token {
 	LowP,
 	/// The `invariant` keyword.
 	Invariant,
+	// FIXME: Missing `precision` qualifier keyword.
 	/// The `precise` keyword.
 	Precise,
 	/// The `coherent` keyword.
@@ -700,8 +701,6 @@ impl std::fmt::Display for Token {
 ///   changes the behaviour of the lexer.
 /// - `hardcoded_version` - Whether the lexer has a hardcoded version. If `true`, this disables the dynamic
 ///   on-the-fly version changing when an appropriate version directive is encountered.
-///
-/// TODO: Track spans of line-continuators.
 fn parse_tokens<C: Char>(
 	lexer: &mut Lexer<C>,
 	parsing_define_body: bool,

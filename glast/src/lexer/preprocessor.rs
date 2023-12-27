@@ -94,6 +94,7 @@ pub enum TokenStream {
 	Undef {
 		/// Span of the `undef` keyword.
 		kw: Span,
+		/// Any tokens after the keyword.
 		tokens: Vec<Spanned<UndefToken>>,
 	},
 	/// An `#ifdef` directive.
@@ -624,7 +625,7 @@ impl ConditionToken {
 					// contains anything afterwards.
 					let mut num = String::new();
 					let mut chars = s.chars();
-					for char in chars.next() {
+					while let Some(char) = chars.next() {
 						if char.is_ascii_digit() {
 							num.push(char);
 						} else {
@@ -1895,7 +1896,7 @@ pub(crate) fn concat_macro_body(
 	Vec<crate::diag::Syntax2>,
 	Vec<crate::diag::Semantic>,
 ) {
-	use crate::diag::{ExpectedGrammar, Semantic, Syntax2};
+	use crate::diag::{Found, Semantic, Syntax2};
 
 	let mut stack = Vec::new();
 	let mut syntax_diags = Vec::new();
@@ -1912,9 +1913,9 @@ pub(crate) fn concat_macro_body(
 					if next.0 == super::Token::MacroConcat {
 						// We have something like `foobar ## ##`. We cannot concatenate two concat operators, so we
 						// just emit the tokens as-is.
-						syntax_diags.push(Syntax2::ExpectedGrammar {
-							item: ExpectedGrammar::TokenConcatRHS,
-							pos: token.1.end,
+						syntax_diags.push(Syntax2::FoundUnexpected {
+							ty: Found::NothingOnRhsOfConcat,
+							span: token.1.end_zero_width(),
 						});
 						stack.push(prev);
 						stack.push((
@@ -1975,23 +1976,23 @@ pub(crate) fn concat_macro_body(
 					}
 				}
 				(Some(prev), None) => {
-					syntax_diags.push(Syntax2::ExpectedGrammar {
-						item: ExpectedGrammar::TokenConcatRHS,
-						pos: token.1.end,
+					syntax_diags.push(Syntax2::FoundUnexpected {
+						ty: Found::NothingOnRhsOfConcat,
+						span: token.1.end_zero_width(),
 					});
 					stack.push(prev);
 				}
 				(None, Some(next)) => {
-					syntax_diags.push(Syntax2::ExpectedGrammar {
-						item: ExpectedGrammar::TokenConcatLHS,
-						pos: token.1.start - 1,
+					syntax_diags.push(Syntax2::FoundUnexpected {
+						ty: Found::NothingOnLhsOfConcat,
+						span: token.1.start_zero_width(),
 					});
 					if next.0 == super::Token::MacroConcat {
 						// We begin the replacement-list with `## ##`. We cannot concatenate two concat operators,
 						// so we just emit the tokens as-is.
-						syntax_diags.push(Syntax2::ExpectedGrammar {
-							item: ExpectedGrammar::TokenConcatRHS,
-							pos: token.1.end,
+						syntax_diags.push(Syntax2::FoundUnexpected {
+							ty: Found::NothingOnRhsOfConcat,
+							span: token.1.end_zero_width(),
 						});
 						stack.push((
 							super::Token::Invalid('#'),
@@ -2014,13 +2015,13 @@ pub(crate) fn concat_macro_body(
 				}
 				(None, None) => {
 					// The entire replacement-list is just `##`.
-					syntax_diags.push(Syntax2::ExpectedGrammar {
-						item: ExpectedGrammar::TokenConcatLHS,
-						pos: token.1.start - 1,
+					syntax_diags.push(Syntax2::FoundUnexpected {
+						ty: Found::NothingOnLhsOfConcat,
+						span: token.1.start_zero_width(),
 					});
-					syntax_diags.push(Syntax2::ExpectedGrammar {
-						item: ExpectedGrammar::TokenConcatRHS,
-						pos: token.1.end,
+					syntax_diags.push(Syntax2::FoundUnexpected {
+						ty: Found::NothingOnRhsOfConcat,
+						span: token.1.end_zero_width(),
 					});
 					stack.push((
 						super::Token::Invalid('#'),

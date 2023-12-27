@@ -60,8 +60,8 @@ pub type Spanned<T> = (T, Span);
 impl Span {
 	/// Constructs a new span between the two positions.
 	pub fn new(start: usize, end: usize) -> Self {
-		// Invariant: If this assertion is not met, the semantic meaning of this type will be incorrect, but it will
-		// never cause any further panics or memory unsafety. Hence, I've made a decision to only perform this
+		// Invariant: If this assertion is not met, the semantic meaning of this type will be incorrect, but it
+		// will never cause any further panics or memory unsafety. Hence, I've made a decision to only perform this
 		// check in debug builds; the tests should catch any potential misuses.
 		debug_assert!(
 			start <= end,
@@ -73,8 +73,8 @@ impl Span {
 
 	/// Constructs a new span between the end of the first span and the beginning of the second span.
 	pub fn new_between(a: Span, b: Span) -> Self {
-		// Invariant: If this assertion is not met, the semantic meaning of this type will be incorrect, but it will
-		// never cause any further panics or memory unsafety. Hence, I've made a decision to only perform this
+		// Invariant: If this assertion is not met, the semantic meaning of this type will be incorrect, but it
+		// will never cause any further panics or memory unsafety. Hence, I've made a decision to only perform this
 		// check in debug builds; the tests should catch any potential misuses.
 		debug_assert!(
 			a.end <= b.start,

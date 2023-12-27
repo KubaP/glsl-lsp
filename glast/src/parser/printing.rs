@@ -455,17 +455,22 @@ fn print_node<'a>(w: &mut Writer, ctx: &PrintCtx<'a>, handle: NodeHandle) {
 		} => {
 			continue_eol!(w, "For(");
 			w.indent();
-			if let Some(init) = init {
+			if let Omittable::Some(init) = init {
 				new_line_part!(w, "init: ");
-				//print_node(w, &init);
+				match init {
+					Either::Left(expr) => {
+						print_expr(w, ctx, expr);
+					}
+					Either::Right(_) => {}
+				}
 			}
-			if let Some(cond) = cond {
+			if let Omittable::Some(cond) = cond {
 				new_line_part!(w, "cond: ");
-				//print_node(w, &cond);
+				print_expr(w, ctx, cond);
 			}
-			if let Some(inc) = inc {
+			if let Omittable::Some(inc) = inc {
 				new_line_part!(w, "inc: ");
-				//print_node(w, &inc);
+				print_expr(w, ctx, inc);
 			}
 			if let Some(body) = body {
 				new_line_whole!(w, "body: Scope(");

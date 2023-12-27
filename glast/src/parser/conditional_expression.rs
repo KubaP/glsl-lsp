@@ -502,7 +502,7 @@ impl<'a> Walker<'a> {
 					if *contains_eof {
 						self.syntax_diags.push(Syntax2::ExpectedGrammar {
 							item: ExpectedGrammar::BlockCommentEnd,
-							pos: token_span.end,
+							span: token_span.end_zero_width(),
 						});
 					}
 					let token_span = *token_span;

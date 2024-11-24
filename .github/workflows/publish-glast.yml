@@ -16,7 +16,7 @@ jobs:
         name: "Run test suite"
         strategy:
             matrix:
-                os: [windows-latest, macos-latest, ubuntu-latest]
+                os: [windows-latest, macos-13, macos-latest, ubuntu-latest]
         runs-on: ${{ matrix.os }}
         timeout-minutes: 10
 

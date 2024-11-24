@@ -23,9 +23,12 @@ jobs:
                     - os: ubuntu-latest
                       target: x86_64-unknown-linux-gnu
                       vsce_target: linux-x64
-                    - os: macos-latest
+                    - os: macos-13
                       target: x86_64-apple-darwin
                       vsce_target: darwin-x64
+                    - os: macos-latest
+                      target: aarch64-apple-darwin
+                      vsce_target: darwin-arm64
         outputs:
             EXT_VERSION: ${{ steps.build-script.outputs.EXT_VERSION }}
         runs-on: ${{ matrix.os }}
@@ -110,4 +113,5 @@ jobs:
                       ./glsl-lsp-win32-x64/glsl-lsp-win32-x64-${{ needs.deploy.outputs.EXT_VERSION }}.vsix
                       ./glsl-lsp-linux-x64/glsl-lsp-linux-x64-${{ needs.deploy.outputs.EXT_VERSION }}.vsix
                       ./glsl-lsp-darwin-x64/glsl-lsp-darwin-x64-${{ needs.deploy.outputs.EXT_VERSION }}.vsix
+                      ./glsl-lsp-darwin-arm64/glsl-lsp-darwin-arm64-${{ needs.deploy.outputs.EXT_VERSION }}.vsix
                   fail_on_unmatched_files: true

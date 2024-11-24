@@ -1,6 +1,6 @@
 ﻿param (
 	[string]
-	[ValidateSet("x86_64-pc-windows-msvc", "x86_64-unknown-linux-gnu", "x86_64-apple-darwin")]
+	[ValidateSet("x86_64-pc-windows-msvc", "x86_64-unknown-linux-gnu", "x86_64-apple-darwin", "aarch64-apple-darwin")]
 	$Target
 )
 
@@ -41,6 +41,10 @@ switch ($Target) {
 			-Destination (Join-Path $script:DEST "glsl-lsp") -Verbose
 	}
 	"x86_64-apple-darwin" {
+		Copy-Item -Path (Join-Path $script:ROOT "server" "target" $Target "release" "glsl-lsp") `
+			-Destination (Join-Path $script:DEST "glsl-lsp") -Verbose 
+	}
+	"aarch64-apple-darwin" {
 		Copy-Item -Path (Join-Path $script:ROOT "server" "target" $Target "release" "glsl-lsp") `
 			-Destination (Join-Path $script:DEST "glsl-lsp") -Verbose 
 	}

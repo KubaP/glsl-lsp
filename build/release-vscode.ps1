@@ -1,6 +1,6 @@
 ﻿param (
 	[string]
-	[ValidateSet("x86_64-pc-windows-msvc", "x86_64-unknown-linux-gnu", "x86_64-apple-darwin")]
+	[ValidateSet("x86_64-pc-windows-msvc", "x86_64-unknown-linux-gnu", "x86_64-apple-darwin", "aarch64-apple-darwin")]
 	$Target
 )
 
@@ -54,6 +54,7 @@ switch ($Target) {
 	"x86_64-pc-windows-msvc" { $serverPath = "glsl-lsp.exe" }
 	"x86_64-unknown-linux-gnu" { $serverPath = "glsl-lsp" }
 	"x86_64-apple-darwin" { $serverPath = "glsl-lsp" }
+	"aarch64-apple-darwin" { $serverPath = "glsl-lsp" }
 }
 $script = Get-Content -Path (Join-Path $script:OUT_DIR "src" "main.ts")
 $script = $script -replace "\`${GLSL_SERVER_PATH}", $serverPath

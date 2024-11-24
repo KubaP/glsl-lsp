@@ -19,6 +19,7 @@ Prerequisites:
 |`x86_64-pc-windows-msvc`|`glsl-lsp.exe`|`win32-x64`|
 |`x86_64-unknown-linux-gnu`|`glsl-lsp`|`linux-x64`|
 |`x86_64-apple-darwin`|`glsl-lsp`|`darwin-x64`|
+|`aarch64-apple-darwin`|`glsl-lsp`|`darwin-arm64`|
 
 `$VERSION` is the current version of the extension found in the client [package manifest](/client/package.json).
 

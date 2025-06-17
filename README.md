@@ -1,4 +1,10 @@
 # glsl-lsp
+⚠ **This project has been archived.**
+
+*There will be no more feature updates nor bug fixes. If someone would like to continue developing this project, feel free to fork this repositoty!*
+
+---
+
 This repository contains a heavily **work-in-progress** project aiming to provide a language extension for the OpenGL Shading Language.
 
 This project is targeting GLSL `450` & `460` initially, but there are plans to support older versions in the future, including but not limited to `110`, `300 es`, `330` and `410`.

@@ -16,7 +16,7 @@ jobs:
         name: "Run test suite"
         strategy:
             matrix:
-                os: [windows-latest, macos-latest, ubuntu-latest]
+                os: [windows-latest, macos-13, macos-latest, ubuntu-latest]
         runs-on: ${{ matrix.os }}
         timeout-minutes: 10
 
@@ -36,12 +36,14 @@ jobs:
         strategy:
             matrix:
                 include:
-                  - os: windows-latest
-                    target: x86_64-pc-windows-msvc
-                  - os: ubuntu-latest
-                    target: x86_64-unknown-linux-gnu
-                  - os: macos-latest
-                    target: x86_64-apple-darwin
+                    - os: windows-latest
+                      target: x86_64-pc-windows-msvc
+                    - os: ubuntu-latest
+                      target: x86_64-unknown-linux-gnu
+                    - os: macos-13
+                      target: x86_64-apple-darwin
+                    - os: macos-latest
+                      target: aarch64-apple-darwin
         outputs:
             VERSION: ${{ steps.build-script.outputs.VERSION }}
         runs-on: ${{ matrix.os }}
@@ -69,8 +71,8 @@ jobs:
             - name: Upload artifact for later github release
               uses: actions/upload-artifact@v3
               with:
-                name: glsl-lsp-${{ matrix.target }}
-                path: ./publish/glsl-lsp-${{ matrix.target }}-${{ steps.build-script.outputs.VERSION }}.zip
+                  name: glsl-lsp-${{ matrix.target }}
+                  path: ./publish/glsl-lsp-${{ matrix.target }}-${{ steps.build-script.outputs.VERSION }}.zip
 
     gh-release:
         name: "Create github release"
@@ -101,4 +103,5 @@ jobs:
                       ./glsl-lsp-x86_64-pc-windows-msvc/glsl-lsp-x86_64-pc-windows-msvc-${{ needs.build.outputs.VERSION }}.zip
                       ./glsl-lsp-x86_64-unknown-linux-gnu/glsl-lsp-x86_64-unknown-linux-gnu-${{ needs.build.outputs.VERSION }}.zip
                       ./glsl-lsp-x86_64-apple-darwin/glsl-lsp-x86_64-apple-darwin-${{ needs.build.outputs.VERSION }}.zip
+                      ./glsl-lsp-aarch64-apple-darwin/glsl-lsp-aarch64-apple-darwin-${{ needs.build.outputs.VERSION }}.zip
                   fail_on_unmatched_files: true
